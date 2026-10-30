@@ -185,7 +185,7 @@ fn build_ui(app: &Application) {
         navigation.borrow_mut().push(b.clone());
         sidebar.append(&b);
     }
-    let warning = text("Il vetro Aero è attivo nell'interfaccia. La sfocatura reale dello sfondo arriverà con il renderer Smithay.", "settings-warning");
+    let warning = text("Il tema Aero è disponibile nell'interfaccia. La sfocatura reale dello sfondo arriverà con il renderer Smithay.", "settings-warning");
     sidebar.append(&warning);
     root.append(&sidebar);
     let main_panel = GtkBox::new(Orientation::Vertical, 0);
