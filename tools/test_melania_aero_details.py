@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 from melania_aero_artwork import ACTIONS, DEVICES, FILES, FOLDERS
 from melania_aero_details import (
     CATEGORY_MARKS, EXTRA_ACTIONS, EXTRA_DEVICES, EXTRA_FILES,
-    EXTRA_FOLDERS, is_curated, refined_artwork,
+    EXTRA_FOLDERS, SPECIAL_PLACES, is_curated, refined_artwork,
 )
 
 
@@ -20,7 +20,8 @@ class QualityTests(unittest.TestCase):
         self.assertNotIn("file://", art.lower())
 
     def test_extras_full_and_compact(self):
-        groups = (("places", EXTRA_FOLDERS), ("mimetypes", EXTRA_FILES),
+        groups = (("places", EXTRA_FOLDERS), ("places", SPECIAL_PLACES),
+                  ("mimetypes", EXTRA_FILES),
                   ("devices", EXTRA_DEVICES), ("categories", CATEGORY_MARKS),
                   ("actions", EXTRA_ACTIONS))
         for context, names in groups:
@@ -59,6 +60,7 @@ class QualityTests(unittest.TestCase):
 
     def test_context_app_aliases_get_actual_artwork(self):
         for name in ("computer", "drive-harddisk", "application-pdf",
+                     "user-trash", "network-workgroup",
                      "applications-internet"):
             self.assertTrue(is_curated(name, "apps"))
             self._valid(refined_artwork(name, "apps", "light", False, 96), name)
