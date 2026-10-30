@@ -285,3 +285,34 @@ headerbar.settings-titlebar.settings-dark .title { color: #f2f7ff; }
 .settings-root.high-contrast .settings-scroll > viewport { background: #ffffff; }
 /* Disabling transparency never changes the flat preferences layout. */
 .settings-root.aero-off .settings-card { box-shadow: none; }
+
+/* Explicit Light / Dark / Aero appearance selector. */
+.settings-appearance-choice {
+  min-width: 176px;
+  min-height: 34px;
+  background: #fff;
+  color: #263b4e;
+  border: 1px solid #cbd7e3;
+  border-radius: 8px;
+}
+.settings-root.settings-dark .settings-appearance-choice {
+  background: #343b45;
+  color: #eef3f9;
+  border-color: #52606d;
+}
+.settings-root.melania-theme-light .settings-card {
+  box-shadow: none;
+  border-color: #dfe3e9;
+}
+.settings-root.melania-theme-light .settings-sidebar {
+  background: #f2f3f5;
+}
+.settings-root.melania-theme-dark .settings-navigation-scroll,
+.settings-root.melania-theme-dark .settings-search {
+  box-shadow: none;
+}
+.settings-root.settings-dark .settings-info-row,
+.settings-root.settings-dark button.settings-linked-row {
+  background: #30353d;
+  border-color: #434a55;
+}
