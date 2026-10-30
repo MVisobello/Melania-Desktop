@@ -52,11 +52,27 @@ jobs:
             trap "kill $pid 2>/dev/null || true" EXIT
             sleep 4
             kill -0 $pid
-            scrot -q 92 reports/settings-system-gtk.png
+            # A healthy GTK process may need longer than four seconds to
+            # paint its first Xvfb frame (especially with software GL).
+            # Retry *capturing*, not launching, to avoid a false black shot.
+            capture_ready() {
+              path="$1"
+              for attempt in $(seq 1 18); do
+                scrot -q 92 "$path"
+                if python3 -c "import sys; from PIL import Image,ImageStat; im=Image.open(sys.argv[1]).convert(\"RGB\"); sys.exit(0 if ImageStat.Stat(im).stddev[0]>7 else 1)" "$path"; then
+                  echo "GTK screenshot ready: $path (attempt $attempt)"
+                  return 0
+                fi
+                sleep 1
+              done
+              echo "FAIL: GTK never painted a nonblack frame for $path" >&2
+              return 1
+            }
+            capture_ready reports/settings-system-gtk.png
             target/debug/melania-settings appearance
             sleep 2
             kill -0 $pid
-            scrot -q 92 reports/settings-appearance-gtk.png
+            capture_ready reports/settings-appearance-gtk.png
           '
           python3 - <<'PY'
           from PIL import Image, ImageStat
