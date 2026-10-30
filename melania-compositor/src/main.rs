@@ -46,7 +46,7 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
 };
-use winit::platform::pump_events::PumpStatus;
+use ::winit::platform::pump_events::PumpStatus;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use melania_core::{Rect as CoreRect, interaction::{Edges, Interaction, Operation}};
 use melania_shell_model::{detect_snap, snap_geometry, Geometry as ShellRect, SnapZone};
@@ -245,14 +245,14 @@ impl Melania {
                     });
                 }
             }
-            self.space.relocate_element(&w.window,(usable.loc.x,usable.loc.y));
+            self.space.map_element(w.window.clone(), (usable.loc.x,usable.loc.y), false);
             top.with_pending_state(|state| {
                 state.size=Some((usable.size.w.max(1),usable.size.h.max(1)).into());
                 state.states.set(xdg_toplevel::State::Maximized);
             });
         } else {
             if let Some(rect)=w.restore_geometry.take() {
-                self.space.relocate_element(&w.window,(rect.x,rect.y));
+                self.space.map_element(w.window.clone(), (rect.x,rect.y), false);
                 top.with_pending_state(|state| {
                     state.size=Some((rect.width as i32,rect.height as i32).into());
                 });
@@ -290,7 +290,7 @@ impl Melania {
         let window = self.space.elements().find(|w| w.toplevel().is_some_and(
             |top| *top.wl_surface() == surface)).cloned();
         let Some(window) = window else { self.interaction = None; return; };
-        self.space.relocate_element(&window, (rect.x, rect.y));
+        self.space.map_element(window.clone(), (rect.x, rect.y), false);
         if matches!(operation, Operation::Resize(_)) {
             if let Some(top) = window.toplevel() {
                 top.with_pending_state(|s| {
@@ -318,7 +318,7 @@ impl Melania {
                             let target = snap_geometry(zone,area);
                             if let Some(window) = self.space.elements()
                                 .find(|w|w.toplevel().is_some_and(|t| t.wl_surface()==top.wl_surface())).cloned() {
-                                self.space.relocate_element(&window,(target.x,target.y));
+                                self.space.map_element(window.clone(), (target.x,target.y), false);
                                 top.with_pending_state(|s| {
                                     s.size=Some((target.width as i32,target.height as i32).into());
                                     if zone == SnapZone::Top {s.states.set(xdg_toplevel::State::Maximized);}
@@ -615,7 +615,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         event.time_msec(), |_, _, _| FilterResult::Forward);
                 }
                 InputEvent::PointerMotionAbsolute { event, .. } => {
-                    let point = event.position_transformed(backend.window_size());
+                    let point = event.position_transformed((backend.window_size().w, backend.window_size().h).into());
                     state.update_interaction(point);
                     let under = if state.interaction.is_some() { None } else { state.surface_at(point) };
                     let pointer = state.seat.get_pointer().expect("pointer");
@@ -683,7 +683,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     for layer in map.layers_on(kind) {
                         if let Some(geo)=map.layer_geometry(layer) {
                             elements.extend(render_elements_from_surface_tree(renderer,layer.wl_surface(),
-                                geo.loc,1.0,1.0,Kind::Unspecified));
+                                (geo.loc.x,geo.loc.y),1.0,1.0,Kind::Unspecified));
                         }
                     }
                 }
@@ -692,7 +692,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let origin=state.space.element_location(window)?;
                 Some((window.toplevel()?.wl_surface().clone(),origin))
             }).flat_map(|(surface,origin)| {
-                render_elements_from_surface_tree(renderer,&surface,origin,1.0,1.0,Kind::Unspecified)
+                render_elements_from_surface_tree(renderer,&surface,(origin.x,origin.y),1.0,1.0,Kind::Unspecified)
             }));
             {
                 let map=layer_map_for_output(&output);
@@ -700,7 +700,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     for layer in map.layers_on(kind) {
                         if let Some(geo)=map.layer_geometry(layer) {
                             elements.extend(render_elements_from_surface_tree(renderer,layer.wl_surface(),
-                                geo.loc,1.0,1.0,Kind::Unspecified));
+                                (geo.loc.x,geo.loc.y),1.0,1.0,Kind::Unspecified));
                         }
                     }
                 }
