@@ -91,7 +91,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     if melania_config::load().unwrap_or_default().high_contrast {
         root.add_css_class("high-contrast");
     }
-    let query=Entry::builder().placeholder_text("Cerca applicazioni, file, impostazioni...").build();
+    let query=Entry::builder().placeholder_text("Cerca applicazioni, cartelle, impostazioni...").build();
     query.add_css_class("melania-entry");
     root.append(&query);
     let columns=GtkBox::new(Orientation::Horizontal,10);
@@ -104,7 +104,8 @@ fn start_window(app:&Application)->ApplicationWindow {
     scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
     let apps_box=GtkBox::new(Orientation::Vertical,3);
     apps_box.add_css_class("melania-start-apps");
-    let mut searchable:Vec<(Button,String)>=Vec::new();
+    // Search-only results remain hidden in the normal classic app list.
+    let mut searchable:Vec<(Button,String,bool)>=Vec::new();
     for (name,program,icon) in [
         ("Melania Files", "melania-files", "org.melaniadesktop.Files"),
         ("Impostazioni", "melania-settings", "preferences-system"),
@@ -113,7 +114,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         let menu=w.clone();
         button.connect_clicked(move |_| { run(program); menu.set_visible(false); });
         apps_box.append(&button);
-        searchable.push((button,name.to_lowercase()));
+        searchable.push((button,name.to_lowercase(),false));
     }
     let mut apps=gio::AppInfo::all().into_iter().filter(|app|app.should_show()).collect::<Vec<_>>();
     apps.sort_by_key(|app|app.name().to_string().to_lowercase());
@@ -134,19 +135,73 @@ fn start_window(app:&Application)->ApplicationWindow {
             }
         });
         apps_box.append(&button);
-        searchable.push((button,name.to_lowercase()));
+        searchable.push((button,name.to_lowercase(),false));
     }
-    let empty=label("Nessuna applicazione trovata", "melania-sub");
+    // GNOME/COSMIC-inspired unified search without background indexing or
+    // filesystem traversal: only apps, known settings sections and XDG folders.
+    for (name, page, keywords) in [
+        ("Aspetto", "appearance", "tema aero glass colori trasparenza scuro"),
+        ("Desktop e finestre", "desktop", "snap anteprime finestre barra raggruppamento"),
+        ("Spazi di lavoro", "workspaces", "workspace desktop virtuali"),
+        ("Rete e Bluetooth", "network", "wifi wi-fi bluetooth connessione"),
+        ("Accessibilità", "accessibility", "contrasto movimento animazioni"),
+        ("Sistema", "system", "informazioni versione sistema"),
+    ] {
+        let caption = format!("Impostazioni · {name}");
+        let button=icon_row(&caption,"preferences-system","melania-action");
+        button.add_css_class("melania-search-result");
+        button.set_visible(false);
+        let menu=w.clone();
+        button.connect_clicked(move |_| {
+            if let Err(e)=Command::new("melania-settings").arg(page).spawn() {
+                eprintln!("Melania settings search: {e}");
+            } else { menu.set_visible(false); }
+        });
+        searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),keywords),true));
+        apps_box.append(&button);
+    }
+    for (name, kind, icon_name) in [
+        ("Home", "HOME", "user-home"),
+        ("Documenti", "DOCUMENTS", "folder-documents"),
+        ("Immagini", "PICTURES", "folder-pictures"),
+        ("Download", "DOWNLOAD", "folder-download"),
+    ] {
+        let caption=format!("Cartella · {name}");
+        let button=icon_row(&caption,icon_name,"melania-action");
+        button.add_css_class("melania-search-result");
+        button.set_visible(false);
+        let menu=w.clone();
+        button.connect_clicked(move |_| {
+            let folder=xdg_shortcut_directory(kind);
+            if let Err(e)=Command::new("melania-files").arg(folder).spawn() {
+                eprintln!("Melania folder search: {e}");
+            } else {menu.set_visible(false);}
+        });
+        searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),kind.to_lowercase()),true));
+        apps_box.append(&button);
+    }
+    let empty=label("Nessun risultato: applicazioni, cartelle o impostazioni", "melania-sub");
     empty.set_visible(false);apps_box.append(&empty);
+    let searchable=Rc::new(searchable);
+    let searchable_for_filter=searchable.clone();
     query.connect_changed(move |q| {
-        let text=q.text().to_lowercase();
+        let term=q.text().trim().to_lowercase();
         let mut visible=0;
-        for (button,name) in &searchable {
-            let matches=name.contains(&text);
+        for (button,name,search_only) in searchable_for_filter.iter() {
+            let matches=if term.is_empty() { !search_only } else { name.contains(&term) };
             button.set_visible(matches);
             if matches {visible+=1;}
         }
         empty.set_visible(visible==0);
+    });
+    let searchable_for_enter=searchable.clone();
+    let entry=query.clone();
+    query.connect_activate(move |_| {
+        let term=entry.text().trim().to_lowercase();
+        if term.is_empty(){return;}
+        if let Some((button,_,_))=searchable_for_enter.iter().find(|(_,name,_)|name.contains(&term)) {
+            button.emit_clicked();
+        }
     });
     scroll.set_child(Some(&apps_box));left.append(&scroll);
     columns.append(&left);
