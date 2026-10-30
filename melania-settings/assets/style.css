@@ -206,44 +206,7 @@ button.settings-nav-item:focus-visible, .settings-icon-choice:focus-visible {
   outline-offset: 2px;
 }
 
-/* Windows 7-style three-button native decoration on Melania windows only. */
-headerbar.settings-titlebar windowcontrols {
-  border-spacing: 0px;
-  margin: 0px 5px 0px 0px;
-}
-headerbar.settings-titlebar windowcontrols button {
-  min-width: 29px;
-  min-height: 22px;
-  padding: 2px 5px;
-  margin: 0px;
-  border-radius: 0px;
-  background-image: linear-gradient(to bottom, #effaff, #c8e0f5 58%, #a9cbe9);
-  color: #1e4162;
-  border: 1px solid #8caeca;
-  box-shadow: inset 0 1px rgba(255,255,255,.97);
-}
-headerbar.settings-titlebar windowcontrols button.minimize {
-  border-radius: 0 0 0 6px;
-}
-headerbar.settings-titlebar windowcontrols button.close {
-  min-width: 37px;
-  border-radius: 0 0 6px 0;
-  color: #ffffff;
-  background-image: linear-gradient(to bottom, #f58f8d, #db4c49 64%, #b8232d);
-  border: 1px solid #a9484c;
-}
-headerbar.settings-titlebar windowcontrols button:hover {
-  background-image: linear-gradient(to bottom, #ffffff, #b4dbfa 58%, #6ab0e5);
-  border-color: #5d94c5;
-}
-headerbar.settings-titlebar windowcontrols button.close:hover {
-  background-image: linear-gradient(to bottom, #ffaaa1, #f04c45 58%, #c61f25);
-  border-color: #a63439;
-}
-headerbar.settings-titlebar windowcontrols button:active {
-  box-shadow: inset 0 1px 3px rgba(24,70,110,.24);
-}
-
+/* Shared titlebar controls are styled in branding/window-chrome-win7.css. */
 /* Dark remains quiet and GNOME-like; high-contrast is independent. */
 .settings-root.settings-dark {
   background: #1d2229;
