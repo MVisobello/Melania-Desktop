@@ -388,14 +388,15 @@ fn running_window_strip() -> GtkBox {
     box_running
 }
 
-/// Four real workspaces, displayed in the compact taskbar. State is queried
+/// User-configured workspaces, displayed in the taskbar. State is queried
 /// from the compositor rather than guessed from button clicks.
 fn workspace_strip() -> GtkBox {
     let row=GtkBox::new(Orientation::Horizontal,2);
     row.add_css_class("melania-workspace-strip");
     let path=std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let mut buttons=Vec::new();
-    for n in 1..=4u8 {
+    let count = melania_config::load().unwrap_or_default().workspace_count;
+    for n in 1..=count {
         let b=Button::with_label(&n.to_string());
         b.add_css_class("melania-workspace-button");
         b.set_tooltip_text(Some(&format!("Spazio di lavoro {n}")));
