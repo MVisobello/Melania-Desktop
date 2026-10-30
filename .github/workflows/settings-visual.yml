@@ -7,6 +7,7 @@ on:
       - 'melania-files/assets/style.css'
       - 'melania-files/src/main.rs'
       - 'branding/window-chrome-win7.css'
+      - 'branding/window_controls.rs'
       - 'tools/melania_fluent_office.py'
       - 'tools/build_melania_fluent_themes.py'
       - '.github/workflows/settings-visual.yml'
