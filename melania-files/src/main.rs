@@ -582,6 +582,21 @@ fn navigation_icon_button(icon_name: &str, tooltip: &str) -> Button {
     button
 }
 
+/// Compact command button with icon and label; actions keep their existing
+/// handlers rather than cloning transfer/rename/trash logic.
+fn action_icon_button(title: &str, icon_name: &str, tooltip: &str) -> Button {
+    let button = Button::new();
+    button.add_css_class("files-command");
+    button.set_tooltip_text(Some(tooltip));
+    let content = GtkBox::new(Orientation::Horizontal, 6);
+    let icon = Image::from_icon_name(icon_name);
+    icon.set_pixel_size(19);
+    content.append(&icon);
+    content.append(&Label::new(Some(title)));
+    button.set_child(Some(&content));
+    button
+}
+
 fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button {
     let button = Button::new();
     let row = GtkBox::new(Orientation::Horizontal, 9);
@@ -655,11 +670,11 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     // They are ordinary GTK widgets; no custom compositor support required.
     let list_view_toggle = gtk::ToggleButton::with_label("Elenco");
     list_view_toggle.set_tooltip_text(Some("Alterna fra griglia ed elenco"));
-    toolbar.append(&list_view_toggle);
+
     let inspector_toggle = gtk::ToggleButton::with_label("Dettagli");
     inspector_toggle.set_active(true);
     inspector_toggle.set_tooltip_text(Some("Mostra o nasconde il pannello dettagli"));
-    toolbar.append(&inspector_toggle);
+
     let hidden_toggle = CheckButton::with_label("Nascosti");
     hidden_toggle.set_tooltip_text(Some("Mostra file nascosti (nomi che iniziano con punto)"));
 
@@ -679,14 +694,66 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let unmark = Button::with_label("− Preferito");
     unmark.set_tooltip_text(Some("Rimuovi la cartella corrente dai preferiti"));
 
-    root.append(&toolbar);
-    let actions = FlowBox::new();
+    // Modern single-row command ribbon. Popovers retain ALL existing actions
+    // while keeping the main toolbar readable, including on narrow windows.
+    let actions = GtkBox::new(Orientation::Horizontal, 3);
     actions.add_css_class("files-actions");
-    actions.set_selection_mode(gtk::SelectionMode::None);
-    actions.set_column_spacing(7);
-    actions.set_row_spacing(5);
-    actions.set_min_children_per_line(2);
-    actions.set_max_children_per_line(9);
+    let actions_scroll = ScrolledWindow::new();
+    actions_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    actions_scroll.set_child(Some(&actions));
+
+    let new_menu = gtk::MenuButton::new();
+    new_menu.add_css_class("files-command");
+    new_menu.set_tooltip_text(Some("Crea una cartella, un file vuoto o da modello"));
+    let new_label = GtkBox::new(Orientation::Horizontal, 6);
+    new_label.append(&Image::from_icon_name("list-add-symbolic"));
+    new_label.append(&Label::new(Some("Nuovo ▾")));
+    new_menu.set_child(Some(&new_label));
+    let new_choices = GtkBox::new(Orientation::Vertical, 6);
+    new_choices.add_css_class("files-command-menu");
+    let new_popover = gtk::Popover::new();
+    new_popover.set_child(Some(&new_choices));
+    new_menu.set_popover(Some(&new_popover));
+    actions.append(&new_menu);
+
+    let sort_menu = gtk::MenuButton::new();
+    sort_menu.add_css_class("files-command");
+    sort_menu.set_tooltip_text(Some("Ordina i file"));
+    let sort_label = GtkBox::new(Orientation::Horizontal, 5);
+    sort_label.append(&Image::from_icon_name("view-sort-ascending-symbolic"));
+    sort_label.append(&Label::new(Some("Ordina ▾")));
+    sort_menu.set_child(Some(&sort_label));
+    let sort_choices = GtkBox::new(Orientation::Vertical, 7);
+    sort_choices.add_css_class("files-command-menu");
+    let sort_popover = gtk::Popover::new();
+    sort_popover.set_child(Some(&sort_choices));
+    sort_menu.set_popover(Some(&sort_popover));
+
+    let view_menu = gtk::MenuButton::new();
+    view_menu.add_css_class("files-command");
+    view_menu.set_tooltip_text(Some("Visualizzazione e dettagli"));
+    let view_label = GtkBox::new(Orientation::Horizontal, 5);
+    view_label.append(&Image::from_icon_name("view-list-symbolic"));
+    view_label.append(&Label::new(Some("Visualizza ▾")));
+    view_menu.set_child(Some(&view_label));
+    let view_choices = GtkBox::new(Orientation::Vertical, 7);
+    view_choices.add_css_class("files-command-menu");
+    let view_popover = gtk::Popover::new();
+    view_popover.set_child(Some(&view_choices));
+    view_menu.set_popover(Some(&view_popover));
+
+    let more_menu = gtk::MenuButton::new();
+    more_menu.add_css_class("files-command");
+    more_menu.set_tooltip_text(Some("Altre operazioni e strumenti"));
+    let more_label = GtkBox::new(Orientation::Horizontal, 5);
+    more_label.append(&Image::from_icon_name("view-more-symbolic"));
+    more_label.append(&Label::new(Some("Altro ▾")));
+    more_menu.set_child(Some(&more_label));
+    let other_choices = GtkBox::new(Orientation::Vertical, 6);
+    other_choices.add_css_class("files-command-menu");
+    let other_popover = gtk::Popover::new();
+    other_popover.set_child(Some(&other_choices));
+    more_menu.set_popover(Some(&other_popover));
     let new_folder_name=Entry::builder().placeholder_text("Nome nuova cartella").build();
     new_folder_name.set_width_chars(22);
     let create_blank=Button::with_label("+ File vuoto");
@@ -694,20 +761,24 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     new_file_name.set_width_chars(20);
     let create_folder=Button::with_label("+ Nuova cartella");
     create_folder.add_css_class("files-create-button");
-    actions.insert(&new_folder_name, -1);
-    actions.insert(&create_folder, -1);
-    actions.insert(&new_file_name, -1);
-    actions.insert(&create_blank, -1);
-    // Secondary controls live on their own row. At narrower window widths the
-    // navigation bar remains readable rather than overflowing with actions.
-    actions.insert(&hidden_toggle, -1);
-    actions.insert(&images_toggle, -1);
-    actions.insert(&sort, -1);
-    actions.insert(&reverse, -1);
-    actions.insert(&recursive_search_button, -1);
-    actions.insert(&mark, -1);
-    actions.insert(&unmark, -1);
-    root.append(&actions);
+    new_choices.append(&Label::new(Some("Nuova cartella")));
+    new_choices.append(&new_folder_name);
+    new_choices.append(&create_folder);
+    new_choices.append(&gtk::Separator::new(Orientation::Horizontal));
+    new_choices.append(&Label::new(Some("Nuovo file vuoto")));
+    new_choices.append(&new_file_name);
+    new_choices.append(&create_blank);
+    sort_choices.append(&sort);
+    sort_choices.append(&reverse);
+    view_choices.append(&list_view_toggle);
+    view_choices.append(&inspector_toggle);
+    view_choices.append(&hidden_toggle);
+    view_choices.append(&images_toggle);
+    other_choices.append(&recursive_search_button);
+    other_choices.append(&mark);
+    other_choices.append(&unmark);
+    root.append(&actions_scroll);
+    root.append(&toolbar);
     // A pair of native GTK Paned containers guarantee that the sidebar,
     // adaptive file FlowBox, and inspector never paint on top of each other.
     // Dragging separators changes the available tile grid width naturally.
@@ -773,23 +844,41 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     inspector.append(&open);
     let rename_name = Entry::builder().placeholder_text("Nuovo nome del file").build();
     let rename_button = Button::with_label("Rinomina senza sovrascrivere");
-    inspector.append(&rename_name);
-    inspector.append(&rename_button);
+    let rename_menu = gtk::MenuButton::new();
+    rename_menu.add_css_class("files-command");
+    rename_menu.set_tooltip_text(Some("Rinomina i file selezionati senza sovrascrivere"));
+    let rename_caption = GtkBox::new(Orientation::Horizontal, 5);
+    rename_caption.append(&Image::from_icon_name("edit-select-all-symbolic"));
+    rename_caption.append(&Label::new(Some("Rinomina")));
+    rename_menu.set_child(Some(&rename_caption));
+    let rename_choices = GtkBox::new(Orientation::Vertical, 6);
+    rename_choices.add_css_class("files-command-menu");
+    rename_choices.append(&Label::new(Some("Nuovo nome")));
+    rename_choices.append(&rename_name);
+    rename_choices.append(&rename_button);
+    let rename_popover = gtk::Popover::new();
+    rename_popover.set_child(Some(&rename_choices));
+    rename_menu.set_popover(Some(&rename_popover));
     let transfer_label = Label::new(Some("Trasferimenti locali sicuri"));
     transfer_label.set_xalign(0.0);
     transfer_label.add_css_class("files-title");
     inspector.append(&transfer_label);
-    let copy_button = Button::with_label("Copia selezione");
-    let cut_button = Button::with_label("Taglia selezione");
-    let paste_button = Button::with_label("Incolla qui");
-    let trash_button = Button::with_label("Sposta nel Cestino");
+    let copy_button = action_icon_button("Copia", "edit-copy-symbolic", "Copia la selezione");
+    let cut_button = action_icon_button("Taglia", "edit-cut-symbolic", "Taglia la selezione");
+    let paste_button = action_icon_button("Incolla", "edit-paste-symbolic", "Incolla nella cartella");
+    let trash_button = action_icon_button("Elimina", "user-trash-symbolic", "Sposta nel Cestino");
     trash_button.add_css_class("files-trash");
     trash_button.set_tooltip_text(Some("Elimina in modo recuperabile tramite il Cestino del sistema"));
     // File operations remain wired to the same handlers; surface them in the
     // adaptive actions bar rather than hiding them behind the inspector.
-    for button in [&copy_button, &cut_button, &paste_button, &trash_button] {
-        actions.insert(button, -1);
+    for button in [&cut_button, &copy_button, &paste_button] {
+        actions.append(button);
     }
+    actions.append(&rename_menu);
+    actions.append(&trash_button);
+    actions.append(&sort_menu);
+    actions.append(&view_menu);
+    actions.append(&more_menu);
     let transfer_note = Label::new(Some("Copia pubblica file negli appunti GTK del sistema. Taglia resta interno a Melania e sposta solo sul filesystem locale, senza sovrascritture."));
     transfer_note.set_wrap(true);
     transfer_note.set_xalign(0.0);
@@ -888,7 +977,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     }
     template_popover.set_child(Some(&template_choices));
     template_menu.set_popover(Some(&template_popover));
-    actions.insert(&template_menu, -1);
+    new_choices.append(&template_menu);
     for (label, dir) in [
         ("⌂  Home", home()),
         ("▤  Scrivania", xdg_user_directory("DESKTOP", "Desktop")),
