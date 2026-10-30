@@ -117,6 +117,9 @@ bright = sum(1 for r,g,b in sample.getdata() if min(r,g,b) > 185)
 assert bright > 300, f'GTK windows are hidden or not drawn (bright samples={bright})'
 print(f'PASS: real Xvfb rendering {im.size}, {unique} colors, {bright} bright window samples')
 PY
+  # Both the foreground Settings window and background Files window must
+  # display identical Win7 controls in the actual composited screenshot.
+  python3 tools/check_shared_window_chrome.py reports/nested-wayland-full-desktop.png
 fi
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
