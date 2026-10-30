@@ -1,0 +1,45 @@
+name: Import Melania source bundle
+
+on:
+  push:
+    paths:
+      - melania-initial.bundle
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  restore-sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify original Git bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f melania-initial.bundle
+          echo "00f17cddaced84e6b81d460357b4b8ba4d9f3af101931594c67121db0ea62227  melania-initial.bundle" | sha256sum --check -
+          git bundle verify melania-initial.bundle
+      - name: Restore complete source tree and publish on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          restore_dir="$(mktemp -d)"
+          git clone --quiet --branch main ./melania-initial.bundle "$restore_dir/source"
+          test -f "$restore_dir/source/.github/workflows/linux-verify.yml"
+          test -f "$restore_dir/source/Cargo.toml"
+          rsync -a --exclude='.git' "$restore_dir/source/" ./
+          rm -f melania-initial.bundle
+          rm -f .github/workflows/import-melania-bundle.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "No new content"; exit 0; }
+          git commit -m "Import complete Melania Desktop v0.38 source snapshot"
+          git push origin HEAD:main
+          echo "Complete Melania source tree published on main."
