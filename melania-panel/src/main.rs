@@ -28,6 +28,22 @@ fn make_surface(app:&Application,kind:Layer,anchors:&[Edge],width:i32,height:i32
     if anchors.contains(&Edge::Left) {w.set_margin(Edge::Left,margin);}
     if anchors.contains(&Edge::Right) {w.set_margin(Edge::Right,margin);}
     w.set_exclusive_zone(exclusive);
+    // Start, quick settings, notifications and calendar use a keyboard-aware
+    // overlay. Escape dismisses the surface without shutting down the panel.
+    if exclusive == 0 {
+        let escape = gtk::EventControllerKey::new();
+        escape.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let surface = w.clone();
+        escape.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                surface.set_visible(false);
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        w.add_controller(escape);
+    }
     w
 }
 fn toggle_surface(w:&ApplicationWindow,other:&ApplicationWindow) {
