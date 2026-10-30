@@ -1610,6 +1610,15 @@ fn append_browser_tab(
     });
 }
 
+/// The nested Wayland compositor does not yet expose a formal panel work area.
+/// Size the *initial* window to leave room for the 52 px Aero taskbar and a
+/// titlebar/placement margin. It remains freely resizable/maximizable.
+fn files_initial_size(screen_width: i32, screen_height: i32) -> (i32, i32) {
+    let width = if screen_width > 0 {(screen_width - 56).clamp(560, 1160)} else {1100};
+    let height = if screen_height > 0 {(screen_height - 145).clamp(450, 720)} else {620};
+    (width,height)
+}
+
 fn build_ui(app: &Application) {
     setup_melania_icon_theme();
     let css = gtk::CssProvider::new();
@@ -1618,8 +1627,16 @@ fn build_ui(app: &Application) {
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
+    let screen = gdk::Display::default()
+        .and_then(|display| display.monitors().item(0))
+        .and_then(|object| object.downcast::<gdk::Monitor>().ok())
+        .map(|monitor| monitor.geometry());
+    let (initial_width, initial_height) = screen.map(|rect| {
+        files_initial_size(rect.width(), rect.height())
+    }).unwrap_or_else(|| files_initial_size(1280, 800));
     let window = ApplicationWindow::builder().application(app)
-        .title("Melania Files").default_width(1160).default_height(720).build();
+        .title("Melania Files")
+        .default_width(initial_width).default_height(initial_height).build();
     window.add_css_class("melania-files-window");
     // One integrated native header: [+] [tabs...] [minimize/maximize/close].
     // GTK keeps the real draggable window chrome and accessible controls.
@@ -1738,6 +1755,18 @@ fn setup_melania_icon_theme() {
     }
     if let Some(settings) = gtk::Settings::default() {
         settings.set_property("gtk-icon-theme-name", "Melania-Aero-Classic");
+    }
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::files_initial_size;
+    #[test]
+    fn respects_the_bottom_panel_on_small_desktops() {
+        assert_eq!(files_initial_size(1280,800), (1160,655));
+        assert_eq!(files_initial_size(1024,768), (968,623));
+        assert_eq!(files_initial_size(1920,1080), (1160,720));
+        assert_eq!(files_initial_size(0,0), (1100,620));
     }
 }
 
