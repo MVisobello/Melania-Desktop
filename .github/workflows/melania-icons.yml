@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'tools/build_melania_icon_variants.py'
+      - 'tools/melania_aero_artwork.py'
+      - 'tools/test_melania_aero_artwork.py'
       - 'tools/audit_melania_icon_variants.py'
       - 'branding/coverage/**'
       - 'branding/Melania-Aero-Classic/**'
@@ -13,6 +15,8 @@ on:
   pull_request:
     paths:
       - 'tools/build_melania_icon_variants.py'
+      - 'tools/melania_aero_artwork.py'
+      - 'tools/test_melania_aero_artwork.py'
       - 'branding/coverage/**'
       - 'branding/Melania-Aero-Classic/**'
       - 'branding/Melania/**'
@@ -29,6 +33,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Test curated Aero vector artwork
+        run: python3 tools/test_melania_aero_artwork.py
       - name: Build all three original icon variants
         run: |
           set -euo pipefail
