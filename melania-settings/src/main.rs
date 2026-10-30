@@ -153,6 +153,34 @@ fn build_ui(
     appearance.append(&saved_option("Aero Glass", "Trasparenze, riflessi e bordi Aero. La sfocatura reale richiede il compositore.", prefs.borrow().aero_glass, prefs.clone(), |p,v| p.aero_glass = v, Some(apply_style.clone())));
     appearance.append(&saved_option("Animazioni GTK", "Attiva le transizioni nelle finestre Melania, salvo la preferenza Riduci movimento.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, Some(apply_style.clone())));
     appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
+    appearance.append(&text("Pacchetto icone Melania", "settings-hero"));
+    let icon_variants = gtk::DropDown::from_strings(&[
+        "Melania Light", "Melania Dark", "Melania Light on Dark Panel"
+    ]);
+    icon_variants.add_css_class("settings-icon-choice");
+    let selected = melania_config::ICON_THEMES.iter()
+        .position(|&name|name==prefs.borrow().icon_theme).unwrap_or(0);
+    icon_variants.set_selected(selected as u32);
+    icon_variants.set_tooltip_text(Some(
+        "Usa le varianti Aero del nostro icon pack. Melania aggiorna questa finestra subito e le altre app al riavvio."
+    ));
+    let prefs_for_icons = prefs.clone();
+    icon_variants.connect_selected_notify(move |dropdown| {
+        let index=dropdown.selected() as usize;
+        let Some(&variant)=melania_config::ICON_THEMES.get(index) else{return;};
+        let mut preferences = prefs_for_icons.borrow_mut();
+        preferences.icon_theme=variant.to_string();
+        if let Err(e)=melania_config::save(&preferences) {
+            eprintln!("Impossibile salvare il tema icone: {e}");
+            return;
+        }
+        if let Some(settings)=gtk::Settings::default() {
+            settings.set_property("gtk-icon-theme-name",
+                melania_config::resolved_icon_theme(&preferences));
+        }
+    });
+    appearance.append(&icon_variants);
+    appearance.append(&text("Se il pacchetto non è ancora installato, Melania usa temporaneamente Aero Classic. Le altre applicazioni applicheranno la variante al prossimo avvio.", "settings-subtitle"));
     appearance.append(&text("Intensità effetto vetro", "settings-hero"));
     let blur = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     blur.set_value(prefs.borrow().blur_strength as f64);
