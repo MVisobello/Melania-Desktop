@@ -17,6 +17,16 @@ class FilesAndPanelUX(unittest.TestCase):
         self.assertIn("browser.empty_icon.set_icon_name(Some(icon))",source)
         self.assertIn("files-empty-state",stylesheet)
 
+    def test_unreadable_directory_discards_stale_file_selection(self):
+        source=(ROOT/"melania-files/src/main.rs").read_text()
+        refresh=source.split("fn refresh(browser: &Browser) {", 1)[1]
+        error_handler=refresh.split("Err(err) => {", 1)[1].split("let is_empty = entries.is_empty()", 1)[0]
+        self.assertIn("browser.visible_paths.borrow_mut().clear();", error_handler)
+        self.assertIn("browser.selected_paths.borrow_mut().clear();", error_handler)
+        self.assertIn("*browser.selected.borrow_mut() = None;", error_handler)
+        self.assertIn("browser.tile_buttons.borrow_mut().clear();", error_handler)
+        self.assertIn("browser.preview_image.set_visible(false);", error_handler)
+
     def test_files_sidebar_toggle_uses_real_window_widgets(self):
         source=(ROOT/"melania-files/src/main.rs").read_text()
         self.assertIn('view-sidebar-symbolic',source)
