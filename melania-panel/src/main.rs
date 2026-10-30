@@ -255,7 +255,18 @@ fn start_window(app:&Application)->ApplicationWindow {
     computer.connect_clicked(|_|run("melania-files"));right.append(&computer);
     let settings=icon_row("Impostazioni","org.melaniadesktop.Settings","melania-shortcut");
     settings.connect_clicked(|_|run("melania-settings"));right.append(&settings);
-    columns.append(&right);root.append(&columns);
+    columns.append(&right);
+    // Limit the ENTIRE two-column menu, not only the left application list.
+    // Otherwise the quick-access column forces the whole popup to 760px.
+    let body_scroll = gtk::ScrolledWindow::new();
+    body_scroll.add_css_class("melania-start-body-scroll");
+    body_scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
+    body_scroll.set_propagate_natural_height(true);
+    body_scroll.set_vexpand(false);
+    body_scroll.set_min_content_height(280);
+    body_scroll.set_max_content_height(350);
+    body_scroll.set_child(Some(&columns));
+    root.append(&body_scroll);
     let footer=GtkBox::new(Orientation::Horizontal,10);
     footer.add_css_class("melania-start-footer");
     let logo=Image::from_icon_name("melania");logo.set_pixel_size(31);footer.append(&logo);
