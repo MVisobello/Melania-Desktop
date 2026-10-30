@@ -2,6 +2,7 @@
 //! Settings displayed here never mutate host GNOME/Cinnamon configuration.
 use gtk::prelude::*;
 use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack};
+use crate::symbols;
 use std::{env, fs, process::Command};
 
 fn label(value: &str, class: &str) -> Label {
@@ -16,8 +17,7 @@ fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
     page.add_css_class("settings-body");
     let heading = GtkBox::new(Orientation::Horizontal, 18);
     heading.add_css_class("settings-page-heading");
-    let image = Image::from_icon_name(icon);
-    image.set_pixel_size(42);
+    let image = symbols::icon(icon, 42);
     image.add_css_class("settings-page-icon");
     heading.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -35,8 +35,7 @@ pub fn info_row(icon: &str, title: &str, description: &str) -> GtkBox {
     let row = GtkBox::new(Orientation::Horizontal, 15);
     row.add_css_class("settings-info-row");
     row.set_valign(Align::Center);
-    let image = Image::from_icon_name(icon);
-    image.set_pixel_size(23);
+    let image = symbols::icon(icon, 23);
     image.add_css_class("settings-row-icon");
     row.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -52,8 +51,7 @@ pub fn linked_row(stack: &Stack, target: &str, icon: &str, title: &str, descript
     button.set_hexpand(true);
     let layout = GtkBox::new(Orientation::Horizontal, 15);
     layout.set_valign(Align::Center);
-    let image = Image::from_icon_name(icon);
-    image.set_pixel_size(25);
+    let image = symbols::icon(icon, 25);
     image.add_css_class("settings-row-icon");
     layout.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
