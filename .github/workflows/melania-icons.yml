@@ -40,6 +40,15 @@ jobs:
           test -f dist/melania-icon-themes/Melania-Light/index.theme
           test -f dist/melania-icon-themes/Melania-Dark/index.theme
           test -f dist/melania-icon-themes/Melania-Light-on-Dark-Panel/index.theme
+      - name: Verify isolated user-local installation
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/melania-icons-isolated
+        run: |
+          set -euo pipefail
+          bash scripts/install-melania-icon-variants.sh dist/melania-icon-themes
+          test -f "$XDG_DATA_HOME/icons/Melania-Dark/places/scalable/folder.svg"
+          test -f "$XDG_DATA_HOME/icons/Melania-Light/actions/24/edit-copy.svg"
+          test -f "$XDG_DATA_HOME/icons/Melania-Light-on-Dark-Panel/panel/network-wireless-signal-excellent.svg"
       - name: Export portable packages
         run: |
           set -euo pipefail
