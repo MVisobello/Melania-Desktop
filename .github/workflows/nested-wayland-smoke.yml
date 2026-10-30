@@ -1,0 +1,41 @@
+name: Nested Wayland runtime smoke test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nested-wayland:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install headless X11 host, Mesa software renderer and Wayland clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth mesa-utils libgl1-mesa-dri libegl1-mesa-dev \
+            libwayland-dev libxkbcommon-dev libudev-dev libseat-dev libdrm-dev libgbm-dev \
+            libgles2-mesa-dev libx11-dev pkg-config wayland-utils
+          command -v wayland-info
+      - name: Compile nested Smithay compositor
+        run: cargo build --locked -p melania-compositor
+      - name: Connect real Wayland client to Melania under virtual X11 host
+        run: |
+          mkdir -p reports
+          MELANIA_SMOKE_LOG=reports/compositor.log \
+            xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX' \
+            bash scripts/smoke-wayland-nested.sh
+          mv wayland-globals.log reports/wayland-globals.log
+      - name: Archive smoke-test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: melania-wayland-smoke-logs
+          path: reports/
+          if-no-files-found: warn
