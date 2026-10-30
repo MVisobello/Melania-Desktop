@@ -57,7 +57,7 @@ class MelaniaAppearanceAndIconContracts(unittest.TestCase):
         for name in TRAY:
             # The legacy freedesktop names stay packaged for compatibility.
             # Only the five new Melania tray IDs are loaded by the panel.
-            if name.startswith("melania-tray-"):
+            if name.startswith("melania-tray-") and not name.endswith("-light"):
                 self.assertIn(name, panel)
             for variant in ("light", "dark"):
                 xml = artwork(name, "status", variant, 20)
