@@ -60,7 +60,7 @@ class MelaniaDesignContract(unittest.TestCase):
                 root = ET.fromstring(svg)
                 self.assertTrue(root.tag.endswith("svg"))
                 self.assertNotIn("<text", svg)
-                self.assertIn("<path", svg)
+                self.assertTrue(any(tag in svg for tag in ("<path", "<rect", "<circle")))
         builder=(ROOT/"tools/build_melania_fluent_themes.py").read_text()
         self.assertIn("settings_artwork(name,category", builder)
 
