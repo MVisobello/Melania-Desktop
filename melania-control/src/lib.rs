@@ -254,6 +254,22 @@ pub const ACK: &str = "OK\nEND\n";
         let reply=respond_preview_path(path);
         assert_eq!(reply,"OK\nPREVIEW\t%2Frun%2Fuser%2F1000%2Fmelania-preview%2F1-2.bmp\nEND\n");
     }
+    #[test] fn preview_round_trip_over_private_socket() {
+        use std::os::unix::net::UnixListener;
+        let path=std::env::temp_dir().join(format!("melania-preview-ipc-{}.sock",std::process::id()));
+        let listener=UnixListener::bind(&path).unwrap();
+        let server=std::thread::spawn(move || {
+            let (mut socket,_) = listener.accept().unwrap();
+            assert_eq!(read_command(&mut socket).unwrap(),Some(Command::Preview(7)));
+            socket.write_all(respond_preview_path(
+                Path::new("/run/user/1000/melania-123-preview/7-1.bmp")
+            ).as_bytes()).unwrap();
+        });
+        let response=request_preview(&path,7).unwrap();
+        assert_eq!(response,Path::new("/run/user/1000/melania-123-preview/7-1.bmp"));
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
     #[test] fn invalid_encoding() {
         for s in ["%G0","%","raw\ttab","%FF"] {assert!(unescape(s).is_none());}
     }
