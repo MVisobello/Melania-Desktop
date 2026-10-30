@@ -12,11 +12,11 @@ sys.path.insert(0,str(ROOT/"tools"))
 from melania_shell_symbolic_icons import TRAY, artwork
 
 DEFAULT_ICONS=(
-    "melania-tray-wifi-symbolic",
-    "melania-tray-bluetooth-symbolic",
-    "melania-tray-volume-symbolic",
-    "melania-tray-battery-symbolic",
-    "melania-tray-notifications-symbolic",
+    "melania-tray-wifi",
+    "melania-tray-bluetooth",
+    "melania-tray-volume",
+    "melania-tray-battery",
+    "melania-tray-notifications",
 )
 
 
@@ -63,6 +63,13 @@ class StartTrayDesignContracts(unittest.TestCase):
                     self.assertNotIn('linearGradient',source)
                     self.assertNotIn('font',source)
                     self.assertGreaterEqual(source.count("<path")+source.count("<rect")+source.count("<circle"),2)
+        for icon in DEFAULT_ICONS:
+            self.assertIn(icon+"-light", TRAY)
+            light_svg=artwork(icon+"-light", "status", "light", 22)
+            self.assertIn('stroke="#334d67"', light_svg)
+            self.assertIn('stroke="#f1f7fe"', artwork(icon, "status", "light", 22))
+        self.assertIn('light_tray=',panel)
+        self.assertIn('format!("{icon_name}-light")',panel)
         self.assertIn('unique.add(f"status/{size}/{name}.svg")',builder)
         self.assertIn('or approved_artwork(',builder)
 
