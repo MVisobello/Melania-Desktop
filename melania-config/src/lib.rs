@@ -19,6 +19,8 @@ pub struct Preferences {
     pub reduce_motion: bool,
     /// Increase contrast of Melania shell and Settings (not host GTK themes).
     pub high_contrast: bool,
+    /// Icon family used by every Melania GTK process (never changes host GTK).
+    pub icon_theme: String,
 }
 impl Default for Preferences {
     fn default() -> Self { Self {
@@ -26,7 +28,34 @@ impl Default for Preferences {
         snap_windows: true, preview_windows: true,
         do_not_disturb: false, blur_strength: 70, workspace_count: 4,
         group_windows: false, reduce_motion: false, high_contrast: false,
+        icon_theme: "Melania-Light".into(),
     } }
+}
+pub const ICON_THEMES: [&str; 3] = [
+    "Melania-Light", "Melania-Dark", "Melania-Light-on-Dark-Panel"
+];
+/// The bundled theme is added to GTK's per-process icon search paths.
+/// Installed user icon themes remain discoverable in ~/.local/share/icons.
+pub fn bundled_icon_paths() -> Vec<PathBuf> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    vec![
+        root.join("dist/melania-icon-themes"),
+        root.join("branding"),
+    ]
+}
+pub fn icon_theme_available(name: &str) -> bool {
+    if !ICON_THEMES.contains(&name) {return false;}
+    if bundled_icon_paths().iter().any(|p|p.join(name).join("index.theme").is_file()) {
+        return true;
+    }
+    let user = std::env::var_os("XDG_DATA_HOME").filter(|s| !s.is_empty())
+        .map(PathBuf::from).or_else(||std::env::var_os("HOME")
+            .map(|h|PathBuf::from(h).join(".local/share")));
+    user.is_some_and(|base|base.join("icons").join(name).join("index.theme").is_file())
+}
+pub fn resolved_icon_theme(prefs:&Preferences) -> &str {
+    if icon_theme_available(&prefs.icon_theme) {&prefs.icon_theme}
+    else {"Melania-Aero-Classic"}
 }
 impl Preferences {
     pub fn from_text(data: &str) -> Self {
@@ -47,16 +76,17 @@ impl Preferences {
                 "group_windows" => if let Some(b) = as_bool() { prefs.group_windows = b },
                 "reduce_motion" => if let Some(b) = as_bool() { prefs.reduce_motion = b },
                 "high_contrast" => if let Some(b) = as_bool() { prefs.high_contrast = b },
+                "icon_theme" if ICON_THEMES.contains(&v) => prefs.icon_theme = v.to_string(),
                 _ => {}, // future versions can read older/newer files
             }
         }
         prefs
     }
     pub fn to_text(&self) -> String { format!(
-        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\n",
+        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\nicon_theme={}\n",
         self.dark_mode, self.aero_glass, self.animations, self.snap_windows,
         self.preview_windows, self.do_not_disturb, self.blur_strength, self.workspace_count,
-        self.group_windows, self.reduce_motion, self.high_contrast)
+        self.group_windows, self.reduce_motion, self.high_contrast, self.icon_theme)
     }
     pub fn read_from(path: &Path) -> io::Result<Self> {
         match fs::read_to_string(path) {
@@ -134,6 +164,16 @@ mod tests {
         assert_eq!(Preferences::from_text(&p.to_text()), p);
         let bad = Preferences::from_text("group_windows=probably\nreduce_motion=1\nhigh_contrast=");
         assert!(!bad.group_windows && !bad.reduce_motion && !bad.high_contrast);
+    }
+    #[test] fn icon_themes_are_validated_and_backward_compatible() {
+        assert_eq!(Preferences::default().icon_theme,"Melania-Light");
+        for name in ICON_THEMES {
+            let p=Preferences::from_text(&format!("icon_theme={name}"));
+            assert_eq!(p.icon_theme,name);
+            assert_eq!(Preferences::from_text(&p.to_text()),p);
+        }
+        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Light");
+        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Light");
     }
     #[test] fn reads_and_writes_file() {
         let dir = std::env::temp_dir().join(format!("melania-test-{}-{:?}", std::process::id(), std::thread::current().id()));
