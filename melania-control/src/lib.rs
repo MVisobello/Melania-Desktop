@@ -163,7 +163,7 @@ pub fn current_workspace(path: &Path) -> Result<u8, ControlError> {
     }
     let value=lines[1].strip_prefix("WORKSPACE\t")
         .and_then(|s|s.parse::<u8>().ok())
-        .filter(|i|(1..=4).contains(i))
+        .filter(|i|(1..=8).contains(i))
         .ok_or(ControlError::Protocol("Workspace non valido"))?;
     Ok(value)
 }
@@ -243,6 +243,14 @@ pub const ACK: &str = "OK\nEND\n";
     #[test] fn rejects_multiple_commands_in_one_connection() {
         let mut reader=&b"CLOSE 12\nLIST\n"[..];
         assert_eq!(read_command(&mut reader).unwrap(),None);
+    }
+    #[test] fn all_configurable_workspaces_are_accepted() {
+        for workspace in 1..=8 {
+            assert_eq!(Command::parse(&format!("WORKSPACE {workspace}\n")),Some(Command::Workspace(workspace)));
+            assert_eq!(respond_workspace(workspace),format!("OK\nWORKSPACE\t{workspace}\nEND\n"));
+        }
+        // Regression: STATUS must accept 5–8, not just the old four buttons.
+        assert_eq!(Command::parse("WORKSPACE 8\n"),Some(Command::Workspace(8)));
     }
     #[test] fn status_response_is_strict() {
         assert_eq!(respond_workspace(2),"OK\nWORKSPACE\t2\nEND\n");
