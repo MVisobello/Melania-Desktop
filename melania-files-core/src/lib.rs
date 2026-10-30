@@ -1,7 +1,7 @@
-pub mod nautilus_features;
 //! Filesystem model for Melania Files: bounded directory listings, predictable
 //! filtering/sorting, and durable bookmarks. No GTK and no compositor required.
 //! Never follow symlinks during directory classification or metadata inspection.
+pub mod nautilus_features;
 use std::{collections::HashSet, fs, io, path::{Path, PathBuf}, time::SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
