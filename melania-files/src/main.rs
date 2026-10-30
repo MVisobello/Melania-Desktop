@@ -19,6 +19,10 @@ struct Browser {
     visible_paths: Rc<RefCell<Vec<PathBuf>>>,
     tile_buttons: Rc<RefCell<Vec<(PathBuf, Button)>>>,
     tiles: FlowBox,
+    list_mode: Rc<Cell<bool>>,
+    list_header: GtkBox,
+    preview_icon: Image,
+    preview_heading: Label,
     location: Entry,
     status: Label,
     preview: Label,
@@ -60,6 +64,45 @@ fn human_size(size: u64) -> String {
 }
 
 fn is_picture(path: &Path) -> bool { model::is_picture(path) }
+
+/// Display metadata supplied by the bounded filesystem model, never
+/// recursively probe symlink targets just to populate a table row.
+fn file_type_label(entry: &model::Entry) -> String {
+    if entry.is_directory { return "Cartella".into(); }
+    if entry.is_symlink { return "Collegamento".into(); }
+    match entry.path.extension().and_then(|s| s.to_str())
+        .unwrap_or("").to_ascii_lowercase().as_str() {
+        "pdf" => "Documento PDF".into(),
+        "txt"|"md"|"odt"|"doc"|"docx" => "Documento".into(),
+        "ods"|"xls"|"xlsx"|"csv" => "Foglio di calcolo".into(),
+        "odp"|"ppt"|"pptx" => "Presentazione".into(),
+        "png"|"jpg"|"jpeg"|"webp"|"gif"|"svg"|"bmp" => "Immagine".into(),
+        "zip"|"7z"|"tar"|"gz"|"xz"|"rar" => "Archivio".into(),
+        "mp3"|"flac"|"ogg"|"wav" => "Audio".into(),
+        "mp4"|"mkv"|"webm"|"avi" => "Video".into(),
+        "" => "File".into(),
+        other => other.to_uppercase(),
+    }
+}
+fn modified_time_label(modified: Option<std::time::SystemTime>) -> String {
+    use std::time::UNIX_EPOCH;
+    let Some(epoch) = modified.and_then(|m|m.duration_since(UNIX_EPOCH).ok()) else {
+        return "—".into();
+    };
+    let secs = i64::try_from(epoch.as_secs()).unwrap_or(i64::MAX);
+    glib::DateTime::from_unix_local(secs).ok()
+        .and_then(|d| d.format("%d/%m/%Y %H:%M").ok())
+        .map(|s|s.to_string()).unwrap_or_else(||"—".into())
+}
+
+fn list_heading_label(title: &str, width: i32, expand: bool) -> Label {
+    let label = Label::new(Some(title));
+    label.set_xalign(0.0);
+    label.set_hexpand(expand);
+    if width > 0 {label.set_size_request(width, -1);}
+    label.add_css_class("files-list-heading-label");
+    label
+}
 
 /// Use the actual XDG user directories, including localized names such as
 /// "Documenti" / "Scrivania". Never assume ~/Documents exists.
@@ -347,7 +390,11 @@ fn refresh(browser: &Browser) {
     }
     browser.tile_buttons.borrow_mut().clear();
     let mut count = 0;
+    let list_mode = browser.list_mode.get();
     for entry in entries {
+        let type_name = file_type_label(&entry);
+        let file_size = if entry.is_directory {"—".to_string()} else {human_size(entry.size)};
+        let changed = modified_time_label(entry.modified);
         let path = entry.path;
         let name = entry.name;
         count += 1;
@@ -355,26 +402,58 @@ fn refresh(browser: &Browser) {
         let button = Button::new();
         button.add_css_class("files-tile");
         button.set_tooltip_text(Some(&path.display().to_string()));
-        let stack = GtkBox::new(Orientation::Vertical, 6);
-        stack.set_halign(Align::Center);
-        if is_picture(&path) && path.is_file() {
-            let picture = Picture::for_filename(&path);
-            picture.set_size_request(90, 70);
-            picture.set_content_fit(gtk::ContentFit::Contain);
-            stack.append(&picture);
+        if list_mode {
+            // Four useful columns without changing selection, DnD, context
+            // menus, default app opening or the underlying file model.
+            button.add_css_class("files-list-row");
+            let row = GtkBox::new(Orientation::Horizontal, 9);
+            row.add_css_class("files-list-row-content");
+            let name_cell = GtkBox::new(Orientation::Horizontal, 9);
+            name_cell.set_hexpand(true);
+            name_cell.set_halign(Align::Fill);
+            let icon = Image::from_icon_name(entry_icon(&path, folder));
+            icon.set_pixel_size(23);
+            name_cell.append(&icon);
+            let text = Label::new(Some(&name));
+            text.set_xalign(0.0);
+            text.set_hexpand(true);
+            text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            text.add_css_class("files-list-name");
+            name_cell.append(&text);
+            row.append(&name_cell);
+            let size_cell = list_heading_label(&file_size, 84, false);
+            size_cell.add_css_class("files-list-meta");
+            row.append(&size_cell);
+            let type_cell = list_heading_label(&type_name, 124, false);
+            type_cell.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            type_cell.add_css_class("files-list-meta");
+            row.append(&type_cell);
+            let changed_cell = list_heading_label(&changed, 132, false);
+            changed_cell.add_css_class("files-list-meta");
+            row.append(&changed_cell);
+            button.set_child(Some(&row));
         } else {
-            let symbol = Image::from_icon_name(entry_icon(&path, folder));
-            symbol.set_pixel_size(42);
-            symbol.add_css_class("files-icon");
-            stack.append(&symbol);
+            let stack = GtkBox::new(Orientation::Vertical, 6);
+            stack.set_halign(Align::Center);
+            if is_picture(&path) && path.is_file() {
+                let picture = Picture::for_filename(&path);
+                picture.set_size_request(90, 70);
+                picture.set_content_fit(gtk::ContentFit::Contain);
+                stack.append(&picture);
+            } else {
+                let symbol = Image::from_icon_name(entry_icon(&path, folder));
+                symbol.set_pixel_size(42);
+                symbol.add_css_class("files-icon");
+                stack.append(&symbol);
+            }
+            let short = if name.chars().count() > 20 {
+                format!("{}…", name.chars().take(19).collect::<String>())
+            } else { name.clone() };
+            let label = Label::new(Some(&short));
+            label.add_css_class("files-name");
+            stack.append(&label);
+            button.set_child(Some(&stack));
         }
-        let short = if name.chars().count() > 20 {
-            format!("{}…", name.chars().take(19).collect::<String>())
-        } else { name.clone() };
-        let label = Label::new(Some(&short));
-        label.add_css_class("files-name");
-        stack.append(&label);
-        button.set_child(Some(&stack));
         if browser.selected_paths.borrow().contains(&path) {
             button.add_css_class("files-tile-selected");
         }
@@ -423,11 +502,16 @@ fn refresh(browser: &Browser) {
             } else { selection.iter().next().cloned() };
             drop(selection);
             if count > 1 {
+                state.preview_heading.set_text(&format!("{count} elementi selezionati"));
+                state.preview_icon.set_icon_name(Some("folder-multiple-symbolic"));
+                state.preview_icon.set_visible(true);
                 state.preview.set_text(&format!("{count} elementi selezionati · Ctrl+C/Ctrl+X, Canc o trascina per copiarli."));
                 state.preview_image.set_visible(false);
                 return;
             }
             if count == 0 {
+                state.preview_heading.set_text("Nessun elemento selezionato");
+                state.preview_icon.set_visible(false);
                 state.preview.set_text("Nessun elemento selezionato.");
                 state.preview_image.set_visible(false);
                 return;
@@ -445,8 +529,11 @@ fn refresh(browser: &Browser) {
             } else { String::new() };
             let excerpt = if excerpt.is_empty() { String::new() }
                 else { format!("\n\nANTEPRIMA TESTO\n{excerpt}") };
-            state.preview.set_text(&format!("{}\n\nDimensione: {}\n\nPercorso:\n{}{}",
-                name, size, selected_path.display(), excerpt));
+            state.preview_heading.set_text(&name);
+            state.preview_icon.set_icon_name(Some(entry_icon(&selected_path, folder)));
+            state.preview_icon.set_visible(!is_picture(&selected_path));
+            state.preview.set_text(&format!("Tipo: {}\nDimensione: {}\nPosizione: {}{}",
+                if folder {"Cartella"} else {"File"}, size, selected_path.parent().unwrap_or(&selected_path).display(), excerpt));
             if is_picture(&selected_path) && selected_path.is_file() {
                 state.preview_image.set_filename(Some(&selected_path));
                 state.preview_image.set_visible(true);
@@ -540,6 +627,16 @@ fn refresh(browser: &Browser) {
         });
         button.add_controller(secondary_click);
         browser.tiles.insert(&button, -1);
+    }
+    if browser.selected_paths.borrow().is_empty() {
+        browser.preview_heading.set_text(&caption);
+        browser.preview_icon.set_icon_name(Some("folder"));
+        browser.preview_icon.set_visible(true);
+        browser.preview_image.set_visible(false);
+        browser.preview_image.set_filename(None::<&Path>);
+        browser.preview.set_text(&format!(
+            "Cartella · {} elementi\nPosizione: {}", count, dir.display()
+        ));
     }
     browser.status.set_text(&format!("{count} elementi visibili · Melania Files"));
 }
@@ -669,7 +766,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     // Native counterparts of the executable UX Lab's view/inspector controls.
     // They are ordinary GTK widgets; no custom compositor support required.
     let list_view_toggle = gtk::ToggleButton::with_label("Elenco");
-    list_view_toggle.set_tooltip_text(Some("Alterna fra griglia ed elenco"));
+    list_view_toggle.set_active(true);
+    list_view_toggle.set_tooltip_text(Some("Elenco dettagliato (attivo) o griglia con icone"));
 
     let inspector_toggle = gtk::ToggleButton::with_label("Dettagli");
     inspector_toggle.set_active(true);
@@ -681,7 +779,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let images_toggle = CheckButton::with_label("Foto");
     images_toggle.set_tooltip_text(Some("Mostra solo immagini e cartelle"));
 
-    let sort = gtk::DropDown::from_strings(&["Nome", "Data", "Dimensione"]);
+    let sort = gtk::DropDown::from_strings(&["Nome", "Data", "Dimensione", "Tipo"]);
     sort.set_tooltip_text(Some("Ordina elementi, mantenendo le cartelle all'inizio"));
 
     let recursive_search_button = Button::with_label("Cerca nelle sottocartelle…");
@@ -794,24 +892,49 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     scroll.set_vexpand(true);
     scroll.add_css_class("files-grid");
     let tiles = FlowBox::new();
-    // The FlowBox wraps automatically according to the *actual* middle-pane
-    // width; do not hard-code four columns into a fixed-size region.
-    tiles.set_max_children_per_line(6);
+    // Start in the approved column-based list. Grid remains selectable.
+    tiles.set_max_children_per_line(1);
     tiles.set_min_children_per_line(1);
     tiles.set_column_spacing(10);
     tiles.set_row_spacing(10);
     tiles.set_selection_mode(gtk::SelectionMode::None);
     tiles.set_valign(Align::Start);
-    let view_tiles=tiles.clone();
-    list_view_toggle.connect_toggled(move |toggle| {
-        view_tiles.set_max_children_per_line(if toggle.is_active() { 1 } else { 6 });
-        if toggle.is_active() {
-            view_tiles.add_css_class("files-list-view");
-        } else {
-            view_tiles.remove_css_class("files-list-view");
-        }
-    });
+    tiles.add_css_class("files-list-view");
+    let list_header = GtkBox::new(Orientation::Horizontal, 9);
+    list_header.add_css_class("files-list-header");
+    // Column headers are functional sort controls, not decorative labels.
+    // A second click reverses the selected ordering. Folder-first is retained.
+    for (caption, sort_index, width, expand) in [
+        ("Nome", 0, 0, true),
+        ("Dimensione", 2, 84, false),
+        ("Tipo", 3, 124, false),
+        ("Ultima modifica", 1, 132, false),
+    ] {
+        let control=Button::new();
+        control.add_css_class("files-list-sort");
+        control.set_tooltip_text(Some("Ordina per questa colonna; premi di nuovo per invertire"));
+        control.set_hexpand(expand);
+        let heading = list_heading_label(caption,width,expand);
+        control.set_child(Some(&heading));
+        let picker = sort.clone();
+        let reverse_button = reverse.clone();
+        control.connect_clicked(move |_| {
+            if picker.selected() == sort_index {
+                reverse_button.set_active(!reverse_button.is_active());
+            } else {
+                reverse_button.set_active(false);
+                picker.set_selected(sort_index);
+            }
+        });
+        list_header.append(&control);
+    }
+    let center_panel = GtkBox::new(Orientation::Vertical, 0);
+    center_panel.set_hexpand(true);
+    center_panel.set_vexpand(true);
+    center_panel.append(&list_header);
+    scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     scroll.set_child(Some(&tiles));
+    center_panel.append(&scroll);
     let inspector = GtkBox::new(Orientation::Vertical, 14);
     inspector.add_css_class("files-preview");
     inspector.set_size_request(220, -1);
@@ -823,6 +946,16 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     inspector_toggle.connect_toggled(move |toggle| {
         details_area.set_visible(toggle.is_active());
     });
+    let preview_icon = Image::from_icon_name("folder");
+    preview_icon.set_pixel_size(76);
+    preview_icon.set_halign(Align::Center);
+    preview_icon.add_css_class("files-preview-folder-icon");
+    inspector.append(&preview_icon);
+    let preview_heading = Label::new(Some("Home"));
+    preview_heading.set_xalign(0.0);
+    preview_heading.set_wrap(true);
+    preview_heading.add_css_class("files-preview-heading");
+    inspector.append(&preview_heading);
     let title = Label::new(Some("Dettagli"));
     title.add_css_class("files-title");
     title.set_xalign(0.0);
@@ -859,10 +992,13 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let rename_popover = gtk::Popover::new();
     rename_popover.set_child(Some(&rename_choices));
     rename_menu.set_popover(Some(&rename_popover));
+    // Transfer safety explanation belongs under "Altro", not permanently
+    // occupying the preview pane. The underlying safe operations do not change.
     let transfer_label = Label::new(Some("Trasferimenti locali sicuri"));
     transfer_label.set_xalign(0.0);
     transfer_label.add_css_class("files-title");
-    inspector.append(&transfer_label);
+    other_choices.append(&gtk::Separator::new(Orientation::Horizontal));
+    other_choices.append(&transfer_label);
     let copy_button = action_icon_button("Copia", "edit-copy-symbolic", "Copia la selezione");
     let cut_button = action_icon_button("Taglia", "edit-cut-symbolic", "Taglia la selezione");
     let paste_button = action_icon_button("Incolla", "edit-paste-symbolic", "Incolla nella cartella");
@@ -883,10 +1019,10 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     transfer_note.set_wrap(true);
     transfer_note.set_xalign(0.0);
     transfer_note.add_css_class("files-info");
-    inspector.append(&transfer_note);
+    other_choices.append(&transfer_note);
     let middle_and_inspector = gtk::Paned::new(Orientation::Horizontal);
     middle_and_inspector.set_wide_handle(true);
-    middle_and_inspector.set_start_child(Some(&scroll));
+    middle_and_inspector.set_start_child(Some(&center_panel));
     middle_and_inspector.set_end_child(Some(&inspector_scroll));
     middle_and_inspector.set_position(690);
     let sidebar_scroll = ScrolledWindow::new();
@@ -923,7 +1059,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         selection_anchor: Rc::new(RefCell::new(None)),
         visible_paths: Rc::new(RefCell::new(Vec::new())),
         tile_buttons: Rc::new(RefCell::new(Vec::new())),
-        tiles, location, status, preview, preview_image, search,
+        tiles, list_mode: Rc::new(Cell::new(true)), list_header: list_header.clone(),
+        preview_icon, preview_heading, location, status, preview, preview_image, search,
         back: Rc::new(RefCell::new(Vec::new())),
         forward: Rc::new(RefCell::new(Vec::new())),
         show_hidden: Rc::new(Cell::new(false)),
@@ -943,6 +1080,20 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         trash_action: trash_button.clone(), rename_field: rename_name.clone(),
         transfer_progress, transfer_cancel, active_job,
     };
+    let view_state = browser.clone();
+    let view_rows = browser.tiles.clone();
+    list_view_toggle.connect_toggled(move |toggle| {
+        let mode = toggle.is_active();
+        view_state.list_mode.set(mode);
+        view_state.list_header.set_visible(mode);
+        view_rows.set_max_children_per_line(if mode {1} else {6});
+        if mode {
+            view_rows.add_css_class("files-list-view");
+        } else {
+            view_rows.remove_css_class("files-list-view");
+        }
+        refresh(&view_state);
+    });
     // User templates: copies are always create_new, so an existing document
     // cannot be replaced. Only regular files, never symlink templates.
     let template_menu = gtk::MenuButton::new();
