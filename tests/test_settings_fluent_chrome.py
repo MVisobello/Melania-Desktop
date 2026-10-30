@@ -64,6 +64,18 @@ class MelaniaDesignContract(unittest.TestCase):
         builder=(ROOT/"tools/build_melania_fluent_themes.py").read_text()
         self.assertIn("settings_artwork(name,category", builder)
 
+    def test_official_app_ids_resolve_without_missing_image_placeholders(self):
+        from melania_fluent_artwork import CORE
+        from melania_fluent_settings_icons import artwork as system_icon
+        ids = ("melania", "org.melaniadesktop.Files", "org.melaniadesktop.Settings")
+        for name in ids:
+            self.assertTrue(any(icon == name and context == "apps" for _, icon, context in CORE))
+        moon = system_icon("melania", "apps", "light", 32)
+        self.assertIn('mask="url(#cut)"', moon)
+        ET.fromstring(moon)
+        build = (ROOT / "tools/build_melania_fluent_themes.py").read_text()
+        self.assertIn('unique.add(f"apps/scalable/{app_name}.svg")', build)
+
     def test_real_window_buttons_styled_in_both_apps(self):
         for app, header in (("melania-files","files-aero-header"),
                             ("melania-settings","settings-titlebar")):
