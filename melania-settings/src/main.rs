@@ -1,5 +1,6 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
+mod symbols;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
@@ -344,7 +345,7 @@ fn build_ui(
     if is_valid_page(initial_page) {
         stack.set_visible_child_name(initial_page);
     }
-    let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
+    let navigation: Rc<RefCell<Vec<(Button, &'static str)>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target, icon_name) in [
         ("Sistema", "system", "computer"),
@@ -368,15 +369,24 @@ fn build_ui(
         ("Schermo", "display", "video-display"),
         ("Archiviazione", "storage", "drive-harddisk"),
     ] {
+        // Group headings make the long navigation easier to scan.
+        let group = match target {
+            "system" => Some("SISTEMA"),
+            "appearance" => Some("PERSONALIZZAZIONE"),
+            "account" => Some("UTENTI E APPLICAZIONI"),
+            "desktop" => Some("DESKTOP E FINESTRE"),
+            _ => None,
+        };
+        if let Some(group) = group {
+            navigation_list.append(&text(group, "settings-nav-group"));
+        }
         let button = Button::new();
         button.add_css_class("settings-nav-item");
         button.set_hexpand(true);
         button.set_tooltip_text(Some(name));
         let row = GtkBox::new(Orientation::Horizontal, 12);
         row.add_css_class("settings-nav-content");
-        let icon = Image::from_icon_name(icon_name);
-        icon.set_pixel_size(19);
-        row.append(&icon);
+        row.append(&symbols::icon(icon_name, 20));
         let caption = Label::new(Some(name));
         caption.set_xalign(0.0);
         caption.set_hexpand(true);
@@ -385,21 +395,19 @@ fn build_ui(
         let navigation_stack = stack.clone();
         button.connect_clicked(move |_| navigation_stack.set_visible_child_name(target));
         if target == initial_page { button.add_css_class("active-section"); }
-        navigation.borrow_mut().push(button.clone());
+        navigation.borrow_mut().push((button.clone(), target));
         navigation_labels.borrow_mut().push((button.clone(), name.to_lowercase()));
         navigation_list.append(&button);
     }
-    // Reflect programmatic navigation from the panel or command-line requests.
+    // Selected state must use the actual target, not SETTINGS_PAGES ordering.
     let buttons = navigation.clone();
     stack.connect_visible_child_name_notify(move |stack| {
         let current = stack.visible_child_name();
-        for (i, name) in SETTINGS_PAGES.iter().enumerate() {
-            if let Some(button) = buttons.borrow().get(i) {
-                if current.as_deref() == Some(*name) {
-                    button.add_css_class("active-section");
-                } else {
-                    button.remove_css_class("active-section");
-                }
+        for (button, target) in buttons.borrow().iter() {
+            if current.as_deref() == Some(*target) {
+                button.add_css_class("active-section");
+            } else {
+                button.remove_css_class("active-section");
             }
         }
     });
