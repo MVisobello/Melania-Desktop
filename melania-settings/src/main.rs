@@ -347,6 +347,7 @@ fn build_ui(
         stack.set_visible_child_name(initial_page);
     }
     let navigation: Rc<RefCell<Vec<(Button, &'static str)>>> = Rc::new(RefCell::new(Vec::new()));
+    let navigation_headings: Rc<RefCell<Vec<Label>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target, icon_name) in [
         ("Sistema", "system", "computer"),
@@ -379,7 +380,9 @@ fn build_ui(
             _ => None,
         };
         if let Some(group) = group {
-            navigation_list.append(&text(group, "settings-nav-group"));
+            let heading = text(group, "settings-nav-group");
+            navigation_headings.borrow_mut().push(heading.clone());
+            navigation_list.append(&heading);
         }
         let button = Button::new();
         button.add_css_class("settings-nav-item");
@@ -413,10 +416,14 @@ fn build_ui(
         }
     });
     let categories = navigation_labels.clone();
+    let group_labels = navigation_headings.clone();
     category_search.connect_changed(move |search| {
-        let query = search.text().to_lowercase();
+        let query = search.text().trim().to_lowercase();
+        for heading in group_labels.borrow().iter() {
+            heading.set_visible(query.is_empty());
+        }
         for (button, label) in categories.borrow().iter() {
-            button.set_visible(query.trim().is_empty() || label.contains(query.trim()));
+            button.set_visible(query.is_empty() || label.contains(query.as_str()));
         }
     });
     sidebar.append(&text("Melania Desktop  ·  Impostazioni locali", "settings-sidebar-footer"));
