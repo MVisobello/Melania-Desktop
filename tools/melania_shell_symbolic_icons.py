@@ -27,6 +27,12 @@ TRAY = {
     "preferences-system-notifications-symbolic": '<path d="M6 17h12l-2-3V10a4 4 0 0 0-8 0v4Z"/><path d="M10 20c1 2 3 2 4 0"/>',
 }
 
+# Small GTK widget affordances must not degrade to unknown-icon squares.
+WIDGETS = {
+    "pan-down-symbolic": '<path d="m6 9 6 6 6-6"/>',
+    "pan-end-symbolic": '<path d="m9 6 6 6-6 6"/>',
+}
+
 
 def artwork(name: str, category: str, variant: str = "light", size: int = 24) -> str | None:
     if not name.endswith("-symbolic"):
@@ -41,6 +47,11 @@ def artwork(name: str, category: str, variant: str = "light", size: int = 24) ->
             return None
         stroke = "#e6f3ff" if variant == "dark" else "#294c70"
         shape = TRAY[name]
+    elif name in WIDGETS:
+        if category not in ("actions", "apps"):
+            return None
+        stroke = "#e6f3ff" if variant == "dark" else "#30445a"
+        shape = WIDGETS[name]
     else:
         return None
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="{size}" height="{size}">'
