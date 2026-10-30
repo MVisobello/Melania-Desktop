@@ -83,6 +83,10 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
         for _label, name, context in CORE:
             for size in (16,24,32,48,64,96,128,256):
                 unique.add(f'{context}/{size}x{size}/{name}.svg')
+    # Exact GTK application IDs must exist as real theme entries. Without
+    # these names, Start and pinned Files/Settings show missing-image tiles.
+    for app_name in ("melania", "org.melaniadesktop.Files", "org.melaniadesktop.Settings"):
+        unique.add(f"apps/scalable/{app_name}.svg")
     paths=sorted(unique)
     if dest.exists():
         raise FileExistsError(f'Output already exists; remove knowingly: {dest}')
