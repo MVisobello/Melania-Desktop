@@ -101,7 +101,7 @@ button.settings-nav-item.active-section image { color: #1765b6; }
   font-size: 12px;
   color: #747f8e;
 }
-.settings-row-description { max-width: 360px; }
+.settings-row-description { color: #747f8e; }
 .settings-section-heading {
   margin: 16px 2px 5px;
   color: #3b444e;
