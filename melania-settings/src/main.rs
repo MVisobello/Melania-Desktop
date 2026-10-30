@@ -1,6 +1,8 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
 mod symbols;
+#[path = "../../branding/window_controls.rs"]
+mod window_controls;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
@@ -128,45 +130,18 @@ fn build_ui(
     let window = ApplicationWindow::builder().application(app).title("Melania — Impostazioni")
         .default_width(1020).default_height(690).build();
     window.add_css_class("melania-settings-window");
-    // All three Windows 7-style controls perform native GTK window actions.
+    // Shared component: same Win7 buttons, glyphs and actions as Files.
     let titlebar = HeaderBar::new();
     titlebar.add_css_class("settings-titlebar");
-    titlebar.set_show_title_buttons(false);
-    titlebar.set_decoration_layout(Some(""));
     let title_text = Label::new(Some("Impostazioni"));
     title_text.add_css_class("title");
     titlebar.set_title_widget(Some(&title_text));
-    // A real sidebar switch allows Settings to stay usable on narrow displays.
-    // GTK keeps the main content scrollable instead of clipping navigation.
+    // Responsive navigation keeps the Settings sidebar usable on narrow screens.
     let navigation_toggle = Button::with_label("☰");
     navigation_toggle.add_css_class("settings-sidebar-toggle");
     navigation_toggle.set_tooltip_text(Some("Mostra o nascondi il menu (Ctrl+B)"));
     titlebar.pack_start(&navigation_toggle);
-    let controls = GtkBox::new(Orientation::Horizontal, 0);
-    controls.add_css_class("win7-window-controls");
-    let minimize = Button::with_label("—");
-    minimize.add_css_class("win7-minimize");
-    minimize.set_tooltip_text(Some("Minimizza"));
-    let maximize = Button::with_label("□");
-    maximize.add_css_class("win7-maximize");
-    maximize.set_tooltip_text(Some("Massimizza / Ripristina"));
-    let close = Button::with_label("×");
-    close.add_css_class("win7-close");
-    close.set_tooltip_text(Some("Chiudi"));
-    let w = window.clone();
-    minimize.connect_clicked(move |_| w.minimize());
-    let w = window.clone();
-    maximize.connect_clicked(move |_| {
-        if w.is_maximized() { w.unmaximize(); } else { w.maximize(); }
-    });
-    let toggle_icon = maximize.clone();
-    window.connect_maximized_notify(move |w| {
-        toggle_icon.set_label(if w.is_maximized() { "❐" } else { "□" });
-    });
-    let w = window.clone();
-    close.connect_clicked(move |_| w.close());
-    for b in [&minimize, &maximize, &close] { controls.append(b); }
-    titlebar.pack_end(&controls);
+    window_controls::install(&window, &titlebar);
     window.set_titlebar(Some(&titlebar));
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.add_css_class("settings-root");
