@@ -37,6 +37,9 @@ il tema Aero o riscrivere il backend filesystem.
   disattivata.
 - Due o più finestre aprono al passaggio del mouse un popover con icona,
   titolo di ciascuna finestra e pulsante per attivarla o chiuderla.
+- Il titolo Wayland della finestra Files segue la cartella della scheda attiva,
+  così nel selettore si distinguono ad esempio `Documenti — Melania Files`
+  e `Immagini — Melania Files`, anziché due voci identiche.
 - Gli elementi **scheda** dentro la stessa finestra NON sono finestre
   Wayland indipendenti: rimangono selezionabili dalla barra delle schede.
 - **Limite esplicito**: il popover non contiene ancora miniature live dei
