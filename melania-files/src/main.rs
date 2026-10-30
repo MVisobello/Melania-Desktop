@@ -766,7 +766,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     // Native counterparts of the executable UX Lab's view/inspector controls.
     // They are ordinary GTK widgets; no custom compositor support required.
     let list_view_toggle = gtk::ToggleButton::with_label("Elenco");
-    list_view_toggle.set_tooltip_text(Some("Alterna fra griglia ed elenco"));
+    list_view_toggle.set_active(true);
+    list_view_toggle.set_tooltip_text(Some("Elenco dettagliato (attivo) o griglia con icone"));
 
     let inspector_toggle = gtk::ToggleButton::with_label("Dettagli");
     inspector_toggle.set_active(true);
@@ -891,24 +892,27 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     scroll.set_vexpand(true);
     scroll.add_css_class("files-grid");
     let tiles = FlowBox::new();
-    // The FlowBox wraps automatically according to the *actual* middle-pane
-    // width; do not hard-code four columns into a fixed-size region.
-    tiles.set_max_children_per_line(6);
+    // Start in the approved column-based list. Grid remains selectable.
+    tiles.set_max_children_per_line(1);
     tiles.set_min_children_per_line(1);
     tiles.set_column_spacing(10);
     tiles.set_row_spacing(10);
     tiles.set_selection_mode(gtk::SelectionMode::None);
     tiles.set_valign(Align::Start);
-    let view_tiles=tiles.clone();
-    list_view_toggle.connect_toggled(move |toggle| {
-        view_tiles.set_max_children_per_line(if toggle.is_active() { 1 } else { 6 });
-        if toggle.is_active() {
-            view_tiles.add_css_class("files-list-view");
-        } else {
-            view_tiles.remove_css_class("files-list-view");
-        }
-    });
+    tiles.add_css_class("files-list-view");
+    let list_header = GtkBox::new(Orientation::Horizontal, 9);
+    list_header.add_css_class("files-list-header");
+    list_header.append(&list_heading_label("Nome", 0, true));
+    list_header.append(&list_heading_label("Dimensione", 84, false));
+    list_header.append(&list_heading_label("Tipo", 124, false));
+    list_header.append(&list_heading_label("Ultima modifica", 132, false));
+    let center_panel = GtkBox::new(Orientation::Vertical, 0);
+    center_panel.set_hexpand(true);
+    center_panel.set_vexpand(true);
+    center_panel.append(&list_header);
+    scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     scroll.set_child(Some(&tiles));
+    center_panel.append(&scroll);
     let inspector = GtkBox::new(Orientation::Vertical, 14);
     inspector.add_css_class("files-preview");
     inspector.set_size_request(220, -1);
@@ -920,6 +924,16 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     inspector_toggle.connect_toggled(move |toggle| {
         details_area.set_visible(toggle.is_active());
     });
+    let preview_icon = Image::from_icon_name("folder");
+    preview_icon.set_pixel_size(76);
+    preview_icon.set_halign(Align::Center);
+    preview_icon.add_css_class("files-preview-folder-icon");
+    inspector.append(&preview_icon);
+    let preview_heading = Label::new(Some("Home"));
+    preview_heading.set_xalign(0.0);
+    preview_heading.set_wrap(true);
+    preview_heading.add_css_class("files-preview-heading");
+    inspector.append(&preview_heading);
     let title = Label::new(Some("Dettagli"));
     title.add_css_class("files-title");
     title.set_xalign(0.0);
@@ -956,10 +970,13 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let rename_popover = gtk::Popover::new();
     rename_popover.set_child(Some(&rename_choices));
     rename_menu.set_popover(Some(&rename_popover));
+    // Transfer safety explanation belongs under "Altro", not permanently
+    // occupying the preview pane. The underlying safe operations do not change.
     let transfer_label = Label::new(Some("Trasferimenti locali sicuri"));
     transfer_label.set_xalign(0.0);
     transfer_label.add_css_class("files-title");
-    inspector.append(&transfer_label);
+    other_choices.append(&gtk::Separator::new(Orientation::Horizontal));
+    other_choices.append(&transfer_label);
     let copy_button = action_icon_button("Copia", "edit-copy-symbolic", "Copia la selezione");
     let cut_button = action_icon_button("Taglia", "edit-cut-symbolic", "Taglia la selezione");
     let paste_button = action_icon_button("Incolla", "edit-paste-symbolic", "Incolla nella cartella");
@@ -980,10 +997,10 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     transfer_note.set_wrap(true);
     transfer_note.set_xalign(0.0);
     transfer_note.add_css_class("files-info");
-    inspector.append(&transfer_note);
+    other_choices.append(&transfer_note);
     let middle_and_inspector = gtk::Paned::new(Orientation::Horizontal);
     middle_and_inspector.set_wide_handle(true);
-    middle_and_inspector.set_start_child(Some(&scroll));
+    middle_and_inspector.set_start_child(Some(&center_panel));
     middle_and_inspector.set_end_child(Some(&inspector_scroll));
     middle_and_inspector.set_position(690);
     let sidebar_scroll = ScrolledWindow::new();
@@ -1020,7 +1037,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         selection_anchor: Rc::new(RefCell::new(None)),
         visible_paths: Rc::new(RefCell::new(Vec::new())),
         tile_buttons: Rc::new(RefCell::new(Vec::new())),
-        tiles, location, status, preview, preview_image, search,
+        tiles, list_mode: Rc::new(Cell::new(true)), list_header: list_header.clone(),
+        preview_icon, preview_heading, location, status, preview, preview_image, search,
         back: Rc::new(RefCell::new(Vec::new())),
         forward: Rc::new(RefCell::new(Vec::new())),
         show_hidden: Rc::new(Cell::new(false)),
@@ -1040,6 +1058,20 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         trash_action: trash_button.clone(), rename_field: rename_name.clone(),
         transfer_progress, transfer_cancel, active_job,
     };
+    let view_state = browser.clone();
+    let view_rows = browser.tiles.clone();
+    list_view_toggle.connect_toggled(move |toggle| {
+        let mode = toggle.is_active();
+        view_state.list_mode.set(mode);
+        view_state.list_header.set_visible(mode);
+        view_rows.set_max_children_per_line(if mode {1} else {6});
+        if mode {
+            view_rows.add_css_class("files-list-view");
+        } else {
+            view_rows.remove_css_class("files-list-view");
+        }
+        refresh(&view_state);
+    });
     // User templates: copies are always create_new, so an existing document
     // cannot be replaced. Only regular files, never symlink templates.
     let template_menu = gtk::MenuButton::new();
