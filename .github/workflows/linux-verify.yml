@@ -71,7 +71,9 @@ jobs:
         if: always()
         with:
           name: gtk-build-log
-          path: |\n            gtk-build.log\n            gtk-panel-tests.log
+          path: |
+            gtk-build.log
+            gtk-panel-tests.log
 
 
   rust-notifications:
