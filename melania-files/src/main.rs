@@ -20,6 +20,7 @@ struct Browser {
     tile_buttons: Rc<RefCell<Vec<(PathBuf, Button)>>>,
     tiles: FlowBox,
     empty_view: GtkBox,
+    empty_icon: Image,
     empty_title: Label,
     empty_explanation: Label,
     list_mode: Rc<Cell<bool>>,
@@ -395,6 +396,7 @@ fn refresh(browser: &Browser) {
         Ok(entries) => entries,
         Err(err) => {
             browser.empty_view.set_visible(true);
+            browser.empty_icon.set_icon_name(Some("dialog-error"));
             browser.empty_title.set_text("Impossibile leggere la cartella");
             browser.empty_explanation.set_text(&format!("{err}"));
             browser.list_header.set_visible(false);
@@ -406,8 +408,9 @@ fn refresh(browser: &Browser) {
     browser.empty_view.set_visible(is_empty);
     browser.list_header.set_visible(!is_empty && browser.list_mode.get());
     if is_empty {
-        let (_icon, title, description) = empty_folder_message(
+        let (icon, title, description) = empty_folder_message(
             &query, browser.only_images.get(), browser.show_hidden.get());
+        browser.empty_icon.set_icon_name(Some(icon));
         browser.empty_title.set_text(title);
         browser.empty_explanation.set_text(description);
     }
@@ -1125,7 +1128,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         selection_anchor: Rc::new(RefCell::new(None)),
         visible_paths: Rc::new(RefCell::new(Vec::new())),
         tile_buttons: Rc::new(RefCell::new(Vec::new())),
-        tiles, empty_view, empty_title, empty_explanation,
+        tiles, empty_view, empty_icon: empty_image, empty_title, empty_explanation,
         list_mode: Rc::new(Cell::new(true)), list_header: list_header.clone(),
         preview_icon, preview_heading, location, status, preview, preview_image, search,
         back: Rc::new(RefCell::new(Vec::new())),
