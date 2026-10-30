@@ -249,12 +249,9 @@ fn start_window(app:&Application)->ApplicationWindow {
         });
         right.append(&button);
     }
-    right.append(&gtk::Separator::new(Orientation::Horizontal));
-    right.append(&label("SISTEMA", "melania-section-label"));
-    let computer=icon_row("Computer","computer","melania-shortcut");
-    computer.connect_clicked(|_|run("melania-files"));right.append(&computer);
-    let settings=icon_row("Impostazioni","org.melaniadesktop.Settings","melania-shortcut");
-    settings.connect_clicked(|_|run("melania-settings"));right.append(&settings);
+    // Files and Settings already have larger launchers in the application
+    // list. Duplicating them here made a redundant, half-clipped section.
+    // Keep all four useful folders completely visible in this sidebar.
     columns.append(&right);
     // Limit the ENTIRE two-column menu, not only the left application list.
     // Otherwise the quick-access column forces the whole popup to 760px.
