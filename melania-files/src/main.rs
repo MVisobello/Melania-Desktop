@@ -343,7 +343,7 @@ fn repaint_volumes(browser: &Browser) {
     for mount in gio::VolumeMonitor::get().mounts() {
         let Some(root) = mount.root().path() else { continue; };
         if !root.is_dir() { continue; }
-        browser.mounts_box.append(&navigation_button(&mount.name(), root, browser));
+        browser.mounts_box.append(&navigation_button_with_icon(&mount.name(), root, browser, Some("drive-harddisk-symbolic")));
     }
 }
 
@@ -696,7 +696,7 @@ fn action_icon_button(title: &str, icon_name: &str, tooltip: &str) -> Button {
     button
 }
 
-fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button {
+fn navigation_button_with_icon(label: &str, target: PathBuf, browser: &Browser, forced_icon: Option<&str>) -> Button {
     let button = Button::new();
     let row = GtkBox::new(Orientation::Horizontal, 9);
     // Use the compact, purpose-built symbolic icons in Melania Files' sidebar.
@@ -710,8 +710,8 @@ fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button 
         else if label.contains("Video") { "folder-videos-symbolic" }
         else if label.contains("File system") { "drive-harddisk-symbolic" }
         else { "user-bookmarks-symbolic" };
-    let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(22);
+    let icon = Image::from_icon_name(forced_icon.unwrap_or(icon_name));
+    icon.set_pixel_size(21);
     row.append(&icon);
     let caption = Label::new(Some(label));
     caption.set_xalign(0.0);
@@ -726,6 +726,10 @@ fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button 
     button
 }
 
+fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button {
+    navigation_button_with_icon(label, target, browser, None)
+}
+
 fn repaint_favorites(browser: &Browser) {
     let container = browser.favorites_box.clone();
     while let Some(child) = container.first_child() { container.remove(&child); }
@@ -736,7 +740,7 @@ fn repaint_favorites(browser: &Browser) {
     for path in browser.bookmarks.borrow().paths().iter() {
         if !path.is_dir() { continue; }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        container.append(&navigation_button(&name, path.clone(), browser));
+        container.append(&navigation_button_with_icon(&name, path.clone(), browser, Some("user-bookmarks-symbolic")));
     }
 }
 
