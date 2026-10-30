@@ -194,6 +194,8 @@ fn build_ui(app: &Application) {
     main_panel.set_vexpand(true);
     let scroll = gtk::ScrolledWindow::new();
     scroll.add_css_class("settings-scroll");
+    scroll.set_hexpand(true);
+    scroll.set_vexpand(true);
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroll.set_child(Some(&stack));
     main_panel.append(&scroll);
