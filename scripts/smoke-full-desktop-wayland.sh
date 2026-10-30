@@ -9,6 +9,8 @@ for name in melania-compositor melania-desktop-surface melania-panel melania-fil
   [[ -x "target/debug/$name" ]] || { echo "BLOCKED: missing $name" >&2; exit 3; }
 done
 mkdir -p reports
+# Ensure the XDG Desktop directory exists on fresh CI runners.
+mkdir -p "$HOME/Desktop"
 TEMP="$(mktemp -d -t melania-full-wayland-XXXXXX)"
 mkdir -m 700 "$TEMP/runtime"
 export XDG_RUNTIME_DIR="$TEMP/runtime"

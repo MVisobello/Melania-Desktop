@@ -34,7 +34,7 @@ jobs:
             libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev \
             libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev \
             libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev \
-            libgl1-mesa-dri mesa-utils scrot python3-pil procps
+            libgl1-mesa-dri mesa-utils scrot python3-pil procps dbus dbus-user-session dbus-x11
       - name: Build nested compositor, control CLI and GTK file manager
         run: |
           set -o pipefail
@@ -59,9 +59,10 @@ jobs:
           WINIT_UNIX_BACKEND: x11
           RUST_BACKTRACE: '1'
           MELANIA_DEBUG_RENDER: '1'
+          WAYLAND_DEBUG: client
         run: |
           set -o pipefail
-          xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
             timeout --signal=TERM --kill-after=5s 95s \
             bash scripts/smoke-full-desktop-wayland.sh 2>&1 | tee wayland-full-test.log
       - name: Upload diagnostic logs

@@ -120,6 +120,10 @@ impl CompositorHandler for Melania {
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() &&
+           self.managed.iter().any(|w| w.surface == *surface) {
+            eprintln!("MELANIA_WL_COMMIT toplevel {:?}", surface.id());
+        }
         for window in self.space.elements() {
             if window.toplevel().is_some_and(|top| top.wl_surface() == surface) {
                 window.on_commit();
@@ -694,12 +698,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            let top_render_elements = elements.len();
             elements.extend(state.space.elements().rev().filter_map(|window| {
                 let origin=state.space.element_location(window)?;
                 Some((window.toplevel()?.wl_surface().clone(),origin))
             }).flat_map(|(surface,origin)| {
                 render_elements_from_surface_tree(renderer,&surface,(origin.x,origin.y),1.0,1.0,Kind::Unspecified)
             }));
+            let xdg_render_elements = elements.len() - top_render_elements;
             {
                 let map=layer_map_for_output(&output);
                 for kind in [WlrLayer::Bottom,WlrLayer::Background] {
@@ -712,10 +718,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             if debug_render && last_render_report.elapsed() >= Duration::from_secs(1) {
-                eprintln!("MELANIA_RENDER windows={} layers={} elements={} size={}x{}",
+                eprintln!("MELANIA_RENDER windows={} layers={} elements={} xdg={} top={} size={}x{}",
                           state.space.elements().count(),
                           layer_map_for_output(&output).layers().count(),
-                          elements.len(), size.w, size.h);
+                          elements.len(), xdg_render_elements, top_render_elements, size.w, size.h);
                 last_render_report = Instant::now();
             }
             let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
