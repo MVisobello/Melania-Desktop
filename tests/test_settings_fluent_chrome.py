@@ -47,6 +47,23 @@ class MelaniaDesignContract(unittest.TestCase):
         self.assertIn('XDG_DATA_HOME: ${{ runner.temp }}/melania-data', smoke)
         self.assertIn('else {"Adwaita"}', config)
 
+    def test_system_icons_are_real_svg_pictograms_not_letter_tiles(self):
+        from melania_fluent_settings_icons import artwork as system_icon
+        names = ("bluetooth", "preferences-desktop-theme",
+                 "preferences-system-notifications", "applications-other",
+                 "avatar-default", "x-office-calendar", "battery",
+                 "audio-card", "input-keyboard", "dialog-information")
+        for name in names:
+            with self.subTest(icon=name):
+                svg = system_icon(name, "apps", "light", 24)
+                self.assertIsNotNone(svg)
+                root = ET.fromstring(svg)
+                self.assertTrue(root.tag.endswith("svg"))
+                self.assertNotIn("<text", svg)
+                self.assertIn("<path", svg)
+        builder=(ROOT/"tools/build_melania_fluent_themes.py").read_text()
+        self.assertIn("settings_artwork(name,category", builder)
+
     def test_real_window_buttons_styled_in_both_apps(self):
         for app, header in (("melania-files","files-aero-header"),
                             ("melania-settings","settings-titlebar")):
