@@ -169,8 +169,7 @@ fn build_ui(
     sidebar.set_size_request(258, -1);
     let brand_row = GtkBox::new(Orientation::Horizontal, 10);
     brand_row.add_css_class("settings-brand");
-    let brand = Image::from_icon_name("melania");
-    brand.set_pixel_size(28);
+    let brand = symbols::icon("melania", 29);
     brand_row.append(&brand);
     brand_row.append(&text("Melania", "settings-brand-name"));
     sidebar.append(&brand_row);
