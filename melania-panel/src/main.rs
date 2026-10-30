@@ -115,13 +115,14 @@ fn start_window(app:&Application)->ApplicationWindow {
     left.set_hexpand(true);
     left.append(&label("TUTTE LE APPLICAZIONI", "melania-section-label"));
     let scroll=gtk::ScrolledWindow::new();
-    scroll.set_vexpand(true); scroll.set_hexpand(true);
+    // Do not set vexpand: it overrides the content-height cap and stretches
+    // the shell layer all the way to the top edge on smaller displays.
+    scroll.set_vexpand(false);
+    scroll.set_hexpand(true);
     scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
-    // GTK otherwise lets the full application list's natural height force
-    // the popup to the top edge of a 1280x800 display.
     scroll.set_propagate_natural_height(true);
-    scroll.set_min_content_height(250);
-    scroll.set_max_content_height(335);
+    scroll.set_min_content_height(220);
+    scroll.set_max_content_height(302);
     let apps_box=GtkBox::new(Orientation::Vertical,4);
     apps_box.add_css_class("melania-start-apps");
     // Search-only results remain hidden in the normal classic app list.
