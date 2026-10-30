@@ -137,7 +137,7 @@ pub fn start_copy(sources: Vec<PathBuf>, destination: PathBuf) -> io::Result<Job
             return;
         }
         emit(&progress, &tx);
-        let mut created = Vec::new();
+        let mut created: Vec<PathBuf> = Vec::new();
         for (source, target) in plan.entries {
             let mut created_here = false;
             let result = copy_tree(&source, &target, &mut progress, &stop, &tx, &mut created_here);
