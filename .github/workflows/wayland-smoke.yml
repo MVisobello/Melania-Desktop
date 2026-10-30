@@ -1,0 +1,62 @@
+name: Melania nested Wayland smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'melania-compositor/**'
+      - 'melania-control/**'
+      - 'melania-files/**'
+      - 'melania-panel/**'
+      - 'melania-desktop-surface/**'
+      - 'scripts/smoke-nested-wayland.sh'
+      - '.github/workflows/wayland-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nested-wayland:
+    name: Xvfb host + real nested Wayland compositor + GTK client
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software rendering, GTK and X11 host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config build-essential xvfb xauth x11-utils \
+            libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev \
+            libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev \
+            libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev \
+            libgl1-mesa-dri mesa-utils
+      - name: Build nested compositor, control CLI and GTK file manager
+        run: |
+          set -o pipefail
+          cargo build -p melania-compositor -p melania-control -p melania-files 2>&1 | tee wayland-smoke-build.log
+      - name: Run real nested session (no host session takeover)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+          WINIT_UNIX_BACKEND: x11
+          KEEP_MELANIA_LOGS: '1'
+          RUST_BACKTRACE: '1'
+        run: |
+          set -o pipefail
+          mkdir -p reports
+          xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
+            timeout --signal=TERM --kill-after=5s 85s \
+            bash scripts/smoke-nested-wayland.sh 2>&1 | tee wayland-smoke-test.log
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: melania-nested-wayland-smoke-logs
+          path: |
+            wayland-smoke-*.log
+            reports/wayland-smoke.log
+          if-no-files-found: warn
