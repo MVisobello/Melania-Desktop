@@ -1468,7 +1468,13 @@ fn build_ui(app: &Application) {
     aero_header.pack_start(&add_button);
     let tab_strip = GtkBox::new(Orientation::Horizontal, 4);
     tab_strip.add_css_class("files-top-tabs");
-    aero_header.pack_start(&tab_strip);
+    let tab_scroll = ScrolledWindow::new();
+    tab_scroll.add_css_class("files-tab-scroll");
+    tab_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    tab_scroll.set_min_content_width(160);
+    tab_scroll.set_max_content_width(650);
+    tab_scroll.set_child(Some(&tab_strip));
+    aero_header.pack_start(&tab_scroll);
     window.set_titlebar(Some(&aero_header));
     let frame = GtkBox::new(Orientation::Vertical, 0);
     let tabs = gtk::Notebook::new();
