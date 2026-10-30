@@ -303,7 +303,9 @@ fn build_ui(
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
     let network = page("Rete e Bluetooth", "Consulta le informazioni sulle connessioni.");
     network.append(&section("Connessioni"));
-    network.append(&text("Wi-Fi: NetworkManager (nmcli) · Bluetooth: BlueZ (bluetoothctl). Per poter agire, i servizi devono essere installati e l'utente deve avere i permessi richiesti.", "settings-subtitle"));
+    network.append(&gnome_pages::info_row("network-workgroup", "Rete attuale",
+        &gnome_pages::network_status()));
+    network.append(&text("Informazioni lette da NetworkManager. La connessione viene gestita dal sistema Linux: Melania non cambia i dispositivi senza una richiesta esplicita.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
     let accessibility = page("Accessibilità", "Regola la leggibilità e il movimento dell'interfaccia.");
     accessibility.append(&section("Visione e movimento"));
