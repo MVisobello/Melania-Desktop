@@ -231,6 +231,13 @@ fn build_ui(
     ));
     accessibility.append(&text("Le preferenze dei pannelli si applicano al prossimo avvio; questa finestra cambia subito.", "settings-subtitle"));
     stack.add_titled(&accessibility, Some("accessibility"), "Accessibilità");
+    let keyboard = page("Scorciatoie", "Navigazione rapida nella sessione Wayland di Melania.");
+    keyboard.append(&text("Alt + Tab  ·  Finestra successiva", "settings-hero"));
+    keyboard.append(&text("Alt + Maiusc + Tab  ·  Finestra precedente", "settings-subtitle"));
+    keyboard.append(&text("Ctrl + Alt + Freccia sinistra/destra  ·  Cambia spazio di lavoro", "settings-hero"));
+    keyboard.append(&text("Super + E  ·  Apri Melania Files", "settings-hero"));
+    keyboard.append(&text("Le combinazioni sono intercettate dal compositore Melania. Non modificano le scorciatoie del desktop Linux ospitante. La personalizzazione dei tasti arriverà in una milestone successiva.", "settings-subtitle"));
+    stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
     let system = page("Sistema", "Informazioni sull'ambiente Melania.");
     system.append(&text("Melania Desktop — pre-alpha", "settings-hero"));
     system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
@@ -250,6 +257,7 @@ fn build_ui(
         ("▦  Spazi di lavoro", "workspaces"),
         ("⌁  Rete e Bluetooth", "network"),
         ("♿  Accessibilità", "accessibility"),
+        ("⌨  Scorciatoie", "shortcuts"),
         ("⚙  Sistema", "system"),
     ] {
         let b = Button::with_label(name);
@@ -311,8 +319,8 @@ fn setup_melania_icon_theme() {
     }
 }
 
-const SETTINGS_PAGES: [&str; 6] = [
-    "appearance", "desktop", "workspaces", "network", "accessibility", "system"
+const SETTINGS_PAGES: [&str; 7] = [
+    "appearance", "desktop", "workspaces", "network", "accessibility", "shortcuts", "system"
 ];
 fn is_valid_page(page: &str) -> bool { SETTINGS_PAGES.contains(&page) }
 
