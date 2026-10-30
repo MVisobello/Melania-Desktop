@@ -646,3 +646,21 @@ window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbo
   min-height: 47px;
   padding: 3px 8px;
 }
+
+/* The whole launcher body scrolls as one bounded surface; the scrollbar does
+ * not introduce an opaque rectangle inside the dark/light GNOME-like menu. */
+.melania-start-panel .melania-start-body-scroll,
+.melania-start-panel .melania-start-body-scroll > viewport {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.melania-start-panel .melania-start-body-scroll scrollbar {
+  background: transparent;
+  min-width: 5px;
+}
+.melania-start-panel .melania-start-body-scroll scrollbar slider {
+  background: rgba(153,184,216,.45);
+  min-width: 4px;
+  border-radius: 4px;
+}
