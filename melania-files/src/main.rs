@@ -1280,37 +1280,78 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     root
 }
 
-/// Append one independent file browser page and its native, compact tab label.
-/// The notebook handles drag-reordering and scrolling of its tabs.
+/// The visible tabs live in the native GTK HeaderBar. The Notebook only
+/// manages the pages, so there is no duplicated title or second tab bar.
+fn sync_tab_highlights(
+    notebook: &gtk::Notebook,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox)>>>,
+) {
+    let active = notebook.current_page();
+    for (page, tab) in headers.borrow().iter() {
+        if notebook.page_num(page) == active {
+            tab.add_css_class("files-tab-active");
+        } else {
+            tab.remove_css_class("files-tab-active");
+        }
+    }
+}
+
+/// Append the new tab AFTER the existing ones. "+" remains the first item.
 fn append_browser_tab(
     notebook: &gtk::Notebook,
+    tab_strip: &GtkBox,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox)>>>,
     path: PathBuf,
     pending: Rc<RefCell<Option<PendingTransfer>>>,
     title: &str,
 ) {
     let text = Label::new(Some(title));
     let child = file_tab(path, pending, text.clone());
-    let header = GtkBox::new(Orientation::Horizontal, 5);
-    header.add_css_class("files-tab-heading");
-    let icon = Image::from_icon_name("folder");
+    let tab = GtkBox::new(Orientation::Horizontal, 3);
+    tab.add_css_class("files-top-tab");
+    let tab_button = Button::new();
+    tab_button.add_css_class("files-top-tab-select");
+    let tab_contents = GtkBox::new(Orientation::Horizontal, 6);
+    let icon = Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(16);
     text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    text.set_max_width_chars(17);
+    text.set_max_width_chars(16);
+    tab_contents.append(&icon);
+    tab_contents.append(&text);
+    tab_button.set_child(Some(&tab_contents));
     let close = Button::from_icon_name("window-close-symbolic");
     close.add_css_class("files-tab-close");
     close.set_tooltip_text(Some("Chiudi scheda"));
-    header.append(&icon);
-    header.append(&text);
-    header.append(&close);
-    let index = notebook.append_page(&child, Some(&header));
-    notebook.set_tab_reorderable(&child, true);
+    tab.append(&tab_button);
+    tab.append(&close);
+    let index = notebook.append_page(&child, None::<&gtk::Widget>);
+    headers.borrow_mut().push((child.clone(), tab.clone()));
+    tab_strip.append(&tab);
     notebook.set_current_page(Some(index));
-    let tabs = notebook.clone();
+    sync_tab_highlights(notebook, headers);
+
+    let pages = notebook.clone();
+    let selected_page = child.clone();
+    tab_button.connect_clicked(move |_| {
+        if let Some(number) = pages.page_num(&selected_page) {
+            pages.set_current_page(Some(number));
+        }
+    });
+
+    let pages = notebook.clone();
+    let heading_list = headers.clone();
+    let strip = tab_strip.clone();
     close.connect_clicked(move |_| {
-        if tabs.n_pages() > 1 {
-            if let Some(page) = tabs.page_num(&child) {
-                tabs.remove_page(Some(page));
+        // Never silently close the last browser. Ctrl+W follows the same rule.
+        if pages.n_pages() <= 1 { return; }
+        if let Some(index) = pages.page_num(&child) {
+            if let Some(position) = heading_list.borrow().iter()
+                .position(|(page, _)| page == &child) {
+                heading_list.borrow_mut().remove(position);
             }
+            strip.remove(&tab);
+            pages.remove_page(Some(index));
+            sync_tab_highlights(&pages, &heading_list);
         }
     });
 }
@@ -1326,38 +1367,45 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder().application(app)
         .title("Melania Files").default_width(1160).default_height(720).build();
     window.add_css_class("melania-files-window");
-    // Match the Aero treatment of Settings while keeping native window controls.
+    // One integrated native header: [+] [tabs...] [minimize/maximize/close].
+    // GTK keeps the real draggable window chrome and accessible controls.
     let aero_header = gtk::HeaderBar::new();
     aero_header.add_css_class("files-aero-header");
     aero_header.set_show_title_buttons(true);
     aero_header.set_decoration_layout(Some(":minimize,maximize,close"));
-    let aero_title = Label::new(Some("Melania Files"));
-    aero_title.add_css_class("title");
-    aero_header.set_title_widget(Some(&aero_title));
+    let add_button = Button::from_icon_name("list-add-symbolic");
+    add_button.add_css_class("files-new-tab");
+    add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
+    aero_header.pack_start(&add_button);
+    let tab_strip = GtkBox::new(Orientation::Horizontal, 4);
+    tab_strip.add_css_class("files-top-tabs");
+    aero_header.pack_start(&tab_strip);
     window.set_titlebar(Some(&aero_header));
     let frame = GtkBox::new(Orientation::Vertical, 0);
-    // Native GTK notebook: contiguous, reorderable tabs with embedded close
-    // controls, scroll arrows and a + button attached to the tab header.
     let tabs = gtk::Notebook::new();
-    tabs.set_scrollable(true);
+    tabs.set_show_tabs(false);
     tabs.set_vexpand(true);
     tabs.set_show_border(false);
     tabs.add_css_class("files-notebook");
+    let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox)>>> = Rc::new(RefCell::new(Vec::new()));
+    let headers_for_switch = tab_headers.clone();
+    tabs.connect_switch_page(move |notebook, _, _| {
+        sync_tab_highlights(notebook, &headers_for_switch);
+    });
 
     let starting = std::env::args_os().nth(1).map(PathBuf::from)
         .filter(|p| p.is_dir()).unwrap_or_else(home);
     let shared_pending: Rc<RefCell<Option<PendingTransfer>>> = Rc::new(RefCell::new(None));
-    append_browser_tab(&tabs, starting, shared_pending.clone(), "Home");
-
-    // Action widget is part of the notebook's header, not an unrelated toolbar.
-    let add_button = Button::from_icon_name("list-add-symbolic");
-    add_button.add_css_class("files-new-tab");
-    add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
-    tabs.set_action_widget(&add_button, gtk::PackType::End);
+    let initial_title = starting.file_name().map(|s|s.to_string_lossy().into_owned())
+        .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_string());
+    append_browser_tab(&tabs, &tab_strip, &tab_headers, starting, shared_pending.clone(), &initial_title);
     let notebook = tabs.clone();
     let pending_for_add = shared_pending.clone();
+    let header_for_add = tab_headers.clone();
+    let rail_for_add = tab_strip.clone();
     add_button.connect_clicked(move |_| {
-        append_browser_tab(&notebook, home(), pending_for_add.clone(), "Home");
+        append_browser_tab(&notebook, &rail_for_add, &header_for_add,
+            home(), pending_for_add.clone(), "Home");
     });
     frame.append(&tabs);
 
@@ -1365,6 +1413,8 @@ fn build_ui(app: &Application) {
     let keys = gtk::EventControllerKey::new();
     let keys_notebook = tabs.clone();
     let keys_add = add_button.clone();
+    let tab_headers_for_keys = tab_headers.clone();
+    let strip_for_keys = tab_strip.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         if !modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
             return glib::Propagation::Proceed;
@@ -1375,7 +1425,16 @@ fn build_ui(app: &Application) {
         }
         if key == gdk::Key::w || key == gdk::Key::W {
             if keys_notebook.n_pages() > 1 {
-                keys_notebook.remove_page(keys_notebook.current_page());
+                if let Some(index) = keys_notebook.current_page() {
+                    if let Some((_, heading)) = tab_headers_for_keys.borrow().iter()
+                        .find(|(page, _)| keys_notebook.page_num(page) == Some(index)).cloned() {
+                        strip_for_keys.remove(&heading);
+                    }
+                    tab_headers_for_keys.borrow_mut()
+                        .retain(|(page, _)| keys_notebook.page_num(page) != Some(index));
+                    keys_notebook.remove_page(Some(index));
+                    sync_tab_highlights(&keys_notebook, &tab_headers_for_keys);
+                }
             }
             return glib::Propagation::Stop;
         }
