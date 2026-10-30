@@ -338,15 +338,16 @@ fn build(app: &Application) {
 /// packaged installations use XDG_DATA_HOME/icons/Melania instead.
 /// Does not change the icon theme of the user's other desktop sessions.
 fn setup_melania_icon_theme() {
-    if let Some(display) = gtk::gdk::Display::default() {
-        let theme = gtk::IconTheme::for_display(&display);
-        let bundled = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../branding");
-        if bundled.join("Melania-Aero-Classic/index.theme").is_file() {
-            theme.add_search_path(&bundled);
+    let prefs=melania_config::load().unwrap_or_default();
+    if let Some(display)=gtk::gdk::Display::default() {
+        let icons=gtk::IconTheme::for_display(&display);
+        for location in melania_config::bundled_icon_paths() {
+            if location.is_dir() {icons.add_search_path(&location);}
         }
     }
-    if let Some(settings) = gtk::Settings::default() {
-        settings.set_property("gtk-icon-theme-name", "Melania-Aero-Classic");
+    if let Some(settings)=gtk::Settings::default() {
+        settings.set_property("gtk-icon-theme-name",
+            melania_config::resolved_icon_theme(&prefs));
     }
 }
 
