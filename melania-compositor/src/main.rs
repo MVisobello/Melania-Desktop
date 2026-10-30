@@ -718,6 +718,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .env(SOCKET_ENV, &control_path)
             .env("XDG_SESSION_TYPE", "wayland")
             .env("XDG_CURRENT_DESKTOP", "Melania")
+            .env("MELANIA_NESTED_SESSION", "1")
             .env("GDK_BACKEND", "wayland").spawn()?);
     }
     loop {
@@ -773,6 +774,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .env(SOCKET_ENV, &control_path)
                             .env("XDG_SESSION_TYPE", "wayland")
                             .env("XDG_CURRENT_DESKTOP", "Melania")
+            .env("MELANIA_NESTED_SESSION", "1")
                             .env("GDK_BACKEND", "wayland").spawn() {
                             eprintln!("Melania shortcut Super+E: {e}");
                         }
