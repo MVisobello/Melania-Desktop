@@ -496,6 +496,8 @@ fn workspace_strip() -> GtkBox {
     let path=std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let mut buttons=Vec::new();
     let count = melania_config::load().unwrap_or_default().workspace_count;
+    let extras = GtkBox::new(Orientation::Vertical, 3);
+    extras.add_css_class("melania-workspace-extras");
     for n in 1..=count {
         let b=Button::with_label(&n.to_string());
         b.add_css_class("melania-workspace-button");
@@ -509,11 +511,35 @@ fn workspace_strip() -> GtkBox {
                 }
             }
         });
-        row.append(&b);buttons.push(b);
+        if n <= 4 { row.append(&b); } else { extras.append(&b); }
+        buttons.push(b);
     }
+    // At most four workspace buttons occupy the bar. Remaining desktops
+    // live in a popover, keeping the 1024px Aero layout usable.
+    let overflow = if count > 4 {
+        let more = gtk::MenuButton::new();
+        more.set_label("Altri ▾");
+        more.add_css_class("melania-workspace-overflow");
+        more.set_tooltip_text(Some("Altri spazi di lavoro"));
+        let popover = gtk::Popover::new();
+        popover.add_css_class("melania-group-popover");
+        popover.set_child(Some(&extras));
+        more.set_popover(Some(&popover));
+        row.append(&more);
+        Some(more)
+    } else { None };
     let refresh=move || {
         if let Some(path)=path.as_ref() {
             if let Ok(active)=current_workspace(path) {
+                if let Some(ref more) = overflow {
+                    if active > 4 {
+                        more.set_label(&format!("{active} ▾"));
+                        more.add_css_class("melania-workspace-active");
+                    } else {
+                        more.set_label("Altri ▾");
+                        more.remove_css_class("melania-workspace-active");
+                    }
+                }
                 for (index,button) in buttons.iter().enumerate() {
                     if (index+1) as u8==active {button.add_css_class("melania-workspace-active");}
                     else {button.remove_css_class("melania-workspace-active");}
@@ -717,8 +743,17 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         pinned.append(&b);
     }
     bar.append(&pinned);
+    // XFCE-like horizontal overflow rather than squeezing or hiding windows.
+    // The original running-window buttons remain untouched inside the viewport.
     let running = running_window_strip();
-    bar.append(&running);
+    let running_scroll = gtk::ScrolledWindow::new();
+    running_scroll.add_css_class("melania-running-scroll");
+    running_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    running_scroll.set_min_content_width(140);
+    running_scroll.set_max_content_width(610);
+    running_scroll.set_hexpand(true);
+    running_scroll.set_child(Some(&running));
+    bar.append(&running_scroll);
     bar.append(&workspace_strip());
     let space=GtkBox::new(Orientation::Horizontal,1);space.set_hexpand(true);bar.append(&space);
     // Shell-only 20 px symbolic glyphs: these names are supplied by Melania Aero
