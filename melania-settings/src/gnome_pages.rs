@@ -167,7 +167,7 @@ pub fn overview(stack: &Stack) -> GtkBox {
     system.append(&software);
     for (target, icon, title, subtitle) in [
         ("account", "avatar-default", "Utenti", "Informazioni sull'account corrente"),
-        ("applications", "application-x-executable", "Applicazioni", "Applicazioni e associazioni file"),
+        ("applications", "applications-other", "Applicazioni", "Applicazioni e associazioni file"),
         ("about", "dialog-information", "Informazioni sul sistema", "Versione di Melania e sistema operativo"),
     ] {
         software.append(&linked_row(stack, target, icon, title, subtitle));
