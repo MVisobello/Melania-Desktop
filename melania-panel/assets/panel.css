@@ -664,3 +664,35 @@ window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbo
   min-width: 4px;
   border-radius: 4px;
 }
+
+/* Win7-inspired Start orb: only the launcher is round. All taskbar app
+ * buttons keep their existing rectangular geometry. */
+.melania-bar button.melania-start {
+  min-width: 43px;
+  min-height: 43px;
+  padding: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to bottom, #3f9dfb, #1455a5);
+  border: 1px solid rgba(213,237,255,.64);
+  box-shadow: inset 0 1px rgba(255,255,255,.32), 0 1px 5px rgba(0,0,0,.28);
+}
+.melania-bar button.melania-start:hover {
+  background: linear-gradient(to bottom, #69b9ff, #2473c8);
+}
+.melania-bar button.melania-start:active,
+.melania-bar button.melania-start.melania-start-open {
+  background: linear-gradient(to bottom, #114377, #237bce);
+  box-shadow: inset 0 2px 5px rgba(0,0,0,.30);
+}
+.melania-start-panel .melania-session-more {
+  border-radius: 7px;
+  padding: 2px 5px;
+  min-width: 30px;
+}
+.melania-session-choices { padding: 9px; min-width: 215px; }
+.melania-session-choices .melania-session-choice {
+  min-height: 35px; border-radius: 7px;
+  text-align: left;
+}
+.melania-session-choices .melania-session-choice:disabled { opacity: .45; }
+.melania-session-hint { font-size: 11px; opacity: .8; margin: 6px; }
