@@ -32,19 +32,36 @@ def close_button_widths(path: Path) -> list[int]:
             if not groups or x > groups[-1][-1] + 1:
                 groups.append([])
             groups[-1].append(x)
-        return sorted((len(g) for g in groups if len(g) >= 16), reverse=True)
+        dimensions = []
+        for group in groups:
+            if len(group) < 16:
+                continue
+            active_rows = []
+            for y in range(min(48, height), min(140, height)):
+                red_count = 0
+                for x in group:
+                    r, g, b = pixels[x, y]
+                    if r > 135 and r > g * 1.4 and r > b * 1.35 and g < 175:
+                        red_count += 1
+                if red_count >= 5:
+                    active_rows.append(y)
+            if active_rows:
+                dimensions.append((len(group), max(active_rows)-min(active_rows)+1))
+        return sorted(dimensions, reverse=True)
 
 
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: check_shared_window_chrome.py <real-desktop.png>")
-    widths = close_button_widths(Path(sys.argv[1]))
-    assert len(widths) == 2, f"Expected both Files and Settings red close buttons: {widths}"
-    assert all(w >= 35 for w in widths), f"Close buttons too narrow: {widths}"
-    assert abs(widths[0] - widths[1]) <= 5, (
-        f"Win7 close buttons mismatch between front and background windows: {widths}"
-    )
-    print(f"PASS: real Files and Settings Win7 close buttons match, widths={widths}")
+    buttons = close_button_widths(Path(sys.argv[1]))
+    assert len(buttons) == 2, f"Expected both Files and Settings close buttons: {buttons}"
+    widths = [w for w, _ in buttons]
+    heights = [h for _, h in buttons]
+    assert all(w >= 28 for w in widths), f"Close buttons too narrow: {buttons}"
+    assert abs(widths[0]-widths[1]) <= 5, f"Close widths differ: {buttons}"
+    assert all(h <= 33 for h in heights), f"Close buttons still fill titlebar height: {buttons}"
+    assert abs(heights[0]-heights[1]) <= 5, f"Close heights differ: {buttons}"
+    print(f"PASS: actual front/back Win7 close buttons match, widths={widths}, heights={heights}")
 
 
 if __name__ == "__main__":
