@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 from melania_fluent_artwork import artwork,CORE,REVERSE
 from melania_fluent_reference import artwork as approved_artwork
 from melania_fluent_settings_icons import artwork as settings_artwork
-from melania_shell_symbolic_icons import artwork as shell_artwork, SIDEBAR, TRAY
+from melania_shell_symbolic_icons import artwork as shell_artwork, SIDEBAR, TRAY, WIDGETS
 
 ROOT=Path(__file__).resolve().parents[1]
 COVERAGE=ROOT/'branding'/'coverage'
@@ -96,6 +96,9 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
     for name in TRAY:
         for size in ("scalable", "16x16", "24x24"):
             unique.add(f"status/{size}/{name}.svg")
+    for name in WIDGETS:
+        for size in ("scalable", "16x16", "24x24"):
+            unique.add(f"actions/{size}/{name}.svg")
     paths=sorted(unique)
     if dest.exists():
         raise FileExistsError(f'Output already exists; remove knowingly: {dest}')
