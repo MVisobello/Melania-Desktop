@@ -343,7 +343,7 @@ fn repaint_volumes(browser: &Browser) {
     for mount in gio::VolumeMonitor::get().mounts() {
         let Some(root) = mount.root().path() else { continue; };
         if !root.is_dir() { continue; }
-        browser.mounts_box.append(&navigation_button(&mount.name(), root, browser));
+        browser.mounts_box.append(&navigation_button_with_icon(&mount.name(), root, browser, Some("drive-harddisk-symbolic")));
     }
 }
 
@@ -696,13 +696,13 @@ fn action_icon_button(title: &str, icon_name: &str, tooltip: &str) -> Button {
     button
 }
 
-fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button {
+fn navigation_button_with_icon(label: &str, target: PathBuf, browser: &Browser, forced_icon: Option<&str>) -> Button {
     let button = Button::new();
     let row = GtkBox::new(Orientation::Horizontal, 9);
     // Use the compact, purpose-built symbolic icons in Melania Files' sidebar.
     // Detailed PNGs remain in the main file grid at larger sizes.
-    let icon_name = if label.contains("Home") { "user-home-symbolic" }
-        else if label.contains("Scrivania") { "user-home-symbolic" }
+    let icon_name = if label == "Home" { "user-home-symbolic" }
+        else if label == "Scrivania" { "user-desktop-symbolic" }
         else if label.contains("Documenti") { "folder-documents-symbolic" }
         else if label.contains("Immagini") { "folder-pictures-symbolic" }
         else if label.contains("Download") { "folder-download-symbolic" }
@@ -710,11 +710,10 @@ fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button 
         else if label.contains("Video") { "folder-videos-symbolic" }
         else if label.contains("File system") { "drive-harddisk-symbolic" }
         else { "user-bookmarks-symbolic" };
-    let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(22);
+    let icon = Image::from_icon_name(forced_icon.unwrap_or(icon_name));
+    icon.set_pixel_size(21);
     row.append(&icon);
-    let text = label.split_once("  ").map(|(_,name)|name).unwrap_or(label);
-    let caption = Label::new(Some(text));
+    let caption = Label::new(Some(label));
     caption.set_xalign(0.0);
     row.append(&caption);
     button.set_child(Some(&row));
@@ -727,6 +726,10 @@ fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button 
     button
 }
 
+fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button {
+    navigation_button_with_icon(label, target, browser, None)
+}
+
 fn repaint_favorites(browser: &Browser) {
     let container = browser.favorites_box.clone();
     while let Some(child) = container.first_child() { container.remove(&child); }
@@ -737,7 +740,7 @@ fn repaint_favorites(browser: &Browser) {
     for path in browser.bookmarks.borrow().paths().iter() {
         if !path.is_dir() { continue; }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        container.append(&navigation_button(&format!("☆  {name}"), path.clone(), browser));
+        container.append(&navigation_button_with_icon(&name, path.clone(), browser, Some("user-bookmarks-symbolic")));
     }
 }
 
@@ -1132,14 +1135,14 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     template_menu.set_popover(Some(&template_popover));
     new_choices.append(&template_menu);
     for (label, dir) in [
-        ("⌂  Home", home()),
-        ("▤  Scrivania", xdg_user_directory("DESKTOP", "Desktop")),
-        ("▤  Documenti", xdg_user_directory("DOCUMENTS", "Documents")),
-        ("▣  Immagini", xdg_user_directory("PICTURES", "Pictures")),
-        ("⇩  Download", xdg_user_directory("DOWNLOAD", "Downloads")),
-        ("♫  Musica", xdg_user_directory("MUSIC", "Music")),
-        ("▸  Video", xdg_user_directory("VIDEOS", "Videos")),
-        ("◈  File system", PathBuf::from("/")),
+        ("Home", home()),
+        ("Scrivania", xdg_user_directory("DESKTOP", "Desktop")),
+        ("Documenti", xdg_user_directory("DOCUMENTS", "Documents")),
+        ("Immagini", xdg_user_directory("PICTURES", "Pictures")),
+        ("Download", xdg_user_directory("DOWNLOAD", "Downloads")),
+        ("Musica", xdg_user_directory("MUSIC", "Music")),
+        ("Video", xdg_user_directory("VIDEOS", "Videos")),
+        ("File system", PathBuf::from("/")),
     ] {
         sidebar.append(&navigation_button(label, dir, &browser));
     }
@@ -1645,10 +1648,16 @@ fn build_ui(app: &Application) {
         .title("Melania Files")
         .default_width(initial_width).default_height(initial_height).build();
     window.add_css_class("melania-files-window");
+    let appearance = melania_config::load().unwrap_or_default();
+    window.add_css_class(&format!("melania-theme-{}", appearance.appearance_theme()));
+    if let Some(gtk_settings) = gtk::Settings::default() {
+        gtk_settings.set_property("gtk-application-prefer-dark-theme", appearance.dark_mode);
+    }
     // One integrated header: [+] [tabs...] [shared Win7 controls].
     // Same accessible, functional titlebar buttons as Melania Settings.
     let aero_header = gtk::HeaderBar::new();
     aero_header.add_css_class("files-aero-header");
+    aero_header.add_css_class(&format!("melania-theme-{}", appearance.appearance_theme()));
     window_controls::install(&window, &aero_header);
     // Override GTK HeaderBar's automatic centered window-title widget:
     // the tabs ARE the titlebar, never add a duplicate app title.
@@ -1657,7 +1666,6 @@ fn build_ui(app: &Application) {
     let add_button = Button::from_icon_name("list-add-symbolic");
     add_button.add_css_class("files-new-tab");
     add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
-    aero_header.pack_start(&add_button);
     let tab_strip = GtkBox::new(Orientation::Horizontal, 4);
     tab_strip.add_css_class("files-top-tabs");
     let tab_scroll = ScrolledWindow::new();
@@ -1666,7 +1674,12 @@ fn build_ui(app: &Application) {
     tab_scroll.set_min_content_width(160);
     tab_scroll.set_max_content_width(650);
     tab_scroll.set_child(Some(&tab_strip));
-    aero_header.pack_start(&tab_scroll);
+    // One tab rail: open tabs followed by [+], never the reverse.
+    let tab_rail = GtkBox::new(Orientation::Horizontal, 3);
+    tab_rail.add_css_class("files-tab-rail");
+    tab_rail.append(&tab_scroll);
+    tab_rail.append(&add_button);
+    aero_header.pack_start(&tab_rail);
     window.set_titlebar(Some(&aero_header));
     let frame = GtkBox::new(Orientation::Vertical, 0);
     let tabs = gtk::Notebook::new();

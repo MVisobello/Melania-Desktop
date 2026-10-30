@@ -349,3 +349,86 @@ window { background: transparent; color: #f4f8ff; }
 .melania-group-popover .melania-window-preview .melania-action {
   min-width: 110px;
 }
+
+/* Three cohesive shell appearances. Aero remains the default; the other
+ * two deliberately omit glass gradients and deep blue reflections. */
+window.melania-theme-light .melania-bar {
+  background: #eef0f4;
+  border-top: 1px solid #cfd5df;
+  color: #26323d;
+}
+window.melania-theme-light .melania-bar button {
+  color: #304252;
+}
+window.melania-theme-light .melania-start,
+window.melania-theme-light .melania-pin,
+window.melania-theme-light .melania-bar .melania-window,
+window.melania-theme-light .melania-bar .melania-icon-only {
+  background: #e3e7ed;
+  border-color: #d0d7e1;
+  box-shadow: none;
+}
+window.melania-theme-light .melania-start:hover,
+window.melania-theme-light .melania-pin:hover { background: #d3e2f1; }
+window.melania-theme-light .melania-panel {
+  background: #f5f6f8;
+  color: #273441;
+  border: 1px solid #ccd5df;
+  box-shadow: 0 8px 22px rgba(13,31,49,.16);
+}
+window.melania-theme-light .melania-panel label,
+window.melania-theme-light .melania-row-text,
+window.melania-theme-light .melania-section-label {
+  color: #2c465d;
+}
+window.melania-theme-light .melania-panel button { color: #2b4256; }
+window.melania-theme-light .melania-panel entry {
+  background: #fff; color: #2b4256; border-color: #d1d7df;
+}
+window.melania-theme-light .melania-workspace-strip {
+  background: #e1e6ec;
+}
+window.melania-theme-light .melania-workspace-button {
+  color: #3a5368; background: #eef2f6; border-color: #d5dce4;
+}
+window.melania-theme-light .melania-workspace-active {
+  background: #c0dcf6; color: #174e82; border-color: #86b7e4;
+}
+window.melania-theme-light .melania-tray-button image { color: #2e506d; }
+
+window.melania-theme-dark .melania-bar {
+  background: #24272d;
+  border-top: 1px solid #4a505a;
+  color: #edf0f3;
+}
+window.melania-theme-dark .melania-start,
+window.melania-theme-dark .melania-pin,
+window.melania-theme-dark .melania-bar .melania-window,
+window.melania-theme-dark .melania-bar .melania-icon-only {
+  background: #343940;
+  border-color: #4a515c;
+  box-shadow: none;
+}
+window.melania-theme-dark .melania-bar .melania-window-active {
+  background: #364a63;
+  border-color: #6486a8;
+  border-bottom: 2px solid #83b6e9;
+}
+window.melania-theme-dark .melania-panel {
+  background: #2b2f37;
+  color: #f0f2f6;
+  border-color: #515964;
+  box-shadow: 0 12px 30px rgba(0,0,0,.33);
+}
+window.melania-theme-dark .melania-workspace-strip { background: #30363f; }
+window.melania-theme-dark .melania-workspace-button {
+  background: #3b434f; border-color: #535c6a;
+}
+window.melania-theme-dark .melania-tray-button image,
+window.melania-theme-aero .melania-tray-button image { color: #e9f3ff; }
+/* Compact, visually aligned signal icons at the bottom-right. */
+.melania-tray-button image {
+  min-width: 17px; min-height: 17px;
+  margin: 0;
+}
+.melania-tray-button { padding: 2px 5px; }

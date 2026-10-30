@@ -63,6 +63,21 @@ pub fn resolved_icon_theme(prefs:&Preferences) -> &str {
     else {"Adwaita"}
 }
 impl Preferences {
+    /// The three mutually exclusive Melania interface themes. Legacy config
+    /// booleans remain on disk so existing installations keep their choices.
+    pub fn appearance_theme(&self) -> &'static str {
+        if self.dark_mode { "dark" }
+        else if self.aero_glass { "aero" }
+        else { "light" }
+    }
+    pub fn set_appearance_theme(&mut self, name: &str) -> bool {
+        match name {
+            "light" => { self.dark_mode = false; self.aero_glass = false; true }
+            "dark" => { self.dark_mode = true; self.aero_glass = false; true }
+            "aero" => { self.dark_mode = false; self.aero_glass = true; true }
+            _ => false,
+        }
+    }
     pub fn from_text(data: &str) -> Self {
         let mut prefs = Self::default();
         for line in data.lines() {
@@ -140,6 +155,19 @@ mod tests {
         assert!(p.aero_glass);
         assert!(!p.dark_mode);
         assert_eq!(p.blur_strength, 70);
+    }
+    #[test] fn light_dark_aero_are_exclusive_and_backward_compatible() {
+        let mut p = Preferences::default();
+        assert_eq!(p.appearance_theme(), "aero");
+        for name in ["light", "dark", "aero"] {
+            assert!(p.set_appearance_theme(name));
+            assert_eq!(p.appearance_theme(), name);
+            assert_eq!(Preferences::from_text(&p.to_text()).appearance_theme(), name);
+        }
+        assert!(!p.set_appearance_theme("invalid"));
+        assert_eq!(p.appearance_theme(), "aero");
+        assert_eq!(Preferences::from_text("aero_glass=false\ndark_mode=false").appearance_theme(), "light");
+        assert_eq!(Preferences::from_text("aero_glass=false\ndark_mode=true").appearance_theme(), "dark");
     }
     #[test] fn round_trip() {
         let mut p = Preferences::default();

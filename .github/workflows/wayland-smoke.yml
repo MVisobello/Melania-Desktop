@@ -10,6 +10,8 @@ on:
       - 'melania-panel/**'
       - 'tools/build_melania_icon_variants.py'
       - 'tools/build_melania_fluent_themes.py'
+      - 'tools/melania_shell_symbolic_icons.py'
+      - 'tests/test_appearance_trio_shell_icons.py'
       - 'tools/melania_fluent_artwork.py'
       - 'tools/melania_fluent_reference.py'
       - 'branding/window-chrome-win7.css'
@@ -24,6 +26,8 @@ on:
   pull_request:
     paths:
       - 'tools/build_melania_fluent_themes.py'
+      - 'tools/melania_shell_symbolic_icons.py'
+      - 'tests/test_appearance_trio_shell_icons.py'
       - 'tools/melania_fluent_artwork.py'
       - 'tools/melania_fluent_reference.py'
       - 'branding/window-chrome-win7.css'

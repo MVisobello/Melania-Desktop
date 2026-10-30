@@ -5,8 +5,8 @@
  */
 headerbar.melania-win7-header,
 headerbar.melania-win7-header:backdrop {
-  min-height: 38px;
-  padding: 0 8px 0 12px;
+  min-height: 34px;
+  padding: 0 8px 0 10px;
   background: linear-gradient(to bottom,
       #dbf0ff 0%, #a4d4f4 43%, #66abe0 68%, #88c6ed 100%);
   color: #153b62;
@@ -29,11 +29,11 @@ headerbar.melania-win7-header button.win7-close,
 headerbar.melania-win7-header button.win7-minimize:backdrop,
 headerbar.melania-win7-header button.win7-maximize:backdrop,
 headerbar.melania-win7-header button.win7-close:backdrop {
-  min-width: 35px;
-  min-height: 25px;
-  padding: 0 4px;
+  min-width: 28px;
+  min-height: 18px;
+  padding: 0 2px;
   margin: 0;
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 700;
   color: #183754;
   background: linear-gradient(to bottom,#e9f9ff,#8dbadf);
@@ -47,7 +47,7 @@ headerbar.melania-win7-header button.win7-minimize:backdrop {
 }
 headerbar.melania-win7-header button.win7-close,
 headerbar.melania-win7-header button.win7-close:backdrop {
-  min-width: 44px;
+  min-width: 36px;
   border-radius: 0 0 6px 0;
   color: #ffffff;
   background: linear-gradient(to bottom,#f9b4aa 0%,#d34836 56%,#ab241d 100%);
@@ -67,4 +67,45 @@ headerbar.melania-win7-header button.win7-maximize:focus-visible,
 headerbar.melania-win7-header button.win7-close:focus-visible {
   outline: 2px solid #1b5a95;
   outline-offset: -2px;
+}
+
+/* Light is the calm GNOME-like flat interface: no Aero gradients. */
+headerbar.melania-win7-header.melania-theme-light,
+headerbar.melania-win7-header.melania-theme-light:backdrop {
+  background: #f4f5f7;
+  border: 0;
+  border-bottom: 1px solid #d6dbe2;
+  box-shadow: none;
+  color: #303944;
+}
+headerbar.melania-win7-header.melania-theme-light .title { color: #303944; }
+headerbar.melania-win7-header.melania-theme-light button.win7-minimize,
+headerbar.melania-win7-header.melania-theme-light button.win7-maximize {
+  background: #e9ecef;
+  border-color: #cdd3d9;
+  box-shadow: none;
+  color: #253649;
+}
+/* Dark uses GNOME-inspired slate, retaining recognizable Windows 7 controls. */
+headerbar.melania-win7-header.melania-theme-dark,
+headerbar.melania-win7-header.melania-theme-dark:backdrop {
+  background: #292d33;
+  border: 0;
+  border-bottom: 1px solid #3f454e;
+  box-shadow: none;
+  color: #eff2f5;
+}
+headerbar.melania-win7-header.melania-theme-dark .title { color: #eff2f5; }
+headerbar.melania-win7-header.melania-theme-dark button.win7-minimize,
+headerbar.melania-win7-header.melania-theme-dark button.win7-maximize,
+headerbar.melania-win7-header.melania-theme-dark button.win7-minimize:backdrop,
+headerbar.melania-win7-header.melania-theme-dark button.win7-maximize:backdrop {
+  background: #40464e;
+  color: #f4f5f7;
+  border-color: #555f6a;
+  box-shadow: none;
+}
+headerbar.melania-win7-header.melania-theme-dark button.win7-minimize:hover,
+headerbar.melania-win7-header.melania-theme-dark button.win7-maximize:hover {
+  background: #5b7084;
 }
