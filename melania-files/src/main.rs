@@ -582,6 +582,21 @@ fn navigation_icon_button(icon_name: &str, tooltip: &str) -> Button {
     button
 }
 
+/// Compact command button with icon and label; actions keep their existing
+/// handlers rather than cloning transfer/rename/trash logic.
+fn action_icon_button(title: &str, icon_name: &str, tooltip: &str) -> Button {
+    let button = Button::new();
+    button.add_css_class("files-command");
+    button.set_tooltip_text(Some(tooltip));
+    let content = GtkBox::new(Orientation::Horizontal, 6);
+    let icon = Image::from_icon_name(icon_name);
+    icon.set_pixel_size(19);
+    content.append(&icon);
+    content.append(&Label::new(Some(title)));
+    button.set_child(Some(&content));
+    button
+}
+
 fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button {
     let button = Button::new();
     let row = GtkBox::new(Orientation::Horizontal, 9);
@@ -655,11 +670,11 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     // They are ordinary GTK widgets; no custom compositor support required.
     let list_view_toggle = gtk::ToggleButton::with_label("Elenco");
     list_view_toggle.set_tooltip_text(Some("Alterna fra griglia ed elenco"));
-    toolbar.append(&list_view_toggle);
+
     let inspector_toggle = gtk::ToggleButton::with_label("Dettagli");
     inspector_toggle.set_active(true);
     inspector_toggle.set_tooltip_text(Some("Mostra o nasconde il pannello dettagli"));
-    toolbar.append(&inspector_toggle);
+
     let hidden_toggle = CheckButton::with_label("Nascosti");
     hidden_toggle.set_tooltip_text(Some("Mostra file nascosti (nomi che iniziano con punto)"));
 
@@ -679,14 +694,66 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let unmark = Button::with_label("− Preferito");
     unmark.set_tooltip_text(Some("Rimuovi la cartella corrente dai preferiti"));
 
-    root.append(&toolbar);
-    let actions = FlowBox::new();
+    // Modern single-row command ribbon. Popovers retain ALL existing actions
+    // while keeping the main toolbar readable, including on narrow windows.
+    let actions = GtkBox::new(Orientation::Horizontal, 3);
     actions.add_css_class("files-actions");
-    actions.set_selection_mode(gtk::SelectionMode::None);
-    actions.set_column_spacing(7);
-    actions.set_row_spacing(5);
-    actions.set_min_children_per_line(2);
-    actions.set_max_children_per_line(9);
+    let actions_scroll = ScrolledWindow::new();
+    actions_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    actions_scroll.set_child(Some(&actions));
+
+    let new_menu = gtk::MenuButton::new();
+    new_menu.add_css_class("files-command");
+    new_menu.set_tooltip_text(Some("Crea una cartella, un file vuoto o da modello"));
+    let new_label = GtkBox::new(Orientation::Horizontal, 6);
+    new_label.append(&Image::from_icon_name("list-add-symbolic"));
+    new_label.append(&Label::new(Some("Nuovo ▾")));
+    new_menu.set_child(Some(&new_label));
+    let new_choices = GtkBox::new(Orientation::Vertical, 6);
+    new_choices.add_css_class("files-command-menu");
+    let new_popover = gtk::Popover::new();
+    new_popover.set_child(Some(&new_choices));
+    new_menu.set_popover(Some(&new_popover));
+    actions.append(&new_menu);
+
+    let sort_menu = gtk::MenuButton::new();
+    sort_menu.add_css_class("files-command");
+    sort_menu.set_tooltip_text(Some("Ordina i file"));
+    let sort_label = GtkBox::new(Orientation::Horizontal, 5);
+    sort_label.append(&Image::from_icon_name("view-sort-ascending-symbolic"));
+    sort_label.append(&Label::new(Some("Ordina ▾")));
+    sort_menu.set_child(Some(&sort_label));
+    let sort_choices = GtkBox::new(Orientation::Vertical, 7);
+    sort_choices.add_css_class("files-command-menu");
+    let sort_popover = gtk::Popover::new();
+    sort_popover.set_child(Some(&sort_choices));
+    sort_menu.set_popover(Some(&sort_popover));
+
+    let view_menu = gtk::MenuButton::new();
+    view_menu.add_css_class("files-command");
+    view_menu.set_tooltip_text(Some("Visualizzazione e dettagli"));
+    let view_label = GtkBox::new(Orientation::Horizontal, 5);
+    view_label.append(&Image::from_icon_name("view-list-symbolic"));
+    view_label.append(&Label::new(Some("Visualizza ▾")));
+    view_menu.set_child(Some(&view_label));
+    let view_choices = GtkBox::new(Orientation::Vertical, 7);
+    view_choices.add_css_class("files-command-menu");
+    let view_popover = gtk::Popover::new();
+    view_popover.set_child(Some(&view_choices));
+    view_menu.set_popover(Some(&view_popover));
+
+    let more_menu = gtk::MenuButton::new();
+    more_menu.add_css_class("files-command");
+    more_menu.set_tooltip_text(Some("Altre operazioni e strumenti"));
+    let more_label = GtkBox::new(Orientation::Horizontal, 5);
+    more_label.append(&Image::from_icon_name("view-more-symbolic"));
+    more_label.append(&Label::new(Some("Altro ▾")));
+    more_menu.set_child(Some(&more_label));
+    let other_choices = GtkBox::new(Orientation::Vertical, 6);
+    other_choices.add_css_class("files-command-menu");
+    let other_popover = gtk::Popover::new();
+    other_popover.set_child(Some(&other_choices));
+    more_menu.set_popover(Some(&other_popover));
     let new_folder_name=Entry::builder().placeholder_text("Nome nuova cartella").build();
     new_folder_name.set_width_chars(22);
     let create_blank=Button::with_label("+ File vuoto");
@@ -694,20 +761,24 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     new_file_name.set_width_chars(20);
     let create_folder=Button::with_label("+ Nuova cartella");
     create_folder.add_css_class("files-create-button");
-    actions.insert(&new_folder_name, -1);
-    actions.insert(&create_folder, -1);
-    actions.insert(&new_file_name, -1);
-    actions.insert(&create_blank, -1);
-    // Secondary controls live on their own row. At narrower window widths the
-    // navigation bar remains readable rather than overflowing with actions.
-    actions.insert(&hidden_toggle, -1);
-    actions.insert(&images_toggle, -1);
-    actions.insert(&sort, -1);
-    actions.insert(&reverse, -1);
-    actions.insert(&recursive_search_button, -1);
-    actions.insert(&mark, -1);
-    actions.insert(&unmark, -1);
-    root.append(&actions);
+    new_choices.append(&Label::new(Some("Nuova cartella")));
+    new_choices.append(&new_folder_name);
+    new_choices.append(&create_folder);
+    new_choices.append(&gtk::Separator::new(Orientation::Horizontal));
+    new_choices.append(&Label::new(Some("Nuovo file vuoto")));
+    new_choices.append(&new_file_name);
+    new_choices.append(&create_blank);
+    sort_choices.append(&sort);
+    sort_choices.append(&reverse);
+    view_choices.append(&list_view_toggle);
+    view_choices.append(&inspector_toggle);
+    view_choices.append(&hidden_toggle);
+    view_choices.append(&images_toggle);
+    other_choices.append(&recursive_search_button);
+    other_choices.append(&mark);
+    other_choices.append(&unmark);
+    root.append(&actions_scroll);
+    root.append(&toolbar);
     // A pair of native GTK Paned containers guarantee that the sidebar,
     // adaptive file FlowBox, and inspector never paint on top of each other.
     // Dragging separators changes the available tile grid width naturally.
@@ -773,23 +844,41 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     inspector.append(&open);
     let rename_name = Entry::builder().placeholder_text("Nuovo nome del file").build();
     let rename_button = Button::with_label("Rinomina senza sovrascrivere");
-    inspector.append(&rename_name);
-    inspector.append(&rename_button);
+    let rename_menu = gtk::MenuButton::new();
+    rename_menu.add_css_class("files-command");
+    rename_menu.set_tooltip_text(Some("Rinomina i file selezionati senza sovrascrivere"));
+    let rename_caption = GtkBox::new(Orientation::Horizontal, 5);
+    rename_caption.append(&Image::from_icon_name("edit-select-all-symbolic"));
+    rename_caption.append(&Label::new(Some("Rinomina")));
+    rename_menu.set_child(Some(&rename_caption));
+    let rename_choices = GtkBox::new(Orientation::Vertical, 6);
+    rename_choices.add_css_class("files-command-menu");
+    rename_choices.append(&Label::new(Some("Nuovo nome")));
+    rename_choices.append(&rename_name);
+    rename_choices.append(&rename_button);
+    let rename_popover = gtk::Popover::new();
+    rename_popover.set_child(Some(&rename_choices));
+    rename_menu.set_popover(Some(&rename_popover));
     let transfer_label = Label::new(Some("Trasferimenti locali sicuri"));
     transfer_label.set_xalign(0.0);
     transfer_label.add_css_class("files-title");
     inspector.append(&transfer_label);
-    let copy_button = Button::with_label("Copia selezione");
-    let cut_button = Button::with_label("Taglia selezione");
-    let paste_button = Button::with_label("Incolla qui");
-    let trash_button = Button::with_label("Sposta nel Cestino");
+    let copy_button = action_icon_button("Copia", "edit-copy-symbolic", "Copia la selezione");
+    let cut_button = action_icon_button("Taglia", "edit-cut-symbolic", "Taglia la selezione");
+    let paste_button = action_icon_button("Incolla", "edit-paste-symbolic", "Incolla nella cartella");
+    let trash_button = action_icon_button("Elimina", "user-trash-symbolic", "Sposta nel Cestino");
     trash_button.add_css_class("files-trash");
     trash_button.set_tooltip_text(Some("Elimina in modo recuperabile tramite il Cestino del sistema"));
     // File operations remain wired to the same handlers; surface them in the
     // adaptive actions bar rather than hiding them behind the inspector.
-    for button in [&copy_button, &cut_button, &paste_button, &trash_button] {
-        actions.insert(button, -1);
+    for button in [&cut_button, &copy_button, &paste_button] {
+        actions.append(button);
     }
+    actions.append(&rename_menu);
+    actions.append(&trash_button);
+    actions.append(&sort_menu);
+    actions.append(&view_menu);
+    actions.append(&more_menu);
     let transfer_note = Label::new(Some("Copia pubblica file negli appunti GTK del sistema. Taglia resta interno a Melania e sposta solo sul filesystem locale, senza sovrascritture."));
     transfer_note.set_wrap(true);
     transfer_note.set_xalign(0.0);
@@ -888,7 +977,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     }
     template_popover.set_child(Some(&template_choices));
     template_menu.set_popover(Some(&template_popover));
-    actions.insert(&template_menu, -1);
+    new_choices.append(&template_menu);
     for (label, dir) in [
         ("⌂  Home", home()),
         ("▤  Scrivania", xdg_user_directory("DESKTOP", "Desktop")),
@@ -1280,37 +1369,92 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     root
 }
 
-/// Append one independent file browser page and its native, compact tab label.
-/// The notebook handles drag-reordering and scrolling of its tabs.
+/// The visible tabs live in the native GTK HeaderBar. The Notebook only
+/// manages the pages, so there is no duplicated title or second tab bar.
+fn sync_tab_highlights(
+    notebook: &gtk::Notebook,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
+    window: &ApplicationWindow,
+) {
+    let active = notebook.current_page();
+    for (page, tab, title) in headers.borrow().iter() {
+        if notebook.page_num(page) == active {
+            tab.add_css_class("files-tab-active");
+            // Compositor IPC and taskbar hover chooser can identify the
+            // folder shown in each *window*, not just "Melania Files".
+            window.set_title(Some(&format!("{} — Melania Files", title.label())));
+        } else {
+            tab.remove_css_class("files-tab-active");
+        }
+    }
+}
+
+/// Append the new tab AFTER the existing ones. "+" remains the first item.
 fn append_browser_tab(
     notebook: &gtk::Notebook,
+    tab_strip: &GtkBox,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
+    window: &ApplicationWindow,
     path: PathBuf,
     pending: Rc<RefCell<Option<PendingTransfer>>>,
     title: &str,
 ) {
     let text = Label::new(Some(title));
     let child = file_tab(path, pending, text.clone());
-    let header = GtkBox::new(Orientation::Horizontal, 5);
-    header.add_css_class("files-tab-heading");
-    let icon = Image::from_icon_name("folder");
+    let tab = GtkBox::new(Orientation::Horizontal, 3);
+    tab.add_css_class("files-top-tab");
+    let tab_button = Button::new();
+    tab_button.add_css_class("files-top-tab-select");
+    let tab_contents = GtkBox::new(Orientation::Horizontal, 6);
+    let icon = Image::from_icon_name("folder-symbolic");
     icon.set_pixel_size(16);
     text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    text.set_max_width_chars(17);
+    text.set_max_width_chars(16);
+    tab_contents.append(&icon);
+    tab_contents.append(&text);
+    tab_button.set_child(Some(&tab_contents));
     let close = Button::from_icon_name("window-close-symbolic");
     close.add_css_class("files-tab-close");
     close.set_tooltip_text(Some("Chiudi scheda"));
-    header.append(&icon);
-    header.append(&text);
-    header.append(&close);
-    let index = notebook.append_page(&child, Some(&header));
-    notebook.set_tab_reorderable(&child, true);
+    tab.append(&tab_button);
+    tab.append(&close);
+    let index = notebook.append_page(&child, None::<&gtk::Widget>);
+    headers.borrow_mut().push((child.clone(), tab.clone(), text.clone()));
+    tab_strip.append(&tab);
     notebook.set_current_page(Some(index));
-    let tabs = notebook.clone();
+    sync_tab_highlights(notebook, headers, window);
+    let tabs_for_title = notebook.clone();
+    let page_for_title = child.clone();
+    let window_for_title = window.clone();
+    text.connect_label_notify(move |label| {
+        if tabs_for_title.page_num(&page_for_title) == tabs_for_title.current_page() {
+            window_for_title.set_title(Some(&format!("{} — Melania Files", label.label())));
+        }
+    });
+
+    let pages = notebook.clone();
+    let selected_page = child.clone();
+    tab_button.connect_clicked(move |_| {
+        if let Some(number) = pages.page_num(&selected_page) {
+            pages.set_current_page(Some(number));
+        }
+    });
+
+    let pages = notebook.clone();
+    let heading_list = headers.clone();
+    let strip = tab_strip.clone();
+    let window_after_close = window.clone();
     close.connect_clicked(move |_| {
-        if tabs.n_pages() > 1 {
-            if let Some(page) = tabs.page_num(&child) {
-                tabs.remove_page(Some(page));
+        // Never silently close the last browser. Ctrl+W follows the same rule.
+        if pages.n_pages() <= 1 { return; }
+        if let Some(index) = pages.page_num(&child) {
+            if let Some(position) = heading_list.borrow().iter()
+                .position(|(page, _, _)| page == &child) {
+                heading_list.borrow_mut().remove(position);
             }
+            strip.remove(&tab);
+            pages.remove_page(Some(index));
+            sync_tab_highlights(&pages, &heading_list, &window_after_close);
         }
     });
 }
@@ -1326,38 +1470,57 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder().application(app)
         .title("Melania Files").default_width(1160).default_height(720).build();
     window.add_css_class("melania-files-window");
-    // Match the Aero treatment of Settings while keeping native window controls.
+    // One integrated native header: [+] [tabs...] [minimize/maximize/close].
+    // GTK keeps the real draggable window chrome and accessible controls.
     let aero_header = gtk::HeaderBar::new();
     aero_header.add_css_class("files-aero-header");
     aero_header.set_show_title_buttons(true);
     aero_header.set_decoration_layout(Some(":minimize,maximize,close"));
-    let aero_title = Label::new(Some("Melania Files"));
-    aero_title.add_css_class("title");
-    aero_header.set_title_widget(Some(&aero_title));
+    // Override GTK HeaderBar's automatic centered window-title widget:
+    // the tabs ARE the titlebar, never add a duplicate app title.
+    let no_title = GtkBox::new(Orientation::Horizontal, 0);
+    aero_header.set_title_widget(Some(&no_title));
+    let add_button = Button::from_icon_name("list-add-symbolic");
+    add_button.add_css_class("files-new-tab");
+    add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
+    aero_header.pack_start(&add_button);
+    let tab_strip = GtkBox::new(Orientation::Horizontal, 4);
+    tab_strip.add_css_class("files-top-tabs");
+    let tab_scroll = ScrolledWindow::new();
+    tab_scroll.add_css_class("files-tab-scroll");
+    tab_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    tab_scroll.set_min_content_width(160);
+    tab_scroll.set_max_content_width(650);
+    tab_scroll.set_child(Some(&tab_strip));
+    aero_header.pack_start(&tab_scroll);
     window.set_titlebar(Some(&aero_header));
     let frame = GtkBox::new(Orientation::Vertical, 0);
-    // Native GTK notebook: contiguous, reorderable tabs with embedded close
-    // controls, scroll arrows and a + button attached to the tab header.
     let tabs = gtk::Notebook::new();
-    tabs.set_scrollable(true);
+    tabs.set_show_tabs(false);
     tabs.set_vexpand(true);
     tabs.set_show_border(false);
     tabs.add_css_class("files-notebook");
+    let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
+    let headers_for_switch = tab_headers.clone();
+    let window_for_switch = window.clone();
+    tabs.connect_switch_page(move |notebook, _, _| {
+        sync_tab_highlights(notebook, &headers_for_switch, &window_for_switch);
+    });
 
     let starting = std::env::args_os().nth(1).map(PathBuf::from)
         .filter(|p| p.is_dir()).unwrap_or_else(home);
     let shared_pending: Rc<RefCell<Option<PendingTransfer>>> = Rc::new(RefCell::new(None));
-    append_browser_tab(&tabs, starting, shared_pending.clone(), "Home");
-
-    // Action widget is part of the notebook's header, not an unrelated toolbar.
-    let add_button = Button::from_icon_name("list-add-symbolic");
-    add_button.add_css_class("files-new-tab");
-    add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
-    tabs.set_action_widget(&add_button, gtk::PackType::End);
+    let initial_title = starting.file_name().map(|s|s.to_string_lossy().into_owned())
+        .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_string());
+    append_browser_tab(&tabs, &tab_strip, &tab_headers, &window, starting, shared_pending.clone(), &initial_title);
     let notebook = tabs.clone();
     let pending_for_add = shared_pending.clone();
+    let header_for_add = tab_headers.clone();
+    let rail_for_add = tab_strip.clone();
+    let window_for_add = window.clone();
     add_button.connect_clicked(move |_| {
-        append_browser_tab(&notebook, home(), pending_for_add.clone(), "Home");
+        append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
+            home(), pending_for_add.clone(), "Home");
     });
     frame.append(&tabs);
 
@@ -1365,6 +1528,9 @@ fn build_ui(app: &Application) {
     let keys = gtk::EventControllerKey::new();
     let keys_notebook = tabs.clone();
     let keys_add = add_button.clone();
+    let tab_headers_for_keys = tab_headers.clone();
+    let strip_for_keys = tab_strip.clone();
+    let window_for_keys = window.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         if !modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
             return glib::Propagation::Proceed;
@@ -1375,7 +1541,16 @@ fn build_ui(app: &Application) {
         }
         if key == gdk::Key::w || key == gdk::Key::W {
             if keys_notebook.n_pages() > 1 {
-                keys_notebook.remove_page(keys_notebook.current_page());
+                if let Some(index) = keys_notebook.current_page() {
+                    if let Some((_, heading, _)) = tab_headers_for_keys.borrow().iter()
+                        .find(|(page, _, _)| keys_notebook.page_num(page) == Some(index)).cloned() {
+                        strip_for_keys.remove(&heading);
+                    }
+                    tab_headers_for_keys.borrow_mut()
+                        .retain(|(page, _, _)| keys_notebook.page_num(page) != Some(index));
+                    keys_notebook.remove_page(Some(index));
+                    sync_tab_highlights(&keys_notebook, &tab_headers_for_keys, &window_for_keys);
+                }
             }
             return glib::Propagation::Stop;
         }

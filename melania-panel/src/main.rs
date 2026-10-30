@@ -357,15 +357,17 @@ fn app_button(label:&str,command:&'static str)->Button {
         "melania-settings"=>"org.melaniadesktop.Settings",
         _=>"applications-system"
     });
-    icon.set_pixel_size(25);row.append(&icon);
-    row.append(&Label::new(Some(label)));
+    icon.set_pixel_size(28);
+    row.append(&icon);
     b.set_child(Some(&row));
+    b.add_css_class("melania-icon-only");
+    b.set_tooltip_text(Some(label));
     b.connect_clicked(move |_|run(command));b
 }
 
 /// The running-window strip is driven exclusively by compositor state.
 /// It never guesses windows from processes or .desktop launcher entries.
-fn running_window_strip() -> GtkBox {
+fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> GtkBox {
     let box_running = GtkBox::new(Orientation::Horizontal, 4);
     box_running.add_css_class("melania-running");
     let last: Rc<RefCell<Option<Vec<WindowInfo>>>> = Rc::new(RefCell::new(None));
@@ -377,12 +379,27 @@ fn running_window_strip() -> GtkBox {
             let result = path.as_ref().map(|p| control_request(p, WindowCommand::List));
             let Ok(windows) = result.unwrap_or_else(||Err(melania_control::ControlError::Protocol("socket non disponibile"))) else {
                 if last.borrow().is_some() {
+                    for (_, button) in pinned_buttons.borrow().iter() {
+                        button.set_visible(true);
+                    }
                     while let Some(child) = target.first_child() {target.remove(&child);}
                     *last.borrow_mut() = None;
                 }
                 return;
             };
             if last.borrow().as_ref() == Some(&windows) {return;}
+            // A running Melania application replaces its launcher, rather
+            // than showing a duplicate icon elsewhere on the taskbar.
+            for (command, button) in pinned_buttons.borrow().iter() {
+                let running = windows.iter().any(|w| {
+                    if command == "melania-files" {
+                        w.app_id.eq_ignore_ascii_case("org.melaniadesktop.Files")
+                    } else {
+                        w.app_id.eq_ignore_ascii_case("org.melaniadesktop.Settings")
+                    }
+                });
+                button.set_visible(!running);
+            }
             while let Some(child) = target.first_child() {target.remove(&child);}
             for group in window_groups::group_windows(&windows, group_enabled) {
                 // Grouped applications use a native, keyboard-accessible GTK
@@ -391,22 +408,22 @@ fn running_window_strip() -> GtkBox {
                     let first = group.windows.iter().find(|w| w.active)
                         .unwrap_or(&group.windows[0]);
                     let count = group.windows.len();
-                    let app_name = if group.app_id.trim().is_empty() {
-                        "Applicazione".to_string()
-                    } else {
-                        group.app_id.rsplit('.').next().unwrap_or(&group.app_id).to_string()
-                    };
                     let menu = gtk::MenuButton::new();
                     menu.add_css_class("melania-window");
                     menu.add_css_class("melania-window-group");
                     if group.active() { menu.add_css_class("melania-window-active"); }
                     if group.all_minimized() { menu.add_css_class("melania-window-minimized"); }
                     menu.set_tooltip_text(Some(&format!("{count} finestre — {}", group.app_id)));
-                    let entry = GtkBox::new(Orientation::Horizontal, 5);
+                    let entry = gtk::Overlay::new();
                     let icon = Image::from_icon_name(&first.app_id);
-                    icon.set_pixel_size(18);
-                    entry.append(&icon);
-                    entry.append(&label(&format!("{app_name} ({count})"),"melania-row-text"));
+                    icon.set_pixel_size(28);
+                    entry.set_child(Some(&icon));
+                    let count_badge = Label::new(Some(&count.to_string()));
+                    count_badge.add_css_class("melania-icon-count");
+                    count_badge.set_halign(gtk::Align::End);
+                    count_badge.set_valign(gtk::Align::End);
+                    entry.add_overlay(&count_badge);
+                    menu.add_css_class("melania-icon-only");
                     menu.set_child(Some(&entry));
                     let popover = gtk::Popover::new();
                     popover.add_css_class("melania-group-popover");
@@ -417,7 +434,12 @@ fn running_window_strip() -> GtkBox {
                         let text = if grouped_window.title.chars().count() > 48 {
                             format!("{}…", grouped_window.title.chars().take(47).collect::<String>())
                         } else { grouped_window.title.clone() };
-                        let row = GtkBox::new(Orientation::Horizontal, 4);
+                        let row = GtkBox::new(Orientation::Horizontal, 6);
+                        row.add_css_class("melania-window-preview");
+                        let preview_icon = Image::from_icon_name(&grouped_window.app_id);
+                        preview_icon.set_pixel_size(38);
+                        preview_icon.add_css_class("melania-preview-icon");
+                        row.append(&preview_icon);
                         let focus = Button::with_label(&text);
                         focus.add_css_class("melania-action");
                         focus.set_hexpand(true);
@@ -454,6 +476,15 @@ fn running_window_strip() -> GtkBox {
                     }
                     popover.set_child(Some(&list));
                     menu.set_popover(Some(&popover));
+                    // Open the real window chooser on hover as well as on click.
+                    // Until Smithay exposes thumbnails the preview is an app
+                    // icon + window title, never a fabricated screen capture.
+                    let hover = gtk::EventControllerMotion::new();
+                    let menu_for_hover = menu.clone();
+                    hover.connect_enter(move |_,_,_| {
+                        menu_for_hover.popup();
+                    });
+                    menu.add_controller(hover);
                     // Preserve safe hover activation when dragging files over a
                     // group; DnD remains COPY-only and is owned by the client.
                     let hover_target = gtk::DropTarget::new(
@@ -484,10 +515,12 @@ fn running_window_strip() -> GtkBox {
                 }
                 let window = &group.windows[0];
                 let id = window.id;
-                let title = if window.title.chars().count() > 28 {
-                    format!("{}…",window.title.chars().take(27).collect::<String>())
-                } else { window.title.clone() };
-                let focus = icon_row(&title, &window.app_id, "melania-window");
+                let focus = Button::new();
+                focus.add_css_class("melania-window");
+                focus.add_css_class("melania-icon-only");
+                let window_icon = Image::from_icon_name(&window.app_id);
+                window_icon.set_pixel_size(28);
+                focus.set_child(Some(&window_icon));
                 focus.set_tooltip_text(Some(&format!("{} — {}",window.title,window.app_id)));
                 if window.active {focus.add_css_class("melania-window-active");}
                 if window.minimized {focus.add_css_class("melania-window-minimized");}
@@ -523,20 +556,9 @@ fn running_window_strip() -> GtkBox {
                 let left = hovering.clone();
                 file_hover.connect_leave(move |_|left.set(false));
                 focus.add_controller(file_hover);
-                let close = Button::with_label("×");
-                close.add_css_class("melania-close-window");
-                close.set_tooltip_text(Some("Chiudi finestra"));
-                let socket=path.clone();
-                close.connect_clicked(move |_| {
-                    if let Some(socket) = socket.as_ref() {
-                        if let Err(e)=control_request(socket, WindowCommand::Close(id)) {
-                            eprintln!("Melania close: {e}");
-                        }
-                    }
-                });
-                let entry=GtkBox::new(Orientation::Horizontal,1);
-                entry.append(&focus);entry.append(&close);
-                target.append(&entry);
+                // Closing a window remains available through app controls,
+                // not as a stray × beside every taskbar icon.
+                target.append(&focus);
             }
             *last.borrow_mut()=Some(windows);
         }
@@ -767,6 +789,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     // App pins are genuine GTK drop targets. Dragging reorders the buttons.
     // A dropped file is NOT silently moved/deleted, and cannot execute arbitrary .desktop files.
     let pinned=GtkBox::new(Orientation::Horizontal,6);
+    let pinned_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
     let pins=load_pins();
     let pinned_order=Rc::new(RefCell::new(pins.clone()));
     for id in pins {
@@ -805,12 +828,13 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         });
         b.add_controller(drop);
         b.set_widget_name(program);
+        pinned_buttons.borrow_mut().push((program.to_string(), b.clone()));
         pinned.append(&b);
     }
     bar.append(&pinned);
     // XFCE-like horizontal overflow rather than squeezing or hiding windows.
     // The original running-window buttons remain untouched inside the viewport.
-    let running = running_window_strip();
+    let running = running_window_strip(pinned_buttons);
     let running_scroll = gtk::ScrolledWindow::new();
     running_scroll.add_css_class("melania-running-scroll");
     running_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
