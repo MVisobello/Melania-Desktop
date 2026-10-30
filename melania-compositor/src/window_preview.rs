@@ -1,7 +1,7 @@
 //! On-demand window-only GPU readback for the local Melania taskbar.
 //! Never sample the composed desktop: the framebuffer contains only the
 //! requested Wayland surface tree and an opaque background.
-use std::{error::Error, fs::OpenOptions, io::Write, path::Path};
+use std::{error::Error, fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -78,7 +78,8 @@ pub fn capture_window(
         .map_err(|e|std::io::Error::new(std::io::ErrorKind::InvalidData,e))?;
     // The caller chooses a freshly unique filename inside a private 0700
     // directory, with 0600 mode for the image. Never follow an existing file.
-    let mut file = OpenOptions::new().write(true).create_new(true).open(destination)?;
+    let mut file = OpenOptions::new().write(true).create_new(true)
+        .mode(0o600).open(destination)?;
     file.write_all(&bmp)?;
     file.flush()?;
     Ok(())
