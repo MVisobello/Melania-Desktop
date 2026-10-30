@@ -60,6 +60,7 @@ jobs:
           RUST_BACKTRACE: '1'
           MELANIA_DEBUG_RENDER: '1'
           WAYLAND_DEBUG: client
+          GSK_RENDERER: cairo
         run: |
           set -o pipefail
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \

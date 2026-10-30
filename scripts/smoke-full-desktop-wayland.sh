@@ -64,7 +64,22 @@ target/debug/melania-winctl workspace 2 >/dev/null
 [[ "$(target/debug/melania-winctl status)" == *'2'* ]] || { echo 'FAIL: workspace 2 not active' >&2; exit 1; }
 target/debug/melania-winctl workspace 1 >/dev/null
 [[ "$(target/debug/melania-winctl status)" == *'1'* ]] || { echo 'FAIL: workspace 1 not restored' >&2; exit 1; }
-sleep 2
+# Do not mistake an unpainted GTK window for a working desktop. GPU/software
+# initialization is asynchronous on CI. Wait for at least one real xdg buffer.
+READY_RENDER=0
+for i in $(seq 1 140); do
+  if grep -Eq 'MELANIA_RENDER .*xdg=[1-9]' "$TEMP/compositor.log"; then
+    READY_RENDER=1; break
+  fi
+  kill -0 "$PID" 2>/dev/null || { echo 'FAIL: compositor died while waiting for GTK buffers' >&2; exit 1; }
+  sleep .25
+done
+if [[ "$READY_RENDER" != 1 ]]; then
+  echo 'FAIL: GTK toplevels registered but no xdg surface rendered after 35 seconds' >&2
+  grep 'MELANIA_RENDER' "$TEMP/compositor.log" | tail -10 >&2 || true
+  exit 1
+fi
+sleep .8
 if command -v scrot >/dev/null; then
   scrot -z -o reports/nested-wayland-full-desktop.png
   python3 - <<'PY'
