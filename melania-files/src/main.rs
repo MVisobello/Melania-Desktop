@@ -605,8 +605,9 @@ fn navigation_button(label: &str, target: PathBuf, browser: &Browser) -> Button 
     row.append(&caption);
     button.set_child(Some(&row));
     let state = browser.clone();
+    let target_for_navigation = target.clone();
     button.connect_clicked(move |_| {
-        navigate(&state, target.clone(), true);
+        navigate(&state, target_for_navigation.clone(), true);
     });
     if target.is_dir() { attach_drop(&button, Some(target), browser.clone()); }
     button
@@ -1083,11 +1084,12 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         else { state.status.set_text("Seleziona un elemento per visualizzarne le proprietà."); }
     });
     let state=browser.clone();
+    let rename_name_for_click = rename_name.clone();
     rename_button.connect_clicked(move |_| {
         let Some(old)=state.selected.borrow().clone() else {
             state.status.set_text("Seleziona un file prima di rinominarlo."); return;
         };
-        match transfer::rename_local(&old, &rename_name.text()) {
+        match transfer::rename_local(&old, &rename_name_for_click.text()) {
             Ok(updated)=> {
                 *state.selected.borrow_mut()=Some(updated);
                 refresh(&state);
