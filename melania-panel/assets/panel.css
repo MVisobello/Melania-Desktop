@@ -331,3 +331,21 @@ window { background: transparent; color: #f4f8ff; }
   min-height: 45px;
   padding: 4px 8px;
 }
+
+/* Real compositor-owned per-window thumbnails, opt-in through saved preview
+ * preference. App title/close remains accessible alongside the image. */
+.melania-group-popover .melania-live-preview {
+  min-width: 224px;
+  min-height: 140px;
+  margin: 5px;
+  border: 1px solid rgba(178,228,255,0.68);
+  border-radius: 8px;
+  background: rgba(4,24,43,0.87);
+}
+.melania-group-popover .melania-window-preview {
+  min-height: 65px;
+  padding: 6px;
+}
+.melania-group-popover .melania-window-preview .melania-action {
+  min-width: 110px;
+}
