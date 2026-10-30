@@ -71,7 +71,16 @@ fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
     // GTK process only: do not modify the user's host desktop globally.
     if let Some(settings) = gtk::Settings::default() {
         settings.set_property("gtk-enable-animations", prefs.animations && !prefs.reduce_motion);
+        settings.set_property("gtk-application-prefer-dark-theme", prefs.dark_mode);
+        settings.set_property("gtk-icon-theme-name", melania_config::resolved_icon_theme(prefs));
     }
+    for name in ["melania-theme-light", "melania-theme-dark", "melania-theme-aero"] {
+        root.remove_css_class(name);
+        header.remove_css_class(name);
+    }
+    let theme_class = format!("melania-theme-{}", prefs.appearance_theme());
+    root.add_css_class(&theme_class);
+    header.add_css_class(&theme_class);
     if prefs.high_contrast {
         root.add_css_class("high-contrast");
         header.add_css_class("high-contrast");
@@ -181,10 +190,38 @@ fn build_ui(
         refresh_theme(&themed_root, &themed_header, p);
     });
     let appearance = page("Aspetto", "Personalizza colori, interfaccia e icone di Melania Desktop.");
-    appearance.append(&section("Stile e comportamento"));
-    appearance.append(&saved_option("Aero Glass", "Trasparenze, riflessi e bordi Aero. La sfocatura reale richiede il compositore.", prefs.borrow().aero_glass, prefs.clone(), |p,v| p.aero_glass = v, Some(apply_style.clone())));
+    appearance.append(&section("Tema dell'interfaccia"));
+    let appearance_row = GtkBox::new(Orientation::Horizontal, 14);
+    appearance_row.add_css_class("settings-card");
+    let appearance_summary = GtkBox::new(Orientation::Vertical, 3);
+    appearance_summary.set_hexpand(true);
+    appearance_summary.append(&text("Stile di Melania", "settings-row-title"));
+    appearance_summary.append(&text("Light: chiaro e sobrio. Dark: scuro ispirato a GNOME. Aero: classico con riflessi.", "settings-row-description"));
+    appearance_row.append(&appearance_summary);
+    let appearance_picker = gtk::DropDown::from_strings(&["Light · Chiaro", "Dark · Scuro", "Aero · Classico"]);
+    appearance_picker.add_css_class("settings-appearance-choice");
+    let selected_theme = match prefs.borrow().appearance_theme() { "light" => 0, "dark" => 1, _ => 2 };
+    appearance_picker.set_selected(selected_theme);
+    let prefs_for_theme = prefs.clone();
+    let apply_theme = apply_style.clone();
+    appearance_picker.connect_selected_notify(move |picker| {
+        let mode = match picker.selected() { 0 => "light", 1 => "dark", 2 => "aero", _ => return };
+        let mut p = prefs_for_theme.borrow_mut();
+        p.set_appearance_theme(mode);
+        if p.icon_theme.starts_with("Melania-Fluent-") {
+            p.icon_theme = if mode == "dark" { "Melania-Fluent-Dark" } else { "Melania-Fluent-Light" }.into();
+        }
+        if let Err(e) = melania_config::save(&p) {
+            eprintln!("Melania Settings: tema non salvato: {e}");
+            return;
+        }
+        apply_theme(&p);
+    });
+    appearance_row.append(&appearance_picker);
+    appearance.append(&appearance_row);
+    appearance.append(&text("Il tema viene applicato subito alle Impostazioni. Files e barra delle applicazioni lo leggeranno alla prossima apertura.", "settings-subtitle"));
+    appearance.append(&section("Comportamento"));
     appearance.append(&saved_option("Animazioni GTK", "Attiva le transizioni nelle finestre Melania, salvo la preferenza Riduci movimento.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, Some(apply_style.clone())));
-    appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
     appearance.append(&section("Pacchetto di icone"));
     let icon_variants = gtk::DropDown::from_strings(&[
         "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",
