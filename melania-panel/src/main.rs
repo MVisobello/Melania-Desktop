@@ -20,6 +20,8 @@ fn label(txt:&str,class:&str)->Label{
 }
 fn make_surface(app:&Application,kind:Layer,anchors:&[Edge],width:i32,height:i32,margin:i32,namespace:&str,exclusive:i32)->ApplicationWindow {
     let w=ApplicationWindow::builder().application(app).default_width(width).default_height(height).decorated(false).build();
+    let appearance = melania_config::load().unwrap_or_default();
+    w.add_css_class(&format!("melania-theme-{}", appearance.appearance_theme()));
     // gtk4-layer-shell must be initialized before any realization.
     w.init_layer_shell();w.set_namespace(Some(namespace));w.set_layer(kind);
     for &edge in anchors {w.set_anchor(edge,true);}
@@ -868,8 +870,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     bar.append(&running_scroll);
     bar.append(&workspace_strip());
     let space=GtkBox::new(Orientation::Horizontal,1);space.set_hexpand(true);bar.append(&space);
-    // Shell-only 20 px symbolic glyphs: these names are supplied by Melania Aero
-    // Classic and remain overridable by system icon-theme fallback.
+    // Exact Melania compact symbolic glyphs: no glossy 96px app icon tiles.
     let status=Button::new();status.add_css_class("melania-system");
     status.add_css_class("melania-tray-button");
     status.set_tooltip_text(Some("Rete, Bluetooth, audio e alimentazione"));
@@ -877,7 +878,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     for icon_name in ["network-wireless-signal-excellent-symbolic",
         "bluetooth-active-symbolic", "audio-volume-high-symbolic", "battery-good-symbolic"] {
         let icon=Image::from_icon_name(icon_name);
-        icon.set_pixel_size(19);
+        icon.set_pixel_size(18);
         status_row.append(&icon);
     }
     status.set_child(Some(&status_row));
@@ -888,7 +889,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notification_button.add_css_class("melania-tray-button");
     let notification_row=GtkBox::new(Orientation::Horizontal,4);
     let notice_icon=Image::from_icon_name("preferences-system-notifications-symbolic");
-    notice_icon.set_pixel_size(19);
+    notice_icon.set_pixel_size(18);
     notification_row.append(&notice_icon);
     let badge=Label::new(None);badge.add_css_class("melania-notice-count");
     notification_row.append(&badge);
@@ -937,6 +938,7 @@ fn build(app:&Application){
     if let Some(gtk_settings) = gtk::Settings::default() {
         gtk_settings.set_property("gtk-enable-animations",
             preferences.animations && !preferences.reduce_motion);
+        gtk_settings.set_property("gtk-application-prefer-dark-theme", preferences.dark_mode);
     }
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
