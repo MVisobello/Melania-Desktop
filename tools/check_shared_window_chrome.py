@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 
-def close_button_widths(path: Path) -> list[int]:
+def close_button_widths(path: Path) -> list[tuple[int, int]]:
     with Image.open(path) as original:
         im = original.convert("RGB")
         width, height = im.size
