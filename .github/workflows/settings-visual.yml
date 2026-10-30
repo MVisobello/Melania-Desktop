@@ -83,9 +83,56 @@ jobs:
                   assert ImageStat.Stat(im.convert("RGB")).stddev[0] > 7, "Capture appears blank"
                   print(path, im.size, ImageStat.Stat(im).stddev)
           PY
+      - name: Capture Light, Dark and Aero as real GTK appearance screenshots
+        env:
+          GDK_BACKEND: x11
+          XDG_DATA_HOME: ${{ runner.temp }}/melania-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/melania-config
+          GSK_RENDERER: cairo
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          mkdir -p reports "$XDG_CONFIG_HOME/melania"
+          for theme in light dark aero; do
+            case "$theme" in
+              light) dark=false; aero=false ;;
+              dark) dark=true; aero=false ;;
+              aero) dark=false; aero=true ;;
+            esac
+            printf 'dark_mode=%s\naero_glass=%s\n' "$dark" "$aero" > "$XDG_CONFIG_HOME/melania/settings.conf"
+            export MELANIA_CAPTURE_THEME="$theme"
+            dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash -euc '
+              target/debug/melania-settings appearance &
+              pid=$!
+              trap "kill $pid 2>/dev/null || true" EXIT
+              sleep 3
+              for attempt in $(seq 1 20); do
+                kill -0 $pid
+                scrot -q 92 "reports/settings-theme-${MELANIA_CAPTURE_THEME}.png"
+                if python3 -c "import sys; from PIL import Image,ImageStat; im=Image.open(sys.argv[1]).convert(\"RGB\"); sys.exit(0 if ImageStat.Stat(im).stddev[0]>7 else 1)" "reports/settings-theme-${MELANIA_CAPTURE_THEME}.png"; then
+                  echo "Real GTK ${MELANIA_CAPTURE_THEME} theme painted on attempt $attempt"
+                  exit 0
+                fi
+                sleep 1
+              done
+              echo "No valid ${MELANIA_CAPTURE_THEME} screenshot" >&2
+              exit 1
+            '
+          done
+          python3 - <<'PY'
+          from PIL import Image
+          images={name:Image.open(f'reports/settings-theme-{name}.png').convert('RGB')
+                  for name in ('light','dark','aero')}
+          for name,im in images.items():
+              assert im.size==(1280,800),name
+          # A real GNOME-inspired dark page must be substantially darker.
+          def brightness(im): return sum(im.getpixel((x,y))[0] for x in (580,750,910) for y in (250,410,550))/9
+          assert brightness(images['dark'])+35 < brightness(images['light']), 'Dark theme still paints light content'
+          print('PASS: real Light, Dark, Aero Settings renders', {k:brightness(v) for k,v in images.items()})
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: melania-gnome-settings-live-gtk
-          path: reports/settings-*-gtk.png
+          path: reports/settings-*.png
           if-no-files-found: warn
