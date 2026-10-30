@@ -41,11 +41,20 @@ BELL = ('<path d="M5.6 17.3h12.8l-2.2-3.1V9.6'
         'a4.2 4.2 0 0 0-8.4 0v4.6z" />'
         '<path d="M10 20.2c.7 1.4 3.3 1.4 4 0" />')
 TRAY = {
-    "melania-tray-wifi-symbolic": WIFI,
-    "melania-tray-bluetooth-symbolic": BLUETOOTH,
-    "melania-tray-volume-symbolic": VOLUME,
-    "melania-tray-battery-symbolic": BATTERY,
-    "melania-tray-notifications-symbolic": BELL,
+    # Deliberately NOT symbolic: GTK's symbolic mask can flatten outlined
+    # SVG circles/Bluetooth runes to white discs and thick lightning shapes.
+    # Use true-colored white/dark variants, selected by the panel theme.
+    "melania-tray-wifi": WIFI,
+    "melania-tray-bluetooth": BLUETOOTH,
+    "melania-tray-volume": VOLUME,
+    "melania-tray-battery": BATTERY,
+    "melania-tray-notifications": BELL,
+    "melania-tray-wifi-light": WIFI,
+    "melania-tray-bluetooth-light": BLUETOOTH,
+    "melania-tray-volume-light": VOLUME,
+    "melania-tray-battery-light": BATTERY,
+    "melania-tray-notifications-light": BELL,
+    # Existing freedesktop symbolic aliases stay for other consumers.
     "network-wireless-signal-excellent-symbolic": WIFI,
     "bluetooth-active-symbolic": BLUETOOTH,
     "audio-volume-high-symbolic": VOLUME,
@@ -75,7 +84,7 @@ WIDGETS = {
 
 
 def artwork(name: str, category: str, variant: str = "light", size: int = 24) -> str | None:
-    if not name.endswith("-symbolic"):
+    if not name.endswith("-symbolic") and name not in TRAY:
         return None
     if name in SIDEBAR:
         if category not in ("places", "apps", "devices", "actions"):
@@ -85,7 +94,9 @@ def artwork(name: str, category: str, variant: str = "light", size: int = 24) ->
     elif name in TRAY:
         if category not in ("status", "panel", "apps", "actions"):
             return None
-        stroke = "#f1f7fe" if variant == "dark" else "#365675"
+        # Colors are stable across icon-theme variants: the shell selects
+        # the dark-on-light or white-on-dark asset by its exact name.
+        stroke = "#334d67" if name.endswith("-light") else "#f1f7fe"
         shape = TRAY[name]
     elif name in WIDGETS:
         if category not in ("actions", "apps"):
