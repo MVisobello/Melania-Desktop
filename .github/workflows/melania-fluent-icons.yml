@@ -8,6 +8,8 @@ on:
       - 'tools/melania_fluent_reference.py'
       - 'tools/test_melania_fluent_reference.py'
       - 'tools/build_melania_fluent_themes.py'
+      - 'tools/melania_shell_symbolic_icons.py'
+      - 'tests/test_appearance_trio_shell_icons.py'
       - 'tools/test_melania_fluent_artwork.py'
       - 'scripts/install-melania-fluent-icons.sh'
       - 'branding/coverage/**'
@@ -19,6 +21,8 @@ on:
       - 'tools/melania_fluent_reference.py'
       - 'tools/test_melania_fluent_reference.py'
       - 'tools/build_melania_fluent_themes.py'
+      - 'tools/melania_shell_symbolic_icons.py'
+      - 'tests/test_appearance_trio_shell_icons.py'
       - 'tools/test_melania_fluent_artwork.py'
       - 'scripts/install-melania-fluent-icons.sh'
       - 'branding/coverage/**'
@@ -39,6 +43,8 @@ jobs:
         run: python3 tools/test_melania_fluent_reference.py
       - name: Validate independent Office suite illustration
         run: python3 tests/test_settings_fluent_chrome.py
+      - name: Validate exclusive UI themes and small shell icons
+        run: python3 tests/test_appearance_trio_shell_icons.py
       - name: Validate original SVG artwork and contrast
         run: python3 tools/test_melania_fluent_artwork.py
       - name: Build all variants using the full identifier manifests
