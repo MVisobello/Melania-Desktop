@@ -19,6 +19,9 @@ struct Browser {
     visible_paths: Rc<RefCell<Vec<PathBuf>>>,
     tile_buttons: Rc<RefCell<Vec<(PathBuf, Button)>>>,
     tiles: FlowBox,
+    empty_view: GtkBox,
+    empty_title: Label,
+    empty_explanation: Label,
     list_mode: Rc<Cell<bool>>,
     list_header: GtkBox,
     preview_icon: Image,
@@ -64,6 +67,26 @@ fn human_size(size: u64) -> String {
 }
 
 fn is_picture(path: &Path) -> bool { model::is_picture(path) }
+
+/// Give users a meaningful reason when a folder has no visible files.
+/// Filtering can hide every result even when the directory is not empty.
+fn empty_folder_message(query: &str, pictures_only: bool, show_hidden: bool)
+    -> (&'static str, &'static str, &'static str) {
+    if !query.trim().is_empty() {
+        ("system-search", "Nessun risultato",
+         "Prova un altro nome oppure cancella la ricerca.")
+    } else if pictures_only {
+        ("image-x-generic", "Nessuna immagine visibile",
+         "Disattiva il filtro Foto per visualizzare tutti i file.")
+    } else if !show_hidden {
+        ("folder", "Questa cartella è vuota",
+         "Puoi creare una cartella o trascinare qui i tuoi file. I file nascosti non sono visualizzati.")
+    } else {
+        ("folder", "Nessun elemento in questa cartella",
+         "Puoi creare una cartella o trascinare qui i tuoi file.")
+    }
+}
+
 
 /// Display metadata supplied by the bounded filesystem model, never
 /// recursively probe symlink targets just to populate a table row.
@@ -371,10 +394,23 @@ fn refresh(browser: &Browser) {
     let entries = match model::list_directory(&dir, &query, options) {
         Ok(entries) => entries,
         Err(err) => {
+            browser.empty_view.set_visible(true);
+            browser.empty_title.set_text("Impossibile leggere la cartella");
+            browser.empty_explanation.set_text(&format!("{err}"));
+            browser.list_header.set_visible(false);
             browser.status.set_text(&format!("Impossibile accedere: {err}"));
             return;
         }
     };
+    let is_empty = entries.is_empty();
+    browser.empty_view.set_visible(is_empty);
+    browser.list_header.set_visible(!is_empty && browser.list_mode.get());
+    if is_empty {
+        let (_icon, title, description) = empty_folder_message(
+            &query, browser.only_images.get(), browser.show_hidden.get());
+        browser.empty_title.set_text(title);
+        browser.empty_explanation.set_text(description);
+    }
     // A selection filtered out of this tab must not remain actionable.
     // In particular, never allow Trash/Rename to operate on a hidden stale item.
     let visible: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
@@ -754,6 +790,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     toolbar.append(&up);
     toolbar.append(&home_button);
     toolbar.append(&refresh_button);
+    let sidebar_toggle = navigation_icon_button("view-sidebar-symbolic", "Mostra o nascondi la barra laterale (Ctrl+B)");
+    sidebar_toggle.set_tooltip_text(Some("Mostra o nascondi la barra laterale (Ctrl+B)"));
+    toolbar.append(&sidebar_toggle);
     // Nautilus' Ctrl+L location entry: real, local filesystem paths only.
     // GIO URI navigation needs a separate backend migration.
     let location = Entry::builder().placeholder_text("Percorso della cartella (Ctrl+L)").build();
@@ -934,7 +973,30 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     center_panel.append(&list_header);
     scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     scroll.set_child(Some(&tiles));
-    center_panel.append(&scroll);
+    let empty_view = GtkBox::new(Orientation::Vertical, 12);
+    empty_view.add_css_class("files-empty-state");
+    empty_view.set_halign(Align::Center);
+    empty_view.set_valign(Align::Center);
+    empty_view.set_can_target(false);
+    let empty_image = Image::from_icon_name("folder");
+    empty_image.set_pixel_size(72);
+    empty_image.add_css_class("files-empty-image");
+    empty_view.append(&empty_image);
+    let empty_title = Label::new(Some("Questa cartella è vuota"));
+    empty_title.add_css_class("files-empty-title");
+    empty_view.append(&empty_title);
+    let empty_explanation = Label::new(Some("Puoi creare una cartella o trascinare qui i tuoi file."));
+    empty_explanation.add_css_class("files-empty-description");
+    empty_explanation.set_wrap(true);
+    empty_explanation.set_justify(gtk::Justification::Center);
+    empty_view.append(&empty_explanation);
+    empty_view.set_visible(false);
+    let files_overlay = gtk::Overlay::new();
+    files_overlay.set_child(Some(&scroll));
+    files_overlay.add_overlay(&empty_view);
+    files_overlay.set_hexpand(true);
+    files_overlay.set_vexpand(true);
+    center_panel.append(&files_overlay);
     let inspector = GtkBox::new(Orientation::Vertical, 14);
     inspector.add_css_class("files-preview");
     inspector.set_size_request(220, -1);
@@ -1028,6 +1090,10 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let sidebar_scroll = ScrolledWindow::new();
     sidebar_scroll.set_min_content_width(178);
     sidebar_scroll.set_child(Some(&sidebar));
+    let sidebar_to_toggle = sidebar_scroll.clone();
+    sidebar_toggle.connect_clicked(move |_| {
+        sidebar_to_toggle.set_visible(!sidebar_to_toggle.is_visible());
+    });
     content.set_start_child(Some(&sidebar_scroll));
     content.set_end_child(Some(&middle_and_inspector));
     content.set_position(190);
@@ -1059,7 +1125,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         selection_anchor: Rc::new(RefCell::new(None)),
         visible_paths: Rc::new(RefCell::new(Vec::new())),
         tile_buttons: Rc::new(RefCell::new(Vec::new())),
-        tiles, list_mode: Rc::new(Cell::new(true)), list_header: list_header.clone(),
+        tiles, empty_view, empty_title, empty_explanation,
+        list_mode: Rc::new(Cell::new(true)), list_header: list_header.clone(),
         preview_icon, preview_heading, location, status, preview, preview_image, search,
         back: Rc::new(RefCell::new(Vec::new())),
         forward: Rc::new(RefCell::new(Vec::new())),
@@ -1464,6 +1531,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let go_forward = forward.clone();
     let go_up = up.clone();
     let do_refresh = refresh_button.clone();
+    let do_sidebar = sidebar_toggle.clone();
     let do_search = browser.search.clone();
     let do_location = browser.location.clone();
     let do_hidden = hidden_toggle.clone();
@@ -1494,6 +1562,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
             if key == gdk::Key::f { do_search.grab_focus(); return glib::Propagation::Stop; }
             if key == gdk::Key::l { do_location.grab_focus(); do_location.select_region(0,-1); return glib::Propagation::Stop; }
             if key == gdk::Key::h { do_hidden.set_active(!do_hidden.is_active()); return glib::Propagation::Stop; }
+            if key == gdk::Key::b { do_sidebar.emit_clicked(); return glib::Propagation::Stop; }
             if !typing {
                 if key == gdk::Key::a {
                     let mut selected=selected_for_all.borrow_mut();
