@@ -154,7 +154,7 @@ def _status_kind(name: str):
 def _status(name: str, variant: str) -> str:
     kind = _status_kind(name)
     dark = variant == "dark"
-    ink = "#f1f9ff" if dark else "#24476c"
+    ink = "#ecf7ff" if dark else "#17416a"
     accent = "#66caff" if dark else "#167ebc"
     muted = any(word in name for word in ("muted", "disabled", "off", "offline", "empty"))
     shape = {
