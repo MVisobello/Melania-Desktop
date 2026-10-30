@@ -41,7 +41,8 @@ headerbar.melania-win7-header button.win7-close:backdrop {
   border-radius: 0;
   box-shadow: inset 0 1px rgba(255,255,255,.84);
 }
-headerbar.melania-win7-header button.win7-minimize {
+headerbar.melania-win7-header button.win7-minimize,
+headerbar.melania-win7-header button.win7-minimize:backdrop {
   border-radius: 0 0 0 6px;
 }
 headerbar.melania-win7-header button.win7-close,
