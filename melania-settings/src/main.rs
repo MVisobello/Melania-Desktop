@@ -24,8 +24,8 @@ fn saved_option(
     row.add_css_class("settings-card");
     let v = GtkBox::new(Orientation::Vertical, 5);
     v.set_hexpand(true);
-    v.append(&text(title, "settings-hero"));
-    v.append(&text(description, "settings-subtitle"));
+    v.append(&text(title, "settings-row-title"));
+    v.append(&text(description, "settings-row-description"));
     row.append(&v);
     let toggle = Switch::builder().active(current).build();
     // Do not allow GTK's fill alignment to stretch the thumb vertically.
@@ -51,12 +51,17 @@ fn saved_option(
 }
 
 fn page(title: &str, description: &str) -> GtkBox {
-    let body = GtkBox::new(Orientation::Vertical, 15);
+    let body = GtkBox::new(Orientation::Vertical, 12);
     body.add_css_class("settings-body");
-    body.append(&text(title, "settings-heading"));
-    body.append(&text(description, "settings-subtitle"));
+    let introduction = GtkBox::new(Orientation::Vertical, 5);
+    introduction.add_css_class("settings-introduction");
+    introduction.append(&text(title, "settings-heading"));
+    introduction.append(&text(description, "settings-subtitle"));
+    body.append(&introduction);
     body
 }
+
+fn section(title: &str) -> Label { text(title, "settings-section-heading") }
 
 fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
     // GTK process only: do not modify the user's host desktop globally.
@@ -111,34 +116,42 @@ fn build_ui(
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
     let window = ApplicationWindow::builder().application(app).title("Melania — Impostazioni")
-        .default_width(870).default_height(600).build();
+        .default_width(1020).default_height(690).build();
     window.add_css_class("melania-settings-window");
     // Native client-side decorations retain window dragging and window controls.
     let titlebar = HeaderBar::new();
     titlebar.add_css_class("settings-titlebar");
     titlebar.set_show_title_buttons(true);
     titlebar.set_decoration_layout(Some(":minimize,maximize,close"));
-    let title_text = Label::new(Some("Melania — Impostazioni"));
+    let title_text = Label::new(Some("Impostazioni"));
     title_text.add_css_class("title");
     titlebar.set_title_widget(Some(&title_text));
     window.set_titlebar(Some(&titlebar));
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.add_css_class("settings-root");
-    let sidebar = GtkBox::new(Orientation::Vertical, 9);
+    let sidebar = GtkBox::new(Orientation::Vertical, 10);
     sidebar.add_css_class("settings-sidebar");
-    sidebar.set_size_request(225, -1);
+    sidebar.set_size_request(258, -1);
+    let brand_row = GtkBox::new(Orientation::Horizontal, 10);
+    brand_row.add_css_class("settings-brand");
     let brand = Image::from_icon_name("melania");
-    brand.set_pixel_size(70);
-    brand.set_halign(gtk::Align::Start);
-    sidebar.append(&brand);
-    sidebar.append(&text("MELANIA", "settings-heading"));
-    sidebar.append(&text("Impostazioni", "settings-subtitle"));
-    // GNOME/COSMIC-style section search with familiar Cinnamon navigation.
+    brand.set_pixel_size(28);
+    brand_row.append(&brand);
+    brand_row.append(&text("Melania", "settings-brand-name"));
+    sidebar.append(&brand_row);
     let category_search = Entry::new();
     category_search.set_placeholder_text(Some("Cerca nelle impostazioni…"));
-    category_search.set_tooltip_text(Some("Filtra le sezioni delle Impostazioni"));
+    category_search.set_tooltip_text(Some("Filtra le categorie"));
     category_search.add_css_class("settings-search");
     sidebar.append(&category_search);
+    let navigation_scroll = gtk::ScrolledWindow::new();
+    navigation_scroll.set_vexpand(true);
+    navigation_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    navigation_scroll.add_css_class("settings-navigation-scroll");
+    let navigation_list = GtkBox::new(Orientation::Vertical, 3);
+    navigation_list.add_css_class("settings-navigation-list");
+    navigation_scroll.set_child(Some(&navigation_list));
+    sidebar.append(&navigation_scroll);
     let stack = Stack::new();
     stack.set_hexpand(true);
     stack.set_vexpand(true);
