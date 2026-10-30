@@ -27,15 +27,15 @@ WIFI = ('<path d="M2.5 8.5c5.3-4.7 13.7-4.7 19 0" />'
         '<path d="M6 12.4c3.3-2.9 8.7-2.9 12 0" />'
         '<path d="M9.5 16.2c1.4-1.2 3.6-1.2 5 0" />'
         '<circle cx="12" cy="20.2" r="1.25" fill="{ink}" stroke="none"/>')
-BLUETOOTH = ('<path d="M11.4 2.2v19.6l6.4-5.4-12-9.8" />'
-             '<path d="m11.4 2.2 6.4 5.4-12 9.8" />')
+BLUETOOTH = ('<circle cx="12" cy="12" r="10.1" />'
+             '<path d="M11.4 4.7v14.6l4.7-3.8-8-6.7m3.3-4.1 4.7 3.8-8 6.7" />')
 VOLUME = ('<path d="M2.5 9.2h4.6l5.1-4.1v13.8l-5.1-4.1H2.5z" '
           'fill="{ink}" stroke="none"/>'
           '<path d="M15 8.8c2.5 1.8 2.5 4.6 0 6.4" />'
           '<path d="M18 5.6c4.4 3.4 4.4 9.4 0 12.8" />')
 BATTERY = ('<rect x="2.3" y="7.1" width="17.6" height="9.8" rx="2.1"/>'
            '<path d="M21.5 10.2v3.6" />'
-           '<rect x="5.1" y="10" width="10.4" height="4" rx="1" '
+           '<rect x="5.2" y="10" width="5.7" height="4" rx=".8" '
            'fill="{ink}" stroke="none"/>')
 BELL = ('<path d="M5.6 17.3h12.8l-2.2-3.1V9.6'
         'a4.2 4.2 0 0 0-8.4 0v4.6z" />'
@@ -94,7 +94,7 @@ def artwork(name: str, category: str, variant: str = "light", size: int = 24) ->
         shape = WIDGETS[name]
     else:
         return None
-    weight = "2.15" if name in TRAY else "1.8"
+    weight = ("1.8" if "bluetooth" in name else "2.15") if name in TRAY else "1.8"
     shape = shape.replace("{ink}", stroke)
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="{size}" height="{size}">'
             f'<g fill="none" stroke="{stroke}" stroke-width="{weight}" stroke-linecap="round" '
