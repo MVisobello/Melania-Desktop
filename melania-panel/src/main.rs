@@ -88,6 +88,9 @@ fn start_window(app:&Application)->ApplicationWindow {
     let root=GtkBox::new(Orientation::Vertical,9);
     root.add_css_class("melania-panel");
     root.add_css_class("melania-start-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {
+        root.add_css_class("high-contrast");
+    }
     let query=Entry::builder().placeholder_text("Cerca applicazioni, file, impostazioni...").build();
     query.add_css_class("melania-entry");
     root.append(&query);
@@ -238,6 +241,7 @@ fn quick_window(app:&Application, notifications:&ApplicationWindow)->Application
     w.set_margin(Edge::Bottom,65);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,12);root.add_css_class("melania-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {root.add_css_class("high-contrast");}
     let tabs=GtkBox::new(Orientation::Horizontal,6);
     tabs.add_css_class("melania-tabs");
     let notifications_button=Button::with_label("Notifiche");
@@ -561,6 +565,7 @@ fn notifications_window(app: &Application) -> ApplicationWindow {
     w.set_margin(Edge::Bottom,65);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,10);root.add_css_class("melania-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {root.add_css_class("high-contrast");}
     let tabs=GtkBox::new(Orientation::Horizontal,6);
     tabs.add_css_class("melania-tabs");
     let current=Button::with_label("Notifiche");
@@ -695,6 +700,9 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let w=make_surface(app,Layer::Top,&[Edge::Bottom,Edge::Left,Edge::Right],0,52,0,"melania-panel",52);
     w.set_keyboard_mode(KeyboardMode::None);
     let bar=GtkBox::new(Orientation::Horizontal,8);bar.add_css_class("melania-bar");
+    if melania_config::load().unwrap_or_default().high_contrast {
+        bar.add_css_class("high-contrast");
+    }
     let menu=Button::new();menu.add_css_class("melania-start");
     let logo=Image::from_icon_name("melania");logo.set_pixel_size(31);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
     let sm=start.clone();let qs=quick.clone();let nt=notifications.clone();
@@ -820,6 +828,11 @@ fn build(app:&Application){
     if !gtk4_layer_shell::is_supported() {
         eprintln!("Melania Panel requires Wayland with zwlr_layer_shell_v1 (try the nested compositor)");
         return;
+    }
+    let preferences = melania_config::load().unwrap_or_default();
+    if let Some(gtk_settings) = gtk::Settings::default() {
+        gtk_settings.set_property("gtk-enable-animations",
+            preferences.animations && !preferences.reduce_motion);
     }
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
