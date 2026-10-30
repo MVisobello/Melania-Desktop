@@ -58,7 +58,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libgtk-4-dev libgtk4-layer-shell-dev libwayland-dev libxkbcommon-dev
-          pkg-config --modversion gtk4 gtk4-layer-shell
+          pkg-config --modversion gtk4 gtk4-layer-shell-0
       - name: Compile GTK applications
         run: |
           set -o pipefail
@@ -68,6 +68,30 @@ jobs:
         with:
           name: gtk-build-log
           path: gtk-build.log
+
+
+  rust-notifications:
+    name: Notification daemon and D-Bus smoke tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install notification test utilities
+        run: sudo apt-get update && sudo apt-get install -y dbus dbus-user-session libnotify-bin
+      - name: Build notification services
+        run: |
+          set -o pipefail
+          cargo build -p melania-notifyd -p melania-notify-core -p melania-notifyctl 2>&1 | tee notification-build.log
+      - name: Notification core tests
+        run: cargo test -p melania-notify-core
+      - name: D-Bus smoke test
+        run: ./scripts/smoke-notifications-dbus.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notification-build-log
+          path: notification-build.log
 
   compositor:
     name: Smithay compositor and Linux binaries
