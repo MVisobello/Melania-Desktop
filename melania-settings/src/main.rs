@@ -136,6 +136,13 @@ fn build_ui(
     let title_text = Label::new(Some("Impostazioni"));
     title_text.add_css_class("title");
     titlebar.set_title_widget(Some(&title_text));
+    // A real sidebar switch allows Settings to stay usable on narrow displays.
+    // GTK keeps the main content scrollable instead of clipping navigation.
+    let navigation_toggle = Button::with_label("☰");
+    navigation_toggle.add_css_class("settings-sidebar-toggle");
+    navigation_toggle.set_tooltip_text(Some("Mostra o nascondi il menu (Ctrl+B)"));
+    navigation_toggle.set_accessible_label(Some("Mostra o nascondi le categorie"));
+    titlebar.pack_start(&navigation_toggle);
     let controls = GtkBox::new(Orientation::Horizontal, 0);
     controls.add_css_class("win7-window-controls");
     let minimize = Button::with_label("—");
@@ -427,7 +434,26 @@ fn build_ui(
         }
     });
     sidebar.append(&text("Melania Desktop  ·  Impostazioni locali", "settings-sidebar-footer"));
-    root.append(&sidebar);
+    let sidebar_revealer = gtk::Revealer::new();
+    sidebar_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+    sidebar_revealer.set_transition_duration(170);
+    sidebar_revealer.set_reveal_child(true);
+    sidebar_revealer.set_child(Some(&sidebar));
+    root.append(&sidebar_revealer);
+    let side = sidebar_revealer.clone();
+    navigation_toggle.connect_clicked(move |_| {
+        side.set_reveal_child(!side.reveals_child());
+    });
+    // Ctrl+B toggles the sidebar without relying on tiny window buttons.
+    let shortcuts = gtk::ShortcutController::new();
+    let shortcut_action = gtk::CallbackAction::new(move |_, _| {
+        navigation_toggle.activate();
+        gtk::glib::Propagation::Stop
+    });
+    let trigger = gtk::ShortcutTrigger::parse_string("<Control>b")
+        .expect("valid Ctrl+B accelerator");
+    shortcuts.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(shortcut_action)));
+    window.add_controller(shortcuts);
     let main_panel = GtkBox::new(Orientation::Vertical, 0);
     main_panel.add_css_class("settings-main");
     main_panel.set_hexpand(true);
