@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="network-workgroup"><defs>
+    <linearGradient id="face" x1="0" x2="0.78" y1="0" y2="1"><stop stop-color="#7bdbff"/><stop offset="0.51" stop-color="#269bd7"/><stop offset="1" stop-color="#065baf"/></linearGradient>
+    <linearGradient id="shine" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#fff" stop-opacity=".42"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="glass" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#fff" stop-opacity=".82"/><stop offset="1" stop-color="#e9f5ff" stop-opacity=".96"/></linearGradient>
+    </defs><ellipse cx="48" cy="82" rx="30" ry="4" fill="#0c355c" opacity=".13"/>
+    <circle cx="48" cy="46" r="36" fill="url(#face)" opacity=".18"/>
+    <circle cx="48" cy="46" r="32" fill="url(#face)" stroke="#a9e9ff" stroke-opacity=".55" stroke-width="1.2"/>
+    <circle cx="48" cy="28" r="9" fill="none" stroke="#fff" stroke-width="3"/><circle cx="27" cy="64" r="9" fill="none" stroke="#fff" stroke-width="3"/><circle cx="69" cy="64" r="9" fill="none" stroke="#fff" stroke-width="3"/><path d="M43 36 32 55 M53 36 64 55 M36 64H60" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>

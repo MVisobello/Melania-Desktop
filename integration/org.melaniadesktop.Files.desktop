@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Melania Files
+Name[it]=Melania Files
+Comment=Gestore file di Melania Desktop
+Exec=melania-files %f
+Icon=org.melaniadesktop.Files
+Categories=Utility;FileManager;
+Terminal=false
+MimeType=inode/directory;
+StartupNotify=true

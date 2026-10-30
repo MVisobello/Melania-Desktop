@@ -1,0 +1,23 @@
+{
+  "release": "0.13-buildlab",
+  "date": "2026-10-29",
+  "checks": {
+    "workspace_manifest_audit": "PASS",
+    "static_release_tests": {
+      "passed": 7,
+      "failed": 0
+    },
+    "filesystem_prototype_tests": {
+      "passed": 5,
+      "failed": 0
+    },
+    "bash_syntax": "PASS",
+    "headless_gui_x11": "PASS",
+    "cargo_check": "NOT_RUN_TOOLCHAIN_MISSING",
+    "gtk_native_build": "NOT_RUN_LIBRARIES_MISSING",
+    "wayland_nested_smoke": "BLOCKED_NO_BINARY",
+    "wayland_dnd": "NOT_TESTED"
+  },
+  "clarification": "Headless GUI proof-of-concept uses Python/Tk on X11, not the Rust/GTK4 compositor.",
+  "real_wayland_build_verified": false
+}

@@ -1,0 +1,8 @@
+[workspace]
+members = ["melania-preview", "melania-files", "melania-settings", "melania-core", "melania-config", "melania-services", "melania-transfer", "melania-dnd", "melania-compositor", "melania-panel", "melania-shell-model", "melania-control", "melania-filectl", "melania-files-core", "melania-notify-core", "melania-notifyd", "melania-notifyctl", "melania-desktop-surface", "melania-desktop-core", "melania-workspaces"]
+resolver = "2"
+
+[workspace.package]
+version = "0.36.0"
+edition = "2021"
+license = "MIT"

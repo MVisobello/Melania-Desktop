@@ -1,0 +1,16 @@
+[package]
+name = "melania-panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_8"] }
+gtk4-layer-shell = "0.8.1"
+melania-services = { path = "../melania-services" }
+melania-config = { path = "../melania-config" }
+melania-shell-model = { path = "../melania-shell-model" }
+
+melania-control = { path = "../melania-control" }
+
+melania-notify-core = { path = "../melania-notify-core" }

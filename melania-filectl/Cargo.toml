@@ -1,0 +1,8 @@
+[package]
+name = "melania-filectl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+melania-transfer = { path = "../melania-transfer" }

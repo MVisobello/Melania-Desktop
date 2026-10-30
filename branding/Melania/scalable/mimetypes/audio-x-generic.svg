@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="audio-x-generic"><defs>
+    <linearGradient id="face" x1="0" x2="0.78" y1="0" y2="1"><stop stop-color="#ffafaf"/><stop offset="0.51" stop-color="#f66d74"/><stop offset="1" stop-color="#bc3d74"/></linearGradient>
+    <linearGradient id="shine" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#fff" stop-opacity=".42"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="glass" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#fff" stop-opacity=".82"/><stop offset="1" stop-color="#e9f5ff" stop-opacity=".96"/></linearGradient>
+    </defs><ellipse cx="49" cy="84" rx="25" ry="4" fill="#284362" opacity=".1"/>
+    <path d="M23 13H58L74 29V77Q74 82 69 82H28Q23 82 23 77Z" fill="url(#glass)" stroke="#8da7bb" stroke-width="1.6"/>
+    <path d="M58 13V27Q58 30 62 30H74Z" fill="#ffafaf" stroke="#bc3d74" stroke-width="1.3"/>
+    <path d="M28 18V76" stroke="#fff" stroke-width="2.5" opacity=".65"/>
+    <path d="M32 74H65" stroke="#f66d74" stroke-width="2" stroke-opacity=".45"/>
+    <rect x="30" y="43" width="38" height="30" rx="7" fill="#f66d74" opacity=".96"/><g transform="translate(13,22) scale(.72)"><path d="M43 33L64 28V58 M43 40L64 35 M43 40V63" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" /><circle cx="34" cy="65" r="9" fill="white" stroke="none" stroke-width="4"/><circle cx="55" cy="61" r="9" fill="white" stroke="none" stroke-width="4"/></g></svg>

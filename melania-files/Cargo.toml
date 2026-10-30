@@ -1,0 +1,11 @@
+[package]
+name = "melania-files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_8"] }
+melania-transfer = { path = "../melania-transfer" }
+
+melania-files-core = { path = "../melania-files-core" }

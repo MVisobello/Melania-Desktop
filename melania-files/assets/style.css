@@ -1,0 +1,214 @@
+/* Melania Files v0.11 — light content, refined Explorer-style layout */
+window {background:#f3f7fc;color:#162e4b}
+.files-toolbar{background:linear-gradient(to bottom,#f9fcff,#e1edf9);border-bottom:1px solid #bfd3e7;padding:9px 13px}
+.files-toolbar button{border-radius:9px;padding:6px 10px;background:#fff;border:1px solid #ccdeed;color:#284968}
+.files-toolbar entry{border-radius:11px;background:white;border:1px solid #c9deef;color:#213d59}
+.files-sidebar{background:linear-gradient(to bottom,#f3f8ff,#e7f0fa);padding:13px;border-right:1px solid #cbddee}
+.files-sidebar button{background:transparent;border:0;border-radius:9px;color:#234666;padding:9px}
+.files-sidebar button:hover{background:#d4e8fc}
+.files-grid{background:#ffffff;padding:18px}
+.files-tile{background:transparent;border:1px solid transparent;border-radius:12px;padding:9px;color:#234666;min-width:118px}
+.files-tile:hover{background:#e6f2ff;border-color:#85b8f0}
+.files-icon{font-size:36px}.files-name{font-size:12px;color:#23425c}
+.files-preview{background:linear-gradient(to bottom,#fff,#edf5fc);border-left:1px solid #d1dfed;padding:17px}
+.files-inspector-image{background:#eef5fc;border-radius:10px;padding:8px}
+.files-info{color:#5b748e;font-size:12px}
+.files-footer{background:#e8f1fa;color:#536c85;padding:7px 12px;border-top:1px solid #cadbeb}
+.files-title{font-size:17px;font-weight:700;color:#143d68}
+.files-tag{background:#d4e9ff;padding:6px;border-radius:10px;color:#1552a0}
+.files-tile.drop-ready,.files-sidebar button.drop-ready{background:#c6e2ff;border:2px solid #1976eb}
+.files-grid.drop-ready{outline:3px solid #1976eb;outline-offset:-4px}
+
+/* Melania 0.12 — approved Aero file manager refinement */
+.files-toolbar { min-height: 48px; }
+.files-toolbar entry { min-height: 33px; border-radius: 12px; background: #fff; border: 1px solid #c7d9ee; }
+.files-toolbar checkbutton { color: #244b72; margin-left: 6px; }
+.files-sidebar { min-width: 178px; }
+.files-sidebar button:focus-visible { outline: 2px solid #2b8cff; outline-offset: -2px; }
+.files-tile:focus-visible { outline: 2px solid #2b8cff; outline-offset: -2px; }
+.files-preview { min-width: 225px; }
+.files-inspector-image { background: #fff; border: 1px solid #d7e4f1; border-radius: 12px; padding: 8px; }
+.files-footer { min-height: 25px; }
+
+/* Melania Files 0.14: tabs, sort, favorites and folder actions. */
+.files-tabs-toolbar {
+  background: #e3eef9;
+  border-bottom: 1px solid #c6d8e8;
+  padding: 6px 12px;
+}
+.files-tabs-toolbar button {
+  border-radius: 9px;
+  background: #f8fbff;
+  border: 1px solid #cadced;
+  color: #1d4168;
+  padding: 5px 11px;
+}
+.files-notebook > header { background: #ebf4ff; border-bottom: 1px solid #d4e4f3; }
+.files-notebook > header tab { border-radius: 9px 9px 0 0; padding: 6px 16px; color: #2c527a; }
+.files-notebook > header tab:checked { background: #ffffff; color: #1056a9; }
+.files-toolbar dropdown { min-width: 118px; }
+.files-sidebar-heading { margin-top: 18px; color: #537fae; font-size: 11px; font-weight: bold; }
+.files-actions { padding: 5px 16px; background: #f4f8fd; border-bottom: 1px solid #d5e1ee; }
+.files-actions entry { border-radius: 9px; background: white; }
+.files-create-button { color: #125aaf; background: #e4f0ff; border-radius: 9px; }
+
+/* Melania 0.15 — refined filesystem cards, native theme icons, safe actions */
+.files-tile {
+  min-width: 130px;
+  padding: 14px 12px;
+  border-radius: 14px;
+  transition: background-color 120ms ease;
+}
+.files-tile:hover { background: #e7f2ff; border-color: #92bfee; }
+.files-icon { color: #377cc1; }
+.files-preview { min-width: 238px; }
+.files-preview button { border-radius: 10px; }
+.files-preview .files-trash {
+  background: #fff5ed;
+  color: #8a3b1c;
+  border: 1px solid #e9d4c4;
+}
+.files-preview .files-trash:hover { background: #ffe8da; }
+
+/* Melania Phase A (0.27): true three-pane layout, no overlapping file tiles. */
+.files-three-pane > separator { background: #d1e0f0; min-width: 2px; }
+.files-three-pane > separator:hover { background: #8ebef4; }
+.files-inspector-scroll { background: #f4f9fe; }
+.files-inspector-scroll > viewport { background: #f4f9fe; }
+.files-sidebar { min-width: 178px; }
+.files-grid { min-width: 210px; padding: 12px; }
+.files-grid flowbox { padding: 6px; }
+.files-tile { min-width: 100px; padding: 11px 8px; }
+.files-preview { min-width: 220px; padding: 14px; }
+.files-actions { padding: 6px 12px; }
+.files-actions button { min-height: 30px; padding: 3px 8px; }
+.files-actions entry { min-width: 130px; }
+.files-actions dropdown { min-width: 95px; }
+.files-inspector-image { min-width: 180px; min-height: 134px; }
+
+/* Fase B1 (v0.28): compact icon-only buttons and wrapping secondary tools. */
+.files-nav-button { min-width: 30px; min-height: 30px; padding: 4px; margin: 0 1px; border-radius: 9px;
+  color: #1766ae; background: #fbfdff; border: 1px solid #d4e4f3; }
+.files-nav-button:hover { background: #e7f2ff; border-color: #a4cdf5; }
+.files-nav-button:focus-visible { outline: 2px solid #248bf4; outline-offset: 1px; }
+.files-actions { padding: 6px 9px; }
+.files-actions flowboxchild { padding: 0; margin: 0; background: transparent; }
+.files-toolbar label { min-width: 48px; }
+
+/* v0.29: narrower, readable single-column file list option. */
+.files-list-view .files-tile {
+  border-radius: 8px;
+  margin: 1px 4px;
+  padding: 7px 10px;
+}
+.files-toolbar togglebutton {
+  border-radius: 9px;
+  border: 1px solid #d2dfed;
+  background: #f4f9fe;
+  color: #24547f;
+  padding: 6px 10px;
+}
+.files-toolbar togglebutton:checked {
+  background: #d9ecff;
+  border-color: #86bcec;
+}
+
+/* 0.32: browser-like native GTK tabs: one contiguous rail, not separate cards. */
+.files-notebook > header {
+  background: linear-gradient(to bottom, #d9e7f5, #eaf3fd);
+  border-bottom: 1px solid #afcde9;
+  padding: 3px 7px 0;
+}
+.files-notebook > header tabs { margin: 0; padding: 0; }
+.files-notebook > header tab {
+  background: transparent;
+  color: #2d5579;
+  margin: 0;
+  padding: 5px 9px;
+  border: none;
+  border-radius: 0;
+  min-width: 82px;
+  min-height: 27px;
+  border-right: 1px solid rgba(110,150,190,0.32);
+}
+.files-notebook > header tab:hover:not(:checked) { background: rgba(255,255,255,0.32); }
+.files-notebook > header tab:checked {
+  background: #f8fbff;
+  color: #12518d;
+  border: 1px solid #a8cbea;
+  border-bottom-color: #f8fbff;
+  border-radius: 9px 9px 0 0;
+  font-weight: bold;
+}
+.files-tab-heading { border-spacing: 5px; }
+.files-tab-heading image { -gtk-icon-size: 16px; }
+.files-tab-close {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  opacity: 0.75;
+}
+.files-tab-close:hover { background: #d7e8f7; opacity: 1; border-radius: 5px; }
+.files-new-tab {
+  min-width: 27px;
+  min-height: 26px;
+  padding: 3px;
+  margin: 2px 4px;
+  background: rgba(255,255,255,0.35);
+  color: #1d659f;
+  border: 1px solid rgba(139,178,211,0.7);
+  border-radius: 7px;
+}
+.files-new-tab:hover { background: #f5faff; }
+
+/* v0.34: restore luminous Aero treatment in the GTK file manager.
+ * Note: top-tab client-side decoration requires Wayland compilation/testing.
+ * No claim of a working GPU blur in GTK CSS. */
+.files-notebook > header {
+  background: linear-gradient(to bottom, rgba(92,157,205,0.90), rgba(177,216,244,0.86));
+  border-bottom: 1px solid rgba(195,229,253,0.95);
+  box-shadow: inset 0 1px rgba(244,252,255,0.72);
+}
+.files-notebook > header tab {
+  color: #173d61;
+  background: rgba(189,224,248,0.20);
+  border-right: 1px solid rgba(231,247,255,0.45);
+}
+.files-notebook > header tab:hover:not(:checked) {
+  background: rgba(237,249,255,0.43);
+}
+.files-notebook > header tab:checked {
+  background: #fbfdff;
+  border-color: rgba(148,199,237,0.92);
+  border-bottom-color: #fbfdff;
+  box-shadow: inset 0 2px #56acfa;
+}
+.files-toolbar {background: linear-gradient(to bottom,#fafdff,#e7f1fb);}
+
+/* v0.35 refinements: native action accessibility without disturbing Aero tabs. */
+.files-toolbar { padding: 7px 10px; border-bottom: 1px solid #ccdfed; }
+.files-toolbar entry { min-width: 145px; }
+.files-toolbar button { min-width: 30px; }
+.files-actions { padding: 5px 8px; background: linear-gradient(to bottom,#f6fbff,#eaf4fd); }
+.files-actions flowboxchild { margin: 0; padding: 0; }
+.files-actions button { min-height: 29px; border-radius: 8px; }
+.files-notebook > header tab { min-height: 29px; }
+.files-notebook > header tab:hover:not(:checked) { background: rgba(231,247,255,0.55); }
+.files-tab-close { min-width: 23px; min-height: 23px; }
+.files-new-tab { min-height: 27px; min-width: 29px; }
+
+/* v0.36: selection and activation are separate, as in traditional file managers. */
+.files-tile-selected {
+  background: rgba(48,153,243,0.17);
+  border: 1px solid rgba(31,128,217,0.85);
+  box-shadow: inset 0 0 0 1px rgba(245,251,255,0.9);
+}
+.files-tile-selected:hover { background: rgba(48,153,243,0.24); }
+
+/* 0.38: transfer progress and cancellation use compact native GTK controls. */
+progressbar trough { min-height: 6px; border-radius: 5px; background: alpha(#4682b7, 0.12); }
+progressbar progress { min-height: 6px; border-radius: 5px; background: #278ee8; }

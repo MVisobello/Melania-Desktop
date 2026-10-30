@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Melania Panel
+GenericName=Barra delle applicazioni Melania
+Comment=Taskbar, menu delle applicazioni e centro rapido per Melania Desktop
+Exec=melania-panel
+Icon=org.melaniadesktop.Panel
+Terminal=false
+Categories=System;Utility;
+NoDisplay=true

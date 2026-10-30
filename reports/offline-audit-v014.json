@@ -1,0 +1,61 @@
+{
+  "scope": "offline/static checks only; does not compile Rust",
+  "members": [
+    "melania-preview",
+    "melania-files",
+    "melania-settings",
+    "melania-core",
+    "melania-config",
+    "melania-services",
+    "melania-transfer",
+    "melania-dnd",
+    "melania-compositor",
+    "melania-panel",
+    "melania-shell-model",
+    "melania-control",
+    "melania-filectl",
+    "melania-files-core"
+  ],
+  "member_count": 14,
+  "groups": {
+    "core": [
+      "melania-core",
+      "melania-shell-model",
+      "melania-dnd",
+      "melania-transfer",
+      "melania-control",
+      "melania-config",
+      "melania-services",
+      "melania-filectl",
+      "melania-files-core"
+    ],
+    "gtk": [
+      "melania-files",
+      "melania-settings",
+      "melania-preview",
+      "melania-panel"
+    ],
+    "compositor": [
+      "melania-compositor"
+    ]
+  },
+  "executables": {
+    "cargo": false,
+    "rustc": false,
+    "pkg-config": true,
+    "Xvfb": true,
+    "gcc": true,
+    "xvfb-run": true
+  },
+  "native_libraries": {
+    "gtk4": null,
+    "gtk4-layer-shell": null,
+    "wayland-client": null,
+    "xkbcommon": null,
+    "egl": null,
+    "glesv2": null
+  },
+  "errors": [],
+  "static_audit": "PASS",
+  "rust_build": "NOT_RUN"
+}

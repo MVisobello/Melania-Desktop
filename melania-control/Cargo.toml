@@ -1,0 +1,12 @@
+[package]
+name = "melania-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "melania_control"
+
+[[bin]]
+name = "melania-winctl"
+path = "src/main.rs"

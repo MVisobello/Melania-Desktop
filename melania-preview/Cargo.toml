@@ -1,0 +1,11 @@
+[package]
+name = "melania-preview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_8"] }
+melania-config = { path = "../melania-config" }
+melania-services = { path = "../melania-services" }
+melania-transfer = { path = "../melania-transfer" }

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Melania Preview
+Name[it]=Anteprima Melania Desktop
+Exec=melania-preview
+Icon=org.melaniadesktop.Preview
+Categories=Development;
+Terminal=false

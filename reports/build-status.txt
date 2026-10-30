@@ -1,0 +1,12 @@
+Melania validation 2026-10-29T22:29:22Z
+Kernel: Linux 6.18.55 x86_64 GNU/Linux
+Cargo: MISSING
+Rustc: MISSING
+GTK4: MISSING
+GTK layer shell: MISSING
+Wayland client library: MISSING
+Xvfb: /usr/bin/Xvfb
+Workspace: 13/13 crates found. Static audit: PASS
+Toolchain: cargo=no, rustc=no, pkg-config=yes, Xvfb=yes, gcc=yes, xvfb-run=yes
+Native libraries: gtk4=unavailable, gtk4-layer-shell=unavailable, wayland-client=unavailable, xkbcommon=unavailable, egl=unavailable, glesv2=unavailable
+BLOCKED: Cargo not installed; real Rust compilation NOT RUN.

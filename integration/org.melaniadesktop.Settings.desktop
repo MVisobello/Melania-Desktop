@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Melania Settings
+Name[it]=Impostazioni Melania
+Exec=melania-settings
+Icon=org.melaniadesktop.Settings
+Categories=Settings;
+Terminal=false

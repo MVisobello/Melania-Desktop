@@ -1,0 +1,9 @@
+[package]
+name = "melania-notifyd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+melania-notify-core = { path = "../melania-notify-core" }
+zbus = { version = "5", features = ["blocking"] }

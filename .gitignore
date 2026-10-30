@@ -1,0 +1,14 @@
+/target/
+/.build/
+**/__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+.env
+.env.*
+!.env.example
+*.sqlite-journal
+UX-Lab/capture-actions.jsonl

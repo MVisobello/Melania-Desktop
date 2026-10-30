@@ -1,0 +1,29 @@
+* { font-family: "Cantarell", "Noto Sans", sans-serif; }
+window { background: #081c36; color: #eaf4ff; }
+.desktop {
+  background-image: linear-gradient(145deg, #052044 0%, #134d8f 38%, #3880af 67%, #d89d86 100%);
+  color: #ffffff;
+}
+.desktop-brand { font-size: 37px; font-weight: 700; color: white; }
+.desktop-sub { font-size: 14px; color: #d4eaff; }
+.desktop-icon { background: alpha(#05152d,0.3); border: none; color: #eef6ff; border-radius: 12px; padding: 12px; }
+.desktop-icon:hover { background: alpha(#ffffff,0.19); }
+.melania-taskbar { background: alpha(#071a32,0.92); border-top: 1px solid alpha(#ffffff,0.23); padding: 8px 12px; }
+.melania-taskbar button { min-height: 39px; color: #f3f8ff; background: alpha(#ffffff,0.09); border: 1px solid alpha(#ffffff,0.10); border-radius: 10px; }
+.melania-taskbar button:hover { background: alpha(#ffffff,0.2); }
+.melania-start-btn { background: alpha(#1769e9,0.52); border-radius: 12px; }
+.melania-panel { background: #0a1e37; color: #f3f7ff; border: 1px solid #44658a; border-radius: 17px; padding: 16px; box-shadow: 0 8px 35px alpha(black,0.35); }
+.melania-panel-title { font-size: 18px; font-weight: 700; color: #ffffff; }
+.melania-hint { color: #a6c4e7; font-size: 12px; }
+.melania-panel button { color: #f1f7ff; background: #173454; border: 1px solid #365477; border-radius: 10px; padding: 9px; }
+.melania-panel button:hover { background: #225286; }
+.melania-panel entry { color: #f1f7ff; background: #182f4b; border-radius: 12px; border: 1px solid #365477; padding: 9px; }
+.melania-panel switch { background: #30435a; }
+.melania-panel switch:checked { background: #126cec; }
+.quick-row { border-bottom: 1px solid alpha(#ffffff,0.12); padding: 6px 0; }
+.launcher-row { border-radius: 10px; }
+.wallpaper-note { color: alpha(#ffffff,0.84); font-size: 13px; }
+.melania-light .desktop { background-image: linear-gradient(155deg, #84bbec 0%, #aad7ff 52%, #f8d2b7 100%); color: #0b2744; }
+.melania-light .desktop-brand, .melania-light .desktop-sub { color: #102c50; }
+
+.desktop-drop-ready { outline: 3px dashed alpha(white,0.9); outline-offset: -8px; }

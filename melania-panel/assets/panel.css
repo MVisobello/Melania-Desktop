@@ -1,0 +1,181 @@
+/* Melania Aero UI v0.11 — GTK4 layer-shell; compositor blur is a separate milestone */
+window { background: transparent; color: #f4f8ff; }
+.melania-bar { background: rgba(7,23,45,0.94); border-top:1px solid rgba(227,242,255,0.33);box-shadow:0 -6px 24px rgba(1,13,31,0.40);padding:5px 11px;min-height:47px; }
+.melania-start {border-radius:12px;min-width:46px;background:linear-gradient(to bottom,#3d8df5,#165cc6);padding:4px;border:1px solid rgba(255,255,255,.25)}
+.melania-start:hover{background:#367fe2}
+.melania-pin{background:rgba(201,227,255,.11);color:#f6fbff;border-radius:9px;min-height:38px;padding:0 14px}
+.melania-pin:hover{background:rgba(166,205,255,.25)}
+.melania-system{background:rgba(255,255,255,.06);color:#f6fbff;border-radius:9px;min-height:38px}
+.melania-panel{background:rgba(10,29,54,.97);border:1px solid rgba(183,217,255,.30);border-radius:19px;box-shadow:0 12px 42px rgba(0,0,0,.45);padding:16px;color:#f7fbff}
+.melania-heading{font-weight:700;font-size:20px;color:#fff}
+.melania-sub{color:#acc8e8;font-size:11px}
+.melania-entry{border-radius:13px;background:rgba(255,255,255,.10);color:white;min-height:34px;border:1px solid rgba(255,255,255,.15)}
+.melania-action{border-radius:9px;background:rgba(126,172,227,.10);color:#fff;min-height:30px}
+.melania-action:hover{background:rgba(83,159,245,.33)}
+.melania-start-columns{margin-top:5px}
+.melania-start-shortcuts{background:rgba(4,17,35,.25);border-radius:12px;padding:10px}
+.melania-shortcut{background:transparent;border:0;border-radius:8px;color:#eef7ff;min-height:33px}
+.melania-shortcut:hover{background:rgba(80,153,237,.26)}
+.melania-toggle-row button{border-radius:12px;background:linear-gradient(to bottom,#256db8,#194b82);color:white;min-height:48px;}
+.melania-toggle-row button:hover{background:#2b8cff}
+.melania-panel scale trough{background:rgba(255,255,255,.15);border-radius:8px;min-height:6px}
+.melania-panel scale highlight{background:#2b8cff}
+.melania-status{color:#b5d4f4;font-size:12px}
+.melania-running{margin-left:12px}
+.melania-window{padding:6px 12px;min-width:72px;border-radius:8px}
+.melania-window-active{background:rgba(76,157,255,.26);border-bottom:2px solid #71b8ff}
+.melania-window-minimized{opacity:.65}
+.melania-close-window{padding:2px 7px;min-width:20px;opacity:.65}
+.melania-close-window:hover{opacity:1;background:rgba(232,61,80,.60)}
+
+/* Melania 0.12 — keyboard focus and consistent visual states */
+.melania-bar button:focus-visible, .melania-panel button:focus-visible,
+.melania-panel entry:focus-visible { outline: 2px solid #87c8ff; outline-offset: 2px; }
+.melania-window:hover { background: rgba(85,155,230,.27); }
+.melania-system:hover { background: rgba(177,211,255,.20); }
+
+/* Melania Notifications v0.16 */
+.melania-notice { background:rgba(103,168,241,.11); border:1px solid rgba(190,222,255,.17); border-radius:12px; padding:12px; }
+.melania-notice-title { font-size:14px; font-weight:700; color:#f8fbff; }
+.melania-notice-body { color:#d9e7f7; font-size:12px; }
+
+/* Melania 0.17 — actionable notification center */
+.melania-close-notice { min-width:24px; min-height:24px; padding:0 6px; border-radius:8px; background:rgba(255,255,255,.08); }
+.melania-close-notice:hover { background:rgba(232,61,80,.55); }
+.melania-notice-unread { border-left:3px solid #54aaff; background:rgba(66,140,231,.19); }
+
+/* Melania 0.25 — reference-driven Aero shell. GTK colors/transparency are not
+ * compositor blur: real background sampling must be implemented separately. */
+.melania-bar {
+  background: linear-gradient(to bottom,rgba(19,54,84,.93),rgba(3,19,34,.96));
+  border-top:1px solid rgba(219,239,255,.56);
+  padding:5px 12px;
+  min-height:48px;
+}
+.melania-start {
+  background:linear-gradient(to bottom,rgba(65,166,253,.32),rgba(8,64,141,.28));
+  border:1px solid rgba(166,215,255,.26);
+  min-width:48px;
+  border-radius:11px;
+}
+.melania-start:hover {background:rgba(54,125,213,.40)}
+.melania-pin {
+  border-radius:8px;
+  background:linear-gradient(to bottom,rgba(228,246,255,.13),rgba(39,100,164,.12));
+  padding:0 11px;
+}
+.melania-panel {
+  background:linear-gradient(145deg,rgba(13,38,64,.96),rgba(5,20,39,.97));
+  border:1px solid rgba(157,208,251,.35);
+  box-shadow:0 16px 36px rgba(0,9,22,.45);
+  color:#f0f7ff;
+}
+.melania-start-panel {padding:12px;border-radius:18px;}
+.melania-start-panel .melania-entry {
+  background:rgba(198,222,244,.13);
+  border:1px solid rgba(163,209,255,.27);
+  color:#f0f7ff;
+  min-height:35px;
+  border-radius:13px;
+}
+.melania-section-label {
+  color:#b9d8f5;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:1.2px;
+  margin-bottom:5px;
+}
+.melania-start-apps .melania-action {
+  min-height:33px;
+  padding:3px 7px;
+  border-radius:7px;
+  background:transparent;
+  border:1px solid transparent;
+}
+.melania-start-apps .melania-action:hover,
+.melania-start-apps .melania-action:focus-visible {
+  background:rgba(46,126,213,.35);
+  border-color:rgba(155,207,255,.28);
+}
+.melania-row-text {font-size:12px;color:#f0f7ff;}
+.melania-start-shortcuts {
+  padding:10px 8px;
+  background:linear-gradient(to bottom,rgba(2,18,36,.12),rgba(3,17,36,.47));
+  border-left:1px solid rgba(169,208,244,.21);
+  border-radius:7px;
+}
+.melania-shortcut {
+  min-height:32px;
+  border-radius:7px;
+  background:transparent;
+  border:1px solid transparent;
+  padding:2px 7px;
+}
+.melania-shortcut:hover {background:rgba(58,127,207,.30)}
+.melania-start-footer {
+  padding:8px 5px 0 4px;
+  border-top:1px solid rgba(149,190,226,.21);
+}
+.melania-session-button {border-radius:8px;color:#e7f4ff;background:rgba(63,107,150,.25);}
+.melania-tabs {
+  padding:3px;
+  border-radius:11px;
+  background:rgba(0,13,31,.29);
+}
+.melania-tab,.melania-tab-selected {
+  min-height:31px;
+  border-radius:8px;
+  padding:2px 12px;
+  color:#e8f4ff;
+}
+.melania-tab {background:rgba(127,188,255,.08)}
+.melania-tab:hover {background:rgba(66,141,227,.27)}
+.melania-tab-selected,
+.melania-tab-selected:disabled {
+  opacity:1;
+  color:#fff;
+  background:linear-gradient(to bottom,rgba(54,149,238,.95),rgba(27,103,188,.95));
+  border:1px solid rgba(171,220,255,.32);
+}
+.melania-tab-hint {padding:8px;color:#a9c5e2;font-size:11px;}
+.melania-toggle-row button {
+  background:linear-gradient(to bottom,rgba(38,141,233,.92),rgba(19,91,174,.88));
+  border:1px solid rgba(154,215,255,.22);
+}
+.melania-clock {
+  padding:0 12px;
+  font-size:12px;
+  min-width:87px;
+}
+.melania-calendar-panel {padding:13px;}
+.melania-calendar-weekday {color:#a7c7e8;font-size:11px;margin:4px 0;}
+.melania-calendar-day {color:#e7f4ff;font-size:12px;padding:6px 3px;border-radius:6px;}
+.melania-calendar-today {background:#2287ed;color:white;font-weight:700;}
+.melania-cal-nav {min-width:27px;min-height:26px;border-radius:8px;}
+.melania-window {border-bottom:2px solid transparent;}
+.melania-window-active {border-bottom:2px solid #70bcff;}
+
+/* Compact switcher in the approved Aero-style taskbar */
+.melania-workspace-strip { padding: 2px 5px; border-radius: 7px; background: rgba(10,27,49,.34); }
+.melania-workspace-button { min-width: 25px; min-height: 27px; border-radius: 5px; padding: 2px 4px; color: #d9e9ff; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); }
+.melania-workspace-active { background: rgba(40,125,236,.75); border: 1px solid #83b7ff; color: #fff; }
+
+/* Melania Phase A (0.27): disciplined density and consistent flyouts. */
+.melania-bar { min-height: 45px; padding: 3px 9px; }
+.melania-start { min-width: 44px; border-radius: 10px; }
+.melania-pin { min-height: 35px; border-radius: 8px; padding: 0 8px; }
+.melania-panel { border-radius: 15px; border-color: rgba(165,211,249,.35); }
+.melania-start-panel { padding: 11px; }
+.melania-start-apps .melania-action { min-height: 30px; }
+.melania-clock { min-width: 84px; }
+.melania-window { min-width: 72px; }
+
+/* Fase B1 (v0.28) — consistent compact symbolic tray and accurate Start anchor. */
+.melania-bar { padding: 3px 8px; min-height: 45px; }
+.melania-start { min-width: 47px; padding: 3px; border-radius: 10px; }
+.melania-start-panel { border-radius: 15px; padding: 12px; }
+.melania-tray-button { min-height: 31px; padding: 2px 7px; background: transparent; border: 1px solid transparent; }
+.melania-tray-button:hover { background: rgba(84,155,225,.24); border-color: rgba(192,228,255,.22); }
+.melania-tray-button image { min-width: 18px; min-height: 18px; }
+.melania-notice-count { color: #eef8ff; background: #267bd6; border-radius: 8px; font-size: 11px; font-weight: 700; padding: 1px 4px; }
+.melania-clock { padding: 0 7px; min-width: 75px; font-variant-numeric: tabular-nums; }

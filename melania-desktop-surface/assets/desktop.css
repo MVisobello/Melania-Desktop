@@ -1,0 +1,47 @@
+/* Melania approved desktop direction — classic icons, deep-blue Aero shell. */
+window, .melania-desktop-root { background-color: #102b4d; }
+.melania-icon-grid { background: transparent; }
+.melania-desktop-icon {
+  min-width: 94px; min-height: 92px; padding: 8px;
+  background: transparent; border: 1px solid transparent;
+  border-radius: 10px; color: #fff;
+}
+.melania-desktop-icon:hover, .melania-desktop-icon:focus-visible {
+  background: alpha(#9ccfff, 0.22);
+  border-color: alpha(white, 0.42);
+}
+.melania-desktop-caption {
+  color: #fff; font-size: 12px; font-weight: 600;
+  text-shadow: 0 1px 3px alpha(black, 0.85);
+}
+.melania-desktop-message {
+  background: alpha(#0b203e, 0.84); color: white;
+  border-radius: 12px; padding: 8px 16px;
+}
+
+/* Desktop interaction states: selection, DnD feedback and context menu. */
+.melania-desktop-icon.melania-icon-selected {
+  background: alpha(#408fe8, 0.38);
+  border-color: alpha(#d5edff, 0.82);
+}
+.melania-desktop-icon.melania-folder-drop-ready {
+  background: alpha(#3a9dff, 0.48);
+  border: 2px solid #a6dbff;
+}
+.melania-desktop-context {
+  background: alpha(#071d37, 0.96);
+  color: #f1f8ff;
+  border: 1px solid alpha(#d4ecff, 0.35);
+  border-radius: 14px;
+}
+.melania-desktop-context button {
+  background: transparent;
+  color: #f1f8ff;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 13px;
+  min-width: 180px;
+}
+.melania-desktop-context button:hover { background: alpha(#4d9bef, 0.35); }
+/* A separate visual response for dropping onto a folder is essential for DnD. */
+.melania-icon-grid:drop(active) { background: alpha(#2b8cff, 0.06); }

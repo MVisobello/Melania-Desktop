@@ -1,0 +1,11 @@
+[package]
+name = "melania-desktop-surface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_8"] }
+gtk4-layer-shell = "0.8.1"
+melania-transfer = { path = "../melania-transfer" }
+melania-desktop-core = { path = "../melania-desktop-core" }

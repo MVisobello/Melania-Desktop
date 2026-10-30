@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="user-home"><defs>
+    <linearGradient id="face" x1="0" x2="0.78" y1="0" y2="1"><stop stop-color="#72c9ff"/><stop offset="0.51" stop-color="#3294f9"/><stop offset="1" stop-color="#0953bb"/></linearGradient>
+    <linearGradient id="shine" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#fff" stop-opacity=".42"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="glass" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#fff" stop-opacity=".82"/><stop offset="1" stop-color="#e9f5ff" stop-opacity=".96"/></linearGradient>
+    </defs><ellipse cx="48" cy="82" rx="30" ry="4" fill="#0c355c" opacity=".13"/>
+    <circle cx="48" cy="46" r="36" fill="url(#face)" opacity=".18"/>
+    <circle cx="48" cy="46" r="32" fill="url(#face)" stroke="#a9e9ff" stroke-opacity=".55" stroke-width="1.2"/>
+    <path d="M22 46L48 24 74 46 M29 43V72H67V43 M44 72V54H56V72" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" /></svg>

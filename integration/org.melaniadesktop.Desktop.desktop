@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Melania Desktop
+GenericName=Desktop surface
+Comment=Wayland desktop background and icons for Melania
+Exec=melania-desktop-surface
+Icon=melania
+Categories=System;
+NoDisplay=true
+Terminal=false
+StartupNotify=false

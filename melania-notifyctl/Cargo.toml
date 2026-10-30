@@ -1,0 +1,8 @@
+[package]
+name = "melania-notifyctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zbus = { version = "5", features = ["blocking"] }
