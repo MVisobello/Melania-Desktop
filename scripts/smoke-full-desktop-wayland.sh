@@ -25,7 +25,9 @@ cleanup(){
   rm -rf "$TEMP"
 }
 trap cleanup EXIT
-target/debug/melania-compositor \
+# In this isolated test only, reveal Start before taking the true compositor
+# screenshot so its icon sizes and real layout can be visually reviewed.
+MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
