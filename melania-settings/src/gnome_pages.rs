@@ -299,3 +299,17 @@ pub fn add_pages(stack: &Stack) {
         "Alcune pagine sono informative. Le opzioni che possono essere cambiate sono contrassegnate da controlli reali."));
     stack.add_titled(&about, Some("about"), "Informazioni");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_volume;
+
+    #[test]
+    fn reads_pipewire_volume_without_exceeding_slider_range() {
+        assert_eq!(parse_volume("Volume: 0.42"), Some(42.0));
+        assert_eq!(parse_volume("Volume: 1.25 [MUTED]"), Some(100.0));
+        assert_eq!(parse_volume("Volume: 0.00"), Some(0.0));
+        assert_eq!(parse_volume("No audio backend"), None);
+        assert_eq!(parse_volume("Volume: NaN"), None);
+    }
+}
