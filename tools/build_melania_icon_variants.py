@@ -231,8 +231,12 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
             parts=Path(path).parts
             context=parts[0]; name=Path(path).stem
             symbol = name.endswith("-symbolic") or "symbolic" in parts
-            # Light overrides the full Actions family; non-Actions inherit Dark.
-            if variant=="light" and context!="actions":
+            # Light windows require dark symbolic glyphs in *all* contexts,
+            # while colorful app icons are shared from the original Aero
+            # family. Status icons are separate for light panels.
+            if variant=="light" and not (
+                context in ("actions","panel") or symbol
+            ):
                 continue
             key=(context,name,"symbolic-dark" if symbol and variant=="dark" else
                  "symbolic-light" if symbol else
@@ -252,15 +256,27 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                 asset.write_text(img,encoding="utf8")
                 created[key]=asset
             symlink_relative(root/path,created[key])
-    # The Light theme inherits all non-Actions from Dark, avoiding ~20k
-    # unnecessary duplicates and mirroring Flat Remix's directory strategy.
+    # Share colorful scalable illustrations but build contrast-specific
+    # symbolic icons for Light. This avoids white-on-white toolbar/status
+    # glyphs while retaining the Aero source artwork and reducing duplication.
     main_cats=sorted(CATEGORIES)
     for category in main_cats:
-        if category != "actions":
+        if category in ("actions","panel"):
+            continue
+        subdirs=sorted({Path(p).parts[1] for p in paths
+                        if Path(p).parts[0]==category and len(Path(p).parts)>2})
+        if not subdirs:
             symlink_relative(light/category,dark/category)
-    # Light on Dark Panel: lighter application commands, bright status glyphs.
+        else:
+            (light/category).mkdir(exist_ok=True)
+            for subdir in subdirs:
+                item=light/category/subdir
+                if not item.exists():
+                    symlink_relative(item,dark/category/subdir)
+    # Light on Dark Panel: application dialogs get dark-on-light symbols,
+    # while the dark taskbar inherits bright status glyphs and panel icons.
     for category in main_cats:
-        source=light if category=="actions" else dark
+        source=dark if category in ("panel","status","animations") else light
         symlink_relative(mixed/category,source/category)
     dirs=sorted({str(Path(path).parent) for path in dark_paths+light_paths})
     for root,name,variant in [
