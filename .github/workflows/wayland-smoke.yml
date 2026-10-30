@@ -8,6 +8,8 @@ on:
       - 'melania-control/**'
       - 'melania-files/**'
       - 'melania-panel/**'
+      - 'tools/build_melania_icon_variants.py'
+      - 'branding/coverage/**'
       - 'melania-desktop-surface/**'
       - 'scripts/smoke-nested-wayland.sh'
       - 'scripts/smoke-full-desktop-wayland.sh'
@@ -50,6 +52,11 @@ jobs:
         run: |
           set -o pipefail
           cargo build -p melania-compositor -p melania-control -p melania-files -p melania-panel -p melania-desktop-surface -p melania-settings 2>&1 | tee wayland-smoke-build.log
+      - name: Build the selected Melania Light icon theme for nested GTK
+        run: |
+          set -euo pipefail
+          python3 tools/build_melania_icon_variants.py --output dist/melania-icon-themes
+          test -f dist/melania-icon-themes/Melania-Light/places/scalable/folder.svg
       - name: Run real nested session (no host session takeover)
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
