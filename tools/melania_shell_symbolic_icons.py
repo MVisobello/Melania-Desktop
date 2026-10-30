@@ -31,6 +31,20 @@ TRAY = {
 WIDGETS = {
     "pan-down-symbolic": '<path d="m6 9 6 6 6-6"/>',
     "pan-end-symbolic": '<path d="m9 6 6 6-6 6"/>',
+    "list-add-symbolic": '<path d="M12 4v16M4 12h16"/>',
+    "view-sort-ascending-symbolic": '<path d="M5 19V5m-3 3 3-3 3 3M11 7h10M11 12h7M11 17h4"/>',
+    "view-list-symbolic": '<path d="M9 6h12M9 12h12M9 18h12M4 6h.1M4 12h.1M4 18h.1"/>',
+    "view-more-symbolic": '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+    "edit-select-all-symbolic": '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="m9 12 2 2 4-4"/>',
+    "edit-cut-symbolic": '<circle cx="5" cy="6" r="2.5"/><circle cx="5" cy="18" r="2.5"/><path d="m7 8 12 12M7 16 19 4"/>',
+    "edit-copy-symbolic": '<rect x="7" y="7" width="13" height="14" rx="2"/><path d="M16 7V4a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2"/>',
+    "edit-paste-symbolic": '<rect x="5" y="5" width="14" height="17" rx="2"/><rect x="9" y="2" width="6" height="5" rx="1"/><path d="M9 12h6m-6 4h5"/>',
+    "edit-delete-symbolic": '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/>',
+    "go-previous-symbolic": '<path d="m14 5-7 7 7 7"/>',
+    "go-next-symbolic": '<path d="m10 5 7 7-7 7"/>',
+    "go-up-symbolic": '<path d="m5 14 7-7 7 7"/>',
+    "go-home-symbolic": '<path d="m3 11 9-7 9 7v9H3v-9Z"/><path d="M9 20v-6h6v6"/>',
+    "view-refresh-symbolic": '<path d="M20 10a8 8 0 1 0 1 6M20 4v6h-6"/>',
 }
 
 
