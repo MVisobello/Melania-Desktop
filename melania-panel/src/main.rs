@@ -722,6 +722,7 @@ fn calendar_window(app:&Application)->ApplicationWindow {
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,9);
     root.add_css_class("melania-panel");root.add_css_class("melania-calendar-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {root.add_css_class("high-contrast");}
     let now=glib::DateTime::now_local().expect("orologio del sistema");
     let today=(now.year(),now.month() as u32,now.day_of_month() as u32);
     let visible=Rc::new(Cell::new((today.0,today.1)));
