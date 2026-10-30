@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import xml.etree.ElementTree as ET
+from melania_aero_artwork import artwork as curated_artwork
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSIC = ROOT / "branding" / "Melania-Aero-Classic"
@@ -246,7 +247,9 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                 asset_dir=root/"_melania-assets"
                 asset_dir.mkdir(exist_ok=True)
                 asset=asset_dir/(hashlib.sha256(repr(key).encode()).hexdigest()[:28]+".svg")
-                img = None if symbol or context=="actions" else original_svg(name,context)
+                img = curated_artwork(name, context, variant, symbol)
+                if img is None and not (symbol or context=="actions"):
+                    img = original_svg(name,context)
                 if img is None:
                     img=generated_svg(name,context,key[2])
                     origins["generated"]+=1
