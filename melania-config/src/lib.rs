@@ -166,8 +166,8 @@ mod tests {
         }
         assert!(!p.set_appearance_theme("invalid"));
         assert_eq!(p.appearance_theme(), "aero");
-        assert_eq!(Preferences::from_text("aero_glass=false\\ndark_mode=false").appearance_theme(), "light");
-        assert_eq!(Preferences::from_text("aero_glass=false\\ndark_mode=true").appearance_theme(), "dark");
+        assert_eq!(Preferences::from_text("aero_glass=false\ndark_mode=false").appearance_theme(), "light");
+        assert_eq!(Preferences::from_text("aero_glass=false\ndark_mode=true").appearance_theme(), "dark");
     }
     #[test] fn round_trip() {
         let mut p = Preferences::default();
