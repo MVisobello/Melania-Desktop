@@ -955,8 +955,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             // The offscreen EGL readback changes the current GL target.
             // Re-establish the host window framebuffer before the winit
             // backend swaps buffers, or its next EGL surface can be lost.
-            let restore = renderer.render(&mut framebuffer,size,Transform::Flipped180)?;
-            restore.finish()?;
+            if captures_this_frame > 0 {
+                let restore = renderer.render(&mut framebuffer,size,Transform::Flipped180)?;
+                restore.finish()?;
+            }
         }
         while let Some(stream) = listener.accept()? {
             handle.insert_client(stream, Arc::new(ClientState::default()))?;
