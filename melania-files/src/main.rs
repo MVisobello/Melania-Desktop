@@ -1837,6 +1837,35 @@ fn setup_melania_icon_theme() {
 }
 
 #[cfg(test)]
+mod empty_folder_tests {
+    use super::empty_folder_message;
+
+    #[test]
+    fn distinguishes_empty_folder_from_empty_search() {
+        let folder = empty_folder_message("", false, false);
+        assert_eq!(folder.1, "Questa cartella è vuota");
+        assert_eq!(folder.0, "folder");
+        let search = empty_folder_message("rapporti", false, false);
+        assert_eq!(search.1, "Nessun risultato");
+        assert_eq!(search.0, "system-search");
+    }
+
+    #[test]
+    fn only_pictures_filter_has_its_own_explanation() {
+        let filtered = empty_folder_message("", true, true);
+        assert_eq!(filtered.1, "Nessuna immagine visibile");
+        assert!(filtered.2.contains("Foto"));
+        let empty = empty_folder_message("", false, true);
+        assert!(!empty.2.contains("nascosti"));
+    }
+
+    #[test]
+    fn search_reason_takes_precedence_over_photo_filter() {
+        assert_eq!(empty_folder_message("foto", true, false).1, "Nessun risultato");
+    }
+}
+
+#[cfg(test)]
 mod window_size_tests {
     use super::files_initial_size;
     #[test]
