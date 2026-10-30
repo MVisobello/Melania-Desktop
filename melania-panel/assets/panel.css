@@ -1,32 +1,32 @@
 /* Melania Aero UI v0.11 — GTK4 layer-shell; compositor blur is a separate milestone */
 window { background: transparent; color: #f4f8ff; }
 .melania-bar { background: rgba(7,23,45,0.94); border-top:1px solid rgba(227,242,255,0.33);box-shadow:0 -6px 24px rgba(1,13,31,0.40);padding:5px 11px;min-height:47px; }
-.melania-start {border-radius:12px;min-width:46px;background:linear-gradient(to bottom,#3d8df5,#165cc6);padding:4px;border:1px solid rgba(255,255,255,.25)}
-.melania-start:hover{background:#367fe2}
-.melania-pin{background:rgba(201,227,255,.11);color:#f6fbff;border-radius:9px;min-height:38px;padding:0 14px}
-.melania-pin:hover{background:rgba(166,205,255,.25)}
-.melania-system{background:rgba(255,255,255,.06);color:#f6fbff;border-radius:9px;min-height:38px}
-.melania-panel{background:rgba(10,29,54,.97);border:1px solid rgba(183,217,255,.30);border-radius:19px;box-shadow:0 12px 42px rgba(0,0,0,.45);padding:16px;color:#f7fbff}
-.melania-heading{font-weight:700;font-size:20px;color:#fff}
-.melania-sub{color:#acc8e8;font-size:11px}
-.melania-entry{border-radius:13px;background:rgba(255,255,255,.10);color:white;min-height:34px;border:1px solid rgba(255,255,255,.15)}
-.melania-action{border-radius:9px;background:rgba(126,172,227,.10);color:#fff;min-height:30px}
-.melania-action:hover{background:rgba(83,159,245,.33)}
-.melania-start-columns{margin-top:5px}
-.melania-start-shortcuts{background:rgba(4,17,35,.25);border-radius:12px;padding:10px}
-.melania-shortcut{background:transparent;border:0;border-radius:8px;color:#eef7ff;min-height:33px}
-.melania-shortcut:hover{background:rgba(80,153,237,.26)}
+.melania-start {border-radius:12px;min-width:46px;background:linear-gradient(to bottom,#3d8df5,#165cc6);padding:4px;border:1px solid rgba(255,255,255,.25);}
+.melania-start:hover{background:#367fe2;}
+.melania-pin{background:rgba(201,227,255,.11);color:#f6fbff;border-radius:9px;min-height:38px;padding:0 14px;}
+.melania-pin:hover{background:rgba(166,205,255,.25);}
+.melania-system{background:rgba(255,255,255,.06);color:#f6fbff;border-radius:9px;min-height:38px;}
+.melania-panel{background:rgba(10,29,54,.97);border:1px solid rgba(183,217,255,.30);border-radius:19px;box-shadow:0 12px 42px rgba(0,0,0,.45);padding:16px;color:#f7fbff;}
+.melania-heading{font-weight:700;font-size:20px;color:#fff;}
+.melania-sub{color:#acc8e8;font-size:11px;}
+.melania-entry{border-radius:13px;background:rgba(255,255,255,.10);color:white;min-height:34px;border:1px solid rgba(255,255,255,.15);}
+.melania-action{border-radius:9px;background:rgba(126,172,227,.10);color:#fff;min-height:30px;}
+.melania-action:hover{background:rgba(83,159,245,.33);}
+.melania-start-columns{margin-top:5px;}
+.melania-start-shortcuts{background:rgba(4,17,35,.25);border-radius:12px;padding:10px;}
+.melania-shortcut{background:transparent;border:0;border-radius:8px;color:#eef7ff;min-height:33px;}
+.melania-shortcut:hover{background:rgba(80,153,237,.26);}
 .melania-toggle-row button{border-radius:12px;background:linear-gradient(to bottom,#256db8,#194b82);color:white;min-height:48px;}
-.melania-toggle-row button:hover{background:#2b8cff}
-.melania-panel scale trough{background:rgba(255,255,255,.15);border-radius:8px;min-height:6px}
-.melania-panel scale highlight{background:#2b8cff}
-.melania-status{color:#b5d4f4;font-size:12px}
-.melania-running{margin-left:12px}
-.melania-window{padding:6px 12px;min-width:72px;border-radius:8px}
-.melania-window-active{background:rgba(76,157,255,.26);border-bottom:2px solid #71b8ff}
-.melania-window-minimized{opacity:.65}
-.melania-close-window{padding:2px 7px;min-width:20px;opacity:.65}
-.melania-close-window:hover{opacity:1;background:rgba(232,61,80,.60)}
+.melania-toggle-row button:hover{background:#2b8cff;}
+.melania-panel scale trough{background:rgba(255,255,255,.15);border-radius:8px;min-height:6px;}
+.melania-panel scale highlight{background:#2b8cff;}
+.melania-status{color:#b5d4f4;font-size:12px;}
+.melania-running{margin-left:12px;}
+.melania-window{padding:6px 12px;min-width:72px;border-radius:8px;}
+.melania-window-active{background:rgba(76,157,255,.26);border-bottom:2px solid #71b8ff;}
+.melania-window-minimized{opacity:.65;}
+.melania-close-window{padding:2px 7px;min-width:20px;opacity:.65;}
+.melania-close-window:hover{opacity:1;background:rgba(232,61,80,.60);}
 
 /* Melania 0.12 — keyboard focus and consistent visual states */
 .melania-bar button:focus-visible, .melania-panel button:focus-visible,
@@ -58,7 +58,7 @@ window { background: transparent; color: #f4f8ff; }
   min-width:48px;
   border-radius:11px;
 }
-.melania-start:hover {background:rgba(54,125,213,.40)}
+.melania-start:hover {background:rgba(54,125,213,.40);}
 .melania-pin {
   border-radius:8px;
   background:linear-gradient(to bottom,rgba(228,246,255,.13),rgba(39,100,164,.12));
@@ -111,7 +111,7 @@ window { background: transparent; color: #f4f8ff; }
   border:1px solid transparent;
   padding:2px 7px;
 }
-.melania-shortcut:hover {background:rgba(58,127,207,.30)}
+.melania-shortcut:hover {background:rgba(58,127,207,.30);}
 .melania-start-footer {
   padding:8px 5px 0 4px;
   border-top:1px solid rgba(149,190,226,.21);
@@ -128,8 +128,8 @@ window { background: transparent; color: #f4f8ff; }
   padding:2px 12px;
   color:#e8f4ff;
 }
-.melania-tab {background:rgba(127,188,255,.08)}
-.melania-tab:hover {background:rgba(66,141,227,.27)}
+.melania-tab {background:rgba(127,188,255,.08);}
+.melania-tab:hover {background:rgba(66,141,227,.27);}
 .melania-tab-selected,
 .melania-tab-selected:disabled {
   opacity:1;

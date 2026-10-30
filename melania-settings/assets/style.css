@@ -1,12 +1,12 @@
-window{background:#f3f8fe;color:#172d49}
-.settings-sidebar{background:linear-gradient(to bottom,#f5faff,#e5effa);padding:18px;border-right:1px solid #cbddec}
-.settings-sidebar button{background:transparent;color:#1b3e63;border:0;border-radius:10px;padding:10px}
-.settings-sidebar button:hover{background:#d6e8fc}
-.settings-body{padding:25px}.settings-heading{font-size:26px;font-weight:700;color:#103963}
-.settings-subtitle{color:#5e7994}
-.settings-card{background:#fff;border:1px solid #d5e3f2;border-radius:15px;padding:16px;box-shadow:0 3px 10px rgba(30,66,109,.05)}
-.settings-card switch:checked{background:#2b8cff}.settings-hero{font-size:18px;font-weight:700;color:#145296}
-.settings-warning{background:#fff3db;padding:12px;border-radius:10px;color:#7b4f18}
+window{background:#f3f8fe;color:#172d49;}
+.settings-sidebar{background:linear-gradient(to bottom,#f5faff,#e5effa);padding:18px;border-right:1px solid #cbddec;}
+.settings-sidebar button{background:transparent;color:#1b3e63;border:0;border-radius:10px;padding:10px;}
+.settings-sidebar button:hover{background:#d6e8fc;}
+.settings-body{padding:25px;}.settings-heading{font-size:26px;font-weight:700;color:#103963;}
+.settings-subtitle{color:#5e7994;}
+.settings-card{background:#fff;border:1px solid #d5e3f2;border-radius:15px;padding:16px;box-shadow:0 3px 10px rgba(30,66,109,.05);}
+.settings-card switch:checked{background:#2b8cff;}.settings-hero{font-size:18px;font-weight:700;color:#145296;}
+.settings-warning{background:#fff3db;padding:12px;border-radius:10px;color:#7b4f18;}
 
 /* Melania 0.12 — consistent desktop focus/accessibility */
 .settings-sidebar button:focus-visible { outline: 2px solid #2b8cff; outline-offset: -2px; }

@@ -679,11 +679,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         {
             let (renderer, mut framebuffer) = backend.bind()?;
             let mut elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
-            // Background layers sit behind applications. Taskbar/overlays sit on top.
-            // Render order must follow the layer-shell stacking contract.
+            // Smithay draw_render_elements consumes FRONT-TO-BACK elements:
+            // top/overlay first, then toplevels, then bottom/background.
+            // The previous reversed stack allowed the full-screen wallpaper
+            // to occlude every application, despite valid Wayland windows.
             {
                 let map = layer_map_for_output(&output);
-                for kind in [WlrLayer::Background,WlrLayer::Bottom] {
+                for kind in [WlrLayer::Overlay,WlrLayer::Top] {
                     for layer in map.layers_on(kind) {
                         if let Some(geo)=map.layer_geometry(layer) {
                             elements.extend(render_elements_from_surface_tree(renderer,layer.wl_surface(),
@@ -692,7 +694,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            elements.extend(state.space.elements().filter_map(|window| {
+            elements.extend(state.space.elements().rev().filter_map(|window| {
                 let origin=state.space.element_location(window)?;
                 Some((window.toplevel()?.wl_surface().clone(),origin))
             }).flat_map(|(surface,origin)| {
@@ -700,7 +702,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }));
             {
                 let map=layer_map_for_output(&output);
-                for kind in [WlrLayer::Top,WlrLayer::Overlay] {
+                for kind in [WlrLayer::Bottom,WlrLayer::Background] {
                     for layer in map.layers_on(kind) {
                         if let Some(geo)=map.layer_geometry(layer) {
                             elements.extend(render_elements_from_surface_tree(renderer,layer.wl_surface(),

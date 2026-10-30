@@ -72,7 +72,10 @@ assert im.width >= 1024 and im.height >= 600, im.size
 sample = im.resize((128,80))
 unique = len(set(sample.getdata()))
 assert unique > 8, f'rendering seems blank, distinct colors: {unique}'
-print(f'PASS: actual Xvfb screenshot {im.size} with {unique} sampled colors')
+# A colorful wallpaper is not enough: a large bright GTK window must be visible.
+bright = sum(1 for r,g,b in sample.getdata() if min(r,g,b) > 185)
+assert bright > 300, f'GTK windows are hidden or not drawn (bright samples={bright})'
+print(f'PASS: real Xvfb rendering {im.size}, {unique} colors, {bright} bright window samples')
 PY
 fi
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
