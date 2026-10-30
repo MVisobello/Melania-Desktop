@@ -1,6 +1,7 @@
 //! First independent GTK4 layer-shell taskbar for Melania.
 //! This requires a compositor advertising zwlr_layer_shell_v1.
-//! Window list comes from the compositor IPC; thumbnails are not yet implemented.
+//! Window list comes from compositor IPC; thumbnails still require compositor capture.
+mod window_groups;
 use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -308,6 +309,7 @@ fn running_window_strip() -> GtkBox {
     let box_running = GtkBox::new(Orientation::Horizontal, 4);
     box_running.add_css_class("melania-running");
     let last: Rc<RefCell<Option<Vec<WindowInfo>>>> = Rc::new(RefCell::new(None));
+    let group_enabled = melania_config::load().unwrap_or_default().group_windows;
     let path = std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let refresh = {
         let target = box_running.clone();
@@ -322,7 +324,105 @@ fn running_window_strip() -> GtkBox {
             };
             if last.borrow().as_ref() == Some(&windows) {return;}
             while let Some(child) = target.first_child() {target.remove(&child);}
-            for window in &windows {
+            for group in window_groups::group_windows(&windows, group_enabled) {
+                // Grouped applications use a native, keyboard-accessible GTK
+                // popover. Each action still addresses one compositor window ID.
+                if group.windows.len() > 1 {
+                    let first = group.windows.iter().find(|w| w.active)
+                        .unwrap_or(&group.windows[0]);
+                    let count = group.windows.len();
+                    let app_name = if group.app_id.trim().is_empty() {
+                        "Applicazione".to_string()
+                    } else {
+                        group.app_id.rsplit('.').next().unwrap_or(&group.app_id).to_string()
+                    };
+                    let menu = gtk::MenuButton::new();
+                    menu.add_css_class("melania-window");
+                    menu.add_css_class("melania-window-group");
+                    if group.active() { menu.add_css_class("melania-window-active"); }
+                    if group.all_minimized() { menu.add_css_class("melania-window-minimized"); }
+                    menu.set_tooltip_text(Some(&format!("{count} finestre — {}", group.app_id)));
+                    let entry = GtkBox::new(Orientation::Horizontal, 5);
+                    let icon = Image::from_icon_name(&first.app_id);
+                    icon.set_pixel_size(18);
+                    entry.append(&icon);
+                    entry.append(&label(&format!("{app_name} ({count})"),"melania-row-text"));
+                    menu.set_child(Some(&entry));
+                    let popover = gtk::Popover::new();
+                    popover.add_css_class("melania-group-popover");
+                    let list = GtkBox::new(Orientation::Vertical, 5);
+                    list.add_css_class("melania-group-list");
+                    for grouped_window in &group.windows {
+                        let id = grouped_window.id;
+                        let text = if grouped_window.title.chars().count() > 48 {
+                            format!("{}…", grouped_window.title.chars().take(47).collect::<String>())
+                        } else { grouped_window.title.clone() };
+                        let row = GtkBox::new(Orientation::Horizontal, 4);
+                        let focus = Button::with_label(&text);
+                        focus.add_css_class("melania-action");
+                        focus.set_hexpand(true);
+                        focus.set_tooltip_text(Some(&grouped_window.title));
+                        let action = if grouped_window.active && !grouped_window.minimized {
+                            WindowCommand::Minimize(id)
+                        } else { WindowCommand::Activate(id) };
+                        let socket = path.clone();
+                        let flyout = popover.clone();
+                        focus.connect_clicked(move |_| {
+                            if let Some(endpoint) = socket.as_ref() {
+                                if let Err(e) = control_request(endpoint, action) {
+                                    eprintln!("Melania grouped taskbar: {e}");
+                                }
+                            }
+                            flyout.popdown();
+                        });
+                        row.append(&focus);
+                        let close = Button::with_label("×");
+                        close.add_css_class("melania-close-window");
+                        close.set_tooltip_text(Some("Chiudi questa finestra"));
+                        let socket = path.clone();
+                        let flyout = popover.clone();
+                        close.connect_clicked(move |_| {
+                            if let Some(endpoint) = socket.as_ref() {
+                                if let Err(e) = control_request(endpoint, WindowCommand::Close(id)) {
+                                    eprintln!("Melania grouped close: {e}");
+                                }
+                            }
+                            flyout.popdown();
+                        });
+                        row.append(&close);
+                        list.append(&row);
+                    }
+                    popover.set_child(Some(&list));
+                    menu.set_popover(Some(&popover));
+                    // Preserve safe hover activation when dragging files over a
+                    // group; DnD remains COPY-only and is owned by the client.
+                    let hover_target = gtk::DropTarget::new(
+                        gdk::FileList::static_type(), gdk::DragAction::COPY
+                    );
+                    let hovering = Rc::new(Cell::new(false));
+                    let entered = hovering.clone();
+                    let hover_socket = path.clone();
+                    let hover_id = first.id;
+                    hover_target.connect_enter(move |_,_,_| {
+                        entered.set(true);
+                        let still_here = entered.clone();
+                        let endpoint = hover_socket.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+                            if still_here.get() {
+                                if let Some(socket) = endpoint.as_ref() {
+                                    let _ = control_request(socket, WindowCommand::Activate(hover_id));
+                                }
+                            }
+                        });
+                        gdk::DragAction::COPY
+                    });
+                    let exited = hovering.clone();
+                    hover_target.connect_leave(move |_| exited.set(false));
+                    menu.add_controller(hover_target);
+                    target.append(&menu);
+                    continue;
+                }
+                let window = &group.windows[0];
                 let id = window.id;
                 let title = if window.title.chars().count() > 28 {
                     format!("{}…",window.title.chars().take(27).collect::<String>())
