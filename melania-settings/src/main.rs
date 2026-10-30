@@ -59,6 +59,17 @@ fn page(title: &str, description: &str) -> GtkBox {
 }
 
 fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
+    // GTK process only: do not modify the user's host desktop globally.
+    if let Some(settings) = gtk::Settings::default() {
+        settings.set_property("gtk-enable-animations", prefs.animations && !prefs.reduce_motion);
+    }
+    if prefs.high_contrast {
+        root.add_css_class("high-contrast");
+        header.add_css_class("high-contrast");
+    } else {
+        root.remove_css_class("high-contrast");
+        header.remove_css_class("high-contrast");
+    }
     if prefs.aero_glass {
         root.remove_css_class("aero-off");
         header.remove_css_class("aero-off");
@@ -136,7 +147,7 @@ fn build_ui(app: &Application) {
     });
     let appearance = page("Aspetto", "Personalizza l'identità visiva del desktop.");
     appearance.append(&saved_option("Aero Glass", "Trasparenze, riflessi e bordi Aero. La sfocatura reale richiede il compositore.", prefs.borrow().aero_glass, prefs.clone(), |p,v| p.aero_glass = v, Some(apply_style.clone())));
-    appearance.append(&saved_option("Animazioni", "Preferenza per le animazioni della shell.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, None));
+    appearance.append(&saved_option("Animazioni GTK", "Attiva le transizioni nelle finestre Melania, salvo la preferenza Riduci movimento.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, Some(apply_style.clone())));
     appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
     appearance.append(&text("Intensità effetto vetro", "settings-hero"));
     let blur = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
@@ -159,7 +170,8 @@ fn build_ui(app: &Application) {
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
     let desktop = page("Desktop e finestre", "Le preferenze avanzate previste per Melania.");
     desktop.append(&saved_option("Snap finestre", "Aggancio ai bordi gestito dal compositore dal prossimo avvio della sessione.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
-    desktop.append(&saved_option("Anteprime sulla barra", "Preferenza per le miniature delle applicazioni.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
+    desktop.append(&saved_option("Anteprime sulla barra", "Preferenza per le miniature delle applicazioni (ancora in sviluppo).", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
+    desktop.append(&saved_option("Raggruppa finestre nella barra", "Un pulsante per applicazione con menu delle sue finestre. Richiede il riavvio del pannello Melania.", prefs.borrow().group_windows, prefs.clone(), |p,v| p.group_windows = v, None));
     desktop.append(&text("Lo Snap salvato viene letto dal compositore al successivo avvio. Le anteprime sulla barra restano in sviluppo.", "settings-subtitle"));
     stack.add_titled(&desktop, Some("desktop"), "Desktop");
     // Saved workspace count is applied on compositor/panel startup.
@@ -200,6 +212,21 @@ fn build_ui(app: &Application) {
     let network = page("Rete e Bluetooth", "I dispositivi si controllano dal Centro rapido della shell.");
     network.append(&text("Wi-Fi: NetworkManager (nmcli) · Bluetooth: BlueZ (bluetoothctl). Per poter agire, i servizi devono essere installati e l'utente deve avere i permessi richiesti.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
+    let accessibility = page("Accessibilità", "Controlli leggeri e leggibili per le interfacce Melania.");
+    accessibility.append(&saved_option(
+        "Riduci movimento",
+        "Disattiva le animazioni GTK di Melania; non cambia quelle delle altre applicazioni Linux.",
+        prefs.borrow().reduce_motion, prefs.clone(),
+        |p,v| p.reduce_motion = v, Some(apply_style.clone())
+    ));
+    accessibility.append(&saved_option(
+        "Contrasto elevato",
+        "Aumenta il contrasto di Settings e dei pannelli Aero; il compositor e le altre applicazioni non sono inclusi.",
+        prefs.borrow().high_contrast, prefs.clone(),
+        |p,v| p.high_contrast = v, Some(apply_style.clone())
+    ));
+    accessibility.append(&text("Le preferenze dei pannelli si applicano al prossimo avvio; questa finestra cambia subito.", "settings-subtitle"));
+    stack.add_titled(&accessibility, Some("accessibility"), "Accessibilità");
     let system = page("Sistema", "Informazioni sull'ambiente Melania.");
     system.append(&text("Melania Desktop — pre-alpha", "settings-hero"));
     system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
@@ -212,6 +239,7 @@ fn build_ui(app: &Application) {
         ("▣  Desktop e finestre", "desktop"),
         ("▦  Spazi di lavoro", "workspaces"),
         ("⌁  Rete e Bluetooth", "network"),
+        ("♿  Accessibilità", "accessibility"),
         ("⚙  Sistema", "system"),
     ] {
         let b = Button::with_label(name);
