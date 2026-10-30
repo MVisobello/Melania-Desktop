@@ -908,13 +908,17 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     status.set_tooltip_text(Some("Rete, Bluetooth, audio e alimentazione"));
     let status_row=GtkBox::new(Orientation::Horizontal,9);
     status_row.add_css_class("melania-status-icons");
+    let light_tray=melania_config::load().unwrap_or_default().appearance_theme()=="light";
     for (icon_name, icon_class) in [
-        ("melania-tray-wifi-symbolic", "melania-status-wifi"),
-        ("melania-tray-bluetooth-symbolic", "melania-status-bluetooth"),
-        ("melania-tray-volume-symbolic", "melania-status-volume"),
-        ("melania-tray-battery-symbolic", "melania-status-battery"),
+        ("melania-tray-wifi", "melania-status-wifi"),
+        ("melania-tray-bluetooth", "melania-status-bluetooth"),
+        ("melania-tray-volume", "melania-status-volume"),
+        ("melania-tray-battery", "melania-status-battery"),
     ] {
-        let icon=Image::from_icon_name(icon_name);
+        // These are real SVG images, not GTK -symbolic masks; the latter
+        // flattened the Bluetooth rune into an opaque circle.
+        let asset=if light_tray { format!("{icon_name}-light") } else { icon_name.to_string() };
+        let icon=Image::from_icon_name(&asset);
         icon.set_pixel_size(22);
         icon.add_css_class("melania-tray-symbol");
         icon.add_css_class(icon_class);
@@ -927,7 +931,8 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notification_button.set_tooltip_text(Some("Centro notifiche"));
     notification_button.add_css_class("melania-tray-button");
     let notification_row=GtkBox::new(Orientation::Horizontal,4);
-    let notice_icon=Image::from_icon_name("melania-tray-notifications-symbolic");
+    let notification_asset=if light_tray { "melania-tray-notifications-light" } else { "melania-tray-notifications" };
+    let notice_icon=Image::from_icon_name(notification_asset);
     notice_icon.set_pixel_size(22);
     notice_icon.add_css_class("melania-tray-symbol");
     notification_row.append(&notice_icon);
