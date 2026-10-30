@@ -179,3 +179,91 @@ window { background: transparent; color: #f4f8ff; }
 .melania-tray-button image { min-width: 18px; min-height: 18px; }
 .melania-notice-count { color: #eef8ff; background: #267bd6; border-radius: 8px; font-size: 11px; font-weight: 700; padding: 1px 4px; }
 .melania-clock { padding: 0 7px; min-width: 75px; font-variant-numeric: tabular-nums; }
+
+/* M3 — taskbar grouping, overflow and accessibility.
+ * Never alter the Aero logo, title chrome or existing icon theme. */
+.melania-running-scroll {
+  min-height: 39px;
+  background: transparent;
+}
+.melania-running-scroll > viewport { background: transparent; }
+.melania-running-scroll scrollbar {
+  min-height: 3px;
+  background: rgba(9,42,76,0.14);
+}
+.melania-running-scroll scrollbar slider {
+  min-height: 3px;
+  border-radius: 4px;
+  background: rgba(134,195,248,0.68);
+}
+.melania-window-group {
+  min-width: 95px;
+  max-width: 190px;
+  padding: 4px 9px;
+  color: #eaf6ff;
+  border: 1px solid rgba(170,221,255,0.25);
+}
+.melania-window-group:hover {
+  background: rgba(74,156,224,0.32);
+}
+.melania-window-group.melania-window-active {
+  background: rgba(37,139,237,0.40);
+  border-bottom: 2px solid #90d5ff;
+}
+.melania-group-popover > contents {
+  background: linear-gradient(to bottom,rgba(28,70,110,0.98),rgba(8,30,56,0.99));
+  border: 1px solid rgba(175,223,255,0.56);
+  border-radius: 12px;
+  box-shadow: 0 9px 24px rgba(0,12,28,0.32);
+}
+.melania-group-list, .melania-workspace-extras {
+  padding: 7px;
+  min-width: 210px;
+}
+.melania-group-list .melania-action {
+  color: #eff9ff;
+  min-height: 31px;
+  background: rgba(112,181,234,0.12);
+  border: 1px solid rgba(173,219,255,0.10);
+}
+.melania-workspace-overflow {
+  min-width: 47px;
+  min-height: 27px;
+  border-radius: 7px;
+  padding: 1px 5px;
+  color: #eaf6ff;
+  background: rgba(163,209,247,0.13);
+  border: 1px solid rgba(202,234,255,0.19);
+}
+.melania-workspace-extras button {
+  color: #effaff;
+  min-height: 29px;
+  background: rgba(77,150,224,0.21);
+  border: 1px solid rgba(176,224,255,0.15);
+}
+.melania-bar.high-contrast,
+.melania-panel.high-contrast {
+  color: #ffffff;
+  background: #061a30;
+  border: 2px solid #daf3ff;
+  box-shadow: none;
+}
+.melania-bar.high-contrast .melania-pin,
+.melania-bar.high-contrast .melania-window,
+.melania-bar.high-contrast .melania-system,
+.melania-panel.high-contrast button {
+  color: #ffffff;
+  background: #123c65;
+  border: 1px solid #daefff;
+}
+.melania-panel.high-contrast .melania-sub,
+.melania-panel.high-contrast .melania-status,
+.melania-panel.high-contrast .melania-row-text,
+.melania-panel.high-contrast .melania-section-label {
+  color: #ffffff;
+}
+.melania-panel.high-contrast .melania-entry {
+  color: #ffffff;
+  background: #082a4b;
+  border: 2px solid #ffffff;
+}
