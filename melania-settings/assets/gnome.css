@@ -1,0 +1,276 @@
+/* Melania Settings / GNOME-inspired information architecture
+ * Flat group rows + compact sidebar. This stylesheet has higher priority
+ * than the legacy Aero CSS; it changes only Settings, not host GTK apps.
+ */
+window.melania-settings-window,
+window.melania-settings-window.background {
+  background: #f6f8fb;
+  color: #24384f;
+}
+.settings-root,
+.settings-root.aero-off,
+.settings-root.glass-low,
+.settings-root.glass-medium,
+.settings-root.glass-high,
+.settings-root.glass-max {
+  background: #f6f8fb;
+  color: #263f59;
+}
+.settings-sidebar,
+.settings-root.aero-off .settings-sidebar,
+.settings-root.glass-low .settings-sidebar,
+.settings-root.glass-medium .settings-sidebar,
+.settings-root.glass-high .settings-sidebar,
+.settings-root.glass-max .settings-sidebar {
+  min-width: 240px;
+  background: #f2f6fb;
+  border-right: 1px solid #d8e3ef;
+  padding: 17px 10px 10px;
+  box-shadow: inset -1px 0 rgba(255,255,255,.8);
+}
+.settings-sidebar-heading {
+  font-size: 19px;
+  font-weight: 750;
+  color: #1d3955;
+  padding: 0 10px;
+  margin: 0 0 3px;
+}
+.settings-sidebar .settings-search {
+  margin: 5px 5px 11px;
+  min-height: 37px;
+  padding: 3px 12px;
+  border-radius: 10px;
+  color: #224361;
+  background: #ffffff;
+  border: 1px solid #cedeed;
+  box-shadow: none;
+}
+.settings-sidebar .settings-search:focus-visible {
+  outline: 2px solid #4797eb;
+  outline-offset: 0;
+}
+.settings-navigation {
+  padding: 1px 4px 9px;
+}
+.settings-sidebar button.settings-nav-item,
+.settings-root.aero-off .settings-sidebar button.settings-nav-item {
+  min-height: 35px;
+  background: transparent;
+  color: #29415d;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  padding: 6px 11px;
+  margin: 1px 0;
+  font-size: 13px;
+}
+.settings-sidebar button.settings-nav-item:hover {
+  background: #e4eef9;
+  border: 0;
+}
+.settings-sidebar button.settings-nav-item.active-section,
+.settings-root.aero-off .settings-sidebar button.settings-nav-item.active-section {
+  background: #d3e7fc;
+  color: #125b9d;
+  border: 0;
+  box-shadow: none;
+  font-weight: 700;
+}
+.settings-sidebar button.settings-nav-item:focus-visible,
+.settings-linked-row:focus-visible,
+.settings-save:focus-visible {
+  outline: 2px solid #2688e9;
+  outline-offset: 1px;
+}
+.settings-side-section {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6e849b;
+  margin: 16px 10px 5px;
+}
+.settings-main,
+.settings-scroll,
+.settings-scroll > viewport,
+.settings-root.aero-off .settings-main {
+  background: #f8fbfe;
+}
+.settings-body {
+  padding: 29px 32px 38px;
+  border-spacing: 11px;
+}
+.settings-page-heading {
+  margin: 0 0 10px;
+}
+.settings-page-icon {
+  margin: 0 9px 0 2px;
+}
+.settings-heading {
+  font-size: 27px;
+  font-weight: 760;
+  color: #203957;
+}
+.settings-subtitle {
+  font-size: 12px;
+  color: #6b829e;
+}
+.settings-hero {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2a4a69;
+  margin: 8px 0 3px;
+}
+.settings-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #617c96;
+  margin: 19px 0 4px;
+}
+.settings-linked-row,
+.settings-root.aero-off .settings-linked-row {
+  background: #ffffff;
+  border: 1px solid #dbe5f0;
+  box-shadow: 0 1px 3px rgba(33,68,108,.035);
+  border-radius: 10px;
+  padding: 13px 16px;
+  min-height: 64px;
+  color: #263e56;
+  text-shadow: none;
+}
+.settings-linked-row:hover {
+  background: #eef6ff;
+  border-color: #b5d7f5;
+}
+.settings-linked-row:active {
+  background: #e1f0ff;
+}
+.settings-info-row {
+  background: #ffffff;
+  border: 1px solid #dbe5f0;
+  border-radius: 10px;
+  padding: 14px 17px;
+  min-height: 59px;
+}
+.settings-row-icon {
+  min-width: 28px;
+  color: #1876cc;
+}
+.settings-row-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: #28435f;
+}
+.settings-row-description {
+  font-size: 11px;
+  color: #6c829e;
+}
+.settings-chevron {
+  color: #6584a4;
+  margin-left: 12px;
+}
+.settings-card,
+.settings-root.aero-off .settings-card,
+.settings-root.glass-low .settings-card,
+.settings-root.glass-medium .settings-card,
+.settings-root.glass-high .settings-card,
+.settings-root.glass-max .settings-card {
+  background: #ffffff;
+  color: #263d56;
+  border: 1px solid #dce6f0;
+  border-radius: 10px;
+  min-height: 61px;
+  padding: 13px 17px;
+  box-shadow: 0 1px 3px rgba(20,48,76,.035);
+}
+.settings-save,
+.settings-root.aero-off .settings-save {
+  color: #154d80;
+  background: #e6f2ff;
+  border: 1px solid #b5d4f1;
+  border-radius: 9px;
+  min-height: 36px;
+  padding: 7px 15px;
+}
+.settings-save:hover { background: #d5eaff; }
+.settings-icon-choice {
+  background: #ffffff;
+  color: #254a6b;
+  border: 1px solid #d0e1f1;
+  border-radius: 9px;
+  min-height: 36px;
+}
+.settings-warning { color: #835b20; }
+.settings-root.settings-dark,
+.settings-root.settings-dark.aero-off {
+  background: #182635;
+  color: #e1ecf6;
+}
+.settings-root.settings-dark .settings-sidebar {
+  background: #1e3043;
+  border-right-color: #34506b;
+}
+.settings-root.settings-dark .settings-sidebar-heading,
+.settings-root.settings-dark .settings-heading,
+.settings-root.settings-dark .settings-hero,
+.settings-root.settings-dark .settings-row-title,
+.settings-root.settings-dark .settings-sidebar button.settings-nav-item {
+  color: #e6f1fd;
+}
+.settings-root.settings-dark .settings-side-section,
+.settings-root.settings-dark .settings-group-label,
+.settings-root.settings-dark .settings-row-description,
+.settings-root.settings-dark .settings-subtitle {
+  color: #a4bfd8;
+}
+.settings-root.settings-dark .settings-sidebar button.settings-nav-item:hover {
+  background: #31506e;
+}
+.settings-root.settings-dark .settings-sidebar button.settings-nav-item.active-section {
+  background: #2064aa;
+  color: #ffffff;
+}
+.settings-root.settings-dark .settings-main,
+.settings-root.settings-dark .settings-scroll,
+.settings-root.settings-dark .settings-scroll > viewport {
+  background: #182635;
+}
+.settings-root.settings-dark .settings-card,
+.settings-root.settings-dark .settings-info-row,
+.settings-root.settings-dark .settings-linked-row {
+  background: #26394d;
+  color: #eaf5ff;
+  border-color: #3d5873;
+  box-shadow: none;
+}
+.settings-root.settings-dark .settings-linked-row:hover {
+  background: #304b67;
+}
+.settings-root.settings-dark .settings-sidebar .settings-search,
+.settings-root.settings-dark .settings-icon-choice {
+  background: #2a4057;
+  color: #eef6ff;
+  border-color: #40617e;
+}
+.settings-root.settings-dark .settings-save {
+  background: #255d94;
+  color: #f4faff;
+  border-color: #4b86bf;
+}
+/* Accessibility mode takes priority over light/dark aesthetics. */
+.settings-root.high-contrast,
+.settings-root.high-contrast .settings-main,
+.settings-root.high-contrast .settings-scroll,
+.settings-root.high-contrast .settings-scroll > viewport {
+  background: #ffffff;
+  color: #071c31;
+}
+.settings-root.high-contrast .settings-sidebar { background: #e2f1ff; }
+.settings-root.high-contrast .settings-linked-row,
+.settings-root.high-contrast .settings-info-row,
+.settings-root.high-contrast .settings-card {
+  background: #ffffff;
+  border: 2px solid #173f68;
+  color: #071c31;
+}
+.settings-root.high-contrast .settings-row-title,
+.settings-root.high-contrast .settings-heading,
+.settings-root.high-contrast .settings-hero { color: #071c31; }
