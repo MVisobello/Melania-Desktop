@@ -28,10 +28,11 @@ impl Default for Preferences {
         snap_windows: true, preview_windows: true,
         do_not_disturb: false, blur_strength: 70, workspace_count: 4,
         group_windows: false, reduce_motion: false, high_contrast: false,
-        icon_theme: "Melania-Light".into(),
+        icon_theme: "Melania-Fluent-Light".into(),
     } }
 }
-pub const ICON_THEMES: [&str; 3] = [
+pub const ICON_THEMES: [&str; 6] = [
+    "Melania-Fluent-Light", "Melania-Fluent-Dark", "Melania-Fluent-Light-on-Dark-Panel",
     "Melania-Light", "Melania-Dark", "Melania-Light-on-Dark-Panel"
 ];
 /// The bundled theme is added to GTK's per-process icon search paths.
@@ -40,6 +41,7 @@ pub fn bundled_icon_paths() -> Vec<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     vec![
         root.join("dist/melania-icon-themes"),
+        root.join("dist/melania-fluent-icons"),
         root.join("branding"),
     ]
 }
@@ -166,7 +168,7 @@ mod tests {
         assert!(!bad.group_windows && !bad.reduce_motion && !bad.high_contrast);
     }
     #[test] fn icon_themes_are_validated_and_backward_compatible() {
-        assert_eq!(Preferences::default().icon_theme,"Melania-Light");
+        assert_eq!(Preferences::default().icon_theme,"Melania-Fluent-Light");
         for name in ICON_THEMES {
             let p=Preferences::from_text(&format!("icon_theme={name}"));
             assert_eq!(p.icon_theme,name);

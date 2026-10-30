@@ -1,0 +1,78 @@
+name: Build Melania Fluent icon themes
+
+on:
+  push:
+    paths:
+      - 'tools/melania_fluent_artwork.py'
+      - 'tools/melania_fluent_reference.py'
+      - 'tools/test_melania_fluent_reference.py'
+      - 'tools/build_melania_fluent_themes.py'
+      - 'tools/test_melania_fluent_artwork.py'
+      - 'scripts/install-melania-fluent-icons.sh'
+      - 'branding/coverage/**'
+      - '.github/workflows/melania-fluent-icons.yml'
+  pull_request:
+    paths:
+      - 'tools/melania_fluent_artwork.py'
+      - 'tools/melania_fluent_reference.py'
+      - 'tools/test_melania_fluent_reference.py'
+      - 'tools/build_melania_fluent_themes.py'
+      - 'tools/test_melania_fluent_artwork.py'
+      - 'scripts/install-melania-fluent-icons.sh'
+      - 'branding/coverage/**'
+      - '.github/workflows/melania-fluent-icons.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fluent-icons:
+    name: Verify and package Melania Fluent Light / Dark / Mixed
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate approved reference icon pixels and SVG packaging
+        run: python3 tools/test_melania_fluent_reference.py
+      - name: Validate original SVG artwork and contrast
+        run: python3 tools/test_melania_fluent_artwork.py
+      - name: Build all variants using the full identifier manifests
+        run: |
+          set -euo pipefail
+          python3 tools/build_melania_fluent_themes.py --output dist/melania-fluent-icons
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report=json.loads(Path('dist/melania-fluent-icons/BUILD-REPORT.json').read_text())
+          assert report['verified'] is True
+          assert report['paths_per_theme'] >= 20000
+          assert len(report['themes']) == 3
+          print(report)
+          PY
+      - name: Verify isolated installation and symlinks
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/icons-user-data
+        run: |
+          set -euo pipefail
+          bash scripts/install-melania-fluent-icons.sh dist/melania-fluent-icons
+          for theme in Melania-Fluent-Light Melania-Fluent-Dark Melania-Fluent-Light-on-Dark-Panel; do
+            test -f "$XDG_DATA_HOME/icons/$theme/places/scalable/folder.svg"
+            test -f "$XDG_DATA_HOME/icons/$theme/actions/24/edit-copy.svg"
+            test -f "$XDG_DATA_HOME/icons/$theme/mimetypes/scalable/application-pdf.svg"
+          done
+      - name: Package portable themes
+        run: |
+          set -euo pipefail
+          cd dist/melania-fluent-icons
+          tar -cf ../Melania-Fluent-Themes.tar Melania-Fluent-Light Melania-Fluent-Dark Melania-Fluent-Light-on-Dark-Panel BUILD-REPORT.json
+          cd ..
+          xz -T2 -6 Melania-Fluent-Themes.tar
+          ls -lh Melania-Fluent-Themes.tar.xz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Melania-Fluent-Icon-Themes
+          path: |
+            dist/Melania-Fluent-Themes.tar.xz
+            dist/melania-fluent-icons/BUILD-REPORT.json
+          if-no-files-found: error
