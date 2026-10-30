@@ -227,55 +227,40 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
     paths = sorted(set(dark_paths)|set(light_paths))
     created:dict[tuple[str,str,str],Path]={}
     origins = {"original":0,"generated":0}
-    for variant,root,chosen in [("dark",dark,paths),("light",light,paths)]:
-        for path in chosen:
-            parts=Path(path).parts
-            context=parts[0]; name=Path(path).stem
-            symbol = name.endswith("-symbolic") or "symbolic" in parts
-            # Light windows require dark symbolic glyphs in *all* contexts,
-            # while colorful app icons are shared from the original Aero
-            # family. Status icons are separate for light panels.
-            if variant=="light" and not (
-                context in ("actions","panel") or symbol
-            ):
+    # Produce Dark first, then Light: shared color artwork is linked PER FILE.
+    # Linking whole subdirectories was incorrect when symbolic files occupied
+    # the same folder: the folder existed in Light but other icons vanished.
+    for variant, root in (("dark", dark), ("light", light)):
+        for path in paths:
+            parts = Path(path).parts
+            context, name = parts[0], Path(path).stem
+            symbolic = name.endswith("-symbolic") or "symbolic" in parts
+            unique_to_variant = symbolic or context in ("actions", "panel")
+            if variant == "light" and not unique_to_variant:
+                symlink_relative(root / path, dark / path)
                 continue
-            key=(context,name,"symbolic-dark" if symbol and variant=="dark" else
-                 "symbolic-light" if symbol else
-                 "dark-action" if variant=="dark" and context=="actions" else
-                 "light-action" if variant=="light" else "aero")
+            design = ("symbolic-dark" if symbolic and variant == "dark" else
+                      "symbolic-light" if symbolic else
+                      "dark-action" if variant == "dark" and context == "actions" else
+                      "light-action" if variant == "light" and context == "actions" else
+                      "aero")
+            key = (context, name, design)
             if key not in created:
-                asset_dir=root/"_melania-assets"
+                asset_dir = root / "_melania-assets"
                 asset_dir.mkdir(exist_ok=True)
-                asset=asset_dir/(hashlib.sha256(repr(key).encode()).hexdigest()[:28]+".svg")
-                img = curated_artwork(name, context, variant, symbol)
-                if img is None and not (symbol or context=="actions"):
-                    img = original_svg(name,context)
+                asset = asset_dir / (hashlib.sha256(repr(key).encode()).hexdigest()[:28] + ".svg")
+                img = curated_artwork(name, context, variant, symbolic)
+                if img is None and not (symbolic or context == "actions"):
+                    img = original_svg(name, context)
                 if img is None:
-                    img=generated_svg(name,context,key[2])
-                    origins["generated"]+=1
+                    img = generated_svg(name, context, design)
+                    origins["generated"] += 1
                 else:
-                    origins["original"]+=1
+                    origins["original"] += 1
                 ET.fromstring(img)
-                asset.write_text(img,encoding="utf8")
-                created[key]=asset
-            symlink_relative(root/path,created[key])
-    # Share colorful scalable illustrations but build contrast-specific
-    # symbolic icons for Light. This avoids white-on-white toolbar/status
-    # glyphs while retaining the Aero source artwork and reducing duplication.
-    main_cats=sorted(CATEGORIES)
-    for category in main_cats:
-        if category in ("actions","panel"):
-            continue
-        subdirs=sorted({Path(p).parts[1] for p in paths
-                        if Path(p).parts[0]==category and len(Path(p).parts)>2})
-        if not subdirs:
-            symlink_relative(light/category,dark/category)
-        else:
-            (light/category).mkdir(exist_ok=True)
-            for subdir in subdirs:
-                item=light/category/subdir
-                if not item.exists():
-                    symlink_relative(item,dark/category/subdir)
+                asset.write_text(img, encoding="utf8")
+                created[key] = asset
+            symlink_relative(root / path, created[key])
     # Light on Dark Panel: application dialogs get dark-on-light symbols,
     # while the dark taskbar inherits bright status glyphs and panel icons.
     for category in main_cats:
@@ -328,6 +313,10 @@ def main():
     if len(dark_paths)!=20364 or len(light_paths)!=9973:
         raise SystemExit("Unexpected reference manifest size")
     output=args.output.resolve()
+    if args.verify:
+        verify(output, dark_paths, light_paths)
+        print("Verified existing Melania icon themes in", output)
+        return
     if output.exists():
         if not (output/"Melania-Dark"/"index.theme").is_file():
             raise SystemExit(f"Refusing to replace unrelated output: {output}")
