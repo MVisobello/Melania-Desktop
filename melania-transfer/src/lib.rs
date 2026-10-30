@@ -89,7 +89,7 @@ fn copy_tree(source: &Path, target: &Path, created_root: &mut bool) -> io::Resul
 /// Returns paths of created entries; failure rolls back entries created by us.
 pub fn copy_sources(sources: &[PathBuf], destination: &Path) -> io::Result<Vec<PathBuf>> {
     let plan = plan_copy(sources, destination)?;
-    let mut created = Vec::new();
+    let mut created: Vec<PathBuf> = Vec::new();
     for (source, target) in plan.entries {
         // Only cleanup a target which we can establish did not exist before.
         let mut created_here = false;
