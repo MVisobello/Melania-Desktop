@@ -585,6 +585,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Melania nested Wayland ready: WAYLAND_DISPLAY={}", socket.to_string_lossy());
     println!("Melania taskbar control socket: {}", control_path.display());
     let begin = Instant::now();
+    // Opt-in instrumentation for nested software-rendering CI diagnostics.
+    let debug_render = std::env::var_os("MELANIA_DEBUG_RENDER").is_some();
+    let mut last_render_report = Instant::now();
 
     // Optional clients. Each --command PROGRAM starts inside our nested
     // compositor, with no changes to the parent session's environment.
@@ -705,6 +708,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
+            }
+            if debug_render && last_render_report.elapsed() >= Duration::from_secs(1) {
+                eprintln!("MELANIA_RENDER windows={} layers={} elements={} size={}x{}",
+                          state.space.elements().count(),
+                          layer_map_for_output(&output).layers().count(),
+                          elements.len(), size.w, size.h);
+                last_render_report = Instant::now();
             }
             let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
             frame.clear(Color32F::new(0.035, 0.08, 0.18, 1.0), &[damage])?;

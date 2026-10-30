@@ -62,7 +62,7 @@ target/debug/melania-winctl workspace 2 >/dev/null
 [[ "$(target/debug/melania-winctl status)" == *'2'* ]] || { echo 'FAIL: workspace 2 not active' >&2; exit 1; }
 target/debug/melania-winctl workspace 1 >/dev/null
 [[ "$(target/debug/melania-winctl status)" == *'1'* ]] || { echo 'FAIL: workspace 1 not restored' >&2; exit 1; }
-sleep .5
+sleep 2
 if command -v scrot >/dev/null; then
   scrot -z -o reports/nested-wayland-full-desktop.png
   python3 - <<'PY'

@@ -58,6 +58,7 @@ jobs:
           GALLIUM_DRIVER: llvmpipe
           WINIT_UNIX_BACKEND: x11
           RUST_BACKTRACE: '1'
+          MELANIA_DEBUG_RENDER: '1'
         run: |
           set -o pipefail
           xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
