@@ -486,3 +486,26 @@ headerbar.files-aero-header windowcontrols button.close:hover {
 headerbar.files-aero-header windowcontrols button:active {
   box-shadow: inset 0 2px 3px rgba(31,76,107,.25);
 }
+
+/* Files: purpose-built empty state, calm and descriptive rather than a blank
+ * list or an unexplained zero. Rendered over the real scrollable file grid.
+ * This stylesheet is local to Melania Files; it cannot change GNOME.
+ */
+.files-empty-state {
+  min-width: 190px;
+  padding: 24px 20px;
+  border-spacing: 10px;
+}
+.files-empty-image { opacity: .88; }
+.files-empty-title {
+  color: #345678;
+  font-size: 19px;
+  font-weight: 750;
+}
+.files-empty-description {
+  color: #71879e;
+  font-size: 12px;
+}
+.files-toolbar .files-nav-button:hover {
+  background: #dceeff;
+}
