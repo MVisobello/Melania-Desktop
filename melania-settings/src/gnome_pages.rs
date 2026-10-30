@@ -1,7 +1,7 @@
 //! GNOME-inspired, honest Melania Settings information architecture.
 //! Settings displayed here never mutate host GNOME/Cinnamon configuration.
 use gtk::prelude::*;
-use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack};
+use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack, Scale};
 use crate::symbols;
 use std::{env, fs, process::Command};
 
@@ -76,6 +76,49 @@ fn read_command(program: &str, args: &[&str]) -> Option<String> {
     let line = text.lines().map(str::trim).find(|s| !s.is_empty())?;
     Some(line.chars().take(170).collect())
 }
+
+fn battery_status() -> String {
+    // Do not assume BAT0: convertible laptops and external battery packs use
+    // BAT1, BAT2 or other BAT* devices.
+    let batteries = fs::read_dir("/sys/class/power_supply").ok()
+        .into_iter().flatten().flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("BAT"))
+        .collect::<Vec<_>>();
+    if batteries.is_empty() {
+        return "Nessuna batteria rilevata (possibile computer fisso).".into();
+    }
+    batteries.iter().map(|battery| {
+        let path = battery.path();
+        let name = battery.file_name().to_string_lossy().to_string();
+        let capacity = fs::read_to_string(path.join("capacity")).ok()
+            .map(|x| format!("{}%", x.trim())).unwrap_or_else(|| "carica non disponibile".into());
+        let status = fs::read_to_string(path.join("status")).ok()
+            .map(|x| x.trim().to_string()).unwrap_or_else(|| "stato sconosciuto".into());
+        format!("{name}: {capacity} · {status}")
+    }).collect::<Vec<_>>().join("; ")
+}
+fn root_storage() -> String {
+    let output = Command::new("df").args(["-h", "--output=size,used,avail,pcent", "/"])
+        .output();
+    if let Ok(output) = output {
+        if output.status.success() {
+            if let Some(line) = String::from_utf8_lossy(&output.stdout).lines()
+                .filter(|line| !line.trim().is_empty()).last() {
+                let values: Vec<_> = line.split_whitespace().collect();
+                if values.len() == 4 {
+                    return format!("Totale {} · utilizzati {} · disponibili {} · occupazione {}",
+                        values[0], values[1], values[2], values[3]);
+                }
+            }
+        }
+    }
+    "Spazio disponibile non determinabile.".into()
+}
+fn parse_volume(output: &str) -> Option<f64> {
+    let normalized = output.trim().strip_prefix("Volume:")?;
+    let volume = normalized.split_whitespace().next()?.parse::<f64>().ok()?;
+    if volume.is_finite() { Some((volume * 100.0).clamp(0.0, 100.0)) } else { None }
+}
 fn os_name() -> String {
     fs::read_to_string("/etc/os-release").ok()
         .and_then(|text| text.lines().find_map(|line| {
@@ -119,20 +162,48 @@ pub fn add_pages(stack: &Stack) {
         "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
     stack.add_titled(&display, Some("display"), "Schermo");
 
-    let audio = page("Audio", "Stato dei dispositivi audio Linux.", "audio-card");
-    group(&audio, "Dispositivi");
-    audio.append(&info_row("audio-volume-high", "Server audio",
-        &read_command("wpctl", &["status"])
-            .unwrap_or_else(|| "PipeWire/WirePlumber non interrogabile da questa sessione.".into())));
-    audio.append(&info_row("dialog-information", "Configurazione audio",
-        "I controlli dei volumi saranno disponibili dopo l'integrazione PipeWire. Questa pagina è attualmente informativa."));
+    let audio = page("Audio", "Volume e uscita audio tramite PipeWire/WirePlumber.", "audio-card");
+    group(&audio, "Uscita audio");
+    let current_volume = read_command("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .and_then(|output| parse_volume(&output));
+    if let Some(volume) = current_volume {
+        audio.append(&info_row("audio-volume-high", "Volume attuale",
+            &format!("{volume:.0}% · dispositivo di uscita predefinito")));
+        let controls = GtkBox::new(Orientation::Horizontal, 12);
+        controls.add_css_class("settings-action-row");
+        let level = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+        level.set_value(volume);
+        level.set_hexpand(true);
+        level.set_tooltip_text(Some("Volume audio in percentuale"));
+        let apply = Button::with_label("Applica volume");
+        apply.add_css_class("settings-save");
+        let feedback = label("", "settings-action-feedback");
+        let scale = level.clone();
+        let response = feedback.clone();
+        apply.connect_clicked(move |_| {
+            let requested = format!("{:.2}", scale.value().clamp(0.0, 100.0) / 100.0);
+            let status = Command::new("wpctl")
+                .args(["set-volume", "@DEFAULT_AUDIO_SINK@", requested.as_str()])
+                .status();
+            match status {
+                Ok(status) if status.success() =>
+                    response.set_text(&format!("Volume impostato: {:.0}%", scale.value())),
+                _ => response.set_text("Impossibile cambiare il volume. Controlla WirePlumber."),
+            }
+        });
+        controls.append(&level);
+        controls.append(&apply);
+        audio.append(&controls);
+        audio.append(&feedback);
+    } else {
+        audio.append(&info_row("dialog-information", "Audio non disponibile",
+            "Nessun dispositivo PipeWire/WirePlumber accessibile. Il controllo del volume non viene mostrato."));
+    }
     stack.add_titled(&audio, Some("audio"), "Audio");
 
     let power = page("Alimentazione", "Stato e risparmio energetico.", "battery");
     group(&power, "Batteria");
-    let charge = fs::read_to_string("/sys/class/power_supply/BAT0/capacity")
-        .ok().map(|x| format!("Livello di carica: {}%", x.trim()))
-        .unwrap_or_else(|| "Nessuna batteria BAT0 rilevata o informazione non disponibile.".into());
+    let charge = battery_status();
     power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
     power.append(&info_row("dialog-information", "Risparmio energetico",
         "I profili energetici sono gestiti dai servizi Linux; Melania non li modifica da questa pagina."));
@@ -140,8 +211,7 @@ pub fn add_pages(stack: &Stack) {
 
     let storage = page("Archiviazione", "Informazioni sulle unità locali.", "drive-harddisk");
     group(&storage, "Dischi");
-    let space = read_command("df", &["-h", "/"])
-        .unwrap_or_else(|| "Spazio disponibile non determinabile.".into());
+    let space = root_storage();
     storage.append(&info_row("drive-harddisk", "Filesystem principale", &space));
     storage.append(&info_row("dialog-information", "Gestione delle unità",
         "Le operazioni sui dischi rimangono affidate alle utility del sistema operativo."));
@@ -152,6 +222,9 @@ pub fn add_pages(stack: &Stack) {
     bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
         &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
     stack.add_titled(&bluetooth, Some("bluetooth"), "Bluetooth");
+    // The network overview is read-only until Melania integrates NetworkManager
+    // controls; never misrepresent a setting as applied to the host.
+
 
     let applications = page("App", "Programmi e preferenze applicative.", "application-x-executable");
     group(&applications, "Applicazioni");
