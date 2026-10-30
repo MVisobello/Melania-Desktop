@@ -10,6 +10,7 @@ on:
       - 'melania-panel/**'
       - 'melania-desktop-surface/**'
       - 'scripts/smoke-nested-wayland.sh'
+      - 'scripts/smoke-full-desktop-wayland.sh'
       - '.github/workflows/wayland-smoke.yml'
   workflow_dispatch:
 
@@ -33,11 +34,11 @@ jobs:
             libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev \
             libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev \
             libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev \
-            libgl1-mesa-dri mesa-utils
+            libgl1-mesa-dri mesa-utils scrot python3-pil procps
       - name: Build nested compositor, control CLI and GTK file manager
         run: |
           set -o pipefail
-          cargo build -p melania-compositor -p melania-control -p melania-files 2>&1 | tee wayland-smoke-build.log
+          cargo build -p melania-compositor -p melania-control -p melania-files -p melania-panel -p melania-desktop-surface -p melania-settings 2>&1 | tee wayland-smoke-build.log
       - name: Run real nested session (no host session takeover)
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -51,6 +52,17 @@ jobs:
           xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
             timeout --signal=TERM --kill-after=5s 85s \
             bash scripts/smoke-nested-wayland.sh 2>&1 | tee wayland-smoke-test.log
+      - name: Full desktop session, screenshot, workspace IPC and clean shutdown
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+          WINIT_UNIX_BACKEND: x11
+          RUST_BACKTRACE: '1'
+        run: |
+          set -o pipefail
+          xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
+            timeout --signal=TERM --kill-after=5s 95s \
+            bash scripts/smoke-full-desktop-wayland.sh 2>&1 | tee wayland-full-test.log
       - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,4 +71,6 @@ jobs:
           path: |
             wayland-smoke-*.log
             reports/wayland-smoke.log
+            reports/wayland-full-*.log
+            reports/nested-wayland-full-desktop.png
           if-no-files-found: warn
