@@ -18,7 +18,6 @@ import tarfile
 import xml.etree.ElementTree as ET
 from melania_fluent_artwork import artwork,CORE,REVERSE
 from melania_fluent_reference import artwork as approved_artwork
-from melania_fluent_system_glyphs import artwork as system_glyph_artwork
 
 ROOT=Path(__file__).resolve().parents[1]
 COVERAGE=ROOT/'branding'/'coverage'
@@ -107,8 +106,7 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
             if not contrast:design='color'
             key=(category,name,design,'compact' if size<=24 else 'full')
             if key not in known_assets:
-                svg=(system_glyph_artwork(name,category,'dark' if variant=='dark' else 'light',size)
-                     or approved_artwork(name,category,'dark' if variant=='dark' else 'light',size)
+                svg=(approved_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or artwork(name,category,'dark' if variant=='dark' else 'light',size))
                 ET.fromstring(svg)
                 digest=hashlib.sha256(svg.encode('utf8')).hexdigest()
