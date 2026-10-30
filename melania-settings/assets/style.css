@@ -1,13 +1,225 @@
-window{background:#f3f8fe;color:#172d49;}
-.settings-sidebar{background:linear-gradient(to bottom,#f5faff,#e5effa);padding:18px;border-right:1px solid #cbddec;}
-.settings-sidebar button{background:transparent;color:#1b3e63;border:0;border-radius:10px;padding:10px;}
-.settings-sidebar button:hover{background:#d6e8fc;}
-.settings-body{padding:25px;}.settings-heading{font-size:26px;font-weight:700;color:#103963;}
-.settings-subtitle{color:#5e7994;}
-.settings-card{background:#fff;border:1px solid #d5e3f2;border-radius:15px;padding:16px;box-shadow:0 3px 10px rgba(30,66,109,.05);}
-.settings-card switch:checked{background:#2b8cff;}.settings-hero{font-size:18px;font-weight:700;color:#145296;}
-.settings-warning{background:#fff3db;padding:12px;border-radius:10px;color:#7b4f18;}
-
-/* Melania 0.12 — consistent desktop focus/accessibility */
-.settings-sidebar button:focus-visible { outline: 2px solid #2b8cff; outline-offset: -2px; }
-.settings-card { box-shadow: 0 3px 12px rgba(22,65,105,.06); }
+/* Melania Settings — Aero Classic
+ * Translucent GTK surfaces and glass highlights. The actual blurred backdrop
+ * must be supplied by the Wayland compositor; CSS cannot blur other windows. */
+window.melania-settings-window,
+window.melania-settings-window.background {
+  background: transparent;
+  color: #193957;
+}
+headerbar.settings-titlebar {
+  min-height: 43px;
+  background: linear-gradient(to bottom,
+    rgba(225,247,255,0.94) 0%,
+    rgba(125,194,238,0.89) 48%,
+    rgba(71,143,203,0.91) 100%);
+  color: #103b66;
+  border: 1px solid rgba(224,249,255,0.85);
+  border-bottom: 1px solid rgba(48,111,174,0.65);
+  box-shadow: inset 0 1px rgba(255,255,255,0.85),
+              inset 0 -1px rgba(255,255,255,0.28);
+}
+headerbar.settings-titlebar .title {
+  color: #143e69;
+  font-weight: 700;
+}
+headerbar.settings-titlebar windowcontrols button {
+  min-width: 26px;
+  min-height: 24px;
+  border-radius: 7px;
+  background: rgba(241,251,255,0.20);
+  color: #173d61;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+headerbar.settings-titlebar windowcontrols button:hover {
+  background: rgba(248,253,255,0.65);
+  border-color: rgba(255,255,255,0.70);
+}
+.settings-root {
+  background: linear-gradient(to bottom,
+    rgba(207,232,252,0.90), rgba(239,248,255,0.87));
+}
+.settings-sidebar {
+  min-width: 218px;
+  background: linear-gradient(to right,
+    rgba(228,244,255,0.86), rgba(186,220,245,0.65));
+  border-right: 1px solid rgba(117,169,211,0.56);
+  box-shadow: inset 1px 0 rgba(255,255,255,0.65);
+  padding: 22px 17px 17px;
+}
+.settings-sidebar button {
+  background: rgba(255,255,255,0.16);
+  color: #1a466e;
+  border: 1px solid transparent;
+  box-shadow: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: 35px;
+}
+.settings-sidebar button:hover {
+  background: rgba(235,249,255,0.72);
+  border-color: rgba(150,197,235,0.45);
+}
+.settings-sidebar button.active-section {
+  background: linear-gradient(to bottom,
+    rgba(255,255,255,0.87), rgba(208,234,255,0.77));
+  color: #0e5198;
+  border: 1px solid rgba(128,184,232,0.63);
+  box-shadow: inset 0 1px rgba(255,255,255,0.92);
+  font-weight: 700;
+}
+.settings-main {
+  background: rgba(248,252,255,0.70);
+}
+.settings-scroll,
+.settings-scroll > viewport {
+  background: transparent;
+}
+.settings-body { padding: 26px 26px 30px; }
+.settings-heading {
+  font-size: 26px;
+  font-weight: 700;
+  color: #123b66;
+}
+.settings-subtitle { color: #5e7c9c; }
+.settings-hero {
+  font-size: 18px;
+  font-weight: 700;
+  color: #145b9c;
+}
+.settings-card {
+  min-height: 56px;
+  background: linear-gradient(to bottom,
+    rgba(255,255,255,0.88), rgba(236,247,255,0.75));
+  border: 1px solid rgba(160,202,238,0.67);
+  border-radius: 13px;
+  padding: 15px 17px;
+  box-shadow: inset 0 1px rgba(255,255,255,0.98),
+              0 4px 12px rgba(28,81,131,0.07);
+}
+.settings-warning {
+  background: rgba(255,247,218,0.86);
+  border: 1px solid rgba(233,204,134,0.50);
+  padding: 12px;
+  border-radius: 10px;
+  color: #80551c;
+}
+.settings-save {
+  border-radius: 9px;
+  background: linear-gradient(to bottom,#faffff,#d8eaff);
+  color: #174e82;
+  border: 1px solid #aacde9;
+  min-height: 32px;
+}
+.settings-save:hover { background: #e8f5ff; }
+.settings-intensity trough {
+  min-height: 6px;
+  background: rgba(60,117,168,0.17);
+  border: 1px solid rgba(126,178,217,0.45);
+  border-radius: 99px;
+}
+.settings-intensity highlight {
+  min-height: 6px;
+  border-radius: 99px;
+  background: linear-gradient(to right,#137ae7,#73c1fd);
+}
+.settings-intensity slider {
+  min-width: 17px;
+  min-height: 17px;
+  border-radius: 50%;
+  background: linear-gradient(to bottom,#ffffff,#dcecff);
+  border: 1px solid #78a7ce;
+  box-shadow: 0 1px 3px rgba(15,60,108,0.18);
+}
+/* Prevent GTK's default fill allocation from stretching the switch thumb.
+ * The matching Rust widget uses Align::Center and a fixed minimum footprint. */
+switch.settings-switch {
+  min-width: 50px;
+  min-height: 27px;
+  padding: 2px;
+  border-radius: 99px;
+  background: #b5cce1;
+  border: 1px solid #89aac6;
+  box-shadow: inset 0 1px 3px rgba(18,67,109,0.18);
+}
+switch.settings-switch:checked {
+  background: linear-gradient(to bottom,#48a7ff,#1473e3);
+  border-color: #1263c9;
+}
+switch.settings-switch > slider {
+  min-width: 23px;
+  min-height: 23px;
+  border-radius: 99px;
+  background: linear-gradient(to bottom,#ffffff,#eef6ff);
+  border: 1px solid rgba(85,128,171,0.38);
+  box-shadow: 0 1px 3px rgba(9,43,82,0.30);
+}
+switch.settings-switch:focus-visible,
+.settings-sidebar button:focus-visible,
+.settings-save:focus-visible {
+  outline: 2px solid #187eea;
+  outline-offset: 2px;
+}
+/* A disabled Aero switch removes glossy treatment without changing settings. */
+headerbar.settings-titlebar.aero-off {
+  background: #dde7f0;
+  border-bottom-color: #b7c5d3;
+}
+.settings-root.aero-off { background: #edf3f9; }
+.settings-root.aero-off .settings-sidebar { background: #e7eef6; }
+.settings-root.aero-off .settings-card {
+  background: #ffffff;
+  border-color: #d3e0eb;
+  box-shadow: none;
+}
+/* Four settings-friendly opacity bands for the saved visual intensity. */
+.settings-root.glass-low .settings-sidebar { background: rgba(224,240,251,0.95); }
+.settings-root.glass-low .settings-card { background: rgba(255,255,255,0.96); }
+.settings-root.glass-medium .settings-sidebar { background: rgba(210,232,250,0.83); }
+.settings-root.glass-medium .settings-card { background: rgba(255,255,255,0.88); }
+.settings-root.glass-high .settings-sidebar { background: rgba(184,221,248,0.60); }
+.settings-root.glass-high .settings-card { background: rgba(255,255,255,0.72); }
+.settings-root.glass-max .settings-sidebar { background: rgba(166,211,244,0.49); }
+.settings-root.glass-max .settings-card { background: rgba(255,255,255,0.64); }
+/* The dark variant remains glassy and can be previewed without restarting. */
+.settings-root.settings-dark {
+  background: linear-gradient(to bottom,
+    rgba(17,49,79,0.93), rgba(10,30,53,0.93));
+}
+headerbar.settings-titlebar.settings-dark {
+  background: linear-gradient(to bottom,rgba(78,136,186,0.95),rgba(22,61,101,0.96));
+  color: #f1f9ff;
+  border-bottom-color: #1f5182;
+}
+headerbar.settings-titlebar.settings-dark .title,
+headerbar.settings-titlebar.settings-dark windowcontrols button { color: #edf8ff; }
+.settings-root.settings-dark .settings-sidebar {
+  background: linear-gradient(to right,rgba(22,59,92,0.91),rgba(22,66,106,0.80));
+  border-right-color: #426f96;
+}
+.settings-root.settings-dark .settings-main { background: rgba(11,35,61,0.63); }
+.settings-root.settings-dark .settings-heading,
+.settings-root.settings-dark .settings-hero { color: #d9efff; }
+.settings-root.settings-dark .settings-subtitle { color: #b2cce3; }
+.settings-root.settings-dark .settings-card {
+  background: rgba(46,91,131,0.60);
+  border-color: rgba(139,197,238,0.48);
+  box-shadow: inset 0 1px rgba(255,255,255,0.10);
+}
+.settings-root.settings-dark .settings-sidebar button { color: #d9ebfd; }
+.settings-root.settings-dark .settings-sidebar button.active-section {
+  color: #ffffff;
+  background: rgba(63,143,210,0.58);
+  border-color: rgba(153,207,248,0.50);
+}
+.settings-root.settings-dark .settings-warning {
+  color: #ffdfaa;
+  background: rgba(103,79,35,0.59);
+  border-color: rgba(205,165,98,0.35);
+}
+.settings-root.settings-dark .settings-save {
+  background: rgba(43,101,155,0.85);
+  border-color: #669cc7;
+  color: #e6f5ff;
+}
+.settings-root.settings-dark .settings-intensity trough { background: #234b6d; }

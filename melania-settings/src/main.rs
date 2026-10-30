@@ -1,6 +1,6 @@
 //! Settings design prototype. System changes are intentionally not wired yet.
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Image, Label, Orientation, Scale, Stack, Switch};
+use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, HeaderBar, Image, Label, Orientation, Scale, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
 use melania_config::{self, Preferences};
 
@@ -18,6 +18,7 @@ fn saved_option(
     current: bool,
     prefs: Rc<RefCell<Preferences>>,
     change: fn(&mut Preferences, bool),
+    after_change: Option<Rc<dyn Fn(&Preferences)>>,
 ) -> GtkBox {
     let row = GtkBox::new(Orientation::Horizontal, 18);
     row.add_css_class("settings-card");
@@ -27,11 +28,22 @@ fn saved_option(
     v.append(&text(description, "settings-subtitle"));
     row.append(&v);
     let toggle = Switch::builder().active(current).build();
+    // Do not allow GTK's fill alignment to stretch the thumb vertically.
+    toggle.add_css_class("settings-switch");
+    toggle.set_valign(gtk::Align::Center);
+    toggle.set_halign(gtk::Align::End);
+    toggle.set_hexpand(false);
+    toggle.set_vexpand(false);
+    toggle.set_size_request(54, 30);
+    toggle.set_tooltip_text(Some(title));
     toggle.connect_active_notify(move |sw| {
         let mut preferences = prefs.borrow_mut();
         change(&mut preferences, sw.is_active());
         if let Err(e) = melania_config::save(&preferences) {
             eprintln!("Melania Settings: impossibile salvare preferenze: {e}");
+        }
+        if let Some(ref update) = after_change {
+            update(&preferences);
         }
     });
     row.append(&toggle);
@@ -46,6 +58,35 @@ fn page(title: &str, description: &str) -> GtkBox {
     body
 }
 
+fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
+    if prefs.aero_glass {
+        root.remove_css_class("aero-off");
+        header.remove_css_class("aero-off");
+    } else {
+        root.add_css_class("aero-off");
+        header.add_css_class("aero-off");
+    }
+    if prefs.dark_mode {
+        root.add_css_class("settings-dark");
+        header.add_css_class("settings-dark");
+    } else {
+        root.remove_css_class("settings-dark");
+        header.remove_css_class("settings-dark");
+    }
+    for band in ["glass-low", "glass-medium", "glass-high", "glass-max"] {
+        root.remove_css_class(band);
+    }
+    if prefs.aero_glass {
+        let band = match prefs.blur_strength {
+            0..=24 => "glass-low",
+            25..=49 => "glass-medium",
+            50..=79 => "glass-high",
+            _ => "glass-max",
+        };
+        root.add_css_class(band);
+    }
+}
+
 fn build_ui(app: &Application) {
     setup_melania_icon_theme();
     let css = gtk::CssProvider::new();
@@ -56,7 +97,18 @@ fn build_ui(app: &Application) {
     }
     let window = ApplicationWindow::builder().application(app).title("Melania — Impostazioni")
         .default_width(870).default_height(600).build();
+    window.add_css_class("melania-settings-window");
+    // Native client-side decorations retain window dragging and window controls.
+    let titlebar = HeaderBar::new();
+    titlebar.add_css_class("settings-titlebar");
+    titlebar.set_show_title_buttons(true);
+    titlebar.set_decoration_layout(Some(":minimize,maximize,close"));
+    let title_text = Label::new(Some("Melania — Impostazioni"));
+    title_text.add_css_class("title");
+    titlebar.set_title_widget(Some(&title_text));
+    window.set_titlebar(Some(&titlebar));
     let root = GtkBox::new(Orientation::Horizontal, 0);
+    root.add_css_class("settings-root");
     let sidebar = GtkBox::new(Orientation::Vertical, 9);
     sidebar.add_css_class("settings-sidebar");
     sidebar.set_size_request(225, -1);
@@ -70,27 +122,38 @@ fn build_ui(app: &Application) {
     stack.set_hexpand(true);
     stack.set_vexpand(true);
     let prefs = Rc::new(RefCell::new(melania_config::load().unwrap_or_default()));
+    refresh_theme(&root, &titlebar, &prefs.borrow());
+    let themed_root = root.clone();
+    let themed_header = titlebar.clone();
+    let apply_style: Rc<dyn Fn(&Preferences)> = Rc::new(move |p| {
+        refresh_theme(&themed_root, &themed_header, p);
+    });
     let appearance = page("Aspetto", "Personalizza l'identità visiva del desktop.");
-    appearance.append(&saved_option("Aero Glass", "Preferenza grafica (rendering compositor non ancora implementato).", prefs.borrow().aero_glass, prefs.clone(), |p,v| p.aero_glass = v));
-    appearance.append(&saved_option("Animazioni", "Memorizza l'uso delle animazioni.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v));
-    appearance.append(&saved_option("Tema scuro", "Aspetto predefinito per la shell Melania.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v));
-    appearance.append(&text("Intensità effetti visivi (salvata in preferenze)", "settings-hero"));
+    appearance.append(&saved_option("Aero Glass", "Trasparenze, riflessi e bordi Aero. La sfocatura reale richiede il compositore.", prefs.borrow().aero_glass, prefs.clone(), |p,v| p.aero_glass = v, Some(apply_style.clone())));
+    appearance.append(&saved_option("Animazioni", "Preferenza per le animazioni della shell.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, None));
+    appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
+    appearance.append(&text("Intensità effetto vetro", "settings-hero"));
     let blur = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     blur.set_value(prefs.borrow().blur_strength as f64);
+    blur.add_css_class("settings-intensity");
+    blur.set_tooltip_text(Some("Regola la trasparenza del tema; il compositore userà in futuro il medesimo valore per la sfocatura."));
     appearance.append(&blur);
     let save_blur = Button::with_label("Salva intensità");
     let slider = blur.clone();
     let preferences = prefs.clone();
+    let update_blur_style = apply_style.clone();
+    save_blur.add_css_class("settings-save");
     save_blur.connect_clicked(move |_| {
         let mut p = preferences.borrow_mut();
         p.blur_strength = slider.value().round().clamp(0.0,100.0) as u8;
         if let Err(e) = melania_config::save(&p) { eprintln!("Melania Settings: {e}"); }
+        update_blur_style(&p);
     });
     appearance.append(&save_blur);
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
     let desktop = page("Desktop e finestre", "Le preferenze avanzate previste per Melania.");
-    desktop.append(&saved_option("Snap finestre", "Preferenza per l'aggancio ai bordi; integrazione futura con il compositore.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v));
-    desktop.append(&saved_option("Anteprime sulla barra", "Preferenza per le miniature delle applicazioni.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v));
+    desktop.append(&saved_option("Snap finestre", "Preferenza per l'aggancio ai bordi; integrazione futura con il compositore.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
+    desktop.append(&saved_option("Anteprime sulla barra", "Preferenza per le miniature delle applicazioni.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
     desktop.append(&text("Spazi di lavoro: il modello Rust supporta workspace multipli; il rendering è ancora da collegare.", "settings-subtitle"));
     stack.add_titled(&desktop, Some("desktop"), "Desktop");
     let network = page("Rete e Bluetooth", "I dispositivi si controllano dal Centro rapido della shell.");
@@ -101,6 +164,7 @@ fn build_ui(app: &Application) {
     system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
     system.append(&text("Preferenze locali: $XDG_CONFIG_HOME/melania/settings.conf. Le impostazioni hardware sono delegate ai servizi Linux.", "settings-subtitle"));
     stack.add_titled(&system, Some("system"), "Sistema");
+    let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target) in [
         ("◉  Aspetto", "appearance"),
         ("▣  Desktop e finestre", "desktop"),
@@ -109,13 +173,33 @@ fn build_ui(app: &Application) {
     ] {
         let b = Button::with_label(name);
         let s = stack.clone();
-        b.connect_clicked(move |_| s.set_visible_child_name(target));
+        let nav = navigation.clone();
+        b.connect_clicked(move |clicked| {
+            s.set_visible_child_name(target);
+            for item in nav.borrow().iter() {
+                item.remove_css_class("active-section");
+            }
+            clicked.add_css_class("active-section");
+        });
+        if target == "appearance" { b.add_css_class("active-section"); }
+        navigation.borrow_mut().push(b.clone());
         sidebar.append(&b);
     }
-    let warning = text("Le preferenze sono salvate; alcune funzioni grafiche saranno applicate nelle milestone successive.", "settings-warning");
+    let warning = text("Il tema Aero è disponibile nell'interfaccia. La sfocatura reale dello sfondo arriverà con il renderer Smithay.", "settings-warning");
     sidebar.append(&warning);
     root.append(&sidebar);
-    root.append(&stack);
+    let main_panel = GtkBox::new(Orientation::Vertical, 0);
+    main_panel.add_css_class("settings-main");
+    main_panel.set_hexpand(true);
+    main_panel.set_vexpand(true);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.add_css_class("settings-scroll");
+    scroll.set_hexpand(true);
+    scroll.set_vexpand(true);
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_child(Some(&stack));
+    main_panel.append(&scroll);
+    root.append(&main_panel);
     window.set_child(Some(&root));
     window.present();
 }
