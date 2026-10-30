@@ -35,9 +35,11 @@ Il builder usa un inventario testuale dei nomi derivato dal riferimento:
 | `Melania-Light-on-Dark-Panel` | Melania Light on Dark Panel | Comandi Light, status e pannello Dark |
 
 Le icone colorate delle applicazioni e le cartelle conservano lo stesso stile
-classico e possono essere condivise fra varianti. La terza variante usa
-collegamenti alle due precedenti, come nel modello di riferimento. **Installare
-sempre le tre directory assieme.**
+classico e possono essere condivise fra varianti. I simboli di azione, stato,
+dispositivi e pannello hanno invece versioni ad alto contrasto specifiche:
+scure sulle finestre Light, chiare sulle superfici Dark. La terza variante
+combina simboli Light nelle finestre con status/pannello Dark, attraverso
+collegamenti alle due precedenti. **Installare sempre le tre directory assieme.**
 
 ## Costruzione e installazione
 
