@@ -77,6 +77,10 @@ jobs:
             wait "$app_pid" 2>/dev/null || true
             test -s reports/melania-settings-gnome-style.png
           '
+      - name: Execute Melania Files unit tests (including empty-folder states)
+        run: |
+          set -o pipefail
+          cargo test -p melania-files --bin melania-files 2>&1 | tee gtk-files-tests.log
       - name: Taskbar grouping unit tests
         run: |
           set -o pipefail
@@ -88,6 +92,7 @@ jobs:
           path: |
             gtk-build.log
             gtk-panel-tests.log
+            gtk-files-tests.log
             reports/melania-settings-gnome-style.png
             reports/settings-gtk.log
 
