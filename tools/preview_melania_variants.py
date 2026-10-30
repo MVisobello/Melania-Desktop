@@ -18,6 +18,8 @@ SAMPLES = (
     ("Cartella", "places/scalable/folder.svg"),
     ("Documenti", "places/scalable/folder-documents.svg"),
     ("Home", "places/scalable/user-home.svg"),
+    ("Cestino", "places/scalable/user-trash.svg"),
+    ("Server", "places/scalable/network-server.svg"),
     ("PDF", "mimetypes/scalable/application-pdf.svg"),
     ("Testo", "mimetypes/scalable/text-x-generic.svg"),
     ("Computer", "apps/scalable/computer.svg"),
@@ -77,6 +79,8 @@ def render(root: Path, destination: Path) -> None:
                 png = cairosvg.svg2png(bytestring=svg, output_width=size,
                                        output_height=size)
                 icon = Image.open(BytesIO(png)).convert("RGBA")
+                if icon.getbbox() is None:
+                    raise ValueError(f"Rendered icon is blank: {source} at {size}px")
                 ix = x + offset + (96 - size) // 2
                 iy = y + 9 + (96 - size) // 2
                 img.paste(icon, (ix, iy), icon)
