@@ -149,7 +149,7 @@ def generated_svg(name: str, category: str, variant: str) -> str:
     digest = hashlib.sha256(name.encode()).digest()
     tint = PALETTE[digest[0] % len(PALETTE)]
     symbolic = name.endswith("-symbolic") or variant.endswith("-symbolic")
-    dark = variant.startswith("dark")
+    dark = variant in ("symbolic-dark","dark-action") or variant.startswith("dark")
     fg = "#ecf7ff" if dark else "#17416a"
     if symbolic:
         return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">'
