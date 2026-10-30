@@ -27,9 +27,10 @@ CATEGORIES = {
     "places": "Places", "status": "Status",
 }
 FALLBACK = {
-    "apps": "applications-other",
-    "places": "folder", "devices": "computer",
-    "mimetypes": "application-x-executable", "categories": "applications-other",
+    # Only unresolved *place* aliases share an existing folder. Unknown apps
+    # get distinctive original glass vector marks, not 7000 identical
+    # "applications-other" tiles.
+    "places": "folder",
 }
 PALETTE = ["#2785dc", "#1da6c7", "#537bcd", "#328b86",
            "#a267b4", "#499b60", "#d08243", "#4d7ba8"]
