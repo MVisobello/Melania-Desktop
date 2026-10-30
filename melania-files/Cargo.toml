@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+melania-config = { path = "../melania-config" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_8"] }
 melania-transfer = { path = "../melania-transfer" }
 
