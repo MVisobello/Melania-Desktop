@@ -1373,12 +1373,16 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
 /// manages the pages, so there is no duplicated title or second tab bar.
 fn sync_tab_highlights(
     notebook: &gtk::Notebook,
-    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox)>>>,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
+    window: &ApplicationWindow,
 ) {
     let active = notebook.current_page();
-    for (page, tab) in headers.borrow().iter() {
+    for (page, tab, title) in headers.borrow().iter() {
         if notebook.page_num(page) == active {
             tab.add_css_class("files-tab-active");
+            // Compositor IPC and taskbar hover chooser can identify the
+            // folder shown in each *window*, not just "Melania Files".
+            window.set_title(Some(&format!("{} — Melania Files", title.label())));
         } else {
             tab.remove_css_class("files-tab-active");
         }
@@ -1389,7 +1393,8 @@ fn sync_tab_highlights(
 fn append_browser_tab(
     notebook: &gtk::Notebook,
     tab_strip: &GtkBox,
-    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox)>>>,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
+    window: &ApplicationWindow,
     path: PathBuf,
     pending: Rc<RefCell<Option<PendingTransfer>>>,
     title: &str,
@@ -1414,10 +1419,18 @@ fn append_browser_tab(
     tab.append(&tab_button);
     tab.append(&close);
     let index = notebook.append_page(&child, None::<&gtk::Widget>);
-    headers.borrow_mut().push((child.clone(), tab.clone()));
+    headers.borrow_mut().push((child.clone(), tab.clone(), text.clone()));
     tab_strip.append(&tab);
     notebook.set_current_page(Some(index));
-    sync_tab_highlights(notebook, headers);
+    sync_tab_highlights(notebook, headers, window);
+    let tabs_for_title = notebook.clone();
+    let page_for_title = child.clone();
+    let window_for_title = window.clone();
+    text.connect_label_notify(move |label| {
+        if tabs_for_title.page_num(&page_for_title) == tabs_for_title.current_page() {
+            window_for_title.set_title(Some(&format!("{} — Melania Files", label.label())));
+        }
+    });
 
     let pages = notebook.clone();
     let selected_page = child.clone();
@@ -1430,17 +1443,18 @@ fn append_browser_tab(
     let pages = notebook.clone();
     let heading_list = headers.clone();
     let strip = tab_strip.clone();
+    let window_after_close = window.clone();
     close.connect_clicked(move |_| {
         // Never silently close the last browser. Ctrl+W follows the same rule.
         if pages.n_pages() <= 1 { return; }
         if let Some(index) = pages.page_num(&child) {
             if let Some(position) = heading_list.borrow().iter()
-                .position(|(page, _)| page == &child) {
+                .position(|(page, _, _)| page == &child) {
                 heading_list.borrow_mut().remove(position);
             }
             strip.remove(&tab);
             pages.remove_page(Some(index));
-            sync_tab_highlights(&pages, &heading_list);
+            sync_tab_highlights(&pages, &heading_list, &window_after_close);
         }
     });
 }
@@ -1482,10 +1496,11 @@ fn build_ui(app: &Application) {
     tabs.set_vexpand(true);
     tabs.set_show_border(false);
     tabs.add_css_class("files-notebook");
-    let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox)>>> = Rc::new(RefCell::new(Vec::new()));
+    let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
     let headers_for_switch = tab_headers.clone();
+    let window_for_switch = window.clone();
     tabs.connect_switch_page(move |notebook, _, _| {
-        sync_tab_highlights(notebook, &headers_for_switch);
+        sync_tab_highlights(notebook, &headers_for_switch, &window_for_switch);
     });
 
     let starting = std::env::args_os().nth(1).map(PathBuf::from)
@@ -1493,13 +1508,14 @@ fn build_ui(app: &Application) {
     let shared_pending: Rc<RefCell<Option<PendingTransfer>>> = Rc::new(RefCell::new(None));
     let initial_title = starting.file_name().map(|s|s.to_string_lossy().into_owned())
         .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_string());
-    append_browser_tab(&tabs, &tab_strip, &tab_headers, starting, shared_pending.clone(), &initial_title);
+    append_browser_tab(&tabs, &tab_strip, &tab_headers, &window, starting, shared_pending.clone(), &initial_title);
     let notebook = tabs.clone();
     let pending_for_add = shared_pending.clone();
     let header_for_add = tab_headers.clone();
     let rail_for_add = tab_strip.clone();
+    let window_for_add = window.clone();
     add_button.connect_clicked(move |_| {
-        append_browser_tab(&notebook, &rail_for_add, &header_for_add,
+        append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
             home(), pending_for_add.clone(), "Home");
     });
     frame.append(&tabs);
@@ -1510,6 +1526,7 @@ fn build_ui(app: &Application) {
     let keys_add = add_button.clone();
     let tab_headers_for_keys = tab_headers.clone();
     let strip_for_keys = tab_strip.clone();
+    let window_for_keys = window.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         if !modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
             return glib::Propagation::Proceed;
@@ -1521,14 +1538,14 @@ fn build_ui(app: &Application) {
         if key == gdk::Key::w || key == gdk::Key::W {
             if keys_notebook.n_pages() > 1 {
                 if let Some(index) = keys_notebook.current_page() {
-                    if let Some((_, heading)) = tab_headers_for_keys.borrow().iter()
-                        .find(|(page, _)| keys_notebook.page_num(page) == Some(index)).cloned() {
+                    if let Some((_, heading, _)) = tab_headers_for_keys.borrow().iter()
+                        .find(|(page, _, _)| keys_notebook.page_num(page) == Some(index)).cloned() {
                         strip_for_keys.remove(&heading);
                     }
                     tab_headers_for_keys.borrow_mut()
-                        .retain(|(page, _)| keys_notebook.page_num(page) != Some(index));
+                        .retain(|(page, _, _)| keys_notebook.page_num(page) != Some(index));
                     keys_notebook.remove_page(Some(index));
-                    sync_tab_highlights(&keys_notebook, &tab_headers_for_keys);
+                    sync_tab_highlights(&keys_notebook, &tab_headers_for_keys, &window_for_keys);
                 }
             }
             return glib::Propagation::Stop;
