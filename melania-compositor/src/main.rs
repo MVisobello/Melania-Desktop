@@ -391,6 +391,20 @@ impl Melania {
                             let snapped_window = self.space.elements()
                                 .find(|w|w.toplevel().is_some_and(|t| t.wl_surface()==top.wl_surface())).cloned();
                             if let Some(window) = snapped_window {
+                                // A top-edge Snap is a real maximization.
+                                // Keep its prior rectangle for restore and
+                                // for live work-area changes after panel resize.
+                                if let Some(managed)=self.managed.iter_mut().find(|w| {
+                                    w.surface == *top.wl_surface()
+                                }) {
+                                    if zone == SnapZone::Top {
+                                        if managed.restore_geometry.is_none() {
+                                            managed.restore_geometry=Some(active.model.original);
+                                        }
+                                    } else {
+                                        managed.restore_geometry=None;
+                                    }
+                                }
                                 self.space.map_element(window, (target.x,target.y), false);
                                 top.with_pending_state(|s| {
                                     s.size=Some((target.width as i32,target.height as i32).into());
