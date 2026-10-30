@@ -338,7 +338,8 @@ headerbar.files-aero-header {
   padding: 4px 10px;
   background: rgba(246,251,255,0.98);
 }
-/* The action ribbon scrolls horizontally instead of wrapping into two bars. */
-scrolledwindow:has(> viewport > .files-actions) {
-  background: #edf6ff;
-}
+/* The action ribbon scrolls horizontally instead of wrapping into two bars.
+ * Avoid unsupported CSS4 :has() selectors in GTK's CSS parser. */
+.files-actions { border-spacing: 3px; }
+.files-tab-scroll { background: transparent; min-height: 39px; }
+.files-tab-scroll > viewport { background: transparent; }
