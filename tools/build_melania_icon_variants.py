@@ -16,6 +16,7 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 from melania_aero_artwork import artwork as curated_artwork
+from melania_aero_details import refined_artwork, is_curated
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSIC = ROOT / "branding" / "Melania-Aero-Classic"
@@ -235,21 +236,31 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
             parts = Path(path).parts
             context, name = parts[0], Path(path).stem
             symbolic = name.endswith("-symbolic") or "symbolic" in parts
-            unique_to_variant = symbolic or context in ("actions", "panel")
+            unique_to_variant = symbolic or context in ("actions", "panel", "status")
             if variant == "light" and not unique_to_variant:
                 symlink_relative(root / path, dark / path)
                 continue
+            size = 96
+            for segment in parts[1:-1]:
+                match = re.fullmatch(r"(\\d+)(?:x\\d+)?", segment)
+                if match:
+                    size = int(match.group(1))
+                    break
             design = ("symbolic-dark" if symbolic and variant == "dark" else
                       "symbolic-light" if symbolic else
                       "dark-action" if variant == "dark" and context == "actions" else
                       "light-action" if variant == "light" and context == "actions" else
+                      f"{variant}-status" if context in ("status", "panel") else
                       "aero")
-            key = (context, name, design)
+            key = (context, name, design,
+                   "compact" if size <= 24 and is_curated(name, context) else "regular")
             if key not in created:
                 asset_dir = root / "_melania-assets"
                 asset_dir.mkdir(exist_ok=True)
                 asset = asset_dir / (hashlib.sha256(repr(key).encode()).hexdigest()[:28] + ".svg")
-                img = curated_artwork(name, context, variant, symbolic)
+                img = refined_artwork(name, context, variant, symbolic, size)
+                if img is None:
+                    img = curated_artwork(name, context, variant, symbolic)
                 if img is None and not (symbolic or context == "actions"):
                     img = original_svg(name, context)
                 if img is None:
