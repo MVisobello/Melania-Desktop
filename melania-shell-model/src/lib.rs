@@ -1,6 +1,7 @@
 //! Pure, platform-independent shell rules, testable without GTK or Wayland.
 //! Window manipulation and file drops are different kinds of dragging.
 //! The compositor is the final authority for resize, focus and DnD.
+pub mod keyboard_navigation;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

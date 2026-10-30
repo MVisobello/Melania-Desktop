@@ -145,6 +145,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         ("Spazi di lavoro", "workspaces", "workspace desktop virtuali"),
         ("Rete e Bluetooth", "network", "wifi wi-fi bluetooth connessione"),
         ("Accessibilità", "accessibility", "contrasto movimento animazioni"),
+        ("Scorciatoie", "shortcuts", "tastiera alt tab super e ctrl alt workspace"),
         ("Sistema", "system", "informazioni versione sistema"),
     ] {
         let caption = format!("Impostazioni · {name}");
