@@ -1476,6 +1476,10 @@ fn build_ui(app: &Application) {
     aero_header.add_css_class("files-aero-header");
     aero_header.set_show_title_buttons(true);
     aero_header.set_decoration_layout(Some(":minimize,maximize,close"));
+    // Override GTK HeaderBar's automatic centered window-title widget:
+    // the tabs ARE the titlebar, never add a duplicate app title.
+    let no_title = GtkBox::new(Orientation::Horizontal, 0);
+    aero_header.set_title_widget(Some(&no_title));
     let add_button = Button::from_icon_name("list-add-symbolic");
     add_button.add_css_class("files-new-tab");
     add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
