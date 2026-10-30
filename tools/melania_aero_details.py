@@ -176,9 +176,63 @@ def _status(name: str, variant: str) -> str:
                f'stroke-linecap="round" stroke-linejoin="round">{shape}</g>')
 
 
+SPECIAL_PLACES = {
+    "user-trash": "trash", "user-trash-full": "trash-full",
+    "network-server": "server", "network-workgroup": "workgroup",
+    "folder-saved-search": "search", "folder-important": "important",
+    "media-optical": "disc",
+}
+
+
+def _special_place(kind: str, compact: bool) -> str:
+    defs = ('<linearGradient id="m" x2="0" y2="1"><stop stop-color="#fff"/>'
+            '<stop offset=".53" stop-color="#bed4e5"/><stop offset="1" stop-color="#7291aa"/></linearGradient>'
+            '<linearGradient id="s" x2="0" y2="1"><stop stop-color="#a1e2ff"/>'
+            '<stop offset="1" stop-color="#1b6093"/></linearGradient>')
+    if kind.startswith("trash"):
+        paper = ('<path d="m39 28 9-9 11 12-5 9-15-4Z" fill="#f9fcff" '
+                 'stroke="#95a7b8" stroke-width="2"/>' if kind == "trash-full" else "")
+        return svg(paper + '<path d="M27 34h42l-6 47q-15 6-30 0Z" fill="url(#m)" '
+                   'stroke="#617e97" stroke-width="3"/>'
+                   '<path d="M23 29h50v7H23Z" fill="#b1cadc" stroke="#617e97" stroke-width="2"/>'
+                   '<path d="M38 23h20" stroke="#617e97" stroke-width="5"/>'
+                   '<path d="M40 46v25M49 46v25M58 46v25" stroke="#739ab8" '
+                   'stroke-width="3" stroke-linecap="round"/>', defs)
+    if kind == "disc":
+        return svg('<circle cx="48" cy="48" r="37" fill="url(#m)" stroke="#7892a7" stroke-width="2"/>'
+                   '<path d="M21 29q30-18 55 16" fill="none" stroke="#f3fbff" stroke-width="8" opacity=".7"/>'
+                   '<circle cx="48" cy="48" r="12" fill="#80b7d9" stroke="#6489a7" stroke-width="2"/>'
+                   '<circle cx="48" cy="48" r="5" fill="#f5fcff"/>', defs)
+    if kind == "server":
+        return svg('<rect x="30" y="9" width="39" height="77" rx="6" fill="url(#m)" '
+                   'stroke="#566e84" stroke-width="2.5"/>'
+                   '<rect x="36" y="19" width="27" height="17" rx="2" fill="url(#s)"/>'
+                   '<rect x="36" y="43" width="27" height="13" rx="2" fill="#49687f"/>'
+                   '<rect x="36" y="61" width="27" height="13" rx="2" fill="#49687f"/>'
+                   '<circle cx="57" cy="49" r="2.5" fill="#63e2b9"/>'
+                   '<circle cx="57" cy="67" r="2.5" fill="#63e2b9"/>', defs)
+    if kind == "workgroup":
+        return svg('<rect x="10" y="16" width="47" height="35" rx="4" fill="url(#m)" '
+                   'stroke="#556f88" stroke-width="2.4"/>'
+                   '<rect x="15" y="21" width="37" height="24" fill="url(#s)"/>'
+                   '<rect x="40" y="43" width="46" height="35" rx="4" fill="url(#m)" '
+                   'stroke="#556f88" stroke-width="2.4"/>'
+                   '<rect x="45" y="48" width="36" height="24" fill="url(#s)"/>'
+                   '<path d="M33 52v10h9M63 79v6M49 85h28" fill="none" '
+                   'stroke="#6986a0" stroke-width="3"/>', defs)
+    core = folder("documents" if kind == "search" else "plain")
+    if kind == "search":
+        mark = '<circle cx="51" cy="58" r="9" fill="none" stroke="#305f8b" stroke-width="5"/><path d="m58 65 10 10" stroke="#305f8b" stroke-width="5"/>'
+    else:
+        mark = '<path d="M48 47 54 58 67 60 57 68 60 80 48 74 36 80 39 68 29 60 42 58Z" fill="#e58d32" stroke="#99601b" stroke-width="2"/>'
+    return core.replace("</svg>", mark + "</svg>")
+
+
 def refined_artwork(name: str, category: str, variant: str, symbolic: bool,
                     size: int = 96) -> str | None:
     compact = size <= 24
+    if category in ("apps", "places") and name in SPECIAL_PLACES:
+        return _special_place(SPECIAL_PLACES[name], compact)
     # Upstream icon inventories put several system and category names in apps,
     # not in devices/categories. Artwork follows the *name*, not that accident.
     if category == "apps":
@@ -244,11 +298,11 @@ def is_curated(name: str, category: str) -> bool:
     if category == "apps":
         return (name in DEVICES or name in EXTRA_DEVICES or
                 name in FILES or name in EXTRA_FILES or
-                name in CATEGORY_MARKS)
+                name in CATEGORY_MARKS or name in SPECIAL_PLACES)
     if category == "actions":
         return name in ACTIONS or name in EXTRA_ACTIONS
     if category == "places":
-        return name in FOLDERS or name in EXTRA_FOLDERS
+        return name in FOLDERS or name in EXTRA_FOLDERS or name in SPECIAL_PLACES
     if category == "mimetypes":
         return name in FILES or name in EXTRA_FILES
     if category == "devices":
