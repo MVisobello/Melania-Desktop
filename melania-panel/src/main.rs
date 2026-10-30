@@ -605,7 +605,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
             let mut previous:Option<gtk::Widget>=None;
             for id in ids_new {
                 if let Some(widget)=widgets.iter().find(|w|w.widget_name().as_str()==id) {
-                    area.reorder_child_after(*widget,previous.as_ref());
+                    area.reorder_child_after(widget,previous.as_ref());
                     previous=Some(widget.clone());
                 }
             }
@@ -651,8 +651,8 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
             if let Ok(snapshot)=melania_notify_core::read_snapshot(&path) {
                 let unread=snapshot.notifications.iter().filter(|n|n.unread).count() as u32;
                 if unread!=previous_unread {
-                    badge.set_label(if unread == 0 {"".into()}
-                        else {format!("{unread}")});
+                    if unread == 0 { badge.set_label(""); }
+                    else { badge.set_label(&unread.to_string()); }
                     previous_unread=unread;
                 }
             }
