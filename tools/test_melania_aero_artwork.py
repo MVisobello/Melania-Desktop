@@ -30,7 +30,8 @@ class CuratedAeroArtwork(unittest.TestCase):
             self.assertNotEqual(light, dark)
             self.assertIn("#edf8ff", dark)
             self.assertIn("#24557d", light)
-            self.assertNotIn("<rect", light)
+            self.assertIn('<g fill="none"', light)
+            self.assertNotIn('fill="url(#face)"', light)
 
     def test_original_images_remain_fallback(self):
         self.assertIsNone(artwork("firefox", "apps", "light", False))
