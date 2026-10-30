@@ -395,6 +395,19 @@ fn refresh(browser: &Browser) {
     let entries = match model::list_directory(&dir, &query, options) {
         Ok(entries) => entries,
         Err(err) => {
+            // An unreadable directory must never leave previous selections
+            // actionable through Rename, Cut or Trash.
+            browser.visible_paths.borrow_mut().clear();
+            browser.selected_paths.borrow_mut().clear();
+            *browser.selected.borrow_mut() = None;
+            *browser.selection_anchor.borrow_mut() = None;
+            browser.tile_buttons.borrow_mut().clear();
+            browser.preview_heading.set_text("Cartella non accessibile");
+            browser.preview_icon.set_icon_name(Some("dialog-error"));
+            browser.preview_icon.set_visible(true);
+            browser.preview_image.set_visible(false);
+            browser.preview_image.set_filename(None::<&Path>);
+            browser.preview.set_text("Non è possibile leggere il contenuto di questa cartella.");
             browser.empty_view.set_visible(true);
             browser.empty_icon.set_icon_name(Some("dialog-error"));
             browser.empty_title.set_text("Impossibile leggere la cartella");
