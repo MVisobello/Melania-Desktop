@@ -249,6 +249,20 @@ fn build_ui(
                 melania_config::resolved_icon_theme(&preferences));
         }
     });
+    // Keep the visible icon-variant selector synchronized when switching
+    // Light/Dark/Aero, instead of leaving the old Fluent label on screen.
+    let icon_dropdown = icon_variants.clone();
+    let prefs_for_icon_sync = prefs.clone();
+    appearance_picker.connect_selected_notify(move |_| {
+        let index = {
+            let p = prefs_for_icon_sync.borrow();
+            melania_config::ICON_THEMES.iter()
+                .position(|name| *name == p.icon_theme).unwrap_or(0) as u32
+        };
+        if icon_dropdown.selected() != index {
+            icon_dropdown.set_selected(index);
+        }
+    });
     let icon_row = GtkBox::new(Orientation::Horizontal, 16);
     icon_row.add_css_class("settings-card");
     let icon_summary = GtkBox::new(Orientation::Vertical, 4);
