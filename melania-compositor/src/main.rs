@@ -5,8 +5,8 @@
 //! and render client surface trees into a host window using Smithay/winit.
 //!
 //! This is deliberately *not* a display manager / DRM session / full desktop.
-mod window_preview;
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
+mod window_preview;
 
 use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::UnixListener}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
 
