@@ -44,7 +44,7 @@ def paths_from_archive(file:Path)->list[str]:
 
 def validate_name(path:str):
     p=Path(path)
-    if p.is_absolute() or '..' in p.parts or len(p.parts)<2 or p.parts[0] not in CONTEXTS or p.suffix != '.svg':
+    if p.is_absolute() or '..' in p.parts or len(p.parts)<2 or p.parts[0] not in CONTEXTS or p.suffix.lower() != '.svg':
         raise ValueError(f'Invalid freedesktop icon path: {path}')
 
 def size_from_path(path:str)->int:
