@@ -169,7 +169,8 @@ fn build_ui(
     appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
     appearance.append(&section("Pacchetto di icone"));
     let icon_variants = gtk::DropDown::from_strings(&[
-        "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",\n        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
+        "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",
+        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
     ]);
     icon_variants.add_css_class("settings-icon-choice");
     let selected = melania_config::ICON_THEMES.iter()
