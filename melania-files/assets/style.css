@@ -493,7 +493,6 @@ headerbar.files-aero-header windowcontrols button:active {
  */
 .files-empty-state {
   min-width: 190px;
-  max-width: 440px;
   padding: 24px 20px;
   border-spacing: 10px;
 }
@@ -506,7 +505,6 @@ headerbar.files-aero-header windowcontrols button:active {
 .files-empty-description {
   color: #71879e;
   font-size: 12px;
-  line-height: 1.45;
 }
 .files-toolbar .files-nav-button:hover {
   background: #dceeff;
