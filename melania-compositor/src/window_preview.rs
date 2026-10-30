@@ -54,23 +54,25 @@ pub fn capture_window(
         source_width > 16_384 || source_height > 16_384 {
         return Err("Geometria finestra non valida".into());
     }
-    let viewport = (THUMB_W, THUMB_H).into();
+    let buffer_size = (THUMB_W, THUMB_H).into();
+    let physical_size = (THUMB_W, THUMB_H).into();
     let mut offscreen = <GlesRenderer as Offscreen<GlesRenderbuffer>>::create_buffer(
-        renderer, Fourcc::Argb8888, viewport)?;
+        renderer, Fourcc::Argb8888, buffer_size)?;
     let elements = render_elements_from_surface_tree(
         renderer, surface, (0,0), 1.0, 1.0, Kind::Unspecified,
     );
     let mut target = <GlesRenderer as Bind<GlesRenderbuffer>>::bind(renderer, &mut offscreen)?;
     let scale = f64::min(THUMB_W as f64/source_width as f64,
                          THUMB_H as f64/source_height as f64);
-    let damage = Rectangle::from_size(viewport);
+    let damage = Rectangle::from_size(physical_size);
+    let read_region = Rectangle::from_size(buffer_size);
     {
-        let mut frame = renderer.render(&mut target, viewport, Transform::Normal)?;
+        let mut frame = renderer.render(&mut target, physical_size, Transform::Normal)?;
         frame.clear(Color32F::new(0.06,0.13,0.22,1.0), &[damage])?;
         draw_render_elements(&mut frame, scale, &elements, &[damage])?;
         frame.finish()?;
     }
-    let mapping = renderer.copy_framebuffer(&target,damage,Fourcc::Argb8888)?;
+    let mapping = renderer.copy_framebuffer(&target,read_region,Fourcc::Argb8888)?;
     let pixels = renderer.map_texture(&mapping)?;
     let bmp = encode_bmp(THUMB_W as u32,THUMB_H as u32,pixels)
         .map_err(|e|std::io::Error::new(std::io::ErrorKind::InvalidData,e))?;
