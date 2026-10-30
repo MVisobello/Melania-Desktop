@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from melania_shell_symbolic_icons import SIDEBAR, TRAY, artwork
+from melania_shell_symbolic_icons import SIDEBAR, TRAY, WIDGETS, artwork
 
 
 class MelaniaAppearanceAndIconContracts(unittest.TestCase):
@@ -62,6 +62,11 @@ class MelaniaAppearanceAndIconContracts(unittest.TestCase):
                 self.assertNotIn("linearGradient", xml)
         self.assertIn("unique.add(f\"places/{size}/{name}.svg\")", builder)
         self.assertIn("unique.add(f\"status/{size}/{name}.svg\")", builder)
+        for name in WIDGETS:
+            svg = artwork(name, "actions", "light", 24)
+            ET.fromstring(svg)
+            self.assertNotIn("linearGradient", svg)
+        self.assertIn('unique.add(f"actions/{size}/{name}.svg")', builder)
         self.assertNotIn('("⌂  Home", home())', files)
 
     def test_theme_is_used_by_files_and_panel_not_only_settings(self):
