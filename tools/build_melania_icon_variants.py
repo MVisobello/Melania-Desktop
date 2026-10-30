@@ -307,6 +307,7 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                     continue
                 ET.fromstring(img)
                 target.write_text(img, encoding="utf8")
+    main_cats = sorted(CATEGORIES)
     # Light on Dark Panel: application dialogs get dark-on-light symbols,
     # while the dark taskbar inherits bright status glyphs and panel icons.
     for category in main_cats:
