@@ -12,6 +12,17 @@ on:
       - 'scripts/smoke-nested-wayland.sh'
       - 'scripts/smoke-full-desktop-wayland.sh'
       - '.github/workflows/wayland-smoke.yml'
+  pull_request:
+    paths:
+      - 'melania-compositor/**'
+      - 'melania-control/**'
+      - 'melania-shell-model/**'
+      - 'melania-files/**'
+      - 'melania-panel/**'
+      - 'melania-desktop-surface/**'
+      - 'scripts/smoke-nested-wayland.sh'
+      - 'scripts/smoke-full-desktop-wayland.sh'
+      - '.github/workflows/wayland-smoke.yml'
   workflow_dispatch:
 
 permissions:
