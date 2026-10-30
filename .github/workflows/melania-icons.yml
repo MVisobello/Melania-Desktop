@@ -6,6 +6,8 @@ on:
     paths:
       - 'tools/build_melania_icon_variants.py'
       - 'tools/melania_aero_artwork.py'
+      - 'tools/melania_reference_artwork.py'
+      - 'tools/test_melania_reference_artwork.py'
       - 'tools/melania_aero_details.py'
       - 'tools/test_melania_aero_details.py'
       - 'tools/preview_melania_variants.py'
@@ -19,6 +21,8 @@ on:
     paths:
       - 'tools/build_melania_icon_variants.py'
       - 'tools/melania_aero_artwork.py'
+      - 'tools/melania_reference_artwork.py'
+      - 'tools/test_melania_reference_artwork.py'
       - 'tools/test_melania_aero_artwork.py'
       - 'branding/coverage/**'
       - 'branding/Melania-Aero-Classic/**'
@@ -36,6 +40,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Test 30 original screenshot-guided Classic Aero icons
+        run: python3 tools/test_melania_reference_artwork.py
       - name: Test curated Aero vector artwork
         run: python3 tools/test_melania_aero_artwork.py
       - name: Test refined graphics at small and large sizes
