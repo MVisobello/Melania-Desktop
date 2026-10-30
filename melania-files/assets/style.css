@@ -442,3 +442,88 @@ headerbar.files-aero-header {
  * branding/window-chrome-win7.css, shared with Melania Settings.
  * No native GtkHeaderBar windowcontrols are used in this application.
  */
+
+/* New-tab sits after the last opened tab, in the same contiguous rail. */
+.files-tab-rail { border-spacing: 3px; }
+.files-tab-rail .files-new-tab { min-height: 29px; min-width: 29px; margin: 2px 0 2px 3px; }
+.files-sidebar button image { min-width: 19px; min-height: 19px; }
+.files-sidebar button { min-height: 33px; padding: 5px 9px; }
+.files-sidebar-heading { margin-top: 11px; }
+
+/* Light: quiet, flat surfaces with no Aero glass, inspired by GNOME. */
+window.melania-files-window.melania-theme-light { background: #f6f7f9; color: #2a313a; }
+window.melania-theme-light .files-toolbar,
+window.melania-theme-light .files-actions,
+window.melania-theme-light .files-list-header,
+window.melania-theme-light .files-footer {
+  background: #f2f3f5; border-color: #d9dce2; box-shadow: none;
+}
+window.melania-theme-light .files-sidebar { background: #f4f5f7; border-color: #e0e2e6; }
+window.melania-theme-light .files-preview,
+window.melania-theme-light .files-inspector-scroll,
+window.melania-theme-light .files-inspector-scroll > viewport { background: #f6f7f9; }
+window.melania-theme-light .files-grid,
+window.melania-theme-light .files-grid > viewport { background: #fff; }
+window.melania-theme-light .files-top-tab { background: #e8eaee; border-color: #d5d9df; box-shadow: none; }
+window.melania-theme-light .files-top-tab.files-tab-active {
+  background: #fff; border-color: #c5cbd4; box-shadow: inset 0 2px #6198d2;
+}
+window.melania-theme-light .files-actions .files-command { color: #36424e; }
+
+/* Dark: unified GNOME-inspired graphite across all three Files panes. */
+window.melania-files-window.melania-theme-dark { background: #202329; color: #e5e8ed; }
+window.melania-theme-dark .files-toolbar,
+window.melania-theme-dark .files-actions,
+window.melania-theme-dark .files-list-header,
+window.melania-theme-dark .files-footer {
+  background: #292d34; color: #e4eaf0; border-color: #3d454f; box-shadow: none;
+}
+window.melania-theme-dark .files-sidebar {
+  background: #252930; border-right-color: #3a424b;
+}
+window.melania-theme-dark .files-sidebar button { color: #d5dee8; }
+window.melania-theme-dark .files-sidebar button:hover { background: #374454; }
+window.melania-theme-dark .files-sidebar-heading,
+window.melania-theme-dark .files-list-heading-label,
+window.melania-theme-dark .files-list-meta,
+window.melania-theme-dark .files-info { color: #abb8c7; }
+window.melania-theme-dark .files-grid,
+window.melania-theme-dark .files-grid > viewport { background: #202329; }
+window.melania-theme-dark .files-list-header .files-list-sort,
+window.melania-theme-dark .files-list-name,
+window.melania-theme-dark .files-name,
+window.melania-theme-dark .files-title,
+window.melania-theme-dark .files-preview-heading,
+window.melania-theme-dark .files-preview .files-title { color: #e4eaf1; }
+window.melania-theme-dark .files-list-view flowboxchild:nth-child(even) .files-list-row {
+  background: #262b32;
+}
+window.melania-theme-dark .files-list-view .files-list-row:hover,
+window.melania-theme-dark .files-tile:hover { background: #35475a; border-color: #557b9d; }
+window.melania-theme-dark .files-preview,
+window.melania-theme-dark .files-inspector-scroll,
+window.melania-theme-dark .files-inspector-scroll > viewport {
+  background: #292e36; border-color: #3b4450;
+}
+window.melania-theme-dark .files-toolbar entry,
+window.melania-theme-dark .files-toolbar button,
+window.melania-theme-dark .files-actions entry,
+window.melania-theme-dark .files-actions dropdown,
+window.melania-theme-dark .files-command-menu {
+  background: #353b45; color: #eff3f8; border-color: #526070;
+}
+window.melania-theme-dark .files-actions .files-command { color: #e0e9f3; }
+window.melania-theme-dark .files-actions .files-command:hover { background: #414d5d; }
+window.melania-theme-dark .files-top-tab {
+  background: #3b444f; border-color: #53606d; box-shadow: none;
+}
+window.melania-theme-dark .files-top-tab.files-tab-active {
+  background: #292e36; border-color: #6d90b1; box-shadow: inset 0 2px #79b6f1;
+}
+window.melania-theme-dark .files-top-tab-select,
+window.melania-theme-dark .files-new-tab { color: #e7eff9; }
+window.melania-theme-dark .files-new-tab,
+window.melania-theme-dark .files-nav-button { background: #394552; border-color: #5b6b79; color: #ecf4ff; }
+window.melania-theme-dark .files-list-view .files-list-row.files-tile-selected {
+  background: #304d6c; border-color: #76afe2;
+}
