@@ -22,7 +22,10 @@ pub fn group_windows(windows: &[WindowInfo], enabled: bool) -> Vec<WindowGroup> 
     let mut indices: HashMap<String, usize> = HashMap::new();
     for window in windows {
         let app = window.app_id.trim();
-        let key = if enabled && !app.is_empty() {
+        // Multiple Melania Files *windows* always share one folder icon,
+        // independent of the optional grouping preference for other apps.
+        let melania_files = app.eq_ignore_ascii_case("org.melaniadesktop.Files");
+        let key = if (enabled || melania_files) && !app.is_empty() {
             format!("app:{}", app.to_lowercase())
         } else {
             format!("window:{}", window.id)
@@ -70,6 +73,17 @@ mod tests {
         let groups=group_windows(&[w(1,"",false,true),w(2," ",false,true)],true);
         assert_eq!(groups.len(),2);
         assert!(groups.iter().all(WindowGroup::all_minimized));
+    }
+    #[test]
+    fn files_always_group_even_with_classic_window_setting() {
+        let groups=group_windows(&[
+            w(1,"org.melaniadesktop.Files",false,false),
+            w(2,"org.melaniadesktop.Files",true,false),
+            w(3,"org.melaniadesktop.Settings",false,false),
+        ], false);
+        assert_eq!(groups.len(),2);
+        assert_eq!(groups[0].windows.len(),2);
+        assert_eq!(groups[1].windows.len(),1);
     }
     #[test]
     fn empty_input_is_empty() {
