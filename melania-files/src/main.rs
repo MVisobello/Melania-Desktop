@@ -779,7 +779,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let images_toggle = CheckButton::with_label("Foto");
     images_toggle.set_tooltip_text(Some("Mostra solo immagini e cartelle"));
 
-    let sort = gtk::DropDown::from_strings(&["Nome", "Data", "Dimensione"]);
+    let sort = gtk::DropDown::from_strings(&["Nome", "Data", "Dimensione", "Tipo"]);
     sort.set_tooltip_text(Some("Ordina elementi, mantenendo le cartelle all'inizio"));
 
     let recursive_search_button = Button::with_label("Cerca nelle sottocartelle…");
@@ -902,10 +902,32 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     tiles.add_css_class("files-list-view");
     let list_header = GtkBox::new(Orientation::Horizontal, 9);
     list_header.add_css_class("files-list-header");
-    list_header.append(&list_heading_label("Nome", 0, true));
-    list_header.append(&list_heading_label("Dimensione", 84, false));
-    list_header.append(&list_heading_label("Tipo", 124, false));
-    list_header.append(&list_heading_label("Ultima modifica", 132, false));
+    // Column headers are functional sort controls, not decorative labels.
+    // A second click reverses the selected ordering. Folder-first is retained.
+    for (caption, sort_index, width, expand) in [
+        ("Nome", 0, 0, true),
+        ("Dimensione", 2, 84, false),
+        ("Tipo", 3, 124, false),
+        ("Ultima modifica", 1, 132, false),
+    ] {
+        let control=Button::new();
+        control.add_css_class("files-list-sort");
+        control.set_tooltip_text(Some("Ordina per questa colonna; premi di nuovo per invertire"));
+        control.set_hexpand(expand);
+        let heading = list_heading_label(caption,width,expand);
+        control.set_child(Some(&heading));
+        let picker = sort.clone();
+        let reverse_button = reverse.clone();
+        control.connect_clicked(move |_| {
+            if picker.selected() == sort_index {
+                reverse_button.set_active(!reverse_button.is_active());
+            } else {
+                reverse_button.set_active(false);
+                picker.set_selected(sort_index);
+            }
+        });
+        list_header.append(&control);
+    }
     let center_panel = GtkBox::new(Orientation::Vertical, 0);
     center_panel.set_hexpand(true);
     center_panel.set_vexpand(true);
