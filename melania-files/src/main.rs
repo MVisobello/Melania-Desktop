@@ -1325,6 +1325,16 @@ fn build_ui(app: &Application) {
     }
     let window = ApplicationWindow::builder().application(app)
         .title("Melania Files").default_width(1160).default_height(720).build();
+    window.add_css_class("melania-files-window");
+    // Match the Aero treatment of Settings while keeping native window controls.
+    let aero_header = gtk::HeaderBar::new();
+    aero_header.add_css_class("files-aero-header");
+    aero_header.set_show_title_buttons(true);
+    aero_header.set_decoration_layout(Some(":minimize,maximize,close"));
+    let aero_title = Label::new(Some("Melania Files"));
+    aero_title.add_css_class("title");
+    aero_header.set_title_widget(Some(&aero_title));
+    window.set_titlebar(Some(&aero_header));
     let frame = GtkBox::new(Orientation::Vertical, 0);
     // Native GTK notebook: contiguous, reorderable tabs with embedded close
     // controls, scroll arrows and a + button attached to the tab header.
