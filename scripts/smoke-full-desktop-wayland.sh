@@ -25,7 +25,9 @@ cleanup(){
   rm -rf "$TEMP"
 }
 trap cleanup EXIT
-target/debug/melania-compositor \
+# In this isolated test only, reveal Start before taking the true compositor
+# screenshot so its icon sizes and real layout can be visually reviewed.
+MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
@@ -115,7 +117,13 @@ assert unique > 8, f'rendering seems blank, distinct colors: {unique}'
 # A colorful wallpaper is not enough: a large bright GTK window must be visible.
 bright = sum(1 for r,g,b in sample.getdata() if min(r,g,b) > 185)
 assert bright > 300, f'GTK windows are hidden or not drawn (bright samples={bright})'
-print(f'PASS: real Xvfb rendering {im.size}, {unique} colors, {bright} bright window samples')
+# The menu is intentionally opened in CI. Its top edge must not be clipped
+# against the screen while the list scrolls inside the constrained popup.
+top=im.getpixel((20,20))
+menu=im.getpixel((20,500))
+difference=sum(abs(x-y) for x,y in zip(top,menu))
+assert difference > 25, f'Start menu covers the top of the display; must scroll apps internally ({top=}, {menu=})'
+print(f'PASS: real Xvfb rendering {im.size}, {unique} colors, {bright} bright window samples, Start top clearance {difference}')
 PY
   # Both the foreground Settings window and background Files window must
   # display identical Win7 controls in the actual composited screenshot.

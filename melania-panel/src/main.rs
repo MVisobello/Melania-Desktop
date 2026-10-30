@@ -70,7 +70,8 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     button.add_css_class(class);
     let row = GtkBox::new(Orientation::Horizontal, 10);
     let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(21);
+    icon.set_pixel_size(if class == "melania-shortcut" { 29 } else { 34 });
+    icon.add_css_class("melania-menu-app-icon");
     row.append(&icon);
     let caption = label(text, "melania-row-text");
     caption.set_hexpand(true);
@@ -80,37 +81,55 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
 }
 
 fn start_window(app:&Application)->ApplicationWindow {
-    // Inspired by the approved Windows-7-like Melania concept: search, icon
-    // list, quick locations and a compact account/session footer.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],392,480,8,"melania-start",0);
+    // GNOME-inspired clarity with an original Melania identity: generous
+    // application targets, one search field, a calm quick-access section.
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],566,590,8,"melania-start",0);
     // Position 8 px from left, exactly above the 52 px taskbar with 8 px gap.
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,60);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
-    let root=GtkBox::new(Orientation::Vertical,9);
+    let root=GtkBox::new(Orientation::Vertical,12);
     root.add_css_class("melania-panel");
     root.add_css_class("melania-start-panel");
+    let heading = GtkBox::new(Orientation::Horizontal,12);
+    heading.add_css_class("melania-start-heading");
+    let brand_icon = Image::from_icon_name("melania");
+    brand_icon.set_pixel_size(37);
+    brand_icon.add_css_class("melania-start-heading-logo");
+    heading.append(&brand_icon);
+    let heading_copy = GtkBox::new(Orientation::Vertical,2);
+    heading_copy.append(&label("Applicazioni", "melania-start-title"));
+    heading_copy.append(&label("Il tuo spazio Melania", "melania-start-subtitle"));
+    heading_copy.set_hexpand(true);
+    heading.append(&heading_copy);
+    root.append(&heading);
     if melania_config::load().unwrap_or_default().high_contrast {
         root.add_css_class("high-contrast");
     }
-    let query=Entry::builder().placeholder_text("Cerca applicazioni, cartelle, impostazioni...").build();
+    let query=Entry::builder().placeholder_text("Cerca app, file o impostazioni…").build();
     query.add_css_class("melania-entry");
     root.append(&query);
-    let columns=GtkBox::new(Orientation::Horizontal,10);
+    let columns=GtkBox::new(Orientation::Horizontal,15);
     columns.add_css_class("melania-start-columns");
-    let left=GtkBox::new(Orientation::Vertical,5);
+    let left=GtkBox::new(Orientation::Vertical,8);
     left.set_hexpand(true);
-    left.append(&label("PROGRAMMI", "melania-section-label"));
+    left.append(&label("TUTTE LE APPLICAZIONI", "melania-section-label"));
     let scroll=gtk::ScrolledWindow::new();
-    scroll.set_vexpand(true); scroll.set_hexpand(true);
+    // Do not set vexpand: it overrides the content-height cap and stretches
+    // the shell layer all the way to the top edge on smaller displays.
+    scroll.set_vexpand(false);
+    scroll.set_hexpand(true);
     scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
-    let apps_box=GtkBox::new(Orientation::Vertical,3);
+    scroll.set_propagate_natural_height(true);
+    scroll.set_min_content_height(220);
+    scroll.set_max_content_height(302);
+    let apps_box=GtkBox::new(Orientation::Vertical,4);
     apps_box.add_css_class("melania-start-apps");
     // Search-only results remain hidden in the normal classic app list.
     let mut searchable:Vec<(Button,String,bool)>=Vec::new();
     for (name,program,icon) in [
         ("Melania Files", "melania-files", "org.melaniadesktop.Files"),
-        ("Impostazioni", "melania-settings", "preferences-system"),
+        ("Impostazioni", "melania-settings", "org.melaniadesktop.Settings"),
     ] {
         let button=icon_row(name,icon,"melania-action");
         let menu=w.clone();
@@ -123,10 +142,11 @@ fn start_window(app:&Application)->ApplicationWindow {
     for app_info in apps {
         let name=app_info.name().to_string();
         let button=Button::new();button.add_css_class("melania-action");
-        let row=GtkBox::new(Orientation::Horizontal,10);
+        let row=GtkBox::new(Orientation::Horizontal,12);
         let icon=app_info.icon().map(|i|Image::from_gicon(&i))
             .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
-        icon.set_pixel_size(22);
+        icon.set_pixel_size(34);
+        icon.add_css_class("melania-menu-app-icon");
         row.append(&icon);
         let caption=label(&name,"melania-row-text");caption.set_hexpand(true);row.append(&caption);
         button.set_child(Some(&row));
@@ -208,9 +228,10 @@ fn start_window(app:&Application)->ApplicationWindow {
     });
     scroll.set_child(Some(&apps_box));left.append(&scroll);
     columns.append(&left);
-    let right=GtkBox::new(Orientation::Vertical,5);
+    let right=GtkBox::new(Orientation::Vertical,7);
+    right.set_valign(gtk::Align::Start);
     right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(160,-1);
+    right.set_size_request(175,-1);
     right.append(&label("ACCESSI RAPIDI","melania-section-label"));
     let shortcuts = [
         ("Home", "HOME", "user-home"),
@@ -228,17 +249,25 @@ fn start_window(app:&Application)->ApplicationWindow {
         });
         right.append(&button);
     }
-    right.append(&gtk::Separator::new(Orientation::Horizontal));
-    right.append(&label("SISTEMA", "melania-section-label"));
-    let computer=icon_row("Computer","computer","melania-shortcut");
-    computer.connect_clicked(|_|run("melania-files"));right.append(&computer);
-    let settings=icon_row("Impostazioni","preferences-system","melania-shortcut");
-    settings.connect_clicked(|_|run("melania-settings"));right.append(&settings);
-    columns.append(&right);root.append(&columns);
-    let footer=GtkBox::new(Orientation::Horizontal,8);
+    // Files and Settings already have larger launchers in the application
+    // list. Duplicating them here made a redundant, half-clipped section.
+    // Keep all four useful folders completely visible in this sidebar.
+    columns.append(&right);
+    // Limit the ENTIRE two-column menu, not only the left application list.
+    // Otherwise the quick-access column forces the whole popup to 760px.
+    let body_scroll = gtk::ScrolledWindow::new();
+    body_scroll.add_css_class("melania-start-body-scroll");
+    body_scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
+    body_scroll.set_propagate_natural_height(true);
+    body_scroll.set_vexpand(false);
+    body_scroll.set_min_content_height(280);
+    body_scroll.set_max_content_height(350);
+    body_scroll.set_child(Some(&columns));
+    root.append(&body_scroll);
+    let footer=GtkBox::new(Orientation::Horizontal,10);
     footer.add_css_class("melania-start-footer");
-    let logo=Image::from_icon_name("melania");logo.set_pixel_size(26);footer.append(&logo);
-    let user=label("Melania Desktop", "melania-row-text");
+    let logo=Image::from_icon_name("melania");logo.set_pixel_size(31);footer.append(&logo);
+    let user=label("Melania Desktop", "melania-start-footer-name");
     user.set_hexpand(true);footer.append(&user);
     // Never power down the host from a nested compositor preview.
     let exit=Button::with_label("Esci da Melania");
@@ -874,11 +903,22 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let status=Button::new();status.add_css_class("melania-system");
     status.add_css_class("melania-tray-button");
     status.set_tooltip_text(Some("Rete, Bluetooth, audio e alimentazione"));
-    let status_row=GtkBox::new(Orientation::Horizontal,8);
-    for icon_name in ["network-wireless-signal-excellent-symbolic",
-        "bluetooth-active-symbolic", "audio-volume-high-symbolic", "battery-good-symbolic"] {
-        let icon=Image::from_icon_name(icon_name);
-        icon.set_pixel_size(18);
+    let status_row=GtkBox::new(Orientation::Horizontal,9);
+    status_row.add_css_class("melania-status-icons");
+    let light_tray=melania_config::load().unwrap_or_default().appearance_theme()=="light";
+    for (icon_name, icon_class) in [
+        ("melania-tray-wifi", "melania-status-wifi"),
+        ("melania-tray-bluetooth", "melania-status-bluetooth"),
+        ("melania-tray-volume", "melania-status-volume"),
+        ("melania-tray-battery", "melania-status-battery"),
+    ] {
+        // These are real SVG images, not GTK -symbolic masks; the latter
+        // flattened the Bluetooth rune into an opaque circle.
+        let asset=if light_tray { format!("{icon_name}-light") } else { icon_name.to_string() };
+        let icon=Image::from_icon_name(&asset);
+        icon.set_pixel_size(22);
+        icon.add_css_class("melania-tray-symbol");
+        icon.add_css_class(icon_class);
         status_row.append(&icon);
     }
     status.set_child(Some(&status_row));
@@ -888,8 +928,10 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notification_button.set_tooltip_text(Some("Centro notifiche"));
     notification_button.add_css_class("melania-tray-button");
     let notification_row=GtkBox::new(Orientation::Horizontal,4);
-    let notice_icon=Image::from_icon_name("preferences-system-notifications-symbolic");
-    notice_icon.set_pixel_size(18);
+    let notification_asset=if light_tray { "melania-tray-notifications-light" } else { "melania-tray-notifications" };
+    let notice_icon=Image::from_icon_name(notification_asset);
+    notice_icon.set_pixel_size(22);
+    notice_icon.add_css_class("melania-tray-symbol");
     notification_row.append(&notice_icon);
     let badge=Label::new(None);badge.add_css_class("melania-notice-count");
     notification_row.append(&badge);
@@ -948,6 +990,11 @@ fn build(app:&Application){
     let calendar=calendar_window(app);
     // Do not present popup windows until the user clicks.
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);bar.present();
+    // CI-only: show the *real* launcher in the nested compositor screenshot.
+    // Never open Start automatically in a normal user session.
+    if std::env::var_os("MELANIA_SMOKE_OPEN_START").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        start.present();
+    }
 }
 
 /// Prefer Melania's freedesktop icon theme inside Melania applications.
