@@ -455,6 +455,7 @@ fn build_ui(
     });
     // Ctrl+B toggles the sidebar without relying on tiny window buttons.
     let shortcuts = gtk::ShortcutController::new();
+    shortcuts.set_scope(gtk::ShortcutScope::Managed);
     let side_for_shortcut = sidebar_revealer.clone();
     let shortcut_action = gtk::CallbackAction::new(move |_, _| {
         side_for_shortcut.set_reveal_child(!side_for_shortcut.reveals_child());
