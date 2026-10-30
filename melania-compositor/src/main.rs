@@ -647,26 +647,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                             // Avoid overriding a client's Ctrl+Tab or AltGr
                             // input; only explicitly reserved combinations.
                             if modifiers.alt && !modifiers.ctrl && !modifiers.logo &&
-                                (symbol == keysyms::KEY_Tab || symbol == keysyms::KEY_ISO_Left_Tab) {
+                                (symbol == keysyms::KEY_Tab.into() || symbol == keysyms::KEY_ISO_Left_Tab.into()) {
                                 if pressed {
                                     data.cycle_visible_window(modifiers.shift ||
-                                        symbol == keysyms::KEY_ISO_Left_Tab);
+                                        symbol == keysyms::KEY_ISO_Left_Tab.into());
                                 }
                                 return FilterResult::Intercept(());
                             }
                             if modifiers.ctrl && modifiers.alt && !modifiers.logo &&
-                                (symbol == keysyms::KEY_Left || symbol == keysyms::KEY_Right) {
+                                (symbol == keysyms::KEY_Left.into() || symbol == keysyms::KEY_Right.into()) {
                                 if pressed {
                                     if let Some(next) = adjacent_workspace(
                                         data.workspaces.current(), data.workspaces.count(),
-                                        symbol == keysyms::KEY_Left) {
+                                        symbol == keysyms::KEY_Left.into()) {
                                         let _ = data.switch_workspace(next);
                                     }
                                 }
                                 return FilterResult::Intercept(());
                             }
                             if modifiers.logo && !modifiers.ctrl && !modifiers.alt &&
-                                (symbol == keysyms::KEY_e || symbol == keysyms::KEY_E) {
+                                (symbol == keysyms::KEY_e.into() || symbol == keysyms::KEY_E.into()) {
                                 if pressed {open_files = true;}
                                 return FilterResult::Intercept(());
                             }
