@@ -8,7 +8,7 @@ use smithay::{
         renderer::{
             Bind, Color32F, ExportMem, Frame, Offscreen, Renderer,
             gles::{GlesRenderer, GlesRenderbuffer},
-            element::{surface::render_elements_from_surface_tree, Kind},
+            element::{surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement}, Kind},
             utils::draw_render_elements,
         },
     },
@@ -58,7 +58,7 @@ pub fn capture_window(
     let physical_size = (THUMB_W, THUMB_H).into();
     let mut offscreen = <GlesRenderer as Offscreen<GlesRenderbuffer>>::create_buffer(
         renderer, Fourcc::Argb8888, buffer_size)?;
-    let elements = render_elements_from_surface_tree(
+    let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
         renderer, surface, (0,0), 1.0, 1.0, Kind::Unspecified,
     );
     let mut target = <GlesRenderer as Bind<GlesRenderbuffer>>::bind(renderer, &mut offscreen)?;
