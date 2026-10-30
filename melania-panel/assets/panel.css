@@ -278,3 +278,56 @@ window { background: transparent; color: #f4f8ff; }
   background: rgba(63,152,230,0.32);
   border-left-color: #88d5ff;
 }
+
+/* Icon-only Aero taskbar: no application titles, no extra close buttons.
+ * Open Files windows replace their pinned launcher and share one icon. */
+.melania-bar .melania-icon-only,
+.melania-bar .melania-window-group,
+.melania-bar .melania-window {
+  min-width: 44px;
+  max-width: 49px;
+  min-height: 39px;
+  padding: 3px 5px;
+  border-radius: 9px;
+  background: linear-gradient(to bottom,
+    rgba(236,249,255,0.12),rgba(37,109,184,0.13));
+  border: 1px solid rgba(184,224,253,0.19);
+}
+.melania-bar .melania-icon-only:hover {
+  background: rgba(81,164,237,0.31);
+}
+.melania-bar .melania-window-active,
+.melania-bar .melania-window-group.melania-window-active {
+  background: rgba(43,131,224,0.33);
+  border: 1px solid rgba(152,214,255,0.46);
+  border-bottom: 2px solid #6ec1ff;
+}
+.melania-running { margin-left: 2px; }
+.melania-icon-count {
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #137fe9;
+  padding: 0px 3px;
+  border: 1px solid #8dcaff;
+}
+.melania-window-preview {
+  min-height: 58px;
+  border-radius: 9px;
+  padding: 5px;
+  background: rgba(129,190,241,0.10);
+  border: 1px solid rgba(154,212,252,0.16);
+}
+.melania-preview-icon {
+  margin: 0 9px 0 4px;
+}
+.melania-group-popover .melania-group-list {
+  min-width: 300px;
+  padding: 10px;
+}
+.melania-group-popover .melania-action {
+  color: #f2fbff;
+  min-height: 45px;
+  padding: 4px 8px;
+}
