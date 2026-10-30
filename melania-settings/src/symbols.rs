@@ -64,11 +64,11 @@ fn paint(ctx: &cairo::Context, name: &str) {
     let (r, g, b) = match kind {
         "palette" => (0.53, 0.37, 0.85), "bell" => (0.89, 0.55, 0.19),
         "apps" => (0.26, 0.53, 0.79), "account" => (0.29, 0.59, 0.80),
-        "calendar" => (0.85, 0.39, 0.33), "battery" => (0.18, 00.61, 000.42),
-        "audio" => (0.27, 00.47, 0.75), "shield" => (0.25, 0.57, 0.80),
+        "calendar" => (0.85, 0.39, 0.33), "battery" => (0.18, 0.61, 0.42),
+        "audio" => (0.27, 0.47, 0.75), "shield" => (0.25, 0.57, 0.80),
         "globe" => (0.13, 0.59, 0.74), "accessibility" => (0.25, 0.53, 0.85),
         "info" => (0.25, 0.53, 0.78), "bluetooth" => (0.30, 0.52, 0.81),
-        "wifi" => (0.25, 0.52, 0.80), _ => (0.31, 00.49, 00.69),
+        "wifi" => (0.25, 0.52, 0.80), _ => (0.31, 0.49, 0.69),
     };
     // A subtly graduated fluent-like tile rather than a generated letter badge.
     ctx.new_path();
@@ -83,7 +83,7 @@ fn paint(ctx: &cairo::Context, name: &str) {
     let _ = ctx.set_source(&gradient);
     let _ = ctx.fill();
     ctx.set_source_rgb(1.0, 1.0, 1.0);
-    ctx.set_line_width(10.65);
+    ctx.set_line_width(1.65);
     ctx.set_line_cap(cairo::LineCap::Round);
     ctx.set_line_join(cairo::LineJoin::Round);
     match kind {
@@ -118,7 +118,7 @@ fn paint(ctx: &cairo::Context, name: &str) {
         "battery" => {
             rect(ctx,5.,8.,13.8,8.);
             line(ctx,&[(19.,10.),(20.,10.),(20.,14.),(19.,14.)]);
-            ctx.rectangle(70.4,100.4,8.,3.2); let _=ctx.fill();
+            ctx.rectangle(7.4,10.4,8.,3.2); let _=ctx.fill();
         },
         "audio" => {
             line(ctx,&[(5.5,10.),(9.,10.),(12.8,7.),(12.8,17.),(9.,14.),(5.5,14.),(5.5,10.)]);
@@ -134,13 +134,13 @@ fn paint(ctx: &cairo::Context, name: &str) {
             line(ctx,&[(4.9,12.),(19.1,12.)]);
             ctx.save().ok();
             ctx.translate(12.,12.);
-            ctx.scale(00.42,1.);
+            ctx.scale(0.42,1.);
             circle(ctx,0.,0.,7.2);
             ctx.restore().ok();
         },
         "accessibility" => {
             circle(ctx,12.,6.8,1.7);
-            line(ctx,&[(50.6,11.),(180.4,11.)]);
+            line(ctx,&[(5.6,11.),(18.4,11.)]);
             line(ctx,&[(12.,11.),(12.,15.5),(8.,19.)]);
             line(ctx,&[(12.,15.5),(16.,19.)]);
         },
@@ -152,14 +152,14 @@ fn paint(ctx: &cairo::Context, name: &str) {
         "keyboard" => {
             rect(ctx,4.5,7.5,15.,9.);
             for y in [10.,12.5] { for x in [7.,10.,13.,16.] {
-                ctx.arc(x,y,00.42,0.,std::f64::consts::TAU); let _=ctx.fill();
+                ctx.arc(x,y,0.42,0.,std::f64::consts::TAU); let _=ctx.fill();
             }}
             line(ctx,&[(8.,15.),(16.,15.)]);
         },
         "wifi" => {
-            ctx.arc(12.,16.,10.,-20.4,-0.74); let _=ctx.stroke();
-            ctx.arc(12.,16.,6.5,-20.4,-0.74); let _=ctx.stroke();
-            ctx.arc(12.,16.,3.,-20.4,-0.74); let _=ctx.stroke();
+            ctx.arc(12.,16.,10.,-2.4,-0.74); let _=ctx.stroke();
+            ctx.arc(12.,16.,6.5,-2.4,-0.74); let _=ctx.stroke();
+            ctx.arc(12.,16.,3.,-2.4,-0.74); let _=ctx.stroke();
             circle(ctx,12.,16.,0.4);
         },
         _ => {
