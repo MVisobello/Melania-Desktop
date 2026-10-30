@@ -503,7 +503,7 @@ fn refresh(browser: &Browser) {
             drop(selection);
             if count > 1 {
                 state.preview_heading.set_text(&format!("{count} elementi selezionati"));
-                state.preview_icon.set_from_icon_name(Some("folder-multiple-symbolic"));
+                state.preview_icon.set_icon_name(Some("folder-multiple-symbolic"));
                 state.preview_icon.set_visible(true);
                 state.preview.set_text(&format!("{count} elementi selezionati · Ctrl+C/Ctrl+X, Canc o trascina per copiarli."));
                 state.preview_image.set_visible(false);
@@ -530,7 +530,7 @@ fn refresh(browser: &Browser) {
             let excerpt = if excerpt.is_empty() { String::new() }
                 else { format!("\n\nANTEPRIMA TESTO\n{excerpt}") };
             state.preview_heading.set_text(&name);
-            state.preview_icon.set_from_icon_name(Some(entry_icon(&selected_path, folder)));
+            state.preview_icon.set_icon_name(Some(entry_icon(&selected_path, folder)));
             state.preview_icon.set_visible(!is_picture(&selected_path));
             state.preview.set_text(&format!("Tipo: {}\nDimensione: {}\nPosizione: {}{}",
                 if folder {"Cartella"} else {"File"}, size, selected_path.parent().unwrap_or(&selected_path).display(), excerpt));
@@ -630,7 +630,7 @@ fn refresh(browser: &Browser) {
     }
     if browser.selected_paths.borrow().is_empty() {
         browser.preview_heading.set_text(&caption);
-        browser.preview_icon.set_from_icon_name(Some("folder"));
+        browser.preview_icon.set_icon_name(Some("folder"));
         browser.preview_icon.set_visible(true);
         browser.preview_image.set_visible(false);
         browser.preview_image.set_filename(None::<&Path>);
