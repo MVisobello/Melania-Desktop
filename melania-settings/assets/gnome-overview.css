@@ -1,0 +1,28 @@
+/* Additional GNOME-style system overview rows on top of the existing Melania Settings theme. */
+.settings-page-heading { margin: 0 0 13px; border-spacing: 15px; }
+.settings-page-icon { margin: 2px 8px 2px 0; }
+.settings-group-label { margin: 15px 2px 4px; color: #576c85; font-size: 13px; font-weight: 700; }
+button.settings-linked-row, .settings-info-row {
+  background: #ffffff; color: #283c52;
+  border: 1px solid #dfe6ef; border-radius: 12px;
+  min-height: 69px; padding: 12px 17px;
+  box-shadow: 0 1px 2px rgba(21,47,74,.05);
+  border-spacing: 14px;
+}
+button.settings-linked-row:hover { background: #f2f8ff; border-color: #b5d4f3; }
+button.settings-linked-row:focus-visible { outline: 2px solid #2389eb; outline-offset: 1px; }
+.settings-row-icon { min-width: 25px; }
+.settings-row-title { font-size: 14px; font-weight: 650; }
+.settings-row-description { font-size: 11px; color: #72849a; }
+.settings-chevron { color: #6783a0; }
+.settings-root.settings-dark .settings-info-row,
+.settings-root.settings-dark button.settings-linked-row {
+  background: #26394b; border-color: #496078; color: #ecf6ff; box-shadow: none;
+}
+.settings-root.settings-dark button.settings-linked-row:hover { background: #2f4b65; }
+.settings-root.settings-dark .settings-group-label { color: #c6d7e8; }
+.settings-root.settings-dark .settings-row-description { color: #a7bfd3; }
+.settings-root.high-contrast .settings-info-row,
+.settings-root.high-contrast button.settings-linked-row {
+  background: #ffffff; color: #091d32; border: 2px solid #1b4267;
+}
