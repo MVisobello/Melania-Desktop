@@ -6,6 +6,9 @@ on:
     paths:
       - 'tools/build_melania_icon_variants.py'
       - 'tools/melania_aero_artwork.py'
+      - 'tools/melania_aero_details.py'
+      - 'tools/test_melania_aero_details.py'
+      - 'tools/preview_melania_variants.py'
       - 'tools/test_melania_aero_artwork.py'
       - 'tools/audit_melania_icon_variants.py'
       - 'branding/coverage/**'
@@ -35,6 +38,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test curated Aero vector artwork
         run: python3 tools/test_melania_aero_artwork.py
+      - name: Test refined graphics at small and large sizes
+        run: python3 tools/test_melania_aero_details.py
       - name: Build all three original icon variants
         run: |
           set -euo pipefail
@@ -51,6 +56,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/audit_melania_icon_variants.py --output dist/melania-icon-themes --report dist/melania-icon-audit.json
+      - name: Render QA sheet from the actual installed SVG artwork
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/melania-icons-venv"
+          "${RUNNER_TEMP}/melania-icons-venv/bin/pip" install -q pillow cairosvg
+          "${RUNNER_TEMP}/melania-icons-venv/bin/python" tools/preview_melania_variants.py --output dist/melania-icon-themes --png dist/Melania-Aero-Visual-QA.png
       - name: Verify isolated user-local installation
         env:
           XDG_DATA_HOME: ${{ runner.temp }}/melania-icons-isolated
@@ -74,4 +85,5 @@ jobs:
           path: |
             dist/Melania-Aero-Complete.tar.xz
             dist/melania-icon-audit.json
+            dist/Melania-Aero-Visual-QA.png
           if-no-files-found: error
