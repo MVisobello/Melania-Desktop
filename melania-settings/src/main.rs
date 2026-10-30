@@ -111,6 +111,15 @@ fn build_ui(
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
+    // Settings-specific GNOME layout over legacy Aero styles.
+    let gnome_css = gtk::CssProvider::new();
+    gnome_css.load_from_data(include_str!("../assets/gnome.css"));
+    let chrome_css = gtk::CssProvider::new();
+    chrome_css.load_from_data(include_str!("../../branding/window-chrome-win7.css"));
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(&display, &gnome_css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+        gtk::style_context_add_provider_for_display(&display, &chrome_css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+    }
     let window = ApplicationWindow::builder().application(app).title("Melania — Impostazioni")
         .default_width(1010).default_height(690).build();
     window.add_css_class("melania-settings-window");
@@ -407,11 +416,11 @@ fn setup_melania_icon_theme() {
     }
 }
 
-const SETTINGS_PAGES: [&str; 21] = [
+const SETTINGS_PAGES: [&str; 20] = [
     "system", "network", "bluetooth", "appearance", "notifications", "applications",
     "account", "datetime", "power", "audio", "devices", "privacy", "region",
     "accessibility", "about", "desktop", "workspaces", "shortcuts",
-    "display", "storage", "shortcuts"
+    "display", "storage"
 ];
 fn is_valid_page(page: &str) -> bool { SETTINGS_PAGES.contains(&page) }
 
