@@ -155,6 +155,17 @@ def generated_svg(name: str, category: str, variant: str) -> str:
                 f'<g fill="none" stroke="{fg}" stroke-width="5" '
                 f'stroke-linecap="round" stroke-linejoin="round">{GLYPHS[key]}</g></svg>')
     glyph = GLYPHS[key]
+    if category == "actions":
+        # Compact GTK toolbar glyphs must stay legible at 16/22 px without
+        # a square tile behind each action. Different contrast per variant.
+        ink = "#edf8ff" if variant == "dark-action" else "#194c7c"
+        accent = "#5ac4ff" if variant == "dark-action" else "#1887da"
+        return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">'
+                f'<defs><linearGradient id="ink" x2="1" y2="1">'
+                f'<stop stop-color="{accent}"/><stop offset="1" stop-color="{ink}"/>'
+                f'</linearGradient></defs>'
+                f'<g fill="none" stroke="url(#ink)" stroke-width="5.5" '
+                f'stroke-linecap="round" stroke-linejoin="round">{glyph}</g></svg>')
     # Glass treatment and highlights follow the original Melania Aero palette.
     badge = ""
     if key == "application":
@@ -272,9 +283,9 @@ def verify(destination: Path, dark_paths: list[str], light_paths: list[str]):
         cfg.read(folder/"index.theme",encoding="utf8")
         assert cfg["Icon Theme"]["Name"].startswith("Melania ")
     for theme in ("Melania-Dark","Melania-Light","Melania-Light-on-Dark-Panel"):
-        for essential in ("folder","user-home","user-trash","computer"):
-            assert any((destination/theme/f"places/{d}/{essential}.svg").is_file()
-                       for d in ("scalable","symbolic")), essential
+        for essential in ("folder","user-home","user-trash"):
+            assert (destination/theme/f"places/scalable/{essential}.svg").is_file(),(theme,essential)
+        assert (destination/theme/"apps/scalable/computer.svg").is_file(), theme
 
 def main():
     ap=argparse.ArgumentParser()
