@@ -153,13 +153,13 @@ pub fn request_preview(socket: &Path, id: u64) -> Result<std::path::PathBuf, Con
     if bytes.len()>2048 {return Err(ControlError::Protocol("Anteprima IPC troppo grande"));}
     let reply=std::str::from_utf8(&bytes).map_err(|_|ControlError::Protocol("Risposta anteprima non UTF-8"))?;
     let lines:Vec<_>=reply.lines().collect();
-    if lines.len()==2 && lines[0].starts_with("ERR\\t") {
+    if lines.len()==2 && lines[0].starts_with("ERR\t") {
         return Err(ControlError::Rejected(lines[0].to_owned()));
     }
     if lines.len()!=3 || lines[0]!="OK" || lines[2]!="END" {
         return Err(ControlError::Protocol("Risposta anteprima inattesa"));
     }
-    let raw=lines[1].strip_prefix("PREVIEW\\t")
+    let raw=lines[1].strip_prefix("PREVIEW\t")
         .ok_or(ControlError::Protocol("Percorso anteprima mancante"))?;
     let decoded=unescape(raw).ok_or(ControlError::Protocol("Percorso anteprima non valido"))?;
     let preview=std::path::PathBuf::from(&decoded);
@@ -169,7 +169,7 @@ pub fn request_preview(socket: &Path, id: u64) -> Result<std::path::PathBuf, Con
     Ok(preview)
 }
 pub fn respond_preview_path(path: &Path) -> String {
-    format!("OK\\nPREVIEW\\t{}\\nEND\\n", escape(&path.to_string_lossy()))
+    format!("OK\nPREVIEW\t{}\nEND\n", escape(&path.to_string_lossy()))
 }
 
 /// Read exactly one complete command after the client has closed its write half.
