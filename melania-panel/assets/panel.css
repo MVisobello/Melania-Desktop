@@ -267,3 +267,14 @@ window { background: transparent; color: #f4f8ff; }
   background: #082a4b;
   border: 2px solid #ffffff;
 }
+
+/* Search-only shortcuts do not alter the classic Start layout until queried. */
+.melania-search-result {
+  border-left: 2px solid rgba(110,193,253,0.53);
+  padding-left: 8px;
+}
+.melania-search-result:hover,
+.melania-search-result:focus-visible {
+  background: rgba(63,152,230,0.32);
+  border-left-color: #88d5ff;
+}
