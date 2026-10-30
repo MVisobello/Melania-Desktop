@@ -39,10 +39,18 @@ class MelaniaDesignContract(unittest.TestCase):
             self.assertIn(f"headerbar.{header} windowcontrols button.close", css)
             self.assertIn("linear-gradient", css)
             self.assertNotIn("GtkDialog.fake", css)
-        for app in ("melania-files","melania-settings"):
-            source=(ROOT / app / "src/main.rs").read_text()
-            self.assertIn('set_decoration_layout(Some(":minimize,maximize,close"))',source)
-            self.assertIn('set_titlebar(Some(', source)
+        files=(ROOT / "melania-files/src/main.rs").read_text()
+        self.assertIn('set_decoration_layout(Some(":minimize,maximize,close"))',files)
+        self.assertIn('set_titlebar(Some(', files)
+        settings=(ROOT / "melania-settings/src/main.rs").read_text()
+        self.assertIn('set_show_title_buttons(false)', settings)
+        self.assertIn('set_titlebar(Some(', settings)
+        for operation in ("w.minimize()", "w.maximize()", "w.unmaximize()", "w.close()"):
+            self.assertIn(operation, settings)
+        chrome=(ROOT / "branding/window-chrome-win7.css").read_text()
+        for name in ("win7-minimize", "win7-maximize", "win7-close"):
+            self.assertIn(name, chrome)
+            self.assertIn(name, settings)
 
     def test_office_icon_is_generic_original_and_single_exception(self):
         for size in (16,24,32,48,96,128,256):
