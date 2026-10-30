@@ -432,3 +432,207 @@ window.melania-theme-aero .melania-tray-button image { color: #e9f3ff; }
   margin: 0;
 }
 .melania-tray-button { padding: 2px 5px; }
+
+/* Melania Start 0.45: GNOME-inspired spacing, focus and hierarchy without
+ * copying GNOME artwork.  Original Fluent application artwork stays colored;
+ * system/status symbols are clean monochrome shapes. */
+window.melania-theme-aero .melania-start-panel,
+window.melania-theme-dark .melania-start-panel {
+  background: #252f3b;
+  color: #f3f7fc;
+  border: 1px solid #465a6c;
+  border-radius: 20px;
+  padding: 19px;
+  box-shadow: 0 18px 42px rgba(4,12,26,.42);
+}
+window.melania-theme-dark .melania-start-panel {
+  background: #292c33;
+  border-color: #4a515c;
+}
+window.melania-theme-light .melania-start-panel {
+  background: #f7f8fa;
+  color: #28323d;
+  border: 1px solid #d6dce5;
+  border-radius: 20px;
+  padding: 19px;
+  box-shadow: 0 17px 39px rgba(13,25,41,.22);
+}
+.melania-start-panel .melania-start-heading {
+  padding: 0 3px 10px;
+  border-spacing: 13px;
+}
+.melania-start-panel .melania-start-heading-logo {
+  min-width: 39px;
+  min-height: 39px;
+}
+.melania-start-panel .melania-start-title {
+  font-size: 21px;
+  font-weight: 750;
+  color: #f6f9fd;
+}
+.melania-start-panel .melania-start-subtitle {
+  font-size: 12px;
+  color: #b5c7db;
+}
+window.melania-theme-light .melania-start-panel .melania-start-title {
+  color: #202b36;
+}
+window.melania-theme-light .melania-start-panel .melania-start-subtitle {
+  color: #657386;
+}
+.melania-start-panel .melania-entry {
+  background: #3b4653;
+  color: #f3f7fb;
+  border: 1px solid #576779;
+  min-height: 42px;
+  padding: 4px 12px;
+  border-radius: 13px;
+  font-size: 13px;
+  box-shadow: none;
+}
+.melania-start-panel .melania-entry:focus {
+  border-color: #76b7fd;
+  outline: 2px solid rgba(107,175,255,.55);
+  outline-offset: 0;
+}
+window.melania-theme-light .melania-start-panel .melania-entry {
+  background: #fff;
+  color: #2a3440;
+  border-color: #d1d9e3;
+}
+.melania-start-panel .melania-start-columns {
+  border-spacing: 14px;
+  margin-top: 5px;
+}
+.melania-start-panel .melania-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .65px;
+  color: #a9bdd1;
+  padding: 1px 5px 7px;
+  margin: 0;
+}
+window.melania-theme-light .melania-start-panel .melania-section-label {
+  color: #69798d;
+}
+.melania-start-panel .melania-start-apps { border-spacing: 4px; }
+.melania-start-panel .melania-start-apps .melania-action {
+  min-height: 51px;
+  padding: 5px 9px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  color: #f4f8fc;
+}
+.melania-start-panel .melania-start-apps .melania-action:hover,
+.melania-start-panel .melania-start-apps .melania-action:focus-visible {
+  background: #3d536b;
+  border-color: #5f7b98;
+}
+.melania-start-panel .melania-row-text {
+  font-size: 13px;
+  font-weight: 550;
+  color: #edf3f9;
+}
+.melania-start-panel .melania-menu-app-icon {
+  min-width: 30px;
+  min-height: 30px;
+}
+.melania-start-panel .melania-start-shortcuts {
+  padding: 8px 8px 10px;
+  border-radius: 15px;
+  background: #303c4a;
+  border: 1px solid #435468;
+  border-spacing: 5px;
+}
+.melania-start-panel .melania-start-shortcuts .melania-shortcut {
+  min-height: 45px;
+  padding: 5px 6px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.melania-start-panel .melania-start-shortcuts .melania-shortcut:hover,
+.melania-start-panel .melania-start-shortcuts .melania-shortcut:focus-visible {
+  background: #455a70;
+  border-color: #617991;
+}
+.melania-start-panel .melania-start-shortcuts separator {
+  margin: 8px 3px 5px;
+  background: #526174;
+}
+.melania-start-panel .melania-start-footer {
+  margin-top: 5px;
+  padding: 11px 5px 1px;
+  border-top: 1px solid #4b5b6c;
+  border-spacing: 10px;
+}
+.melania-start-panel .melania-start-footer-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: #f2f7fb;
+}
+.melania-start-panel .melania-session-button {
+  min-height: 34px;
+  padding: 4px 12px;
+  border-radius: 10px;
+  background: #3e4c5d;
+  border: 1px solid #536579;
+  color: #f2f7fc;
+}
+.melania-start-panel .melania-session-button:hover {
+  background: #51647a;
+}
+window.melania-theme-light .melania-start-panel .melania-start-apps .melania-action {
+  color: #2c3948;
+}
+window.melania-theme-light .melania-start-panel .melania-start-apps .melania-action:hover,
+window.melania-theme-light .melania-start-panel .melania-start-apps .melania-action:focus-visible {
+  background: #e5edf8;
+  border-color: #bfd4ec;
+}
+window.melania-theme-light .melania-start-panel .melania-row-text,
+window.melania-theme-light .melania-start-panel .melania-start-footer-name {
+  color: #273747;
+}
+window.melania-theme-light .melania-start-panel .melania-start-shortcuts {
+  background: #edf1f5;
+  border-color: #dbe0e7;
+}
+window.melania-theme-light .melania-start-panel .melania-start-shortcuts .melania-shortcut:hover {
+  background: #dce8f5;
+  border-color: #b8cfe5;
+}
+window.melania-theme-light .melania-start-panel .melania-start-shortcuts separator {
+  background: #cbd4df;
+}
+window.melania-theme-light .melania-start-panel .melania-start-footer {
+  border-color: #d3dbe5;
+}
+window.melania-theme-light .melania-start-panel .melania-session-button {
+  background: #e9edf3;
+  color: #304355;
+  border-color: #d3dce6;
+}
+
+/* Original Fluent tray glyphs: 22px silhouettes, genuinely clear at 1x.
+ * Keep one visual weight for Wi-Fi / Bluetooth / audio / battery / bell. */
+.melania-bar .melania-status-icons {
+  border-spacing: 9px;
+}
+.melania-bar .melania-tray-button {
+  min-height: 35px;
+  padding: 3px 8px;
+  border-radius: 10px;
+}
+.melania-bar .melania-tray-button .melania-tray-symbol {
+  min-width: 22px;
+  min-height: 22px;
+  margin: 0;
+  color: #f1f6fc;
+}
+window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbol {
+  color: #354e67;
+}
