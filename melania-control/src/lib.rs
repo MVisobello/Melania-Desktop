@@ -19,7 +19,7 @@ pub struct WindowInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Command { List, Status, Workspace(u8), Send(u64,u8), Activate(u64), Minimize(u64), Close(u64), Quit }
+pub enum Command { List, Status, Workspace(u8), Send(u64,u8), Activate(u64), Minimize(u64), Close(u64), Preview(u64), Quit }
 
 impl Command {
     pub fn wire(self) -> String {
@@ -32,6 +32,7 @@ impl Command {
             Self::Activate(id) => format!("ACTIVATE {id}\n"),
             Self::Minimize(id) => format!("MINIMIZE {id}\n"),
             Self::Close(id) => format!("CLOSE {id}\n"),
+            Self::Preview(id) => format!("PREVIEW {id}\n"),
         }
     }
     pub fn parse(raw: &str) -> Option<Self> {
@@ -50,6 +51,7 @@ impl Command {
             ["ACTIVATE", id] => id.parse().ok().filter(|i| *i > 0).map(Self::Activate),
             ["MINIMIZE", id] => id.parse().ok().filter(|i| *i > 0).map(Self::Minimize),
             ["CLOSE", id] => id.parse().ok().filter(|i| *i > 0).map(Self::Close),
+            ["PREVIEW", id] => id.parse().ok().filter(|i| *i > 0).map(Self::Preview),
             _ => None,
         }
     }
@@ -136,6 +138,40 @@ pub fn request(path: &Path, command: Command) -> Result<Vec<WindowInfo>, Control
     Err(ControlError::Protocol("Risposta IPC incompleta"))
 }
 
+/// Request one compositor-owned preview. The preview file is created in a
+/// private XDG_RUNTIME_DIR child, never in a public or predictable /tmp path.
+/// This channel is separate from the WindowInfo list framing.
+pub fn request_preview(socket: &Path, id: u64) -> Result<std::path::PathBuf, ControlError> {
+    if id == 0 {return Err(ControlError::Protocol("ID finestra nullo"));}
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_millis(800)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(350)))?;
+    stream.write_all(Command::Preview(id).wire().as_bytes())?;
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let mut bytes=Vec::new();
+    stream.take(2049).read_to_end(&mut bytes)?;
+    if bytes.len()>2048 {return Err(ControlError::Protocol("Anteprima IPC troppo grande"));}
+    let reply=std::str::from_utf8(&bytes).map_err(|_|ControlError::Protocol("Risposta anteprima non UTF-8"))?;
+    let lines:Vec<_>=reply.lines().collect();
+    if lines.len()==2 && lines[0].starts_with("ERR\\t") {
+        return Err(ControlError::Rejected(lines[0].to_owned()));
+    }
+    if lines.len()!=3 || lines[0]!="OK" || lines[2]!="END" {
+        return Err(ControlError::Protocol("Risposta anteprima inattesa"));
+    }
+    let raw=lines[1].strip_prefix("PREVIEW\\t")
+        .ok_or(ControlError::Protocol("Percorso anteprima mancante"))?;
+    let decoded=unescape(raw).ok_or(ControlError::Protocol("Percorso anteprima non valido"))?;
+    let preview=std::path::PathBuf::from(&decoded);
+    if !preview.is_absolute() || preview.extension().and_then(|v|v.to_str())!=Some("bmp") {
+        return Err(ControlError::Protocol("Percorso anteprima inatteso"));
+    }
+    Ok(preview)
+}
+pub fn respond_preview_path(path: &Path) -> String {
+    format!("OK\\nPREVIEW\\t{}\\nEND\\n", escape(&path.to_string_lossy()))
+}
+
 /// Read exactly one complete command after the client has closed its write half.
 /// Never execute a prefix that merely resembles a valid command.
 pub fn read_command<R: io::Read>(reader: &mut R) -> io::Result<Option<Command>> {
@@ -196,6 +232,9 @@ pub const ACK: &str = "OK\nEND\n";
         assert_eq!(Command::parse("QUIT"),None);
         assert_eq!(Command::parse("QUIT anything\n"),None);
         assert_eq!(Command::parse("ACTIVATE 42\n"),Some(Command::Activate(42)));
+        assert_eq!(Command::parse("PREVIEW 42\n"),Some(Command::Preview(42)));
+        assert_eq!(Command::Preview(42).wire(),"PREVIEW 42\n");
+        assert_eq!(Command::parse("PREVIEW 0\n"),None);
         for s in ["MINIMIZE 0\n","CLOSE -1\n","LIST extra\n","ACTIVATE 2 3\n","BOGUS 12\n","ACTIVATE 1\nINJECT","CLOSE 1", "CLOSE 1\nJUNK\n"] {
             assert_eq!(Command::parse(s),None, "{s}");
         }
@@ -209,6 +248,11 @@ pub const ACK: &str = "OK\nEND\n";
         for s in ["File.txt","Documento\tprivato\n2026", "Caffè ☕", "100% completo"] {
             assert_eq!(unescape(&escape(s)).as_deref(),Some(s));
         }
+    }
+    #[test] fn preview_reply_has_strict_bounded_framing() {
+        let path=std::path::Path::new("/run/user/1000/melania-preview/1-2.bmp");
+        let reply=respond_preview_path(path);
+        assert_eq!(reply,"OK\nPREVIEW\t%2Frun%2Fuser%2F1000%2Fmelania-preview%2F1-2.bmp\nEND\n");
     }
     #[test] fn invalid_encoding() {
         for s in ["%G0","%","raw\ttab","%FF"] {assert!(unescape(s).is_none());}
