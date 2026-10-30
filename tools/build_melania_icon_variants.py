@@ -303,6 +303,17 @@ def verify(destination: Path, dark_paths: list[str], light_paths: list[str]):
         for essential in ("folder","user-home","user-trash"):
             assert (destination/theme/f"places/scalable/{essential}.svg").is_file(),(theme,essential)
         assert (destination/theme/"apps/scalable/computer.svg").is_file(), theme
+    # Prevent regression to invisible dark-on-dark status glyphs.
+    sample="status/symbolic/audio-volume-muted-symbolic.svg"
+    dark_svg=(destination/"Melania-Dark"/sample).read_text(encoding="utf8")
+    light_svg=(destination/"Melania-Light"/sample).read_text(encoding="utf8")
+    mixed_svg=(destination/"Melania-Light-on-Dark-Panel"/sample).read_text(encoding="utf8")
+    assert '#ecf7ff' in dark_svg, "Dark status must be light-colored"
+    assert '#17416a' in light_svg, "Light status must be dark-colored"
+    assert mixed_svg == dark_svg, "Mixed panel must inherit Dark status"
+    copy='actions/24/edit-copy.svg'
+    assert (destination/"Melania-Dark"/copy).read_text() != (
+        destination/"Melania-Light"/copy).read_text(), "Actions must differ per theme"
 
 def main():
     ap=argparse.ArgumentParser()
