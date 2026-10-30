@@ -11,6 +11,9 @@ pub fn install(window: &ApplicationWindow, header: &HeaderBar) {
 
     let controls = GtkBox::new(Orientation::Horizontal, 0);
     controls.add_css_class("win7-window-controls");
+    // GtkHeaderBar would otherwise stretch the compact buttons to its
+    // full titlebar height. Windows 7 buttons are top-aligned and shallow.
+    controls.set_valign(gtk::Align::Start);
 
     let minimize = Button::with_label("—");
     minimize.add_css_class("win7-minimize");
