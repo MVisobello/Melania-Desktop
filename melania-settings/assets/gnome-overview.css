@@ -43,3 +43,39 @@ button.settings-linked-row:focus-visible { outline: 2px solid #2389eb; outline-o
 .settings-action-row scale { min-width: 170px; }
 .settings-action-feedback { font-size: 12px; color: #637a94; }
 .settings-root.settings-dark .settings-action-feedback { color: #b7c9dd; }
+
+/* Responsive Settings: user-controlled navigation collapses without changing
+   the user's global GTK theme or the approved Fluent icon assets. */
+headerbar.settings-titlebar button.settings-sidebar-toggle {
+  min-width: 35px;
+  min-height: 29px;
+  padding: 0 8px;
+  font-size: 18px;
+  border-radius: 7px;
+  color: #1f537e;
+  border: 1px solid rgba(82,142,192,.35);
+  background: rgba(231,245,255,.72);
+}
+headerbar.settings-titlebar button.settings-sidebar-toggle:hover {
+  color: #123e66;
+  background: #ffffff;
+}
+headerbar.settings-titlebar.settings-dark button.settings-sidebar-toggle {
+  background: #34475b;
+  border-color: #5e7a94;
+  color: #f2f8ff;
+}
+.settings-root .settings-sidebar {
+  min-width: 0;
+}
+.settings-root .settings-body {
+  padding: 23px 27px 27px;
+}
+.settings-root .settings-main {
+  min-width: 0;
+}
+.settings-root .settings-page-heading {
+  border-spacing: 12px;
+}
+.settings-refresh-button { min-height: 34px; padding: 6px 15px; }
+.settings-status-refresh { margin: 0 3px 12px; }
