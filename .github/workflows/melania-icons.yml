@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'tools/build_melania_icon_variants.py'
+      - 'tools/audit_melania_icon_variants.py'
       - 'branding/coverage/**'
       - 'branding/Melania-Aero-Classic/**'
       - 'branding/Melania/**'
@@ -40,6 +41,10 @@ jobs:
           test -f dist/melania-icon-themes/Melania-Light/index.theme
           test -f dist/melania-icon-themes/Melania-Dark/index.theme
           test -f dist/melania-icon-themes/Melania-Light-on-Dark-Panel/index.theme
+      - name: Audit artwork diversity and resolved icon aliases
+        run: |
+          set -euo pipefail
+          python3 tools/audit_melania_icon_variants.py --output dist/melania-icon-themes --report dist/melania-icon-audit.json
       - name: Verify isolated user-local installation
         env:
           XDG_DATA_HOME: ${{ runner.temp }}/melania-icons-isolated
@@ -60,5 +65,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Melania-Aero-Icon-Themes
-          path: dist/Melania-Aero-Complete.tar.xz
+          path: |
+            dist/Melania-Aero-Complete.tar.xz
+            dist/melania-icon-audit.json
           if-no-files-found: error
