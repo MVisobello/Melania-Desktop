@@ -55,7 +55,10 @@ class MelaniaAppearanceAndIconContracts(unittest.TestCase):
                 self.assertNotIn("<text", xml)
                 self.assertNotIn("linearGradient", xml)
         for name in TRAY:
-            self.assertIn(name, panel)
+            # The legacy freedesktop names stay packaged for compatibility.
+            # Only the five new Melania tray IDs are loaded by the panel.
+            if name.startswith("melania-tray-"):
+                self.assertIn(name, panel)
             for variant in ("light", "dark"):
                 xml = artwork(name, "status", variant, 20)
                 ET.fromstring(xml)
