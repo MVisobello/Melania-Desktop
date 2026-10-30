@@ -57,7 +57,10 @@ pub fn icon_theme_available(name: &str) -> bool {
 }
 pub fn resolved_icon_theme(prefs:&Preferences) -> &str {
     if icon_theme_available(&prefs.icon_theme) {&prefs.icon_theme}
-    else {"Melania-Aero-Classic"}
+    // Never silently fall back to the previous glossy Aero family when the
+    // selected Fluent theme has not yet been installed. Adwaita is a coherent
+    // standard GTK fallback; explicit legacy icon choices remain available.
+    else {"Adwaita"}
 }
 impl Preferences {
     pub fn from_text(data: &str) -> Self {
