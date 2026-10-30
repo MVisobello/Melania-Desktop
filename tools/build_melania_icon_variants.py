@@ -272,12 +272,41 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                 asset.write_text(img, encoding="utf8")
                 created[key] = asset
             symlink_relative(root / path, created[key])
+    # Pixel-tuned overrides for the most visible file-manager and system art.
+    # freedesktop can select these fixed-size SVGs instead of shrinking a
+    # detailed scalable picture to a muddy 16x16. 48/128 use scalable vectors.
+    extra_dirs = set()
+    curated_names = sorted({
+        (Path(p).parts[0], Path(p).stem) for p in paths
+        if Path(p).parts[0] in ("places", "mimetypes", "devices", "apps", "categories")
+        and not Path(p).stem.endswith("-symbolic")
+        and is_curated(Path(p).stem, Path(p).parts[0])
+    })
+    for context, name in curated_names:
+        for size in (16, 24):
+            subdir = f"{context}/{size}"
+            extra_dirs.add(subdir)
+            for variant, root in (("dark", dark), ("light", light)):
+                target = root / subdir / f"{name}.svg"
+                if target.exists():
+                    continue
+                if variant == "light":
+                    symlink_relative(target, dark / subdir / f"{name}.svg")
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                img = refined_artwork(name, context, variant, False, size)
+                if img is None:
+                    img = curated_artwork(name, context, variant, False)
+                if img is None:
+                    continue
+                ET.fromstring(img)
+                target.write_text(img, encoding="utf8")
     # Light on Dark Panel: application dialogs get dark-on-light symbols,
     # while the dark taskbar inherits bright status glyphs and panel icons.
     for category in main_cats:
         source=dark if category in ("panel","status","animations") else light
         symlink_relative(mixed/category,source/category)
-    dirs=sorted({str(Path(path).parent) for path in dark_paths+light_paths})
+    dirs=sorted({str(Path(path).parent) for path in dark_paths+light_paths} | extra_dirs)
     for root,name,variant in [
         (dark,"Melania Dark","dark"),(light,"Melania Light","light"),
         (mixed,"Melania Light on Dark Panel","mixed")]:
