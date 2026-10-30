@@ -155,14 +155,14 @@ fn build_ui(
     appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
     appearance.append(&text("Pacchetto icone Melania", "settings-hero"));
     let icon_variants = gtk::DropDown::from_strings(&[
-        "Melania Light", "Melania Dark", "Melania Light on Dark Panel"
+        "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",\n        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
     ]);
     icon_variants.add_css_class("settings-icon-choice");
     let selected = melania_config::ICON_THEMES.iter()
         .position(|&name|name==prefs.borrow().icon_theme).unwrap_or(0);
     icon_variants.set_selected(selected as u32);
     icon_variants.set_tooltip_text(Some(
-        "Usa le varianti Aero del nostro icon pack. Melania aggiorna questa finestra subito e le altre app al riavvio."
+        "Scegli Melania Fluent (concept approvato) oppure i temi Aero precedenti. Le app applicano il tema al riavvio."
     ));
     let prefs_for_icons = prefs.clone();
     icon_variants.connect_selected_notify(move |dropdown| {
@@ -180,7 +180,7 @@ fn build_ui(
         }
     });
     appearance.append(&icon_variants);
-    appearance.append(&text("Se il pacchetto non è ancora installato, Melania usa temporaneamente Aero Classic. Le altre applicazioni applicheranno la variante al prossimo avvio.", "settings-subtitle"));
+    appearance.append(&text("Melania Fluent è il nuovo tema predefinito. Se non è installato, Melania usa temporaneamente Aero Classic. Le altre applicazioni applicano il tema al prossimo avvio.", "settings-subtitle"));
     appearance.append(&text("Intensità effetto vetro", "settings-hero"));
     let blur = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     blur.set_value(prefs.borrow().blur_strength as f64);
