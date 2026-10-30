@@ -105,6 +105,8 @@ struct Melania {
     interaction: Option<ActiveInteraction>,
     managed: Vec<ManagedWindow>,
     workspaces: Workspaces,
+    /// Applies the persisted Aero Snap preference on compositor startup.
+    snap_windows: bool,
     next_window_id: u64,
     active_window: Option<u64>,
     exit_requested: bool,
@@ -310,7 +312,7 @@ impl Melania {
                 // Aero Snap only applies to a completed *window move*.
                 // File DnD is owned by wl_data_device and is never interpreted
                 // as moving a toplevel window.
-                if matches!(active.model.operation, Operation::Move) {
+                if self.snap_windows && matches!(active.model.operation, Operation::Move) {
                     if let Some(mode) = self.output.current_mode() {
                         let usable = layer_map_for_output(&self.output).non_exclusive_zone();
                         let area = ShellRect::new(usable.loc.x, usable.loc.y,
@@ -554,6 +556,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     output.change_current_state(Some(initial_mode), Some(Transform::Flipped180), None,
                                 Some((0, 0).into()));
     output.set_preferred(initial_mode);
+    // Preference changes take effect after restarting the nested session.
+    // This avoids silently remapping a user's currently open windows.
+    let preferences = melania_config::load().unwrap_or_default();
     let mut state = Melania {
         compositor: CompositorState::new::<Melania>(&handle),
         shell: XdgShellState::new::<Melania>(&handle),
@@ -569,7 +574,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         last_press: None,
         interaction: None,
         managed: Vec::new(),
-        workspaces: Workspaces::default(),
+        workspaces: Workspaces::new(preferences.workspace_count),
+        snap_windows: preferences.snap_windows,
         next_window_id: 1,
         active_window: None,
         exit_requested: false,

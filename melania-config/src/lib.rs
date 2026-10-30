@@ -10,12 +10,14 @@ pub struct Preferences {
     pub preview_windows: bool,
     pub do_not_disturb: bool,
     pub blur_strength: u8,
+    /// Fixed workspace count; applied when the compositor and panel start.
+    pub workspace_count: u8,
 }
 impl Default for Preferences {
     fn default() -> Self { Self {
         dark_mode: false, aero_glass: true, animations: true,
         snap_windows: true, preview_windows: true,
-        do_not_disturb: false, blur_strength: 70,
+        do_not_disturb: false, blur_strength: 70, workspace_count: 4,
     } }
 }
 impl Preferences {
@@ -33,15 +35,16 @@ impl Preferences {
                 "preview_windows" => if let Some(b) = as_bool() { prefs.preview_windows = b },
                 "do_not_disturb" => if let Some(b) = as_bool() { prefs.do_not_disturb = b },
                 "blur_strength" => if let Ok(n) = v.parse::<u8>() { prefs.blur_strength = n.min(100) },
+                "workspace_count" => if let Ok(n) = v.parse::<u8>() { if (1..=8).contains(&n) { prefs.workspace_count = n; } },
                 _ => {}, // future versions can read older/newer files
             }
         }
         prefs
     }
     pub fn to_text(&self) -> String { format!(
-        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\n",
+        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\n",
         self.dark_mode, self.aero_glass, self.animations, self.snap_windows,
-        self.preview_windows, self.do_not_disturb, self.blur_strength)
+        self.preview_windows, self.do_not_disturb, self.blur_strength, self.workspace_count)
     }
     pub fn read_from(path: &Path) -> io::Result<Self> {
         match fs::read_to_string(path) {
@@ -94,6 +97,17 @@ mod tests {
     #[test] fn round_trip() {
         let mut p = Preferences::default();
         p.dark_mode = false; p.do_not_disturb = true;
+        assert_eq!(Preferences::from_text(&p.to_text()), p);
+    }
+    #[test] fn workspace_count_is_validated_and_old_configs_keep_default() {
+        assert_eq!(Preferences::from_text("workspace_count=1").workspace_count, 1);
+        assert_eq!(Preferences::from_text("workspace_count=8").workspace_count, 8);
+        for invalid in ["workspace_count=0", "workspace_count=9", "workspace_count=-1", "workspace_count=abc"] {
+            assert_eq!(Preferences::from_text(invalid).workspace_count, 4);
+        }
+        assert_eq!(Preferences::from_text("animations=false").workspace_count, 4);
+        let mut p = Preferences::default();
+        p.workspace_count = 6;
         assert_eq!(Preferences::from_text(&p.to_text()), p);
     }
     #[test] fn reads_and_writes_file() {

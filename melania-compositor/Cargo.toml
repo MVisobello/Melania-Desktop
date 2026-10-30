@@ -15,3 +15,5 @@ melania-shell-model = { path = "../melania-shell-model" }
 melania-control = { path = "../melania-control" }
 
 melania-workspaces = { path = "../melania-workspaces" }
+
+melania-config = { path = "../melania-config" }

@@ -44,8 +44,8 @@ impl Command {
         match fields.as_slice() {
             ["LIST"] => Some(Self::List),
             ["STATUS"] => Some(Self::Status),
-            ["WORKSPACE", ws] => ws.parse::<u8>().ok().filter(|w| (1..=4).contains(w)).map(Self::Workspace),
-            ["SEND", id, ws] => id.parse::<u64>().ok().filter(|i| *i > 0).and_then(|id| ws.parse::<u8>().ok().filter(|w| (1..=4).contains(w)).map(|ws|Self::Send(id,ws))),
+            ["WORKSPACE", ws] => ws.parse::<u8>().ok().filter(|w| (1..=8).contains(w)).map(Self::Workspace),
+            ["SEND", id, ws] => id.parse::<u64>().ok().filter(|i| *i > 0).and_then(|id| ws.parse::<u8>().ok().filter(|w| (1..=8).contains(w)).map(|ws|Self::Send(id,ws))),
             ["QUIT"] => Some(Self::Quit),
             ["ACTIVATE", id] => id.parse().ok().filter(|i| *i > 0).map(Self::Activate),
             ["MINIMIZE", id] => id.parse().ok().filter(|i| *i > 0).map(Self::Minimize),
@@ -188,7 +188,9 @@ pub const ACK: &str = "OK\nEND\n";
         assert_eq!(Command::parse("STATUS\n"),Some(Command::Status));
         assert_eq!(Command::parse("WORKSPACE 3\n"),Some(Command::Workspace(3)));
         assert_eq!(Command::parse("SEND 29 4\n"),Some(Command::Send(29,4)));
-        for raw in ["WORKSPACE 0\n","WORKSPACE 5\n","SEND 0 1\n","SEND 2 9\n","SEND 2 -1\n"] {
+        assert_eq!(Command::parse("WORKSPACE 8\n"),Some(Command::Workspace(8)));
+        assert_eq!(Command::parse("SEND 29 8\n"),Some(Command::Send(29,8)));
+        for raw in ["WORKSPACE 0\n","WORKSPACE 9\n","SEND 0 1\n","SEND 2 9\n","SEND 2 -1\n"] {
             assert_eq!(Command::parse(raw),None);
         }
         assert_eq!(Command::parse("QUIT"),None);
