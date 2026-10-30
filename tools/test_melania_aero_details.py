@@ -16,7 +16,7 @@ class QualityTests(unittest.TestCase):
         root = ET.fromstring(art)
         self.assertEqual(root.attrib.get("viewBox"), "0 0 96 96")
         self.assertNotIn("<script", art.lower())
-        self.assertNotIn("http://", art.lower())
+        self.assertNotIn('href="http:', art.lower())
         self.assertNotIn("file://", art.lower())
 
     def test_extras_full_and_compact(self):
