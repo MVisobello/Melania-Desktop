@@ -13,7 +13,7 @@ pub struct Preferences {
 }
 impl Default for Preferences {
     fn default() -> Self { Self {
-        dark_mode: true, aero_glass: true, animations: true,
+        dark_mode: false, aero_glass: true, animations: true,
         snap_windows: true, preview_windows: true,
         do_not_disturb: false, blur_strength: 70,
     } }
@@ -84,6 +84,12 @@ mod tests {
         assert!(!p.dark_mode);
         assert_eq!(p.blur_strength, 70);
         assert!(p.animations);
+    }
+    #[test] fn aero_light_is_the_default_for_new_installations() {
+        let p = Preferences::default();
+        assert!(p.aero_glass);
+        assert!(!p.dark_mode);
+        assert_eq!(p.blur_strength, 70);
     }
     #[test] fn round_trip() {
         let mut p = Preferences::default();
