@@ -57,12 +57,26 @@ jobs:
       - name: Install GTK and Wayland development packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libgtk-4-dev libgtk4-layer-shell-dev libwayland-dev libxkbcommon-dev
+          sudo apt-get install -y pkg-config libgtk-4-dev libgtk4-layer-shell-dev libwayland-dev libxkbcommon-dev xvfb xauth scrot
           pkg-config --modversion gtk4 gtk4-layer-shell-0
       - name: Compile GTK applications
         run: |
           set -o pipefail
           cargo check -p melania-files -p melania-settings -p melania-preview -p melania-panel -p melania-desktop-surface --all-targets 2>&1 | tee gtk-build.log
+      - name: Capture native GTK Settings with classic window controls
+        run: |
+          set -euo pipefail
+          cargo build -p melania-settings
+          mkdir -p reports
+          xvfb-run -a -s '-screen 0 1200x800x24' bash -c '
+            GDK_BACKEND=x11 ./target/debug/melania-settings > reports/settings-gtk.log 2>&1 &
+            app_pid=$!
+            sleep 4
+            scrot reports/melania-settings-gnome-style.png
+            kill "$app_pid" 2>/dev/null || true
+            wait "$app_pid" 2>/dev/null || true
+            test -s reports/melania-settings-gnome-style.png
+          '
       - name: Taskbar grouping unit tests
         run: |
           set -o pipefail
@@ -74,6 +88,8 @@ jobs:
           path: |
             gtk-build.log
             gtk-panel-tests.log
+            reports/melania-settings-gnome-style.png
+            reports/settings-gtk.log
 
 
   rust-notifications:
