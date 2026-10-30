@@ -80,6 +80,29 @@ if [[ "$READY_RENDER" != 1 ]]; then
   exit 1
 fi
 sleep .8
+# Request a real compositor-owned window-only thumbnail through the same
+# 0600 control socket used by the taskbar. Validate the actual BMP pixels.
+FILES_ID="$(awk -F '\t' 'tolower($3) ~ /org.melaniadesktop.files/ || tolower($4) ~ /melania files/ {print $1;exit}' "$TEMP/windows.log")"
+[[ "$FILES_ID" =~ ^[0-9]+$ ]] || { echo 'FAIL: no Files window id for preview' >&2;exit 1; }
+THUMBNAIL="$(target/debug/melania-winctl preview "$FILES_ID")" || {
+  echo 'FAIL: per-window offscreen GPU preview unavailable' >&2; exit 1;
+}
+python3 - "$THUMBNAIL" <<'PYTHUMB'
+from PIL import Image
+from pathlib import Path
+import os, stat, sys
+p=Path(sys.argv[1])
+assert p.is_file() and p.suffix=='.bmp', p
+assert stat.S_IMODE(p.stat().st_mode)==0o600, oct(p.stat().st_mode)
+assert stat.S_IMODE(p.parent.stat().st_mode)==0o700, oct(p.parent.stat().st_mode)
+image=Image.open(p).convert('RGB')
+assert image.size==(256,160), image.size
+colors=len(set(image.resize((64,40)).getdata()))
+assert colors>4, f'thumbnail is blank or unpainted: {colors} colors'
+print(f'PASS: private window-only GPU thumbnail {image.size}, {colors} sampled colors')
+PYTHUMB
+# Synthetic CI desktop only: preserve one sample for visual QA.
+cp "$THUMBNAIL" reports/nested-wayland-file-preview.bmp
 if command -v scrot >/dev/null; then
   scrot -z -o reports/nested-wayland-full-desktop.png
   python3 - <<'PY'

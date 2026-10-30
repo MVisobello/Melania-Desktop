@@ -6,6 +6,7 @@
 //!
 //! This is deliberately *not* a display manager / DRM session / full desktop.
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
+mod window_preview;
 
 use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::UnixListener}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
 
@@ -78,6 +79,10 @@ struct ManagedWindow {
 struct SocketCleanup(PathBuf);
 impl Drop for SocketCleanup {
     fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+}
+struct PreviewCleanup(PathBuf);
+impl Drop for PreviewCleanup {
+    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
 }
 
 
@@ -550,7 +555,7 @@ impl Melania {
         }
         let id = match command {
             ControlCommand::Activate(id) | ControlCommand::Minimize(id) | ControlCommand::Close(id) => id,
-            ControlCommand::List | ControlCommand::Status | ControlCommand::Workspace(_) | ControlCommand::Send(_,_) | ControlCommand::Quit => unreachable!(),
+            ControlCommand::List | ControlCommand::Status | ControlCommand::Workspace(_) | ControlCommand::Send(_,_) | ControlCommand::Preview(_) | ControlCommand::Quit => unreachable!(),
         };
         let Some(index) = self.managed.iter().position(|w| w.id == id) else {
             return respond_error("Finestra non trovata");
@@ -589,7 +594,7 @@ impl Melania {
             ControlCommand::Close(_) => {
                 if let Some(top) = self.managed[index].window.toplevel() { top.send_close(); }
             }
-            ControlCommand::List | ControlCommand::Status | ControlCommand::Workspace(_) | ControlCommand::Send(_,_) | ControlCommand::Quit => unreachable!(),
+            ControlCommand::List | ControlCommand::Status | ControlCommand::Workspace(_) | ControlCommand::Send(_,_) | ControlCommand::Preview(_) | ControlCommand::Quit => unreachable!(),
         }
         ACK.into()
     }
@@ -685,6 +690,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::set_permissions(&control_path, fs::Permissions::from_mode(0o600))?;
     control_listener.set_nonblocking(true)?;
     let _control_cleanup = SocketCleanup(control_path.clone());
+    // Capture buffers live in a 0700 directory in the private user runtime.
+    let preview_dir = runtime.join(format!("melania-{}-preview",std::process::id()));
+    let previews_enabled=fs::create_dir(&preview_dir).and_then(|_| {
+        fs::set_permissions(&preview_dir,fs::Permissions::from_mode(0o700))
+    }).is_ok();
+    let _preview_cleanup=previews_enabled.then(||PreviewCleanup(preview_dir.clone()));
+    let mut preview_seq: u64=0;
     println!("Melania nested Wayland ready: WAYLAND_DISPLAY={}", socket.to_string_lossy());
     println!("Melania taskbar control socket: {}", control_path.display());
     let begin = Instant::now();
@@ -878,30 +890,80 @@ fn main() -> Result<(), Box<dyn Error>> {
             for layer in layer_map_for_output(&output).layers() {
                 frame_done(layer.wl_surface(), begin.elapsed().as_millis() as u32);
             }
+            // Per-window offscreen capture. Never read composed desktop pixels.
+            let mut captures_this_frame=0u8;
+            for _ in 0..8 {
+                match control_listener.accept() {
+                    Ok((mut client, _)) => {
+                        let _=client.set_read_timeout(Some(Duration::from_millis(40)));
+                        let _=client.set_write_timeout(Some(Duration::from_millis(120)));
+                        let response=match read_command(&mut client) {
+                            Ok(Some(ControlCommand::Preview(id))) => {
+                                if !previews_enabled || captures_this_frame>=2 {
+                                    respond_error("Anteprima temporaneamente non disponibile")
+                                } else if let Some(window)=state.managed.iter().find(|w|w.id==id) {
+                                    if window.minimized {
+                                        respond_error("Finestra minimizzata")
+                                    } else {
+                                        let size=window.window.geometry().size;
+                                        let surface=window.surface.clone();
+                                        preview_seq=preview_seq.saturating_add(1);
+                                        let destination=preview_dir.join(format!("{id}-{preview_seq}.bmp"));
+                                        captures_this_frame+=1;
+                                        match window_preview::capture_window(renderer,&surface,size.w,size.h,&destination) {
+                                            Ok(()) => {
+                                                // Keep several recent snapshots per ID:
+                                                // GTK may still be opening the previous
+                                                // file when another hover capture completes.
+                                                let prefix=format!("{id}-");
+                                                if let Ok(entries)=fs::read_dir(&preview_dir) {
+                                                    let mut versions:Vec<(u64,PathBuf)>=entries
+                                                        .flatten().take(256).filter_map(|entry| {
+                                                            let path=entry.path();
+                                                            let name=path.file_name()?.to_str()?;
+                                                            let seq=name.strip_prefix(&prefix)?
+                                                                .strip_suffix(".bmp")?.parse().ok()?;
+                                                            Some((seq,path))
+                                                        }).collect();
+                                                    versions.sort_by_key(|(seq,_)|*seq);
+                                                    let stale=versions.len().saturating_sub(4);
+                                                    for (_,path) in versions.into_iter().take(stale) {
+                                                        let _=fs::remove_file(path);
+                                                    }
+                                                }
+                                                melania_control::respond_preview_path(&destination)
+                                            }
+                                            Err(e) => {
+                                                let _=fs::remove_file(&destination);
+                                                eprintln!("Melania thumbnail: {e}");
+                                                respond_error("Cattura anteprima non riuscita")
+                                            }
+                                        }
+                                    }
+                                } else {respond_error("Finestra non trovata")}
+                            }
+                            Ok(Some(command)) => state.control(command),
+                            Ok(None) => respond_error("Comando IPC incompleto o non valido"),
+                            Err(e) => respond_error(&format!("Lettura IPC fallita: {e}")),
+                        };
+                        let _=client.write_all(response.as_bytes());
+                    }
+                    Err(e) if e.kind()==std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => {eprintln!("Melania control socket: {e}");break;}
+                }
+            }
+            // The offscreen EGL readback changes the current GL target.
+            // Re-establish the host window framebuffer before the winit
+            // backend swaps buffers, or its next EGL surface can be lost.
+            if captures_this_frame > 0 {
+                let restore = renderer.render(&mut framebuffer,size,Transform::Flipped180)?;
+                restore.finish()?;
+            }
         }
         while let Some(stream) = listener.accept()? {
             handle.insert_client(stream, Arc::new(ClientState::default()))?;
         }
-        // Process bounded, single-line local taskbar requests without threads.
-        // Timeouts prevent a stalled client from freezing the rendering loop.
-        for _ in 0..8 {
-            match control_listener.accept() {
-                Ok((mut client, _)) => {
-                    let _ = client.set_read_timeout(Some(Duration::from_millis(40)));
-                    let _ = client.set_write_timeout(Some(Duration::from_millis(40)));
-                    // Read up to EOF, with a strict length bound, before acting.
-                    // A fragmented or truncated CLOSE must never execute.
-                    let answer = match read_command(&mut client) {
-                        Ok(Some(cmd)) => state.control(cmd),
-                        Ok(None) => respond_error("Comando IPC incompleto o non valido"),
-                        Err(e) => respond_error(&format!("Lettura IPC fallita: {e}")),
-                    };
-                    let _ = client.write_all(answer.as_bytes());
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) => {eprintln!("Melania control socket: {e}");break;}
-            }
-        }
+
         if state.exit_requested { break; }
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;

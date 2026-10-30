@@ -3,7 +3,7 @@
 //! Window list comes from compositor IPC; thumbnails still require compositor capture.
 mod window_groups;
 use gtk::{self, gdk, gio, glib, prelude::*};
-use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation};
+use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
 use std::{cell::{Cell, RefCell}, fs, path::PathBuf, process::Command, rc::Rc, time::Duration};
@@ -371,7 +371,9 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
     let box_running = GtkBox::new(Orientation::Horizontal, 4);
     box_running.add_css_class("melania-running");
     let last: Rc<RefCell<Option<Vec<WindowInfo>>>> = Rc::new(RefCell::new(None));
-    let group_enabled = melania_config::load().unwrap_or_default().group_windows;
+    let settings = melania_config::load().unwrap_or_default();
+    let group_enabled = settings.group_windows;
+    let use_thumbnails = settings.preview_windows;
     let path = std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let refresh = {
         let target = box_running.clone();
@@ -429,6 +431,7 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                     popover.add_css_class("melania-group-popover");
                     let list = GtkBox::new(Orientation::Vertical, 5);
                     list.add_css_class("melania-group-list");
+                    let mut preview_targets: Vec<(u64,Image,Picture)> = Vec::new();
                     for grouped_window in &group.windows {
                         let id = grouped_window.id;
                         let text = if grouped_window.title.chars().count() > 48 {
@@ -440,6 +443,13 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                         preview_icon.set_pixel_size(38);
                         preview_icon.add_css_class("melania-preview-icon");
                         row.append(&preview_icon);
+                        let thumbnail = Picture::new();
+                        thumbnail.add_css_class("melania-live-preview");
+                        thumbnail.set_size_request(224,140);
+                        thumbnail.set_content_fit(gtk::ContentFit::Contain);
+                        thumbnail.set_visible(false);
+                        row.append(&thumbnail);
+                        preview_targets.push((id,preview_icon.clone(),thumbnail));
                         let focus = Button::with_label(&text);
                         focus.add_css_class("melania-action");
                         focus.set_hexpand(true);
@@ -481,8 +491,21 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                     // icon + window title, never a fabricated screen capture.
                     let hover = gtk::EventControllerMotion::new();
                     let menu_for_hover = menu.clone();
+                    let screenshot_endpoint = path.clone();
                     hover.connect_enter(move |_,_,_| {
                         menu_for_hover.popup();
+                        // Captures only the selected compositor-owned window
+                        // subtree, never screen pixels behind another app.
+                        // Six captures max per hover; failure retains icon/title.
+                        if !use_thumbnails {return;}
+                        let Some(socket)=screenshot_endpoint.as_ref() else {return;};
+                        for (id,icon,picture) in preview_targets.iter().take(6) {
+                            if let Ok(image_path)=melania_control::request_preview(socket,*id) {
+                                picture.set_filename(Some(&image_path));
+                                picture.set_visible(true);
+                                icon.set_visible(false);
+                            }
+                        }
                     });
                     menu.add_controller(hover);
                     // Preserve safe hover activation when dragging files over a
