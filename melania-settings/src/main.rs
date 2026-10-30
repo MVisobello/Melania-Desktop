@@ -141,7 +141,6 @@ fn build_ui(
     let navigation_toggle = Button::with_label("☰");
     navigation_toggle.add_css_class("settings-sidebar-toggle");
     navigation_toggle.set_tooltip_text(Some("Mostra o nascondi il menu (Ctrl+B)"));
-    navigation_toggle.set_accessible_label(Some("Mostra o nascondi le categorie"));
     titlebar.pack_start(&navigation_toggle);
     let controls = GtkBox::new(Orientation::Horizontal, 0);
     controls.add_css_class("win7-window-controls");
@@ -446,8 +445,9 @@ fn build_ui(
     });
     // Ctrl+B toggles the sidebar without relying on tiny window buttons.
     let shortcuts = gtk::ShortcutController::new();
+    let side_for_shortcut = sidebar_revealer.clone();
     let shortcut_action = gtk::CallbackAction::new(move |_, _| {
-        navigation_toggle.activate();
+        side_for_shortcut.set_reveal_child(!side_for_shortcut.reveals_child());
         gtk::glib::Propagation::Stop
     });
     let trigger = gtk::ShortcutTrigger::parse_string("<Control>b")
