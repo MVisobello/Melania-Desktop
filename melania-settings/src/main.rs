@@ -98,7 +98,11 @@ fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
     }
 }
 
-fn build_ui(app: &Application) {
+fn build_ui(
+    app: &Application,
+    initial_page: &str,
+    shared_stack: &Rc<RefCell<Option<Stack>>>,
+) {
     setup_melania_icon_theme();
     let css = gtk::CssProvider::new();
     #[allow(deprecated)]
@@ -232,6 +236,12 @@ fn build_ui(app: &Application) {
     system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
     system.append(&text("Preferenze locali: $XDG_CONFIG_HOME/melania/settings.conf. Le impostazioni hardware sono delegate ai servizi Linux.", "settings-subtitle"));
     stack.add_titled(&system, Some("system"), "Sistema");
+    // Expose this live stack only to our own application's command handler,
+    // so a second invocation can navigate the existing Settings window.
+    *shared_stack.borrow_mut() = Some(stack.clone());
+    if is_valid_page(initial_page) {
+        stack.set_visible_child_name(initial_page);
+    }
     let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target) in [
@@ -252,7 +262,7 @@ fn build_ui(app: &Application) {
             }
             clicked.add_css_class("active-section");
         });
-        if target == "appearance" { b.add_css_class("active-section"); }
+        if target == initial_page { b.add_css_class("active-section"); }
         navigation.borrow_mut().push(b.clone());
         navigation_labels.borrow_mut().push((b.clone(), name.to_lowercase()));
         sidebar.append(&b);
@@ -301,8 +311,44 @@ fn setup_melania_icon_theme() {
     }
 }
 
+const SETTINGS_PAGES: [&str; 6] = [
+    "appearance", "desktop", "workspaces", "network", "accessibility", "system"
+];
+fn is_valid_page(page: &str) -> bool { SETTINGS_PAGES.contains(&page) }
+
 fn main() -> gtk::glib::ExitCode {
-    let app = Application::builder().application_id("org.melaniadesktop.Settings").build();
-    app.connect_activate(build_ui);
+    // Handle remote positional page requests even when Settings is already
+    // open, using GTK's normal single-instance application activation.
+    let app = Application::builder()
+        .application_id("org.melaniadesktop.Settings")
+        .flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .build();
+    let requested_page: Rc<RefCell<String>> = Rc::new(RefCell::new("appearance".into()));
+    let stack: Rc<RefCell<Option<Stack>>> = Rc::new(RefCell::new(None));
+    let requested = requested_page.clone();
+    let stack_for_activate = stack.clone();
+    app.connect_activate(move |app| {
+        let page = requested.borrow().clone();
+        if let Some(window) = app.active_window() {
+            if let Some(ref stack) = *stack_for_activate.borrow() {
+                stack.set_visible_child_name(&page);
+            }
+            window.present();
+        } else {
+            build_ui(app, &page, &stack_for_activate);
+        }
+    });
+    let requested = requested_page.clone();
+    app.connect_command_line(move |app, command_line| {
+        let args = command_line.arguments();
+        let page = args.get(1).and_then(|arg| arg.to_str()).unwrap_or("appearance");
+        if !is_valid_page(page) {
+            eprintln!("Melania Settings: sezione non valida: {page}");
+            return gtk::glib::ExitCode::FAILURE;
+        }
+        *requested.borrow_mut() = page.to_string();
+        app.activate();
+        gtk::glib::ExitCode::SUCCESS
+    });
     app.run()
 }
