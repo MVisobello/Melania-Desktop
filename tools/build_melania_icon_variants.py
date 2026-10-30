@@ -17,6 +17,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from melania_aero_artwork import artwork as curated_artwork
 from melania_aero_details import refined_artwork, is_curated
+from melania_reference_artwork import artwork as reference_artwork, REVERSE as REFERENCE_NAMES
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSIC = ROOT / "branding" / "Melania-Aero-Classic"
@@ -258,7 +259,9 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                 asset_dir = root / "_melania-assets"
                 asset_dir.mkdir(exist_ok=True)
                 asset = asset_dir / (hashlib.sha256(repr(key).encode()).hexdigest()[:28] + ".svg")
-                img = refined_artwork(name, context, variant, symbolic, size)
+                img = reference_artwork(name, context, variant, symbolic, size)
+                if img is None:
+                    img = refined_artwork(name, context, variant, symbolic, size)
                 if img is None:
                     img = curated_artwork(name, context, variant, symbolic)
                 if img is None and not (symbolic or context == "actions"):
@@ -280,7 +283,8 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
         (Path(p).parts[0], Path(p).stem) for p in paths
         if Path(p).parts[0] in ("places", "mimetypes", "devices", "apps", "categories")
         and not Path(p).stem.endswith("-symbolic")
-        and is_curated(Path(p).stem, Path(p).parts[0])
+        and (is_curated(Path(p).stem, Path(p).parts[0])
+             or Path(p).stem in REFERENCE_NAMES)
     })
     for context, name in curated_names:
         for size in (16, 24):
@@ -294,7 +298,9 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                     symlink_relative(target, dark / subdir / f"{name}.svg")
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                img = refined_artwork(name, context, variant, False, size)
+                img = reference_artwork(name, context, variant, False, size)
+                if img is None:
+                    img = refined_artwork(name, context, variant, False, size)
                 if img is None:
                     img = curated_artwork(name, context, variant, False)
                 if img is None:
