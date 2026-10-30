@@ -162,11 +162,12 @@ fn build_ui(
     let apply_style: Rc<dyn Fn(&Preferences)> = Rc::new(move |p| {
         refresh_theme(&themed_root, &themed_header, p);
     });
-    let appearance = page("Aspetto", "Personalizza l'identità visiva del desktop.");
+    let appearance = page("Aspetto", "Personalizza colori, interfaccia e icone di Melania Desktop.");
+    appearance.append(&section("Stile e comportamento"));
     appearance.append(&saved_option("Aero Glass", "Trasparenze, riflessi e bordi Aero. La sfocatura reale richiede il compositore.", prefs.borrow().aero_glass, prefs.clone(), |p,v| p.aero_glass = v, Some(apply_style.clone())));
     appearance.append(&saved_option("Animazioni GTK", "Attiva le transizioni nelle finestre Melania, salvo la preferenza Riduci movimento.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, Some(apply_style.clone())));
     appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
-    appearance.append(&text("Pacchetto icone Melania", "settings-hero"));
+    appearance.append(&section("Pacchetto di icone"));
     let icon_variants = gtk::DropDown::from_strings(&[
         "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",\n        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
     ]);
@@ -192,9 +193,17 @@ fn build_ui(
                 melania_config::resolved_icon_theme(&preferences));
         }
     });
-    appearance.append(&icon_variants);
-    appearance.append(&text("Melania Fluent è il nuovo tema predefinito. Se non è installato, Melania usa temporaneamente Aero Classic. Le altre applicazioni applicano il tema al prossimo avvio.", "settings-subtitle"));
-    appearance.append(&text("Intensità effetto vetro", "settings-hero"));
+    let icon_row = GtkBox::new(Orientation::Horizontal, 16);
+    icon_row.add_css_class("settings-card");
+    let icon_summary = GtkBox::new(Orientation::Vertical, 4);
+    icon_summary.set_hexpand(true);
+    icon_summary.append(&text("Tema icone", "settings-row-title"));
+    icon_summary.append(&text("Fluent è predefinito; le app già aperte potrebbero richiedere un riavvio.", "settings-row-description"));
+    icon_row.append(&icon_summary);
+    icon_row.append(&icon_variants);
+    appearance.append(&icon_row);
+    appearance.append(&section("Effetti visivi"));
+    appearance.append(&text("Intensità effetto vetro", "settings-row-title"));
     let blur = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     blur.set_value(prefs.borrow().blur_strength as f64);
     blur.add_css_class("settings-intensity");
@@ -213,7 +222,8 @@ fn build_ui(
     });
     appearance.append(&save_blur);
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
-    let desktop = page("Desktop e finestre", "Le preferenze avanzate previste per Melania.");
+    let desktop = page("Desktop e finestre", "Gestisci il comportamento delle finestre nella sessione Melania.");
+    desktop.append(&section("Finestre"));
     desktop.append(&saved_option("Snap finestre", "Aggancio ai bordi gestito dal compositore dal prossimo avvio della sessione.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
     desktop.append(&saved_option("Anteprime sulla barra", "Catture GPU delle sole finestre della sessione Melania nel selettore al passaggio del mouse. Riavvia il pannello.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
     desktop.append(&saved_option("Raggruppa finestre nella barra", "Un pulsante per applicazione con menu delle sue finestre. Richiede il riavvio del pannello Melania.", prefs.borrow().group_windows, prefs.clone(), |p,v| p.group_windows = v, None));
@@ -222,6 +232,7 @@ fn build_ui(
     // Saved workspace count is applied on compositor/panel startup.
     // Changing mappings while windows are open would risk losing them.
     let workspaces = page("Spazi di lavoro", "Organizza finestre e applicazioni su desktop separati.");
+    workspaces.append(&section("Organizzazione"));
     workspaces.append(&text("Numero di spazi di lavoro fissi (da 1 a 8)", "settings-hero"));
     let workspace_picker = SpinButton::with_range(1.0, 8.0, 1.0);
     workspace_picker.set_value(prefs.borrow().workspace_count as f64);
@@ -254,10 +265,12 @@ fn build_ui(
     workspaces.append(&apply_workspaces);
     workspaces.append(&workspace_feedback);
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
-    let network = page("Rete e Bluetooth", "I dispositivi si controllano dal Centro rapido della shell.");
+    let network = page("Rete e Bluetooth", "Consulta le informazioni sulle connessioni.");
+    network.append(&section("Connessioni"));
     network.append(&text("Wi-Fi: NetworkManager (nmcli) · Bluetooth: BlueZ (bluetoothctl). Per poter agire, i servizi devono essere installati e l'utente deve avere i permessi richiesti.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
-    let accessibility = page("Accessibilità", "Controlli leggeri e leggibili per le interfacce Melania.");
+    let accessibility = page("Accessibilità", "Regola la leggibilità e il movimento dell'interfaccia.");
+    accessibility.append(&section("Visione e movimento"));
     accessibility.append(&saved_option(
         "Riduci movimento",
         "Disattiva le animazioni GTK di Melania; non cambia quelle delle altre applicazioni Linux.",
@@ -273,6 +286,7 @@ fn build_ui(
     accessibility.append(&text("Le preferenze dei pannelli si applicano al prossimo avvio; questa finestra cambia subito.", "settings-subtitle"));
     stack.add_titled(&accessibility, Some("accessibility"), "Accessibilità");
     let keyboard = page("Scorciatoie", "Navigazione rapida nella sessione Wayland di Melania.");
+    keyboard.append(&section("Tastiera"));
     keyboard.append(&text("Alt + Tab  ·  Finestra successiva", "settings-hero"));
     keyboard.append(&text("Alt + Maiusc + Tab  ·  Finestra precedente", "settings-subtitle"));
     keyboard.append(&text("Ctrl + Alt + Freccia sinistra/destra  ·  Cambia spazio di lavoro", "settings-hero"));
@@ -280,6 +294,7 @@ fn build_ui(
     keyboard.append(&text("Le combinazioni sono intercettate dal compositore Melania. Non modificano le scorciatoie del desktop Linux ospitante. La personalizzazione dei tasti arriverà in una milestone successiva.", "settings-subtitle"));
     stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
     let system = page("Sistema", "Informazioni sull'ambiente Melania.");
+    system.append(&section("Informazioni"));
     system.append(&text("Melania Desktop — pre-alpha", "settings-hero"));
     system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
     system.append(&text("Preferenze locali: $XDG_CONFIG_HOME/melania/settings.conf. Le impostazioni hardware sono delegate ai servizi Linux.", "settings-subtitle"));
@@ -292,39 +307,58 @@ fn build_ui(
     }
     let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
-    for (name, target) in [
-        ("◉  Aspetto", "appearance"),
-        ("▣  Desktop e finestre", "desktop"),
-        ("▦  Spazi di lavoro", "workspaces"),
-        ("⌁  Rete e Bluetooth", "network"),
-        ("♿  Accessibilità", "accessibility"),
-        ("⌨  Scorciatoie", "shortcuts"),
-        ("⚙  Sistema", "system"),
+    for (name, target, icon_name) in [
+        ("Aspetto", "appearance", "preferences-desktop-theme"),
+        ("Desktop e finestre", "desktop", "user-desktop"),
+        ("Spazi di lavoro", "workspaces", "view-grid"),
+        ("Rete e Bluetooth", "network", "network-workgroup"),
+        ("Accessibilità", "accessibility", "preferences-desktop-accessibility"),
+        ("Scorciatoie", "shortcuts", "input-keyboard"),
+        ("Sistema", "system", "computer"),
     ] {
-        let b = Button::with_label(name);
-        let s = stack.clone();
-        let nav = navigation.clone();
-        b.connect_clicked(move |clicked| {
-            s.set_visible_child_name(target);
-            for item in nav.borrow().iter() {
-                item.remove_css_class("active-section");
-            }
-            clicked.add_css_class("active-section");
-        });
-        if target == initial_page { b.add_css_class("active-section"); }
-        navigation.borrow_mut().push(b.clone());
-        navigation_labels.borrow_mut().push((b.clone(), name.to_lowercase()));
-        sidebar.append(&b);
+        let button = Button::new();
+        button.add_css_class("settings-nav-item");
+        button.set_hexpand(true);
+        button.set_tooltip_text(Some(name));
+        let row = GtkBox::new(Orientation::Horizontal, 12);
+        row.add_css_class("settings-nav-content");
+        let icon = Image::from_icon_name(icon_name);
+        icon.set_pixel_size(19);
+        row.append(&icon);
+        let caption = Label::new(Some(name));
+        caption.set_xalign(0.0);
+        caption.set_hexpand(true);
+        row.append(&caption);
+        button.set_child(Some(&row));
+        let navigation_stack = stack.clone();
+        button.connect_clicked(move |_| navigation_stack.set_visible_child_name(target));
+        if target == initial_page { button.add_css_class("active-section"); }
+        navigation.borrow_mut().push(button.clone());
+        navigation_labels.borrow_mut().push((button.clone(), name.to_lowercase()));
+        navigation_list.append(&button);
     }
+    // Reflect programmatic navigation from the panel or command-line requests.
+    let buttons = navigation.clone();
+    stack.connect_visible_child_name_notify(move |stack| {
+        let current = stack.visible_child_name();
+        for (i, name) in SETTINGS_PAGES.iter().enumerate() {
+            if let Some(button) = buttons.borrow().get(i) {
+                if current.as_deref() == Some(*name) {
+                    button.add_css_class("active-section");
+                } else {
+                    button.remove_css_class("active-section");
+                }
+            }
+        }
+    });
     let categories = navigation_labels.clone();
     category_search.connect_changed(move |search| {
         let query = search.text().to_lowercase();
         for (button, label) in categories.borrow().iter() {
-            button.set_visible(query.is_empty() || label.contains(query.as_str()));
+            button.set_visible(query.trim().is_empty() || label.contains(query.trim()));
         }
     });
-    let warning = text("Il tema Aero è disponibile nell'interfaccia. La sfocatura reale dello sfondo arriverà con il renderer Smithay.", "settings-warning");
-    sidebar.append(&warning);
+    sidebar.append(&text("Melania Desktop  ·  Impostazioni locali", "settings-sidebar-footer"));
     root.append(&sidebar);
     let main_panel = GtkBox::new(Orientation::Vertical, 0);
     main_panel.add_css_class("settings-main");
