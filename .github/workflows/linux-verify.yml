@@ -63,11 +63,17 @@ jobs:
         run: |
           set -o pipefail
           cargo check -p melania-files -p melania-settings -p melania-preview -p melania-panel -p melania-desktop-surface --all-targets 2>&1 | tee gtk-build.log
+      - name: Taskbar grouping unit tests
+        run: |
+          set -o pipefail
+          cargo test -p melania-panel --bin melania-panel 2>&1 | tee gtk-panel-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gtk-build-log
-          path: gtk-build.log
+          path: |
+            gtk-build.log
+            gtk-panel-tests.log
 
 
   rust-notifications:

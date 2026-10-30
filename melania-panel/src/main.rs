@@ -1,6 +1,7 @@
 //! First independent GTK4 layer-shell taskbar for Melania.
 //! This requires a compositor advertising zwlr_layer_shell_v1.
-//! Window list comes from the compositor IPC; thumbnails are not yet implemented.
+//! Window list comes from compositor IPC; thumbnails still require compositor capture.
+mod window_groups;
 use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -87,7 +88,10 @@ fn start_window(app:&Application)->ApplicationWindow {
     let root=GtkBox::new(Orientation::Vertical,9);
     root.add_css_class("melania-panel");
     root.add_css_class("melania-start-panel");
-    let query=Entry::builder().placeholder_text("Cerca applicazioni, file, impostazioni...").build();
+    if melania_config::load().unwrap_or_default().high_contrast {
+        root.add_css_class("high-contrast");
+    }
+    let query=Entry::builder().placeholder_text("Cerca applicazioni, cartelle, impostazioni...").build();
     query.add_css_class("melania-entry");
     root.append(&query);
     let columns=GtkBox::new(Orientation::Horizontal,10);
@@ -100,7 +104,8 @@ fn start_window(app:&Application)->ApplicationWindow {
     scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
     let apps_box=GtkBox::new(Orientation::Vertical,3);
     apps_box.add_css_class("melania-start-apps");
-    let mut searchable:Vec<(Button,String)>=Vec::new();
+    // Search-only results remain hidden in the normal classic app list.
+    let mut searchable:Vec<(Button,String,bool)>=Vec::new();
     for (name,program,icon) in [
         ("Melania Files", "melania-files", "org.melaniadesktop.Files"),
         ("Impostazioni", "melania-settings", "preferences-system"),
@@ -109,7 +114,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         let menu=w.clone();
         button.connect_clicked(move |_| { run(program); menu.set_visible(false); });
         apps_box.append(&button);
-        searchable.push((button,name.to_lowercase()));
+        searchable.push((button,name.to_lowercase(),false));
     }
     let mut apps=gio::AppInfo::all().into_iter().filter(|app|app.should_show()).collect::<Vec<_>>();
     apps.sort_by_key(|app|app.name().to_string().to_lowercase());
@@ -130,19 +135,73 @@ fn start_window(app:&Application)->ApplicationWindow {
             }
         });
         apps_box.append(&button);
-        searchable.push((button,name.to_lowercase()));
+        searchable.push((button,name.to_lowercase(),false));
     }
-    let empty=label("Nessuna applicazione trovata", "melania-sub");
+    // GNOME/COSMIC-inspired unified search without background indexing or
+    // filesystem traversal: only apps, known settings sections and XDG folders.
+    for (name, page, keywords) in [
+        ("Aspetto", "appearance", "tema aero glass colori trasparenza scuro"),
+        ("Desktop e finestre", "desktop", "snap anteprime finestre barra raggruppamento"),
+        ("Spazi di lavoro", "workspaces", "workspace desktop virtuali"),
+        ("Rete e Bluetooth", "network", "wifi wi-fi bluetooth connessione"),
+        ("Accessibilità", "accessibility", "contrasto movimento animazioni"),
+        ("Sistema", "system", "informazioni versione sistema"),
+    ] {
+        let caption = format!("Impostazioni · {name}");
+        let button=icon_row(&caption,"preferences-system","melania-action");
+        button.add_css_class("melania-search-result");
+        button.set_visible(false);
+        let menu=w.clone();
+        button.connect_clicked(move |_| {
+            if let Err(e)=Command::new("melania-settings").arg(page).spawn() {
+                eprintln!("Melania settings search: {e}");
+            } else { menu.set_visible(false); }
+        });
+        searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),keywords),true));
+        apps_box.append(&button);
+    }
+    for (name, kind, icon_name) in [
+        ("Home", "HOME", "user-home"),
+        ("Documenti", "DOCUMENTS", "folder-documents"),
+        ("Immagini", "PICTURES", "folder-pictures"),
+        ("Download", "DOWNLOAD", "folder-download"),
+    ] {
+        let caption=format!("Cartella · {name}");
+        let button=icon_row(&caption,icon_name,"melania-action");
+        button.add_css_class("melania-search-result");
+        button.set_visible(false);
+        let menu=w.clone();
+        button.connect_clicked(move |_| {
+            let folder=xdg_shortcut_directory(kind);
+            if let Err(e)=Command::new("melania-files").arg(folder).spawn() {
+                eprintln!("Melania folder search: {e}");
+            } else {menu.set_visible(false);}
+        });
+        searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),kind.to_lowercase()),true));
+        apps_box.append(&button);
+    }
+    let empty=label("Nessun risultato: applicazioni, cartelle o impostazioni", "melania-sub");
     empty.set_visible(false);apps_box.append(&empty);
+    let searchable=Rc::new(searchable);
+    let searchable_for_filter=searchable.clone();
     query.connect_changed(move |q| {
-        let text=q.text().to_lowercase();
+        let term=q.text().trim().to_lowercase();
         let mut visible=0;
-        for (button,name) in &searchable {
-            let matches=name.contains(&text);
+        for (button,name,search_only) in searchable_for_filter.iter() {
+            let matches=if term.is_empty() { !search_only } else { name.contains(&term) };
             button.set_visible(matches);
             if matches {visible+=1;}
         }
         empty.set_visible(visible==0);
+    });
+    let searchable_for_enter=searchable.clone();
+    let entry=query.clone();
+    query.connect_activate(move |_| {
+        let term=entry.text().trim().to_lowercase();
+        if term.is_empty(){return;}
+        if let Some((button,_,_))=searchable_for_enter.iter().find(|(_,name,_)|name.contains(&term)) {
+            button.emit_clicked();
+        }
     });
     scroll.set_child(Some(&apps_box));left.append(&scroll);
     columns.append(&left);
@@ -237,6 +296,7 @@ fn quick_window(app:&Application, notifications:&ApplicationWindow)->Application
     w.set_margin(Edge::Bottom,65);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,12);root.add_css_class("melania-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {root.add_css_class("high-contrast");}
     let tabs=GtkBox::new(Orientation::Horizontal,6);
     tabs.add_css_class("melania-tabs");
     let notifications_button=Button::with_label("Notifiche");
@@ -308,6 +368,7 @@ fn running_window_strip() -> GtkBox {
     let box_running = GtkBox::new(Orientation::Horizontal, 4);
     box_running.add_css_class("melania-running");
     let last: Rc<RefCell<Option<Vec<WindowInfo>>>> = Rc::new(RefCell::new(None));
+    let group_enabled = melania_config::load().unwrap_or_default().group_windows;
     let path = std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let refresh = {
         let target = box_running.clone();
@@ -322,7 +383,105 @@ fn running_window_strip() -> GtkBox {
             };
             if last.borrow().as_ref() == Some(&windows) {return;}
             while let Some(child) = target.first_child() {target.remove(&child);}
-            for window in &windows {
+            for group in window_groups::group_windows(&windows, group_enabled) {
+                // Grouped applications use a native, keyboard-accessible GTK
+                // popover. Each action still addresses one compositor window ID.
+                if group.windows.len() > 1 {
+                    let first = group.windows.iter().find(|w| w.active)
+                        .unwrap_or(&group.windows[0]);
+                    let count = group.windows.len();
+                    let app_name = if group.app_id.trim().is_empty() {
+                        "Applicazione".to_string()
+                    } else {
+                        group.app_id.rsplit('.').next().unwrap_or(&group.app_id).to_string()
+                    };
+                    let menu = gtk::MenuButton::new();
+                    menu.add_css_class("melania-window");
+                    menu.add_css_class("melania-window-group");
+                    if group.active() { menu.add_css_class("melania-window-active"); }
+                    if group.all_minimized() { menu.add_css_class("melania-window-minimized"); }
+                    menu.set_tooltip_text(Some(&format!("{count} finestre — {}", group.app_id)));
+                    let entry = GtkBox::new(Orientation::Horizontal, 5);
+                    let icon = Image::from_icon_name(&first.app_id);
+                    icon.set_pixel_size(18);
+                    entry.append(&icon);
+                    entry.append(&label(&format!("{app_name} ({count})"),"melania-row-text"));
+                    menu.set_child(Some(&entry));
+                    let popover = gtk::Popover::new();
+                    popover.add_css_class("melania-group-popover");
+                    let list = GtkBox::new(Orientation::Vertical, 5);
+                    list.add_css_class("melania-group-list");
+                    for grouped_window in &group.windows {
+                        let id = grouped_window.id;
+                        let text = if grouped_window.title.chars().count() > 48 {
+                            format!("{}…", grouped_window.title.chars().take(47).collect::<String>())
+                        } else { grouped_window.title.clone() };
+                        let row = GtkBox::new(Orientation::Horizontal, 4);
+                        let focus = Button::with_label(&text);
+                        focus.add_css_class("melania-action");
+                        focus.set_hexpand(true);
+                        focus.set_tooltip_text(Some(&grouped_window.title));
+                        let action = if grouped_window.active && !grouped_window.minimized {
+                            WindowCommand::Minimize(id)
+                        } else { WindowCommand::Activate(id) };
+                        let socket = path.clone();
+                        let flyout = popover.clone();
+                        focus.connect_clicked(move |_| {
+                            if let Some(endpoint) = socket.as_ref() {
+                                if let Err(e) = control_request(endpoint, action) {
+                                    eprintln!("Melania grouped taskbar: {e}");
+                                }
+                            }
+                            flyout.popdown();
+                        });
+                        row.append(&focus);
+                        let close = Button::with_label("×");
+                        close.add_css_class("melania-close-window");
+                        close.set_tooltip_text(Some("Chiudi questa finestra"));
+                        let socket = path.clone();
+                        let flyout = popover.clone();
+                        close.connect_clicked(move |_| {
+                            if let Some(endpoint) = socket.as_ref() {
+                                if let Err(e) = control_request(endpoint, WindowCommand::Close(id)) {
+                                    eprintln!("Melania grouped close: {e}");
+                                }
+                            }
+                            flyout.popdown();
+                        });
+                        row.append(&close);
+                        list.append(&row);
+                    }
+                    popover.set_child(Some(&list));
+                    menu.set_popover(Some(&popover));
+                    // Preserve safe hover activation when dragging files over a
+                    // group; DnD remains COPY-only and is owned by the client.
+                    let hover_target = gtk::DropTarget::new(
+                        gdk::FileList::static_type(), gdk::DragAction::COPY
+                    );
+                    let hovering = Rc::new(Cell::new(false));
+                    let entered = hovering.clone();
+                    let hover_socket = path.clone();
+                    let hover_id = first.id;
+                    hover_target.connect_enter(move |_,_,_| {
+                        entered.set(true);
+                        let still_here = entered.clone();
+                        let endpoint = hover_socket.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+                            if still_here.get() {
+                                if let Some(socket) = endpoint.as_ref() {
+                                    let _ = control_request(socket, WindowCommand::Activate(hover_id));
+                                }
+                            }
+                        });
+                        gdk::DragAction::COPY
+                    });
+                    let exited = hovering.clone();
+                    hover_target.connect_leave(move |_| exited.set(false));
+                    menu.add_controller(hover_target);
+                    target.append(&menu);
+                    continue;
+                }
+                let window = &group.windows[0];
                 let id = window.id;
                 let title = if window.title.chars().count() > 28 {
                     format!("{}…",window.title.chars().take(27).collect::<String>())
@@ -396,6 +555,8 @@ fn workspace_strip() -> GtkBox {
     let path=std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let mut buttons=Vec::new();
     let count = melania_config::load().unwrap_or_default().workspace_count;
+    let extras = GtkBox::new(Orientation::Vertical, 3);
+    extras.add_css_class("melania-workspace-extras");
     for n in 1..=count {
         let b=Button::with_label(&n.to_string());
         b.add_css_class("melania-workspace-button");
@@ -409,11 +570,35 @@ fn workspace_strip() -> GtkBox {
                 }
             }
         });
-        row.append(&b);buttons.push(b);
+        if n <= 4 { row.append(&b); } else { extras.append(&b); }
+        buttons.push(b);
     }
+    // At most four workspace buttons occupy the bar. Remaining desktops
+    // live in a popover, keeping the 1024px Aero layout usable.
+    let overflow = if count > 4 {
+        let more = gtk::MenuButton::new();
+        more.set_label("Altri ▾");
+        more.add_css_class("melania-workspace-overflow");
+        more.set_tooltip_text(Some("Altri spazi di lavoro"));
+        let popover = gtk::Popover::new();
+        popover.add_css_class("melania-group-popover");
+        popover.set_child(Some(&extras));
+        more.set_popover(Some(&popover));
+        row.append(&more);
+        Some(more)
+    } else { None };
     let refresh=move || {
         if let Some(path)=path.as_ref() {
             if let Ok(active)=current_workspace(path) {
+                if let Some(ref more) = overflow {
+                    if active > 4 {
+                        more.set_label(&format!("{active} ▾"));
+                        more.add_css_class("melania-workspace-active");
+                    } else {
+                        more.set_label("Altri ▾");
+                        more.remove_css_class("melania-workspace-active");
+                    }
+                }
                 for (index,button) in buttons.iter().enumerate() {
                     if (index+1) as u8==active {button.add_css_class("melania-workspace-active");}
                     else {button.remove_css_class("melania-workspace-active");}
@@ -435,6 +620,7 @@ fn notifications_window(app: &Application) -> ApplicationWindow {
     w.set_margin(Edge::Bottom,65);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,10);root.add_css_class("melania-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {root.add_css_class("high-contrast");}
     let tabs=GtkBox::new(Orientation::Horizontal,6);
     tabs.add_css_class("melania-tabs");
     let current=Button::with_label("Notifiche");
@@ -536,6 +722,7 @@ fn calendar_window(app:&Application)->ApplicationWindow {
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,9);
     root.add_css_class("melania-panel");root.add_css_class("melania-calendar-panel");
+    if melania_config::load().unwrap_or_default().high_contrast {root.add_css_class("high-contrast");}
     let now=glib::DateTime::now_local().expect("orologio del sistema");
     let today=(now.year(),now.month() as u32,now.day_of_month() as u32);
     let visible=Rc::new(Cell::new((today.0,today.1)));
@@ -569,6 +756,9 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let w=make_surface(app,Layer::Top,&[Edge::Bottom,Edge::Left,Edge::Right],0,52,0,"melania-panel",52);
     w.set_keyboard_mode(KeyboardMode::None);
     let bar=GtkBox::new(Orientation::Horizontal,8);bar.add_css_class("melania-bar");
+    if melania_config::load().unwrap_or_default().high_contrast {
+        bar.add_css_class("high-contrast");
+    }
     let menu=Button::new();menu.add_css_class("melania-start");
     let logo=Image::from_icon_name("melania");logo.set_pixel_size(31);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
     let sm=start.clone();let qs=quick.clone();let nt=notifications.clone();
@@ -617,8 +807,17 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         pinned.append(&b);
     }
     bar.append(&pinned);
+    // XFCE-like horizontal overflow rather than squeezing or hiding windows.
+    // The original running-window buttons remain untouched inside the viewport.
     let running = running_window_strip();
-    bar.append(&running);
+    let running_scroll = gtk::ScrolledWindow::new();
+    running_scroll.add_css_class("melania-running-scroll");
+    running_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+    running_scroll.set_min_content_width(140);
+    running_scroll.set_max_content_width(610);
+    running_scroll.set_hexpand(true);
+    running_scroll.set_child(Some(&running));
+    bar.append(&running_scroll);
     bar.append(&workspace_strip());
     let space=GtkBox::new(Orientation::Horizontal,1);space.set_hexpand(true);bar.append(&space);
     // Shell-only 20 px symbolic glyphs: these names are supplied by Melania Aero
@@ -685,6 +884,11 @@ fn build(app:&Application){
     if !gtk4_layer_shell::is_supported() {
         eprintln!("Melania Panel requires Wayland with zwlr_layer_shell_v1 (try the nested compositor)");
         return;
+    }
+    let preferences = melania_config::load().unwrap_or_default();
+    if let Some(gtk_settings) = gtk::Settings::default() {
+        gtk_settings.set_property("gtk-enable-animations",
+            preferences.animations && !preferences.reduce_motion);
     }
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}

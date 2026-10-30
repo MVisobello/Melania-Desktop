@@ -268,3 +268,56 @@ headerbar.settings-titlebar.settings-dark windowcontrols button { color: #edf8ff
   background: rgba(38,99,153,0.88);
   color: #e6f4ff;
 }
+
+/* M3 — scoped high contrast. Default blue Aero remains unchanged. */
+.settings-root.high-contrast {
+  background: #eef7ff;
+  color: #071d33;
+}
+.settings-root.high-contrast .settings-sidebar {
+  background: #d9ecff;
+  border-right: 2px solid #144c7c;
+}
+.settings-root.high-contrast .settings-main {
+  background: #ffffff;
+}
+.settings-root.high-contrast .settings-heading,
+.settings-root.high-contrast .settings-hero,
+.settings-root.high-contrast .settings-subtitle,
+.settings-root.high-contrast .settings-sidebar button,
+.settings-root.high-contrast .settings-workspace-picker,
+.settings-root.high-contrast .settings-search {
+  color: #071d33;
+}
+.settings-root.high-contrast .settings-card {
+  background: #ffffff;
+  color: #071d33;
+  border: 2px solid #164c79;
+  box-shadow: none;
+}
+.settings-root.high-contrast .settings-sidebar button.active-section {
+  color: #ffffff;
+  background: #134c81;
+  border: 2px solid #06213e;
+}
+.settings-root.high-contrast .settings-sidebar button.active-section,
+.settings-root.high-contrast .settings-save {
+  font-weight: 700;
+}
+.settings-root.high-contrast switch.settings-switch {
+  border: 2px solid #082f59;
+}
+.settings-root.high-contrast .settings-save,
+.settings-root.high-contrast .settings-search {
+  background: #ffffff;
+  border: 2px solid #164c79;
+  color: #071d33;
+}
+headerbar.settings-titlebar.high-contrast {
+  background: #165487;
+  border-bottom: 2px solid #061d37;
+}
+headerbar.settings-titlebar.high-contrast .title,
+headerbar.settings-titlebar.high-contrast windowcontrols button {
+  color: #ffffff;
+}

@@ -12,12 +12,20 @@ pub struct Preferences {
     pub blur_strength: u8,
     /// Fixed workspace count; applied when the compositor and panel start.
     pub workspace_count: u8,
+    /// Group taskbar buttons by application ID; disabled on upgrades only
+    /// when a user explicitly saved false in their preferences.
+    pub group_windows: bool,
+    /// Reduce GTK animations in Melania applications and shell panels.
+    pub reduce_motion: bool,
+    /// Increase contrast of Melania shell and Settings (not host GTK themes).
+    pub high_contrast: bool,
 }
 impl Default for Preferences {
     fn default() -> Self { Self {
         dark_mode: false, aero_glass: true, animations: true,
         snap_windows: true, preview_windows: true,
         do_not_disturb: false, blur_strength: 70, workspace_count: 4,
+        group_windows: false, reduce_motion: false, high_contrast: false,
     } }
 }
 impl Preferences {
@@ -36,15 +44,19 @@ impl Preferences {
                 "do_not_disturb" => if let Some(b) = as_bool() { prefs.do_not_disturb = b },
                 "blur_strength" => if let Ok(n) = v.parse::<u8>() { prefs.blur_strength = n.min(100) },
                 "workspace_count" => if let Ok(n) = v.parse::<u8>() { if (1..=8).contains(&n) { prefs.workspace_count = n; } },
+                "group_windows" => if let Some(b) = as_bool() { prefs.group_windows = b },
+                "reduce_motion" => if let Some(b) = as_bool() { prefs.reduce_motion = b },
+                "high_contrast" => if let Some(b) = as_bool() { prefs.high_contrast = b },
                 _ => {}, // future versions can read older/newer files
             }
         }
         prefs
     }
     pub fn to_text(&self) -> String { format!(
-        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\n",
+        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\n",
         self.dark_mode, self.aero_glass, self.animations, self.snap_windows,
-        self.preview_windows, self.do_not_disturb, self.blur_strength, self.workspace_count)
+        self.preview_windows, self.do_not_disturb, self.blur_strength, self.workspace_count,
+        self.group_windows, self.reduce_motion, self.high_contrast)
     }
     pub fn read_from(path: &Path) -> io::Result<Self> {
         match fs::read_to_string(path) {
@@ -109,6 +121,19 @@ mod tests {
         let mut p = Preferences::default();
         p.workspace_count = 6;
         assert_eq!(Preferences::from_text(&p.to_text()), p);
+    }
+    #[test] fn compatible_productivity_and_accessibility_preferences() {
+        let old = Preferences::from_text("workspace_count=4\nsnap_windows=true");
+        assert!(!old.group_windows);
+        assert!(!old.reduce_motion);
+        assert!(!old.high_contrast);
+        let p = Preferences::from_text(
+            "group_windows=true\nreduce_motion=true\nhigh_contrast=true\n"
+        );
+        assert!(p.group_windows && p.reduce_motion && p.high_contrast);
+        assert_eq!(Preferences::from_text(&p.to_text()), p);
+        let bad = Preferences::from_text("group_windows=probably\nreduce_motion=1\nhigh_contrast=");
+        assert!(!bad.group_windows && !bad.reduce_motion && !bad.high_contrast);
     }
     #[test] fn reads_and_writes_file() {
         let dir = std::env::temp_dir().join(format!("melania-test-{}-{:?}", std::process::id(), std::thread::current().id()));
