@@ -97,12 +97,29 @@ fn battery_status() -> String {
         format!("{name}: {capacity} · {status}")
     }).collect::<Vec<_>>().join("; ")
 }
+pub fn network_status() -> String {
+    let output = Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let entries: Vec<_> = text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .take(5).collect();
+            if entries.is_empty() { "Nessuna interfaccia di rete rilevata.".into() }
+            else { entries.join("  ·  ") }
+        }
+        _ => "NetworkManager non disponibile in questa sessione.".into(),
+    }
+}
 fn root_storage() -> String {
     let output = Command::new("df").args(["-h", "--output=size,used,avail,pcent", "/"])
         .output();
     if let Ok(output) = output {
         if output.status.success() {
-            if let Some(line) = String::from_utf8_lossy(&output.stdout).lines()
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines()
                 .filter(|line| !line.trim().is_empty()).last() {
                 let values: Vec<_> = line.split_whitespace().collect();
                 if values.len() == 4 {
