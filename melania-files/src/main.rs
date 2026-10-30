@@ -1,4 +1,6 @@
 //! Early working filesystem browser, not a replacement for a mature file manager yet.
+#[path = "../../branding/window_controls.rs"]
+mod window_controls;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use melania_transfer as transfer;
@@ -1643,12 +1645,11 @@ fn build_ui(app: &Application) {
         .title("Melania Files")
         .default_width(initial_width).default_height(initial_height).build();
     window.add_css_class("melania-files-window");
-    // One integrated native header: [+] [tabs...] [minimize/maximize/close].
-    // GTK keeps the real draggable window chrome and accessible controls.
+    // One integrated header: [+] [tabs...] [shared Win7 controls].
+    // Same accessible, functional titlebar buttons as Melania Settings.
     let aero_header = gtk::HeaderBar::new();
     aero_header.add_css_class("files-aero-header");
-    aero_header.set_show_title_buttons(true);
-    aero_header.set_decoration_layout(Some(":minimize,maximize,close"));
+    window_controls::install(&window, &aero_header);
     // Override GTK HeaderBar's automatic centered window-title widget:
     // the tabs ARE the titlebar, never add a duplicate app title.
     let no_title = GtkBox::new(Orientation::Horizontal, 0);

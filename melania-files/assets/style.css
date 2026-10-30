@@ -232,19 +232,6 @@ headerbar.files-aero-header .title {
   color: #153e67;
   font-weight: 700;
 }
-headerbar.files-aero-header windowcontrols button {
-  min-width: 26px;
-  min-height: 24px;
-  border-radius: 7px;
-  color: #173d61;
-  background: rgba(241,251,255,0.20);
-  border: 1px solid transparent;
-  box-shadow: none;
-}
-headerbar.files-aero-header windowcontrols button:hover {
-  background: rgba(248,253,255,0.65);
-  border-color: rgba(255,255,255,0.70);
-}
 
 /* Melania Files: one native top row [+][tabs ...][window buttons].
  * Keep the approved light-blue Aero appearance; real GPU backdrop blur
@@ -451,38 +438,7 @@ headerbar.files-aero-header {
 }
 
 
-/* Melania window chrome — native GTK buttons, classic Windows 7 visual language.
- * Controls still use GTK's minimize/maximize/close actions and accessibility.
- * Scope intentionally excludes tabs and in-window buttons.
+/* Window buttons are intentionally styled only in
+ * branding/window-chrome-win7.css, shared with Melania Settings.
+ * No native GtkHeaderBar windowcontrols are used in this application.
  */
-headerbar.files-aero-header windowcontrols { border-spacing: 0px; margin: 0 4px 0 0; }
-headerbar.files-aero-header windowcontrols button {
-  min-width: 29px;
-  min-height: 22px;
-  margin: 0;
-  padding: 2px 5px;
-  border-radius: 0;
-  color: #1c4167;
-  background-image: linear-gradient(to bottom,#f2fbff,#d1e6f6 55%,#a7cae9);
-  border: 1px solid #87afce;
-  box-shadow: inset 0 1px rgba(255,255,255,.96);
-}
-headerbar.files-aero-header windowcontrols button.minimize { border-radius: 0 0 0 6px; }
-headerbar.files-aero-header windowcontrols button.close {
-  min-width: 37px;
-  border-radius: 0 0 6px 0;
-  background-image: linear-gradient(to bottom,#f59a96,#dd5450 60%,#b52a34);
-  border-color: #ac4d53;
-  color: #ffffff;
-}
-headerbar.files-aero-header windowcontrols button:hover {
-  background-image: linear-gradient(to bottom,#ffffff,#cae7fc 55%,#72b6e9);
-  border-color: #4c95cb;
-}
-headerbar.files-aero-header windowcontrols button.close:hover {
-  background-image: linear-gradient(to bottom,#ffaca6,#f2514b 55%,#c9212c);
-  border-color: #a8343e;
-}
-headerbar.files-aero-header windowcontrols button:active {
-  box-shadow: inset 0 2px 3px rgba(31,76,107,.25);
-}
