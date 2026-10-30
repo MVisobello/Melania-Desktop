@@ -316,9 +316,10 @@ impl Melania {
                         let position = self.seat.get_pointer().expect("pointer").current_location();
                         if let Some(zone) = detect_snap(position.x as i32,position.y as i32,full,18) {
                             let target = snap_geometry(zone,area);
-                            if let Some(window) = self.space.elements()
-                                .find(|w|w.toplevel().is_some_and(|t| t.wl_surface()==top.wl_surface())).cloned() {
-                                self.space.map_element(window.clone(), (target.x,target.y), false);
+                            let snapped_window = self.space.elements()
+                                .find(|w|w.toplevel().is_some_and(|t| t.wl_surface()==top.wl_surface())).cloned();
+                            if let Some(window) = snapped_window {
+                                self.space.map_element(window, (target.x,target.y), false);
                                 top.with_pending_state(|s| {
                                     s.size=Some((target.width as i32,target.height as i32).into());
                                     if zone == SnapZone::Top {s.states.set(xdg_toplevel::State::Maximized);}
@@ -534,7 +535,7 @@ fn frame_done(surface: &WlSurface, elapsed_ms: u32) {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut display = Display::<Melania>::new()?;
-    let handle = display.handle();
+    let mut handle = display.handle();
     let mut seats = SeatState::new();
     let mut seat = seats.new_wl_seat(&handle, "melania-seat0");
     seat.add_keyboard(Default::default(), 250, 40)?;
