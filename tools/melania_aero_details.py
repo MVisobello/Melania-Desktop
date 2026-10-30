@@ -179,6 +179,16 @@ def _status(name: str, variant: str) -> str:
 def refined_artwork(name: str, category: str, variant: str, symbolic: bool,
                     size: int = 96) -> str | None:
     compact = size <= 24
+    # Upstream icon inventories put several system and category names in apps,
+    # not in devices/categories. Artwork follows the *name*, not that accident.
+    if category == "apps":
+        if name in DEVICES or name in EXTRA_DEVICES:
+            return device(DEVICES.get(name, EXTRA_DEVICES.get(name)))
+        if name in FILES or name in EXTRA_FILES:
+            kind = FILES.get(name, EXTRA_FILES.get(name))
+            return _compact_document(kind) if compact else document(kind)
+        if name in CATEGORY_MARKS:
+            category = "categories"
     if category in ("status", "panel") and _status_kind(name):
         return _status(name, variant)
     # Symbolic actions need a high contrast glyph without gradients or badges.
@@ -215,7 +225,7 @@ def refined_artwork(name: str, category: str, variant: str, symbolic: bool,
             return document(EXTRA_FILES[name])
     if category == "devices":
         kind = DEVICES.get(name, EXTRA_DEVICES.get(name))
-        if kind and name in EXTRA_DEVICES:
+        if kind:
             return device(kind)
     if category == "categories" and name in CATEGORY_MARKS:
         kind = CATEGORY_MARKS[name]
@@ -231,6 +241,10 @@ def refined_artwork(name: str, category: str, variant: str, symbolic: bool,
 
 
 def is_curated(name: str, category: str) -> bool:
+    if category == "apps":
+        return (name in DEVICES or name in EXTRA_DEVICES or
+                name in FILES or name in EXTRA_FILES or
+                name in CATEGORY_MARKS)
     if category == "actions":
         return name in ACTIONS or name in EXTRA_ACTIONS
     if category == "places":
