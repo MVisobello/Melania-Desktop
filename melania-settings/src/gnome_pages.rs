@@ -1,7 +1,8 @@
 //! GNOME-inspired, honest Melania Settings information architecture.
 //! Settings displayed here never mutate host GNOME/Cinnamon configuration.
 use gtk::prelude::*;
-use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack};
+use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack, Scale};
+use crate::symbols;
 use std::{env, fs, process::Command};
 
 fn label(value: &str, class: &str) -> Label {
@@ -16,8 +17,7 @@ fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
     page.add_css_class("settings-body");
     let heading = GtkBox::new(Orientation::Horizontal, 18);
     heading.add_css_class("settings-page-heading");
-    let image = Image::from_icon_name(icon);
-    image.set_pixel_size(42);
+    let image = symbols::icon(icon, 42);
     image.add_css_class("settings-page-icon");
     heading.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -35,8 +35,7 @@ pub fn info_row(icon: &str, title: &str, description: &str) -> GtkBox {
     let row = GtkBox::new(Orientation::Horizontal, 15);
     row.add_css_class("settings-info-row");
     row.set_valign(Align::Center);
-    let image = Image::from_icon_name(icon);
-    image.set_pixel_size(23);
+    let image = symbols::icon(icon, 23);
     image.add_css_class("settings-row-icon");
     row.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -52,8 +51,7 @@ pub fn linked_row(stack: &Stack, target: &str, icon: &str, title: &str, descript
     button.set_hexpand(true);
     let layout = GtkBox::new(Orientation::Horizontal, 15);
     layout.set_valign(Align::Center);
-    let image = Image::from_icon_name(icon);
-    image.set_pixel_size(25);
+    let image = symbols::icon(icon, 25);
     image.add_css_class("settings-row-icon");
     layout.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -77,6 +75,66 @@ fn read_command(program: &str, args: &[&str]) -> Option<String> {
     let text = String::from_utf8_lossy(&output.stdout);
     let line = text.lines().map(str::trim).find(|s| !s.is_empty())?;
     Some(line.chars().take(170).collect())
+}
+
+fn battery_status() -> String {
+    // Do not assume BAT0: convertible laptops and external battery packs use
+    // BAT1, BAT2 or other BAT* devices.
+    let batteries = fs::read_dir("/sys/class/power_supply").ok()
+        .into_iter().flatten().flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("BAT"))
+        .collect::<Vec<_>>();
+    if batteries.is_empty() {
+        return "Nessuna batteria rilevata (possibile computer fisso).".into();
+    }
+    batteries.iter().map(|battery| {
+        let path = battery.path();
+        let name = battery.file_name().to_string_lossy().to_string();
+        let capacity = fs::read_to_string(path.join("capacity")).ok()
+            .map(|x| format!("{}%", x.trim())).unwrap_or_else(|| "carica non disponibile".into());
+        let status = fs::read_to_string(path.join("status")).ok()
+            .map(|x| x.trim().to_string()).unwrap_or_else(|| "stato sconosciuto".into());
+        format!("{name}: {capacity} · {status}")
+    }).collect::<Vec<_>>().join("; ")
+}
+pub fn network_status() -> String {
+    let output = Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let entries: Vec<_> = text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .take(5).collect();
+            if entries.is_empty() { "Nessuna interfaccia di rete rilevata.".into() }
+            else { entries.join("  ·  ") }
+        }
+        _ => "NetworkManager non disponibile in questa sessione.".into(),
+    }
+}
+fn root_storage() -> String {
+    let output = Command::new("df").args(["-h", "--output=size,used,avail,pcent", "/"])
+        .output();
+    if let Ok(output) = output {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines()
+                .filter(|line| !line.trim().is_empty()).last() {
+                let values: Vec<_> = line.split_whitespace().collect();
+                if values.len() == 4 {
+                    return format!("Totale {} · utilizzati {} · disponibili {} · occupazione {}",
+                        values[0], values[1], values[2], values[3]);
+                }
+            }
+        }
+    }
+    "Spazio disponibile non determinabile.".into()
+}
+fn parse_volume(output: &str) -> Option<f64> {
+    let normalized = output.trim().strip_prefix("Volume:")?;
+    let volume = normalized.split_whitespace().next()?.parse::<f64>().ok()?;
+    if volume.is_finite() { Some((volume * 100.0).clamp(0.0, 100.0)) } else { None }
 }
 fn os_name() -> String {
     fs::read_to_string("/etc/os-release").ok()
@@ -121,20 +179,48 @@ pub fn add_pages(stack: &Stack) {
         "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
     stack.add_titled(&display, Some("display"), "Schermo");
 
-    let audio = page("Audio", "Stato dei dispositivi audio Linux.", "audio-card");
-    group(&audio, "Dispositivi");
-    audio.append(&info_row("audio-volume-high", "Server audio",
-        &read_command("wpctl", &["status"])
-            .unwrap_or_else(|| "PipeWire/WirePlumber non interrogabile da questa sessione.".into())));
-    audio.append(&info_row("dialog-information", "Configurazione audio",
-        "I controlli dei volumi saranno disponibili dopo l'integrazione PipeWire. Questa pagina è attualmente informativa."));
+    let audio = page("Audio", "Volume e uscita audio tramite PipeWire/WirePlumber.", "audio-card");
+    group(&audio, "Uscita audio");
+    let current_volume = read_command("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .and_then(|output| parse_volume(&output));
+    if let Some(volume) = current_volume {
+        audio.append(&info_row("audio-volume-high", "Volume attuale",
+            &format!("{volume:.0}% · dispositivo di uscita predefinito")));
+        let controls = GtkBox::new(Orientation::Horizontal, 12);
+        controls.add_css_class("settings-action-row");
+        let level = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+        level.set_value(volume);
+        level.set_hexpand(true);
+        level.set_tooltip_text(Some("Volume audio in percentuale"));
+        let apply = Button::with_label("Applica volume");
+        apply.add_css_class("settings-save");
+        let feedback = label("", "settings-action-feedback");
+        let scale = level.clone();
+        let response = feedback.clone();
+        apply.connect_clicked(move |_| {
+            let requested = format!("{:.2}", scale.value().clamp(0.0, 100.0) / 100.0);
+            let status = Command::new("wpctl")
+                .args(["set-volume", "@DEFAULT_AUDIO_SINK@", requested.as_str()])
+                .status();
+            match status {
+                Ok(status) if status.success() =>
+                    response.set_text(&format!("Volume impostato: {:.0}%", scale.value())),
+                _ => response.set_text("Impossibile cambiare il volume. Controlla WirePlumber."),
+            }
+        });
+        controls.append(&level);
+        controls.append(&apply);
+        audio.append(&controls);
+        audio.append(&feedback);
+    } else {
+        audio.append(&info_row("dialog-information", "Audio non disponibile",
+            "Nessun dispositivo PipeWire/WirePlumber accessibile. Il controllo del volume non viene mostrato."));
+    }
     stack.add_titled(&audio, Some("audio"), "Audio");
 
     let power = page("Alimentazione", "Stato e risparmio energetico.", "battery");
     group(&power, "Batteria");
-    let charge = fs::read_to_string("/sys/class/power_supply/BAT0/capacity")
-        .ok().map(|x| format!("Livello di carica: {}%", x.trim()))
-        .unwrap_or_else(|| "Nessuna batteria BAT0 rilevata o informazione non disponibile.".into());
+    let charge = battery_status();
     power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
     power.append(&info_row("dialog-information", "Risparmio energetico",
         "I profili energetici sono gestiti dai servizi Linux; Melania non li modifica da questa pagina."));
@@ -142,8 +228,7 @@ pub fn add_pages(stack: &Stack) {
 
     let storage = page("Archiviazione", "Informazioni sulle unità locali.", "drive-harddisk");
     group(&storage, "Dischi");
-    let space = read_command("df", &["-h", "/"])
-        .unwrap_or_else(|| "Spazio disponibile non determinabile.".into());
+    let space = root_storage();
     storage.append(&info_row("drive-harddisk", "Filesystem principale", &space));
     storage.append(&info_row("dialog-information", "Gestione delle unità",
         "Le operazioni sui dischi rimangono affidate alle utility del sistema operativo."));
@@ -154,6 +239,9 @@ pub fn add_pages(stack: &Stack) {
     bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
         &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
     stack.add_titled(&bluetooth, Some("bluetooth"), "Bluetooth");
+    // The network overview is read-only until Melania integrates NetworkManager
+    // controls; never misrepresent a setting as applied to the host.
+
 
     let applications = page("App", "Programmi e preferenze applicative.", "application-x-executable");
     group(&applications, "Applicazioni");
@@ -210,4 +298,18 @@ pub fn add_pages(stack: &Stack) {
     about.append(&info_row("dialog-information", "Stato del progetto",
         "Alcune pagine sono informative. Le opzioni che possono essere cambiate sono contrassegnate da controlli reali."));
     stack.add_titled(&about, Some("about"), "Informazioni");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_volume;
+
+    #[test]
+    fn reads_pipewire_volume_without_exceeding_slider_range() {
+        assert_eq!(parse_volume("Volume: 0.42"), Some(42.0));
+        assert_eq!(parse_volume("Volume: 1.25 [MUTED]"), Some(100.0));
+        assert_eq!(parse_volume("Volume: 0.00"), Some(0.0));
+        assert_eq!(parse_volume("No audio backend"), None);
+        assert_eq!(parse_volume("Volume: NaN"), None);
+    }
 }

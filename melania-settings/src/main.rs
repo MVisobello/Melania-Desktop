@@ -1,5 +1,6 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
+mod symbols;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
@@ -168,8 +169,7 @@ fn build_ui(
     sidebar.set_size_request(258, -1);
     let brand_row = GtkBox::new(Orientation::Horizontal, 10);
     brand_row.add_css_class("settings-brand");
-    let brand = Image::from_icon_name("melania");
-    brand.set_pixel_size(28);
+    let brand = symbols::icon("melania", 29);
     brand_row.append(&brand);
     brand_row.append(&text("Melania", "settings-brand-name"));
     sidebar.append(&brand_row);
@@ -302,7 +302,9 @@ fn build_ui(
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
     let network = page("Rete e Bluetooth", "Consulta le informazioni sulle connessioni.");
     network.append(&section("Connessioni"));
-    network.append(&text("Wi-Fi: NetworkManager (nmcli) · Bluetooth: BlueZ (bluetoothctl). Per poter agire, i servizi devono essere installati e l'utente deve avere i permessi richiesti.", "settings-subtitle"));
+    network.append(&gnome_pages::info_row("network-workgroup", "Rete attuale",
+        &gnome_pages::network_status()));
+    network.append(&text("Informazioni lette da NetworkManager. La connessione viene gestita dal sistema Linux: Melania non cambia i dispositivi senza una richiesta esplicita.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
     let accessibility = page("Accessibilità", "Regola la leggibilità e il movimento dell'interfaccia.");
     accessibility.append(&section("Visione e movimento"));
@@ -344,7 +346,8 @@ fn build_ui(
     if is_valid_page(initial_page) {
         stack.set_visible_child_name(initial_page);
     }
-    let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
+    let navigation: Rc<RefCell<Vec<(Button, &'static str)>>> = Rc::new(RefCell::new(Vec::new()));
+    let navigation_headings: Rc<RefCell<Vec<Label>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target, icon_name) in [
         ("Sistema", "system", "computer"),
@@ -368,15 +371,26 @@ fn build_ui(
         ("Schermo", "display", "video-display"),
         ("Archiviazione", "storage", "drive-harddisk"),
     ] {
+        // Group headings make the long navigation easier to scan.
+        let group = match target {
+            "system" => Some("SISTEMA"),
+            "appearance" => Some("PERSONALIZZAZIONE"),
+            "account" => Some("UTENTI E APPLICAZIONI"),
+            "desktop" => Some("DESKTOP E FINESTRE"),
+            _ => None,
+        };
+        if let Some(group) = group {
+            let heading = text(group, "settings-nav-group");
+            navigation_headings.borrow_mut().push(heading.clone());
+            navigation_list.append(&heading);
+        }
         let button = Button::new();
         button.add_css_class("settings-nav-item");
         button.set_hexpand(true);
         button.set_tooltip_text(Some(name));
         let row = GtkBox::new(Orientation::Horizontal, 12);
         row.add_css_class("settings-nav-content");
-        let icon = Image::from_icon_name(icon_name);
-        icon.set_pixel_size(19);
-        row.append(&icon);
+        row.append(&symbols::icon(icon_name, 20));
         let caption = Label::new(Some(name));
         caption.set_xalign(0.0);
         caption.set_hexpand(true);
@@ -385,29 +399,31 @@ fn build_ui(
         let navigation_stack = stack.clone();
         button.connect_clicked(move |_| navigation_stack.set_visible_child_name(target));
         if target == initial_page { button.add_css_class("active-section"); }
-        navigation.borrow_mut().push(button.clone());
+        navigation.borrow_mut().push((button.clone(), target));
         navigation_labels.borrow_mut().push((button.clone(), name.to_lowercase()));
         navigation_list.append(&button);
     }
-    // Reflect programmatic navigation from the panel or command-line requests.
+    // Selected state must use the actual target, not SETTINGS_PAGES ordering.
     let buttons = navigation.clone();
     stack.connect_visible_child_name_notify(move |stack| {
         let current = stack.visible_child_name();
-        for (i, name) in SETTINGS_PAGES.iter().enumerate() {
-            if let Some(button) = buttons.borrow().get(i) {
-                if current.as_deref() == Some(*name) {
-                    button.add_css_class("active-section");
-                } else {
-                    button.remove_css_class("active-section");
-                }
+        for (button, target) in buttons.borrow().iter() {
+            if current.as_deref() == Some(*target) {
+                button.add_css_class("active-section");
+            } else {
+                button.remove_css_class("active-section");
             }
         }
     });
     let categories = navigation_labels.clone();
+    let group_labels = navigation_headings.clone();
     category_search.connect_changed(move |search| {
-        let query = search.text().to_lowercase();
+        let query = search.text().trim().to_lowercase();
+        for heading in group_labels.borrow().iter() {
+            heading.set_visible(query.is_empty());
+        }
         for (button, label) in categories.borrow().iter() {
-            button.set_visible(query.trim().is_empty() || label.contains(query.trim()));
+            button.set_visible(query.is_empty() || label.contains(query.as_str()));
         }
     });
     sidebar.append(&text("Melania Desktop  ·  Impostazioni locali", "settings-sidebar-footer"));

@@ -26,3 +26,20 @@ button.settings-linked-row:focus-visible { outline: 2px solid #2389eb; outline-o
 .settings-root.high-contrast button.settings-linked-row {
   background: #ffffff; color: #091d32; border: 2px solid #1b4267;
 }
+
+/* Navigation and category icons: compact GNOME-like grouping, Melania Fluent palette. */
+.settings-nav-group {
+  color: #6a788c;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  margin: 15px 11px 5px;
+}
+.settings-navigation-list .settings-nav-group:first-child { margin-top: 5px; }
+.settings-semantic-icon { min-width: 20px; min-height: 20px; }
+.settings-root.settings-dark .settings-nav-group { color: #b1c4d7; }
+.settings-root.high-contrast .settings-nav-group { color: #173e64; }
+.settings-action-row { padding: 12px; border-spacing: 12px; }
+.settings-action-row scale { min-width: 170px; }
+.settings-action-feedback { font-size: 12px; color: #637a94; }
+.settings-root.settings-dark .settings-action-feedback { color: #b7c9dd; }
