@@ -225,7 +225,7 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
     paths = sorted(set(dark_paths)|set(light_paths))
     created:dict[tuple[str,str,str],Path]={}
     origins = {"original":0,"generated":0}
-    for variant,root,chosen in [("dark",dark,paths),("light",light,light_paths)]:
+    for variant,root,chosen in [("dark",dark,paths),("light",light,paths)]:
         for path in chosen:
             parts=Path(path).parts
             context=parts[0]; name=Path(path).stem
