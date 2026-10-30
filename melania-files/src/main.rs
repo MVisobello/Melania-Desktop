@@ -1627,6 +1627,11 @@ fn build_ui(app: &Application) {
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
+    let chrome_css = gtk::CssProvider::new();
+    chrome_css.load_from_data(include_str!("../../branding/window-chrome-win7.css"));
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(&display, &chrome_css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+    }
     let screen = gdk::Display::default()
         .and_then(|display| display.monitors().item(0))
         .and_then(|object| object.downcast::<gdk::Monitor>().ok())

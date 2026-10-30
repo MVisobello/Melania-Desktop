@@ -1,0 +1,84 @@
+/* Shared Melania GTK 4 window chrome: Windows 7-inspired button silhouettes.
+ * Client-side GTK controls remain real window operations. No host WM changes.
+ */
+headerbar.settings-titlebar,
+headerbar.files-aero-header {
+  min-height: 38px;
+  padding: 0 8px 0 12px;
+  background: linear-gradient(to bottom,
+      #dbf0ff 0%, #a4d4f4 43%, #66abe0 68%, #88c6ed 100%);
+  color: #153b62;
+  border: 1px solid #c6e9ff;
+  border-bottom: 1px solid #4e8fcb;
+  box-shadow: inset 0 1px rgba(255,255,255,.95),
+              inset 0 -1px rgba(255,255,255,.20);
+}
+headerbar.settings-titlebar .title { color: #173f68; font-weight: 700; }
+headerbar.settings-titlebar .win7-window-controls {
+  border-spacing: 0;
+  margin: 0 -6px 0 8px;
+}
+headerbar.settings-titlebar button.win7-minimize,
+headerbar.settings-titlebar button.win7-maximize,
+headerbar.settings-titlebar button.win7-close {
+  min-width: 35px;
+  min-height: 25px;
+  padding: 0 4px;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #183754;
+  background: linear-gradient(to bottom,#e9f9ff,#8dbadf);
+  border: 1px solid #6c9fcb;
+  border-radius: 0;
+  box-shadow: inset 0 1px rgba(255,255,255,.84);
+}
+headerbar.settings-titlebar button.win7-minimize {
+  border-radius: 0 0 0 6px;
+}
+headerbar.settings-titlebar button.win7-close {
+  min-width: 44px;
+  border-radius: 0 0 6px 0;
+  color: #ffffff;
+  background: linear-gradient(to bottom,#f9b4aa 0%,#d34836 56%,#ab241d 100%);
+  border-color: #a8362e;
+  text-shadow: 0 -1px rgba(88,0,0,.35);
+}
+headerbar.settings-titlebar button.win7-minimize:hover,
+headerbar.settings-titlebar button.win7-maximize:hover {
+  background: linear-gradient(to bottom,#ffffff,#c1e6ff 55%,#6aa9e2);
+  border-color: #4b88c3;
+}
+headerbar.settings-titlebar button.win7-close:hover {
+  background: linear-gradient(to bottom,#ffd1bc,#fa6c46 48%,#d22118);
+}
+headerbar.settings-titlebar button.win7-minimize:focus-visible,
+headerbar.settings-titlebar button.win7-maximize:focus-visible,
+headerbar.settings-titlebar button.win7-close:focus-visible {
+  outline: 2px solid #1b5a95;
+  outline-offset: -2px;
+}
+/* Files keeps its GtkHeaderBar native windowcontrols; match the visual family. */
+headerbar.files-aero-header windowcontrols button {
+  min-width: 31px;
+  min-height: 23px;
+  margin: 0;
+  padding: 0;
+  color: #1c405f;
+  border: 1px solid #75a4cd;
+  border-radius: 0;
+  background: linear-gradient(to bottom,#e4f8ff,#91c0e4);
+  box-shadow: inset 0 1px rgba(255,255,255,.85);
+}
+headerbar.files-aero-header windowcontrols button:hover {
+  background: linear-gradient(to bottom,#ffffff,#9fd1f4);
+}
+headerbar.files-aero-header windowcontrols button.close {
+  color: #fff;
+  background: linear-gradient(to bottom,#f3b9a9,#d04837 55%,#ac281e);
+  border-color: #a53b32;
+  border-radius: 0 0 6px 0;
+}
+headerbar.files-aero-header windowcontrols button.close:hover {
+  background: linear-gradient(to bottom,#ffe0d4,#fa754e,#d0261c);
+}

@@ -1,4 +1,5 @@
-//! Melania control centre: saved desktop preferences and system status.
+//! Melania GTK4 Settings: GNOME information architecture with real local preferences.
+mod gnome_pages;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
@@ -115,17 +116,50 @@ fn build_ui(
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
+    let rows_css = gtk::CssProvider::new();
+    rows_css.load_from_data(include_str!("../assets/gnome-overview.css"));
+    let chrome_css = gtk::CssProvider::new();
+    chrome_css.load_from_data(include_str!("../../branding/window-chrome-win7.css"));
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(&display, &rows_css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+        gtk::style_context_add_provider_for_display(&display, &chrome_css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+    }
     let window = ApplicationWindow::builder().application(app).title("Melania — Impostazioni")
         .default_width(1020).default_height(690).build();
     window.add_css_class("melania-settings-window");
-    // Native client-side decorations retain window dragging and window controls.
+    // All three Windows 7-style controls perform native GTK window actions.
     let titlebar = HeaderBar::new();
     titlebar.add_css_class("settings-titlebar");
-    titlebar.set_show_title_buttons(true);
-    titlebar.set_decoration_layout(Some(":minimize,maximize,close"));
+    titlebar.set_show_title_buttons(false);
+    titlebar.set_decoration_layout(Some(""));
     let title_text = Label::new(Some("Impostazioni"));
     title_text.add_css_class("title");
     titlebar.set_title_widget(Some(&title_text));
+    let controls = GtkBox::new(Orientation::Horizontal, 0);
+    controls.add_css_class("win7-window-controls");
+    let minimize = Button::with_label("—");
+    minimize.add_css_class("win7-minimize");
+    minimize.set_tooltip_text(Some("Minimizza"));
+    let maximize = Button::with_label("□");
+    maximize.add_css_class("win7-maximize");
+    maximize.set_tooltip_text(Some("Massimizza / Ripristina"));
+    let close = Button::with_label("×");
+    close.add_css_class("win7-close");
+    close.set_tooltip_text(Some("Chiudi"));
+    let w = window.clone();
+    minimize.connect_clicked(move |_| w.minimize());
+    let w = window.clone();
+    maximize.connect_clicked(move |_| {
+        if w.is_maximized() { w.unmaximize(); } else { w.maximize(); }
+    });
+    let toggle_icon = maximize.clone();
+    window.connect_maximized_notify(move |w| {
+        toggle_icon.set_label(if w.is_maximized() { "❐" } else { "□" });
+    });
+    let w = window.clone();
+    close.connect_clicked(move |_| w.close());
+    for b in [&minimize, &maximize, &close] { controls.append(b); }
+    titlebar.pack_end(&controls);
     window.set_titlebar(Some(&titlebar));
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.add_css_class("settings-root");
@@ -294,12 +328,16 @@ fn build_ui(
     keyboard.append(&text("Super + E  ·  Apri Melania Files", "settings-hero"));
     keyboard.append(&text("Le combinazioni sono intercettate dal compositore Melania. Non modificano le scorciatoie del desktop Linux ospitante. La personalizzazione dei tasti arriverà in una milestone successiva.", "settings-subtitle"));
     stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
-    let system = page("Sistema", "Informazioni sull'ambiente Melania.");
-    system.append(&section("Informazioni"));
-    system.append(&text("Melania Desktop — pre-alpha", "settings-hero"));
-    system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
-    system.append(&text("Preferenze locali: $XDG_CONFIG_HOME/melania/settings.conf. Le impostazioni hardware sono delegate ai servizi Linux.", "settings-subtitle"));
+    // Summary and category pages reflect actual status, without fake hardware switches.
+    gnome_pages::add_pages(&stack);
+    let system = gnome_pages::overview(&stack);
     stack.add_titled(&system, Some("system"), "Sistema");
+    let notifications = page("Notifiche", "Gestisci il comportamento delle notifiche di Melania.");
+    notifications.append(&section("Avvisi"));
+    notifications.append(&saved_option("Non disturbare",
+        "Silenzia gli avvisi di Melania finché non disattivi l'opzione.",
+        prefs.borrow().do_not_disturb, prefs.clone(), |p,v| p.do_not_disturb=v, None));
+    stack.add_titled(&notifications, Some("notifications"), "Notifiche");
     // Expose this live stack only to our own application's command handler,
     // so a second invocation can navigate the existing Settings window.
     *shared_stack.borrow_mut() = Some(stack.clone());
@@ -309,13 +347,26 @@ fn build_ui(
     let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target, icon_name) in [
+        ("Sistema", "system", "computer"),
+        ("Rete", "network", "network-workgroup"),
+        ("Bluetooth", "bluetooth", "bluetooth"),
         ("Aspetto", "appearance", "preferences-desktop-theme"),
+        ("Notifiche", "notifications", "preferences-system-notifications"),
+        ("App", "applications", "applications-other"),
+        ("Account", "account", "avatar-default"),
+        ("Data e ora", "datetime", "x-office-calendar"),
+        ("Energia", "power", "battery"),
+        ("Audio", "audio", "audio-volume-high"),
+        ("Dispositivi", "devices", "input-keyboard"),
+        ("Privacy e sicurezza", "privacy", "security-high"),
+        ("Lingua e regione", "region", "preferences-desktop-locale"),
+        ("Accessibilità", "accessibility", "preferences-desktop-accessibility"),
+        ("Informazioni", "about", "dialog-information"),
         ("Desktop e finestre", "desktop", "user-desktop"),
         ("Spazi di lavoro", "workspaces", "view-grid"),
-        ("Rete e Bluetooth", "network", "network-workgroup"),
-        ("Accessibilità", "accessibility", "preferences-desktop-accessibility"),
         ("Scorciatoie", "shortcuts", "input-keyboard"),
-        ("Sistema", "system", "computer"),
+        ("Schermo", "display", "video-display"),
+        ("Archiviazione", "storage", "drive-harddisk"),
     ] {
         let button = Button::new();
         button.add_css_class("settings-nav-item");
@@ -396,8 +447,10 @@ fn setup_melania_icon_theme() {
     }
 }
 
-const SETTINGS_PAGES: [&str; 7] = [
-    "appearance", "desktop", "workspaces", "network", "accessibility", "shortcuts", "system"
+const SETTINGS_PAGES: [&str; 20] = [
+    "system", "network", "bluetooth", "appearance", "notifications", "applications",
+    "account", "datetime", "power", "audio", "devices", "privacy", "region",
+    "accessibility", "about", "desktop", "workspaces", "shortcuts", "display", "storage"
 ];
 fn is_valid_page(page: &str) -> bool { SETTINGS_PAGES.contains(&page) }
 
@@ -408,7 +461,7 @@ fn main() -> gtk::glib::ExitCode {
         .application_id("org.melaniadesktop.Settings")
         .flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
-    let requested_page: Rc<RefCell<String>> = Rc::new(RefCell::new("appearance".into()));
+    let requested_page: Rc<RefCell<String>> = Rc::new(RefCell::new("system".into()));
     let stack: Rc<RefCell<Option<Stack>>> = Rc::new(RefCell::new(None));
     let requested = requested_page.clone();
     let stack_for_activate = stack.clone();
@@ -426,7 +479,7 @@ fn main() -> gtk::glib::ExitCode {
     let requested = requested_page.clone();
     app.connect_command_line(move |app, command_line| {
         let args = command_line.arguments();
-        let page = args.get(1).and_then(|arg| arg.to_str()).unwrap_or("appearance");
+        let page = args.get(1).and_then(|arg| arg.to_str()).unwrap_or("system");
         if !is_valid_page(page) {
             eprintln!("Melania Settings: sezione non valida: {page}");
             return gtk::glib::ExitCode::FAILURE;
