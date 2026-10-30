@@ -22,16 +22,21 @@ class SettingsUIContract(unittest.TestCase):
         self.assertIn('RefCell::new("system".into())', main)
 
     def test_real_windows_operations(self):
-        main=(ROOT / "melania-settings/src/main.rs").read_text()
-        files=(ROOT / "melania-files/src/main.rs").read_text()
-        chrome=(ROOT / "branding/window-chrome-win7.css").read_text()
+        settings = (ROOT / "melania-settings/src/main.rs").read_text()
+        files = (ROOT / "melania-files/src/main.rs").read_text()
+        controls = (ROOT / "branding/window_controls.rs").read_text()
+        chrome = (ROOT / "branding/window-chrome-win7.css").read_text()
+        for code, header in ((settings, "&titlebar"), (files, "&aero_header")):
+            self.assertIn('window_controls::install(&window, '+header+');', code)
+            self.assertIn('include_str!("../../branding/window-chrome-win7.css")', code)
         for call in ("w.minimize()", "w.maximize()", "w.unmaximize()", "w.close()"):
-            self.assertIn(call, main)
+            self.assertIn(call, controls)
         for cssclass in ("win7-minimize", "win7-maximize", "win7-close"):
-            self.assertIn(cssclass, main)
+            self.assertIn(cssclass, controls)
             self.assertIn(cssclass, chrome)
-        self.assertIn('include_str!("../../branding/window-chrome-win7.css")', files)
-        self.assertIn('include_str!("../../branding/window-chrome-win7.css")', main)
+        # Both apps use the same CSS selector instead of app-specific controls.
+        self.assertIn("headerbar.melania-win7-header", chrome)
+        self.assertNotIn("headerbar.files-aero-header windowcontrols", chrome)
 
     def test_office_category_uses_original_suite_icon(self):
         sys.path.insert(0, str(ROOT / "tools"))
