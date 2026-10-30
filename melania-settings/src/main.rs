@@ -174,7 +174,7 @@ fn build_ui(
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
     let desktop = page("Desktop e finestre", "Le preferenze avanzate previste per Melania.");
     desktop.append(&saved_option("Snap finestre", "Aggancio ai bordi gestito dal compositore dal prossimo avvio della sessione.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
-    desktop.append(&saved_option("Anteprime sulla barra", "Preferenza per le miniature delle applicazioni (ancora in sviluppo).", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
+    desktop.append(&saved_option("Anteprime sulla barra", "Catture GPU delle sole finestre della sessione Melania nel selettore al passaggio del mouse. Riavvia il pannello.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
     desktop.append(&saved_option("Raggruppa finestre nella barra", "Un pulsante per applicazione con menu delle sue finestre. Richiede il riavvio del pannello Melania.", prefs.borrow().group_windows, prefs.clone(), |p,v| p.group_windows = v, None));
     desktop.append(&text("Lo Snap salvato viene letto dal compositore al successivo avvio. Le anteprime sulla barra restano in sviluppo.", "settings-subtitle"));
     stack.add_titled(&desktop, Some("desktop"), "Desktop");
