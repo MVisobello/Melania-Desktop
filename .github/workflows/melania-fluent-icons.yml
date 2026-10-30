@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - 'tools/melania_fluent_artwork.py'
+      - 'tools/melania_fluent_reference.py'
+      - 'tools/test_melania_fluent_reference.py'
       - 'tools/build_melania_fluent_themes.py'
       - 'tools/test_melania_fluent_artwork.py'
       - 'scripts/install-melania-fluent-icons.sh'
@@ -12,6 +14,8 @@ on:
   pull_request:
     paths:
       - 'tools/melania_fluent_artwork.py'
+      - 'tools/melania_fluent_reference.py'
+      - 'tools/test_melania_fluent_reference.py'
       - 'tools/build_melania_fluent_themes.py'
       - 'tools/test_melania_fluent_artwork.py'
       - 'scripts/install-melania-fluent-icons.sh'
@@ -29,6 +33,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Validate approved reference icon pixels and SVG packaging
+        run: python3 tools/test_melania_fluent_reference.py
       - name: Validate original SVG artwork and contrast
         run: python3 tools/test_melania_fluent_artwork.py
       - name: Build all variants using the full identifier manifests
