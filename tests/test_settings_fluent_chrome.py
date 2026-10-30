@@ -77,25 +77,32 @@ class MelaniaDesignContract(unittest.TestCase):
         self.assertIn('unique.add(f"apps/scalable/{app_name}.svg")', build)
 
     def test_real_window_buttons_styled_in_both_apps(self):
-        for app, header in (("melania-files","files-aero-header"),
-                            ("melania-settings","settings-titlebar")):
-            css=(ROOT / app / "assets/style.css").read_text()
-            self.assertIn(f"headerbar.{header} windowcontrols button.minimize", css)
-            self.assertIn(f"headerbar.{header} windowcontrols button.close", css)
-            self.assertIn("linear-gradient", css)
-            self.assertNotIn("GtkDialog.fake", css)
-        files=(ROOT / "melania-files/src/main.rs").read_text()
-        self.assertIn('set_decoration_layout(Some(":minimize,maximize,close"))',files)
-        self.assertIn('set_titlebar(Some(', files)
-        settings=(ROOT / "melania-settings/src/main.rs").read_text()
-        self.assertIn('set_show_title_buttons(false)', settings)
-        self.assertIn('set_titlebar(Some(', settings)
-        for operation in ("w.minimize()", "w.maximize()", "w.unmaximize()", "w.close()"):
-            self.assertIn(operation, settings)
-        chrome=(ROOT / "branding/window-chrome-win7.css").read_text()
-        for name in ("win7-minimize", "win7-maximize", "win7-close"):
+        # Files and Settings must literally install the same Rust component.
+        files = (ROOT / "melania-files/src/main.rs").read_text()
+        settings = (ROOT / "melania-settings/src/main.rs").read_text()
+        controls = (ROOT / "branding/window_controls.rs").read_text()
+        chrome = (ROOT / "branding/window-chrome-win7.css").read_text()
+        for code, header in ((files, "&aero_header"), (settings, "&titlebar")):
+            self.assertIn('mod window_controls;', code)
+            self.assertIn('window_controls::install(&window, '+header+');', code)
+            self.assertIn('set_titlebar(Some(', code)
+            self.assertNotIn('set_show_title_buttons(true)', code)
+            self.assertNotIn('set_decoration_layout(Some(":minimize,maximize,close"))', code)
+            self.assertIn('include_str!("../../branding/window-chrome-win7.css")', code)
+        for name in ("win7-minimize", "win7-maximize", "win7-close",
+                     "win7-window-controls", "melania-win7-header"):
+            self.assertIn(name, controls)
             self.assertIn(name, chrome)
-            self.assertIn(name, settings)
+        for operation in ("w.minimize()", "w.maximize()", "w.unmaximize()", "w.close()"):
+            self.assertIn(operation, controls)
+        self.assertIn('header.set_show_title_buttons(false)', controls)
+        self.assertIn('header.set_decoration_layout(Some(""))', controls)
+        self.assertIn("linear-gradient", chrome)
+        self.assertIn(":backdrop", chrome)
+        for app in ("melania-files", "melania-settings"):
+            css = (ROOT / app / "assets/style.css").read_text()
+            self.assertNotIn("windowcontrols button", css)
+            self.assertNotIn("GtkDialog.fake", css)
 
     def test_office_icon_is_generic_original_and_single_exception(self):
         for size in (16,24,32,48,96,128,256):
