@@ -636,3 +636,13 @@ window.melania-theme-light .melania-start-panel .melania-session-button {
 window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbol {
   color: #354e67;
 }
+
+/* Preserve GNOME-like density on small displays without shrinking artwork. */
+.melania-start-panel .melania-start-shortcuts .melania-shortcut {
+  min-height: 40px;
+  padding: 2px 5px;
+}
+.melania-start-panel .melania-start-apps .melania-action {
+  min-height: 47px;
+  padding: 3px 8px;
+}
