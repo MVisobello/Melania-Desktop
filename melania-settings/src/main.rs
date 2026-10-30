@@ -1,6 +1,6 @@
-//! Settings design prototype. System changes are intentionally not wired yet.
+//! Melania control centre: saved desktop preferences and system status.
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, HeaderBar, Image, Label, Orientation, Scale, Stack, Switch};
+use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
 use melania_config::{self, Preferences};
 
@@ -118,6 +118,12 @@ fn build_ui(app: &Application) {
     sidebar.append(&brand);
     sidebar.append(&text("MELANIA", "settings-heading"));
     sidebar.append(&text("Impostazioni", "settings-subtitle"));
+    // GNOME/COSMIC-style section search with familiar Cinnamon navigation.
+    let category_search = Entry::new();
+    category_search.set_placeholder_text(Some("Cerca nelle impostazioni…"));
+    category_search.set_tooltip_text(Some("Filtra le sezioni delle Impostazioni"));
+    category_search.add_css_class("settings-search");
+    sidebar.append(&category_search);
     let stack = Stack::new();
     stack.set_hexpand(true);
     stack.set_vexpand(true);
@@ -152,22 +158,59 @@ fn build_ui(app: &Application) {
     appearance.append(&save_blur);
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
     let desktop = page("Desktop e finestre", "Le preferenze avanzate previste per Melania.");
-    desktop.append(&saved_option("Snap finestre", "Preferenza per l'aggancio ai bordi; integrazione futura con il compositore.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
+    desktop.append(&saved_option("Snap finestre", "Aggancio ai bordi gestito dal compositore dal prossimo avvio della sessione.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
     desktop.append(&saved_option("Anteprime sulla barra", "Preferenza per le miniature delle applicazioni.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
-    desktop.append(&text("Spazi di lavoro: il modello Rust supporta workspace multipli; il rendering è ancora da collegare.", "settings-subtitle"));
+    desktop.append(&text("Lo Snap salvato viene letto dal compositore al successivo avvio. Le anteprime sulla barra restano in sviluppo.", "settings-subtitle"));
     stack.add_titled(&desktop, Some("desktop"), "Desktop");
+    // Saved workspace count is applied on compositor/panel startup.
+    // Changing mappings while windows are open would risk losing them.
+    let workspaces = page("Spazi di lavoro", "Organizza finestre e applicazioni su desktop separati.");
+    workspaces.append(&text("Numero di spazi di lavoro fissi (da 1 a 8)", "settings-hero"));
+    let workspace_picker = SpinButton::with_range(1.0, 8.0, 1.0);
+    workspace_picker.set_value(prefs.borrow().workspace_count as f64);
+    workspace_picker.set_numeric(true);
+    workspace_picker.set_halign(gtk::Align::Start);
+    workspace_picker.add_css_class("settings-workspace-picker");
+    workspaces.append(&workspace_picker);
+    workspaces.append(&text(
+        "Il nuovo numero si applica dopo il riavvio della sessione Melania, senza spostare le finestre già aperte.",
+        "settings-subtitle"
+    ));
+    let apply_workspaces = Button::with_label("Salva numero di spazi di lavoro");
+    apply_workspaces.add_css_class("settings-save");
+    apply_workspaces.set_halign(gtk::Align::Start);
+    let workspace_feedback = text("", "settings-subtitle");
+    let count_control = workspace_picker.clone();
+    let workspace_preferences = prefs.clone();
+    let feedback = workspace_feedback.clone();
+    apply_workspaces.connect_clicked(move |_| {
+        let count = count_control.value_as_int().clamp(1, 8) as u8;
+        let mut preferences = workspace_preferences.borrow_mut();
+        preferences.workspace_count = count;
+        match melania_config::save(&preferences) {
+            Ok(()) => feedback.set_text(&format!(
+                "{count} spazi di lavoro salvati. Riavvia la sessione Melania per applicarli."
+            )),
+            Err(e) => feedback.set_text(&format!("Impossibile salvare: {e}")),
+        }
+    });
+    workspaces.append(&apply_workspaces);
+    workspaces.append(&workspace_feedback);
+    stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
     let network = page("Rete e Bluetooth", "I dispositivi si controllano dal Centro rapido della shell.");
     network.append(&text("Wi-Fi: NetworkManager (nmcli) · Bluetooth: BlueZ (bluetoothctl). Per poter agire, i servizi devono essere installati e l'utente deve avere i permessi richiesti.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
     let system = page("Sistema", "Informazioni sull'ambiente Melania.");
-    system.append(&text("Melania Desktop 0.3 — pre-alpha", "settings-hero"));
+    system.append(&text("Melania Desktop — pre-alpha", "settings-hero"));
     system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
     system.append(&text("Preferenze locali: $XDG_CONFIG_HOME/melania/settings.conf. Le impostazioni hardware sono delegate ai servizi Linux.", "settings-subtitle"));
     stack.add_titled(&system, Some("system"), "Sistema");
     let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
+    let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     for (name, target) in [
         ("◉  Aspetto", "appearance"),
         ("▣  Desktop e finestre", "desktop"),
+        ("▦  Spazi di lavoro", "workspaces"),
         ("⌁  Rete e Bluetooth", "network"),
         ("⚙  Sistema", "system"),
     ] {
@@ -183,8 +226,16 @@ fn build_ui(app: &Application) {
         });
         if target == "appearance" { b.add_css_class("active-section"); }
         navigation.borrow_mut().push(b.clone());
+        navigation_labels.borrow_mut().push((b.clone(), name.to_lowercase()));
         sidebar.append(&b);
     }
+    let categories = navigation_labels.clone();
+    category_search.connect_changed(move |search| {
+        let query = search.text().to_lowercase();
+        for (button, label) in categories.borrow().iter() {
+            button.set_visible(query.is_empty() || label.contains(query.as_str()));
+        }
+    });
     let warning = text("Il tema Aero è disponibile nell'interfaccia. La sfocatura reale dello sfondo arriverà con il renderer Smithay.", "settings-warning");
     sidebar.append(&warning);
     root.append(&sidebar);
