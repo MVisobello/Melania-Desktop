@@ -101,6 +101,8 @@ colors=len(set(image.resize((64,40)).getdata()))
 assert colors>4, f'thumbnail is blank or unpainted: {colors} colors'
 print(f'PASS: private window-only GPU thumbnail {image.size}, {colors} sampled colors')
 PYTHUMB
+# Synthetic CI desktop only: preserve one sample for visual QA.
+cp "$THUMBNAIL" reports/nested-wayland-file-preview.bmp
 if command -v scrot >/dev/null; then
   scrot -z -o reports/nested-wayland-full-desktop.png
   python3 - <<'PY'
