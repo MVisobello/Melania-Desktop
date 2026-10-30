@@ -11,7 +11,7 @@ use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{f
 
 use smithay::{
     backend::{
-        input::{AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyboardKeyEvent, PointerButtonEvent},
+        input::{AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyboardKeyEvent, KeyState, PointerButtonEvent},
         renderer::{
             element::{surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement}, Kind},
             gles::GlesRenderer,
@@ -24,7 +24,7 @@ use smithay::{
     desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface, Space, Window, WindowSurfaceType},
     output::{Mode, Output, PhysicalProperties, Subpixel},
     input::{
-        keyboard::FilterResult,
+        keyboard::{keysyms, FilterResult},
         pointer::{ButtonEvent, CursorImageStatus, MotionEvent},
         Seat, SeatHandler, SeatState,
     },
@@ -50,6 +50,7 @@ use ::winit::platform::pump_events::PumpStatus;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use melania_core::{Rect as CoreRect, interaction::{Edges, Interaction, Operation}};
 use melania_shell_model::{detect_snap, snap_geometry, Geometry as ShellRect, SnapZone};
+use melania_shell_model::keyboard_navigation::{adjacent_workspace, cycle_window_id};
 use melania_control::{Command as ControlCommand, WindowInfo, ACK, respond_error, respond_list, read_command, respond_workspace, SOCKET_ENV};
 use melania_workspaces::Workspaces;
 
@@ -442,6 +443,18 @@ impl Melania {
         }).collect()
     }
 
+    /// Alt+Tab cycles only visible, non-minimized toplevels on this workspace.
+    /// Uses the existing Activate IPC implementation: focus and stacking
+    /// remain owned by the compositor, never inferred from the taskbar.
+    fn cycle_visible_window(&mut self, backwards: bool) {
+        let visible: Vec<u64> = self.managed.iter()
+            .filter(|w| self.workspaces.is_visible(w.id) && !w.minimized)
+            .map(|w| w.id).collect();
+        if let Some(id) = cycle_window_id(&visible, self.active_window, backwards) {
+            let _ = self.control(ControlCommand::Activate(id));
+        }
+    }
+
     /// Only the compositor may focus, minimize, or close client toplevels.
     fn control(&mut self, command: ControlCommand) -> String {
         if command == ControlCommand::List {return respond_list(&self.window_snapshot());}
@@ -625,8 +638,52 @@ fn main() -> Result<(), Box<dyn Error>> {
                 InputEvent::Keyboard { event, .. } => {
                     let serial = SERIAL_COUNTER.next_serial();
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
-                    keyboard.input::<(), _>(&mut state, event.key_code(), event.state(), serial,
-                        event.time_msec(), |_, _, _| FilterResult::Forward);
+                    let key_state = event.state();
+                    let mut open_files = false;
+                    keyboard.input::<(), _>(&mut state, event.key_code(), key_state, serial,
+                        event.time_msec(), |data, modifiers, keysym| {
+                            let symbol = keysym.modified_sym();
+                            let pressed = key_state == KeyState::Pressed;
+                            // Avoid overriding a client's Ctrl+Tab or AltGr
+                            // input; only explicitly reserved combinations.
+                            if modifiers.alt && !modifiers.ctrl && !modifiers.logo &&
+                                (symbol == keysyms::KEY_Tab || symbol == keysyms::KEY_ISO_Left_Tab) {
+                                if pressed {
+                                    data.cycle_visible_window(modifiers.shift ||
+                                        symbol == keysyms::KEY_ISO_Left_Tab);
+                                }
+                                return FilterResult::Intercept(());
+                            }
+                            if modifiers.ctrl && modifiers.alt && !modifiers.logo &&
+                                (symbol == keysyms::KEY_Left || symbol == keysyms::KEY_Right) {
+                                if pressed {
+                                    if let Some(next) = adjacent_workspace(
+                                        data.workspaces.current(), data.workspaces.count(),
+                                        symbol == keysyms::KEY_Left) {
+                                        let _ = data.switch_workspace(next);
+                                    }
+                                }
+                                return FilterResult::Intercept(());
+                            }
+                            if modifiers.logo && !modifiers.ctrl && !modifiers.alt &&
+                                (symbol == keysyms::KEY_e || symbol == keysyms::KEY_E) {
+                                if pressed {open_files = true;}
+                                return FilterResult::Intercept(());
+                            }
+                            FilterResult::Forward
+                        });
+                    if open_files {
+                        // A fixed, known program; no shell or interpolated input.
+                        // Launch only inside the nested Melania Wayland session.
+                        if let Err(e)=Command::new("melania-files")
+                            .env("WAYLAND_DISPLAY", &socket)
+                            .env(SOCKET_ENV, &control_path)
+                            .env("XDG_SESSION_TYPE", "wayland")
+                            .env("XDG_CURRENT_DESKTOP", "Melania")
+                            .env("GDK_BACKEND", "wayland").spawn() {
+                            eprintln!("Melania shortcut Super+E: {e}");
+                        }
+                    }
                 }
                 InputEvent::PointerMotionAbsolute { event, .. } => {
                     let point = event.position_transformed((backend.window_size().w, backend.window_size().h).into());
