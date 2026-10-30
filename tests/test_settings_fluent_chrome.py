@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Smoke contract for the GNOME-inspired Settings and Windows 7 chrome.
+
+These checks complement, never replace, GTK compilation and visual inspection.
+"""
+from __future__ import annotations
+import sys
+import unittest
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from melania_office_artwork import office_icon
+from melania_fluent_reference import artwork as approved
+from melania_fluent_artwork import artwork as fluent
+
+class MelaniaDesignContract(unittest.TestCase):
+    def test_settings_keeps_working_controls_and_real_navigation(self):
+        source = (ROOT / "melania-settings/src/main.rs").read_text()
+        self.assertIn('let navigation_scroll = gtk::ScrolledWindow::new()', source)
+        self.assertIn('let navigation_list = GtkBox::new(Orientation::Vertical, 3)', source)
+        self.assertIn('stack.connect_visible_child_name_notify', source)
+        self.assertIn('category_search.connect_changed', source)
+        self.assertIn('saved_option(', source)
+        self.assertIn('melania_config::save(&preferences)', source)
+        for category in ("appearance","desktop","workspaces","network",
+                         "accessibility","shortcuts","system"):
+            self.assertIn(f'"{category}"', source)
+        for css_class in ("settings-navigation-list", "settings-section-heading",
+                          "settings-row-title", "settings-row-description"):
+            self.assertIn(css_class, source)
+
+    def test_real_window_buttons_styled_in_both_apps(self):
+        for app, header in (("melania-files","files-aero-header"),
+                            ("melania-settings","settings-titlebar")):
+            css=(ROOT / app / "assets/style.css").read_text()
+            self.assertIn(f"headerbar.{header} windowcontrols button.minimize", css)
+            self.assertIn(f"headerbar.{header} windowcontrols button.close", css)
+            self.assertIn("linear-gradient", css)
+            self.assertNotIn("GtkDialog.fake", css)
+        for app in ("melania-files","melania-settings"):
+            source=(ROOT / app / "src/main.rs").read_text()
+            self.assertIn('set_decoration_layout(Some(":minimize,maximize,close"))',source)
+            self.assertIn('set_titlebar(Some(', source)
+
+    def test_office_icon_is_generic_original_and_single_exception(self):
+        for size in (16,24,32,48,96,128,256):
+            xml=office_icon(size)
+            root=ET.fromstring(xml)
+            self.assertTrue(root.tag.endswith("svg"))
+            for trademark in ("microsoft","office.com","Microsoft", "Office 365"):
+                self.assertNotIn(trademark, xml)
+            self.assertIn("#",xml)
+            approved_icon=approved("applications-office","apps","light",size)
+            self.assertEqual(xml,approved_icon)
+            self.assertEqual(xml,fluent("applications-office","apps","light",size))
+        self.assertNotIn("data:image/png;base64",approved("applications-office","apps","light",96))
+        self.assertIn("data:image/png;base64",approved("web-browser","apps","light",96))
+        self.assertIn("data:image/png;base64",approved("folder-music","places","light",96))
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 from functools import lru_cache
 from melania_fluent_artwork import resolve
+from melania_office_artwork import office_icon
 
 # Precisely as represented in the approved visual concept (36 individually
 # identifiable pictograms); each is an independently encoded transparent PNG.
@@ -121,6 +122,7 @@ def artwork(name: str, category: str, variant: str = 'light', size: int = 96) ->
     if name.endswith('-symbolic') or 'symbolic' in category:
         return None
     kind=resolve(name,category)
+    if kind == 'office': return office_icon(size)
     if category=='places' and name=='folder': kind='folder'
     image=SEMANTIC_TO_IMAGE.get(kind)
     if not image: return None

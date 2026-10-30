@@ -174,8 +174,8 @@ mod tests {
             assert_eq!(p.icon_theme,name);
             assert_eq!(Preferences::from_text(&p.to_text()),p);
         }
-        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Light");
-        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Light");
+        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Fluent-Light");
+        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Fluent-Light");
     }
     #[test] fn reads_and_writes_file() {
         let dir = std::env::temp_dir().join(format!("melania-test-{}-{:?}", std::process::id(), std::thread::current().id()));

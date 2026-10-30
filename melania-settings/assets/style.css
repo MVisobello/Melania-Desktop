@@ -1,323 +1,324 @@
-/* Melania Settings — Aero Classic
- * Translucent GTK surfaces and glass highlights. The actual blurred backdrop
- * must be supplied by the Wayland compositor; CSS cannot blur other windows. */
+/* Melania Settings — GNOME-inspired navigation and preference groups.
+ * Only Melania's own GTK windows are themed; no global host GTK changes.
+ * Native GTK window controls remain functional; their visuals echo Windows 7.
+ */
 window.melania-settings-window,
 window.melania-settings-window.background {
-  background: transparent;
-  color: #193957;
+  background: #f7f8fa;
+  color: #242830;
 }
 headerbar.settings-titlebar {
-  min-height: 43px;
-  background: linear-gradient(to bottom,
-    rgba(225,247,255,0.94) 0%,
-    rgba(125,194,238,0.89) 48%,
-    rgba(71,143,203,0.91) 100%);
-  color: #103b66;
-  border: 1px solid rgba(224,249,255,0.85);
-  border-bottom: 1px solid rgba(48,111,174,0.65);
-  box-shadow: inset 0 1px rgba(255,255,255,0.85),
-              inset 0 -1px rgba(255,255,255,0.28);
+  min-height: 42px;
+  background: #f7f9fc;
+  color: #243650;
+  border-bottom: 1px solid #cfd7e2;
+  box-shadow: inset 0 1px rgba(255,255,255,.9);
+  padding: 0 8px;
 }
 headerbar.settings-titlebar .title {
-  color: #143e69;
+  color: #283e56;
   font-weight: 700;
-}
-headerbar.settings-titlebar windowcontrols button {
-  min-width: 26px;
-  min-height: 24px;
-  border-radius: 7px;
-  background: rgba(241,251,255,0.20);
-  color: #173d61;
-  border: 1px solid transparent;
-  box-shadow: none;
-}
-headerbar.settings-titlebar windowcontrols button:hover {
-  background: rgba(248,253,255,0.65);
-  border-color: rgba(255,255,255,0.70);
 }
 .settings-root {
-  background: linear-gradient(to bottom,
-    rgba(207,232,252,0.90), rgba(239,248,255,0.87));
+  background: #fafbfc;
+  color: #242830;
 }
 .settings-sidebar {
-  min-width: 218px;
-  background: linear-gradient(to right,
-    rgba(228,244,255,0.86), rgba(186,220,245,0.65));
-  border-right: 1px solid rgba(117,169,211,0.56);
-  box-shadow: inset 1px 0 rgba(255,255,255,0.65);
-  padding: 22px 17px 17px;
+  background: #f0f2f5;
+  border-right: 1px solid #dbe0e8;
+  padding: 17px 11px 12px;
 }
-.settings-sidebar button {
-  background: rgba(255,255,255,0.16);
-  color: #1a466e;
-  border: 1px solid transparent;
+.settings-brand {
+  padding: 4px 13px 9px;
+}
+.settings-brand-name {
+  font-weight: 750;
+  font-size: 17px;
+  color: #263747;
+}
+.settings-search {
+  min-height: 34px;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #273b52;
+  border: 1px solid #d2dae4;
   box-shadow: none;
-  border-radius: 10px;
-  padding: 10px 12px;
-  min-height: 35px;
+  margin: 1px 5px 11px;
 }
-.settings-sidebar button:hover {
-  background: rgba(235,249,255,0.72);
-  border-color: rgba(150,197,235,0.45);
-}
-.settings-sidebar button.active-section {
-  background: linear-gradient(to bottom,
-    rgba(255,255,255,0.87), rgba(208,234,255,0.77));
-  color: #0e5198;
-  border: 1px solid rgba(128,184,232,0.63);
-  box-shadow: inset 0 1px rgba(255,255,255,0.92);
-  font-weight: 700;
-}
-.settings-main {
-  background: rgba(248,252,255,0.70);
-}
-.settings-scroll,
-.settings-scroll > viewport {
+.settings-navigation-scroll,
+.settings-navigation-scroll > viewport {
   background: transparent;
+  border: none;
 }
-.settings-body { padding: 26px 26px 30px; }
+.settings-navigation-list {
+  padding: 1px 3px 9px;
+}
+button.settings-nav-item {
+  min-height: 41px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+  color: #3d4755;
+  font-weight: 500;
+}
+button.settings-nav-item:hover {
+  background: #e3e8ef;
+  border-color: transparent;
+}
+button.settings-nav-item.active-section {
+  background: #dceafa;
+  border: 1px solid #c8def7;
+  color: #155da7;
+  font-weight: 700;
+}
+button.settings-nav-item.active-section image { color: #1765b6; }
+.settings-nav-content {
+  border-spacing: 11px;
+}
+.settings-sidebar-footer {
+  font-size: 11px;
+  color: #7b8796;
+  margin: 10px 10px 2px;
+}
+.settings-main, .settings-scroll, .settings-scroll > viewport {
+  background: #fafbfc;
+}
+.settings-body {
+  padding: 32px 38px 45px;
+  border-spacing: 11px;
+}
+.settings-introduction {
+  margin-bottom: 18px;
+}
 .settings-heading {
-  font-size: 26px;
-  font-weight: 700;
-  color: #123b66;
+  font-size: 27px;
+  font-weight: 750;
+  color: #252e3b;
 }
-.settings-subtitle { color: #5e7c9c; }
-.settings-hero {
-  font-size: 18px;
+.settings-subtitle, .settings-row-description {
+  font-size: 12px;
+  color: #747f8e;
+}
+.settings-row-description { color: #747f8e; }
+.settings-section-heading {
+  margin: 16px 2px 5px;
+  color: #3b444e;
+  font-size: 14px;
   font-weight: 700;
-  color: #145b9c;
+}
+.settings-hero, .settings-row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2c3540;
 }
 .settings-card {
+  background: #ffffff;
+  border: 1px solid #e0e5ec;
+  border-radius: 12px;
+  padding: 14px 17px;
   min-height: 56px;
-  background: linear-gradient(to bottom,
-    rgba(255,255,255,0.88), rgba(236,247,255,0.75));
-  border: 1px solid rgba(160,202,238,0.67);
-  border-radius: 13px;
-  padding: 15px 17px;
-  box-shadow: inset 0 1px rgba(255,255,255,0.98),
-              0 4px 12px rgba(28,81,131,0.07);
+  box-shadow: 0 1px 2px rgba(24,38,61,.04);
 }
-.settings-warning {
-  background: rgba(255,247,218,0.86);
-  border: 1px solid rgba(233,204,134,0.50);
-  padding: 12px;
-  border-radius: 10px;
-  color: #80551c;
+.settings-card:hover {
+  border-color: #cbd8e8;
 }
-.settings-save {
+.settings-icon-choice, .settings-workspace-picker {
+  min-height: 34px;
+  min-width: 190px;
+  color: #293a4e;
+  background: #f8fafc;
+  border: 1px solid #d4dce7;
   border-radius: 9px;
-  background: linear-gradient(to bottom,#faffff,#d8eaff);
-  color: #174e82;
-  border: 1px solid #aacde9;
-  min-height: 32px;
+  box-shadow: none;
 }
-.settings-save:hover { background: #e8f5ff; }
+.settings-icon-choice:hover, .settings-workspace-picker:hover {
+  background: #eff5fc;
+}
+.settings-intensity {
+  margin: 4px 0;
+}
 .settings-intensity trough {
+  background: #e0e6ef;
   min-height: 6px;
-  background: rgba(60,117,168,0.17);
-  border: 1px solid rgba(126,178,217,0.45);
   border-radius: 99px;
 }
 .settings-intensity highlight {
+  background: #3587dd;
   min-height: 6px;
   border-radius: 99px;
-  background: linear-gradient(to right,#137ae7,#73c1fd);
 }
 .settings-intensity slider {
   min-width: 17px;
   min-height: 17px;
-  border-radius: 50%;
-  background: linear-gradient(to bottom,#ffffff,#dcecff);
-  border: 1px solid #78a7ce;
-  box-shadow: 0 1px 3px rgba(15,60,108,0.18);
+  border-radius: 99px;
+  background: #ffffff;
+  border: 1px solid #a9bad0;
+  box-shadow: 0 1px 3px rgba(36,60,90,.18);
 }
-/* Prevent GTK's default fill allocation from stretching the switch thumb.
- * The matching Rust widget uses Align::Center and a fixed minimum footprint. */
 switch.settings-switch {
   min-width: 50px;
   min-height: 27px;
   padding: 2px;
-  border-radius: 99px;
-  background: #b5cce1;
-  border: 1px solid #89aac6;
-  box-shadow: inset 0 1px 3px rgba(18,67,109,0.18);
+  border-radius: 50px;
+  background: #d2d7df;
+  border: 1px solid #bcc6d2;
+  box-shadow: none;
 }
 switch.settings-switch:checked {
-  background: linear-gradient(to bottom,#48a7ff,#1473e3);
-  border-color: #1263c9;
+  background: #3589db;
+  border-color: #2473bf;
 }
 switch.settings-switch > slider {
   min-width: 23px;
   min-height: 23px;
-  border-radius: 99px;
-  background: linear-gradient(to bottom,#ffffff,#eef6ff);
-  border: 1px solid rgba(85,128,171,0.38);
-  box-shadow: 0 1px 3px rgba(9,43,82,0.30);
-}
-switch.settings-switch:focus-visible,
-.settings-sidebar button:focus-visible,
-.settings-save:focus-visible {
-  outline: 2px solid #187eea;
-  outline-offset: 2px;
-}
-/* A disabled Aero switch removes glossy treatment without changing settings. */
-headerbar.settings-titlebar.aero-off {
-  background: #dde7f0;
-  border-bottom-color: #b7c5d3;
-}
-.settings-root.aero-off { background: #edf3f9; }
-.settings-root.aero-off .settings-sidebar { background: #e7eef6; }
-.settings-root.aero-off .settings-card {
+  border-radius: 50px;
   background: #ffffff;
-  border-color: #d3e0eb;
+  border: 1px solid rgba(56,89,125,.15);
+  box-shadow: 0 1px 2px rgba(0,0,0,.16);
+}
+.settings-save {
+  background: #e8f1fc;
+  border: 1px solid #bcd4ef;
+  color: #195d9e;
+  border-radius: 9px;
+  min-height: 34px;
+  padding: 6px 14px;
   box-shadow: none;
 }
-/* Four settings-friendly opacity bands for the saved visual intensity. */
-.settings-root.glass-low .settings-sidebar { background: rgba(224,240,251,0.95); }
-.settings-root.glass-low .settings-card { background: rgba(255,255,255,0.96); }
-.settings-root.glass-medium .settings-sidebar { background: rgba(210,232,250,0.83); }
-.settings-root.glass-medium .settings-card { background: rgba(255,255,255,0.88); }
-.settings-root.glass-high .settings-sidebar { background: rgba(184,221,248,0.60); }
-.settings-root.glass-high .settings-card { background: rgba(255,255,255,0.72); }
-.settings-root.glass-max .settings-sidebar { background: rgba(166,211,244,0.49); }
-.settings-root.glass-max .settings-card { background: rgba(255,255,255,0.64); }
-/* The dark variant remains glassy and can be previewed without restarting. */
-.settings-root.settings-dark {
-  background: linear-gradient(to bottom,
-    rgba(17,49,79,0.93), rgba(10,30,53,0.93));
-}
-headerbar.settings-titlebar.settings-dark {
-  background: linear-gradient(to bottom,rgba(78,136,186,0.95),rgba(22,61,101,0.96));
-  color: #f1f9ff;
-  border-bottom-color: #1f5182;
-}
-headerbar.settings-titlebar.settings-dark .title,
-headerbar.settings-titlebar.settings-dark windowcontrols button { color: #edf8ff; }
-.settings-root.settings-dark .settings-sidebar {
-  background: linear-gradient(to right,rgba(22,59,92,0.91),rgba(22,66,106,0.80));
-  border-right-color: #426f96;
-}
-.settings-root.settings-dark .settings-main { background: rgba(11,35,61,0.63); }
-.settings-root.settings-dark .settings-heading,
-.settings-root.settings-dark .settings-hero { color: #d9efff; }
-.settings-root.settings-dark .settings-subtitle { color: #b2cce3; }
-.settings-root.settings-dark .settings-card {
-  background: rgba(46,91,131,0.60);
-  border-color: rgba(139,197,238,0.48);
-  box-shadow: inset 0 1px rgba(255,255,255,0.10);
-}
-.settings-root.settings-dark .settings-sidebar button { color: #d9ebfd; }
-.settings-root.settings-dark .settings-sidebar button.active-section {
-  color: #ffffff;
-  background: rgba(63,143,210,0.58);
-  border-color: rgba(153,207,248,0.50);
-}
-.settings-root.settings-dark .settings-warning {
-  color: #ffdfaa;
-  background: rgba(103,79,35,0.59);
-  border-color: rgba(205,165,98,0.35);
-}
-.settings-root.settings-dark .settings-save {
-  background: rgba(43,101,155,0.85);
-  border-color: #669cc7;
-  color: #e6f5ff;
-}
-.settings-root.settings-dark .settings-intensity trough { background: #234b6d; }
-
-/* Settings phase 1: discoverable navigation, keyboard-accessible search
- * and a compact bounded workspace number control. */
-.settings-search {
-  min-height: 35px;
-  border-radius: 10px;
-  background: rgba(251,254,255,0.90);
-  border: 1px solid rgba(132,180,219,0.66);
-  color: #174873;
-  margin: 12px 0 7px;
-  box-shadow: inset 0 1px rgba(255,255,255,0.85);
-}
-.settings-search:focus-visible {
-  outline: 2px solid #177fe7;
-  outline-offset: 1px;
-}
-.settings-workspace-picker {
-  min-width: 100px;
-  min-height: 34px;
-  color: #174873;
-  background: rgba(251,254,255,0.90);
+.settings-save:hover { background: #dcecff; }
+.settings-warning {
+  padding: 12px;
   border-radius: 9px;
+  background: #f9f4e8;
+  color: #70551e;
 }
 .settings-workspace-picker button {
-  border-radius: 7px;
-  background: rgba(212,234,251,0.92);
-  color: #194976;
-  border: 1px solid rgba(133,180,219,0.40);
+  background: #f2f6fb;
+  color: #304b65;
+  border: none;
+  box-shadow: none;
 }
-.settings-workspace-picker:focus-within {
-  outline: 2px solid #177fe7;
-  outline-offset: 1px;
-}
-.settings-root.settings-dark .settings-search,
-.settings-root.settings-dark .settings-workspace-picker {
-  color: #e6f4ff;
-  background: rgba(23,65,105,0.94);
-  border-color: rgba(154,207,246,0.56);
-}
-.settings-root.settings-dark .settings-search text,
-.settings-root.settings-dark .settings-workspace-picker text { color: #e6f4ff; }
-.settings-root.settings-dark .settings-workspace-picker button {
-  background: rgba(38,99,153,0.88);
-  color: #e6f4ff;
+.settings-search:focus-visible, .settings-save:focus-visible,
+button.settings-nav-item:focus-visible, .settings-icon-choice:focus-visible {
+  outline: 2px solid #3a92e9;
+  outline-offset: 2px;
 }
 
-/* M3 — scoped high contrast. Default blue Aero remains unchanged. */
+/* Windows 7-style three-button native decoration on Melania windows only. */
+headerbar.settings-titlebar windowcontrols {
+  border-spacing: 0px;
+  margin: 0px 5px 0px 0px;
+}
+headerbar.settings-titlebar windowcontrols button {
+  min-width: 29px;
+  min-height: 22px;
+  padding: 2px 5px;
+  margin: 0px;
+  border-radius: 0px;
+  background-image: linear-gradient(to bottom, #effaff, #c8e0f5 58%, #a9cbe9);
+  color: #1e4162;
+  border: 1px solid #8caeca;
+  box-shadow: inset 0 1px rgba(255,255,255,.97);
+}
+headerbar.settings-titlebar windowcontrols button.minimize {
+  border-radius: 0 0 0 6px;
+}
+headerbar.settings-titlebar windowcontrols button.close {
+  min-width: 37px;
+  border-radius: 0 0 6px 0;
+  color: #ffffff;
+  background-image: linear-gradient(to bottom, #f58f8d, #db4c49 64%, #b8232d);
+  border: 1px solid #a9484c;
+}
+headerbar.settings-titlebar windowcontrols button:hover {
+  background-image: linear-gradient(to bottom, #ffffff, #b4dbfa 58%, #6ab0e5);
+  border-color: #5d94c5;
+}
+headerbar.settings-titlebar windowcontrols button.close:hover {
+  background-image: linear-gradient(to bottom, #ffaaa1, #f04c45 58%, #c61f25);
+  border-color: #a63439;
+}
+headerbar.settings-titlebar windowcontrols button:active {
+  box-shadow: inset 0 1px 3px rgba(24,70,110,.24);
+}
+
+/* Dark remains quiet and GNOME-like; high-contrast is independent. */
+.settings-root.settings-dark {
+  background: #1d2229;
+  color: #eef2f7;
+}
+.settings-root.settings-dark .settings-sidebar {
+  background: #252a32;
+  border-right-color: #39424d;
+}
+.settings-root.settings-dark .settings-brand-name,
+.settings-root.settings-dark .settings-heading,
+.settings-root.settings-dark .settings-row-title,
+.settings-root.settings-dark .settings-section-heading,
+.settings-root.settings-dark .settings-hero { color: #eef2f7; }
+.settings-root.settings-dark .settings-subtitle,
+.settings-root.settings-dark .settings-row-description,
+.settings-root.settings-dark .settings-sidebar-footer { color: #a7b2bf; }
+.settings-root.settings-dark .settings-main,
+.settings-root.settings-dark .settings-scroll,
+.settings-root.settings-dark .settings-scroll > viewport { background: #1d2229; }
+.settings-root.settings-dark .settings-card {
+  background: #2c323b;
+  border-color: #3b4551;
+  box-shadow: none;
+}
+.settings-root.settings-dark button.settings-nav-item { color: #d7e0ed; }
+.settings-root.settings-dark button.settings-nav-item:hover { background: #343e4b; }
+.settings-root.settings-dark button.settings-nav-item.active-section {
+  background: #314d6a;
+  color: #eaf5ff;
+  border-color: #46698a;
+}
+.settings-root.settings-dark .settings-search,
+.settings-root.settings-dark .settings-icon-choice,
+.settings-root.settings-dark .settings-workspace-picker {
+  background: #343c48;
+  color: #f0f7ff;
+  border-color: #516071;
+}
+.settings-root.settings-dark .settings-save {
+  background: #2b587f;
+  color: #f0f8ff;
+  border-color: #49779b;
+}
+.settings-root.settings-dark .settings-intensity trough { background: #46505d; }
+headerbar.settings-titlebar.settings-dark {
+  background: #2d3642;
+  border-bottom-color: #455365;
+}
+headerbar.settings-titlebar.settings-dark .title { color: #f2f7ff; }
 .settings-root.high-contrast {
-  background: #eef7ff;
-  color: #071d33;
+  background: #ffffff;
+  color: #080f17;
 }
 .settings-root.high-contrast .settings-sidebar {
-  background: #d9ecff;
-  border-right: 2px solid #144c7c;
-}
-.settings-root.high-contrast .settings-main {
-  background: #ffffff;
-}
-.settings-root.high-contrast .settings-heading,
-.settings-root.high-contrast .settings-hero,
-.settings-root.high-contrast .settings-subtitle,
-.settings-root.high-contrast .settings-sidebar button,
-.settings-root.high-contrast .settings-workspace-picker,
-.settings-root.high-contrast .settings-search {
-  color: #071d33;
+  background: #e3f1ff;
+  border-right: 2px solid #215b92;
 }
 .settings-root.high-contrast .settings-card {
   background: #ffffff;
-  color: #071d33;
-  border: 2px solid #164c79;
-  box-shadow: none;
+  border: 2px solid #285f92;
+  color: #080f17;
 }
-.settings-root.high-contrast .settings-sidebar button.active-section {
+.settings-root.high-contrast .settings-heading,
+.settings-root.high-contrast .settings-row-title,
+.settings-root.high-contrast .settings-subtitle,
+.settings-root.high-contrast .settings-row-description,
+.settings-root.high-contrast .settings-section-heading { color: #080f17; }
+.settings-root.high-contrast button.settings-nav-item.active-section {
+  background: #164d82;
   color: #ffffff;
-  background: #134c81;
-  border: 2px solid #06213e;
+  border: 2px solid #0b2d51;
 }
-.settings-root.high-contrast .settings-sidebar button.active-section,
-.settings-root.high-contrast .settings-save {
-  font-weight: 700;
-}
-.settings-root.high-contrast switch.settings-switch {
-  border: 2px solid #082f59;
-}
-.settings-root.high-contrast .settings-save,
-.settings-root.high-contrast .settings-search {
-  background: #ffffff;
-  border: 2px solid #164c79;
-  color: #071d33;
-}
-headerbar.settings-titlebar.high-contrast {
-  background: #165487;
-  border-bottom: 2px solid #061d37;
-}
-headerbar.settings-titlebar.high-contrast .title,
-headerbar.settings-titlebar.high-contrast windowcontrols button {
-  color: #ffffff;
-}
+.settings-root.high-contrast .settings-main,
+.settings-root.high-contrast .settings-scroll,
+.settings-root.high-contrast .settings-scroll > viewport { background: #ffffff; }
+/* Disabling transparency never changes the flat preferences layout. */
+.settings-root.aero-off .settings-card { box-shadow: none; }

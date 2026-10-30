@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+from melania_office_artwork import office_icon
 
 # Semantic IDs determine the visual metaphor, not any upstream graphic.
 ALIASES = {
@@ -289,6 +290,7 @@ APP_PALETTE={
 }
 
 def _app(kind, compact, name=None):
+    if kind == 'office': return office_icon(16 if compact else 96)
     if kind not in APP_PALETTE: kind='utilities'
     a,b,c=APP_PALETTE[kind];defs=_grad('a',a,b,c)+_grad('b','#F5FCFF','#BFD9EE','#7DB2DB')
     if kind=='browser':
