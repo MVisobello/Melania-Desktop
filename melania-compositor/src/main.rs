@@ -912,14 +912,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         captures_this_frame+=1;
                                         match window_preview::capture_window(renderer,&surface,size.w,size.h,&destination) {
                                             Ok(()) => {
+                                                // Keep several recent snapshots per ID:
+                                                // GTK may still be opening the previous
+                                                // file when another hover capture completes.
                                                 let prefix=format!("{id}-");
                                                 if let Ok(entries)=fs::read_dir(&preview_dir) {
-                                                    for entry in entries.flatten().take(256) {
-                                                        let path=entry.path();
-                                                        if path!=destination && path.file_name()
-                                                            .is_some_and(|n|n.to_string_lossy().starts_with(&prefix)) {
-                                                            let _=fs::remove_file(path);
-                                                        }
+                                                    let mut versions:Vec<(u64,PathBuf)>=entries
+                                                        .flatten().take(256).filter_map(|entry| {
+                                                            let path=entry.path();
+                                                            let name=path.file_name()?.to_str()?;
+                                                            let seq=name.strip_prefix(&prefix)?
+                                                                .strip_suffix(".bmp")?.parse().ok()?;
+                                                            Some((seq,path))
+                                                        }).collect();
+                                                    versions.sort_by_key(|(seq,_)|*seq);
+                                                    let stale=versions.len().saturating_sub(4);
+                                                    for (_,path) in versions.into_iter().take(stale) {
+                                                        let _=fs::remove_file(path);
                                                     }
                                                 }
                                                 melania_control::respond_preview_path(&destination)
