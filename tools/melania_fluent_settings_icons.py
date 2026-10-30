@@ -83,6 +83,19 @@ SHAPES = {
 }
 
 def artwork(name: str, category: str, variant: str = "light", size: int = 96) -> str | None:
+    if name == "melania" and category == "apps":
+        # The official Melania logo: an open blue crescent with an inner dot.
+        # A dedicated SVG must exist in the icon theme: otherwise GTK renders
+        # its generic missing-image placeholder on the Start button.
+        return ('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"
+          width="96" height="96"><defs>
+          <linearGradient id="moon" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#4DB4FF"/><stop offset="1" stop-color="#1177D5"/>
+          </linearGradient>
+          <mask id="cut"><rect width="96" height="96" fill="#fff"/>
+            <circle cx="58" cy="39" r="29" fill="#000"/></mask></defs>
+          <circle cx="41" cy="48" r="36" fill="url(#moon)" mask="url(#cut)"/>
+          <circle cx="64" cy="54" r="8" fill="#2388EA"/></svg>''')
     if category not in ("apps", "actions", "categories", "devices", "panel"):
         return None
     kind = NAMES.get(name)
