@@ -19,12 +19,38 @@ SIDEBAR = {
     "user-trash-symbolic": '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/>',
     "user-bookmarks-symbolic": '<path d="M6 3h12v18l-6-4-6 4Z"/>',
 }
+# Compact original status glyphs with a consistent 2.2px stroke, strong
+# visual balance and explicit colored fills (no currentColor ambiguity).
+# The melania-tray-* names are the default names for the native taskbar.
+# Keep the freedesktop aliases so other consumers do not lose icons.
+WIFI = ('<path d="M2.5 8.5c5.3-4.7 13.7-4.7 19 0" />'
+        '<path d="M6 12.4c3.3-2.9 8.7-2.9 12 0" />'
+        '<path d="M9.5 16.2c1.4-1.2 3.6-1.2 5 0" />'
+        '<circle cx="12" cy="20.2" r="1.25" fill="{ink}" stroke="none"/>')
+BLUETOOTH = ('<path d="M11.4 2.2v19.6l6.4-5.4-12-9.8" />'
+             '<path d="m11.4 2.2 6.4 5.4-12 9.8" />')
+VOLUME = ('<path d="M2.5 9.2h4.6l5.1-4.1v13.8l-5.1-4.1H2.5z" '
+          'fill="{ink}" stroke="none"/>'
+          '<path d="M15 8.8c2.5 1.8 2.5 4.6 0 6.4" />'
+          '<path d="M18 5.6c4.4 3.4 4.4 9.4 0 12.8" />')
+BATTERY = ('<rect x="2.3" y="7.1" width="17.6" height="9.8" rx="2.1"/>'
+           '<path d="M21.5 10.2v3.6" />'
+           '<rect x="5.1" y="10" width="10.4" height="4" rx="1" '
+           'fill="{ink}" stroke="none"/>')
+BELL = ('<path d="M5.6 17.3h12.8l-2.2-3.1V9.6'
+        'a4.2 4.2 0 0 0-8.4 0v4.6z" />'
+        '<path d="M10 20.2c.7 1.4 3.3 1.4 4 0" />')
 TRAY = {
-    "network-wireless-signal-excellent-symbolic": '<path d="M2 9c5.7-5.1 14.3-5.1 20 0M5.5 12.5c3.7-3.2 9.3-3.2 13 0M9 16c1.7-1.5 4.3-1.5 6 0"/><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/>',
-    "bluetooth-active-symbolic": '<path d="M12 2v20l6-5-12-10m6-5 6 5L6 17"/>',
-    "audio-volume-high-symbolic": '<path d="M3 9h4l5-4v14l-5-4H3Z"/><path d="M15 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12"/>',
-    "battery-good-symbolic": '<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10v4M6 10h10v4H6Z"/>',
-    "preferences-system-notifications-symbolic": '<path d="M6 17h12l-2-3V10a4 4 0 0 0-8 0v4Z"/><path d="M10 20c1 2 3 2 4 0"/>',
+    "melania-tray-wifi-symbolic": WIFI,
+    "melania-tray-bluetooth-symbolic": BLUETOOTH,
+    "melania-tray-volume-symbolic": VOLUME,
+    "melania-tray-battery-symbolic": BATTERY,
+    "melania-tray-notifications-symbolic": BELL,
+    "network-wireless-signal-excellent-symbolic": WIFI,
+    "bluetooth-active-symbolic": BLUETOOTH,
+    "audio-volume-high-symbolic": VOLUME,
+    "battery-good-symbolic": BATTERY,
+    "preferences-system-notifications-symbolic": BELL,
 }
 
 # Small GTK widget affordances must not degrade to unknown-icon squares.
@@ -59,7 +85,7 @@ def artwork(name: str, category: str, variant: str = "light", size: int = 24) ->
     elif name in TRAY:
         if category not in ("status", "panel", "apps", "actions"):
             return None
-        stroke = "#e6f3ff" if variant == "dark" else "#294c70"
+        stroke = "#f1f7fe" if variant == "dark" else "#365675"
         shape = TRAY[name]
     elif name in WIDGETS:
         if category not in ("actions", "apps"):
@@ -68,6 +94,8 @@ def artwork(name: str, category: str, variant: str = "light", size: int = 24) ->
         shape = WIDGETS[name]
     else:
         return None
+    weight = "2.15" if name in TRAY else "1.8"
+    shape = shape.replace("{ink}", stroke)
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="{size}" height="{size}">'
-            f'<g fill="none" stroke="{stroke}" stroke-width="1.8" stroke-linecap="round" '
+            f'<g fill="none" stroke="{stroke}" stroke-width="{weight}" stroke-linecap="round" '
             f'stroke-linejoin="round">{shape}</g></svg>')
