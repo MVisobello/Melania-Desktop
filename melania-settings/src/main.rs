@@ -322,6 +322,7 @@ fn build_ui(
     }
     let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
+    let navigation_targets: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
     let nav_list = GtkBox::new(Orientation::Vertical, 3);
     nav_list.add_css_class("settings-navigation");
     for (name, target, icon) in [
@@ -366,8 +367,22 @@ fn build_ui(
         if target == initial_page { b.add_css_class("active-section"); }
         navigation.borrow_mut().push(b.clone());
         navigation_labels.borrow_mut().push((b.clone(), name.to_lowercase()));
+        navigation_targets.borrow_mut().push((b.clone(), target.to_string()));
         nav_list.append(&b);
     }
+    // Keep the selected sidebar row in sync when a System overview row or a
+    // second application invocation navigates the stack directly.
+    let sidebar_targets = navigation_targets.clone();
+    stack.connect_visible_child_name_notify(move |stack| {
+        let selected = stack.visible_child_name().map(|name| name.to_string());
+        for (button, target) in sidebar_targets.borrow().iter() {
+            if selected.as_deref() == Some(target.as_str()) {
+                button.add_css_class("active-section");
+            } else {
+                button.remove_css_class("active-section");
+            }
+        }
+    });
     let categories = navigation_labels.clone();
     category_search.connect_changed(move |search| {
         let query = search.text().to_lowercase();
