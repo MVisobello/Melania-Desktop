@@ -417,7 +417,6 @@ headerbar.files-aero-header {
 .files-preview .files-info {
   color: #597391;
   font-size: 12px;
-  line-height: 1.35;
 }
 .files-preview .files-title {
   font-size: 16px;
@@ -431,4 +430,22 @@ headerbar.files-aero-header {
 .files-list-view .files-list-row:focus-visible {
   outline: 2px solid #238cf0;
   outline-offset: -2px;
+}
+
+.files-list-header .files-list-sort {
+  border: none;
+  border-right: 1px solid rgba(180,208,231,0.65);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 1px;
+  box-shadow: none;
+  min-height: 26px;
+  color: #526d89;
+}
+.files-list-header .files-list-sort:hover {
+  background: rgba(198,228,251,0.55);
+}
+.files-list-header .files-list-sort:focus-visible {
+  outline: 2px solid #2b8ce9;
+  outline-offset: -1px;
 }
