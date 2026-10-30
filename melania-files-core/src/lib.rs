@@ -5,8 +5,8 @@ pub mod nautilus_features;
 use std::{collections::HashSet, fs, io, path::{Path, PathBuf}, time::SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SortBy { Name, Modified, Size }
-impl SortBy { pub fn from_index(i: u32) -> Self { match i { 1 => Self::Modified, 2 => Self::Size, _ => Self::Name } } }
+pub enum SortBy { Name, Modified, Size, Type }
+impl SortBy { pub fn from_index(i: u32) -> Self { match i { 1 => Self::Modified, 2 => Self::Size, 3 => Self::Type, _ => Self::Name } } }
 #[derive(Clone, Copy, Debug)]
 pub struct ListingOptions {
     pub show_hidden: bool,
@@ -59,6 +59,14 @@ pub fn list_directory(dir: &Path, query: &str, options: ListingOptions) -> io::R
             SortBy::Name => normal,
             SortBy::Size => a.size.cmp(&b.size).then(normal),
             SortBy::Modified => a.modified.cmp(&b.modified).then(normal),
+            SortBy::Type => {
+                let suffix = |e:&Entry| {
+                    if e.is_symlink {return String::from("collegamento");}
+                    e.path.extension().and_then(|x|x.to_str())
+                        .unwrap_or("").to_ascii_lowercase()
+                };
+                suffix(a).cmp(&suffix(b)).then(normal)
+            },
         };
         if options.descending { order.reverse() } else { order }
     });
@@ -146,6 +154,18 @@ mod tests {
     impl Drop for Temp { fn drop(&mut self){let _=fs::remove_dir_all(&self.0);} }
     #[test] fn filters_and_folders_first() {let t=Temp::new();fs::create_dir(t.0.join("Z folder")).unwrap();fs::write(t.0.join("b.jpg"),b"x").unwrap();fs::write(t.0.join("a.txt"),b"xx").unwrap();fs::write(t.0.join(".secret"),b"z").unwrap();let l=list_directory(&t.0,"",ListingOptions::default()).unwrap();assert_eq!(l.len(),3);assert_eq!(l[0].name,"Z folder");let l=list_directory(&t.0,"",ListingOptions{pictures_only:true,..Default::default()}).unwrap();assert_eq!(l.len(),2);assert_eq!(l[1].name,"b.jpg");}
     #[test] fn sorts_by_size_desc() {let t=Temp::new();fs::write(t.0.join("small"),b"1").unwrap();fs::write(t.0.join("big"),b"123456").unwrap();let l=list_directory(&t.0,"",ListingOptions{sort_by:SortBy::Size,descending:true,..Default::default()}).unwrap();assert_eq!(l[0].name,"big");}
+    #[test] fn type_sorting_uses_extension_without_following_links() {
+        let t=Temp::new();
+        fs::write(t.0.join("m.pdf"),b"%PDF").unwrap();
+        fs::write(t.0.join("z.csv"),b"a,b").unwrap();
+        fs::write(t.0.join("a.txt"),b"notes").unwrap();
+        let files=list_directory(&t.0,"",ListingOptions {
+            sort_by:SortBy::Type, ..Default::default()
+        }).unwrap();
+        let names:Vec<_>=files.iter().map(|e|e.name.as_str()).collect();
+        assert_eq!(names,vec!["z.csv","m.pdf","a.txt"]);
+        assert_eq!(SortBy::from_index(3),SortBy::Type);
+    }
     #[test] fn query_is_case_insensitive() {let t=Temp::new();fs::write(t.0.join("Relazione.PDF"),b"a").unwrap();assert_eq!(list_directory(&t.0,"rela",ListingOptions::default()).unwrap().len(),1);}
     #[test] fn bounded_listing() {let t=Temp::new();for i in 0..10 {fs::write(t.0.join(i.to_string()),b"a").unwrap();}assert_eq!(list_directory(&t.0,"",ListingOptions{max_entries:3,..Default::default()}).unwrap().len(),3);}
     #[test] fn bookmarks_persist_and_deduplicate() {let t=Temp::new();let folder=t.0.join("la mia cartella");fs::create_dir(&folder).unwrap();let mut bm=Bookmarks::default();assert!(bm.add(&folder).unwrap());assert!(!bm.add(&folder).unwrap());let file=t.0.join("bookmarks");bm.write_to(&file).unwrap();let mut restored=Bookmarks::read_from(&file).unwrap();assert_eq!(restored.paths(),&[folder.clone()]);assert!(restored.remove(&folder));assert!(restored.paths().is_empty());}
