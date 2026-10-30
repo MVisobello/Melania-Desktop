@@ -13,14 +13,14 @@ fn label(value: &str, class: &str) -> Label {
     label
 }
 fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
-    let page = GtkBox::new(Orientation::Vertical, 14);
+    let page = GtkBox::new(Orientation::Vertical, 7);
     page.add_css_class("settings-body");
-    let heading = GtkBox::new(Orientation::Horizontal, 18);
+    let heading = GtkBox::new(Orientation::Horizontal, 11);
     heading.add_css_class("settings-page-heading");
-    let image = symbols::icon(icon, 42);
+    let image = symbols::icon(icon, 32);
     image.add_css_class("settings-page-icon");
     heading.append(&image);
-    let words = GtkBox::new(Orientation::Vertical, 4);
+    let words = GtkBox::new(Orientation::Vertical, 2);
     words.append(&label(title, "settings-heading"));
     words.append(&label(subtitle, "settings-subtitle"));
     heading.append(&words);
@@ -32,10 +32,10 @@ fn group(page: &GtkBox, title: &str) {
     page.append(&heading);
 }
 pub fn info_row(icon: &str, title: &str, description: &str) -> GtkBox {
-    let row = GtkBox::new(Orientation::Horizontal, 15);
+    let row = GtkBox::new(Orientation::Horizontal, 11);
     row.add_css_class("settings-info-row");
     row.set_valign(Align::Center);
-    let image = symbols::icon(icon, 23);
+    let image = symbols::icon(icon, 20);
     image.add_css_class("settings-row-icon");
     row.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -49,9 +49,9 @@ pub fn linked_row(stack: &Stack, target: &str, icon: &str, title: &str, descript
     let button = Button::new();
     button.add_css_class("settings-linked-row");
     button.set_hexpand(true);
-    let layout = GtkBox::new(Orientation::Horizontal, 15);
+    let layout = GtkBox::new(Orientation::Horizontal, 11);
     layout.set_valign(Align::Center);
-    let image = symbols::icon(icon, 25);
+    let image = symbols::icon(icon, 21);
     image.add_css_class("settings-row-icon");
     layout.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 4);
@@ -150,21 +150,27 @@ pub fn overview(stack: &Stack) -> GtkBox {
         "Gestisci le opzioni del sistema e i dispositivi del tuo computer.",
         "computer");
     group(&system, "Hardware");
+    let hardware = GtkBox::new(Orientation::Vertical, 0);
+    hardware.add_css_class("settings-group-card");
+    system.append(&hardware);
     for (target, icon, title, subtitle) in [
         ("display", "video-display", "Schermo", "Monitor, risoluzione e disposizione"),
         ("audio", "audio-card", "Audio", "Uscita, ingresso e dispositivi sonori"),
         ("power", "battery", "Alimentazione", "Batteria e risparmio energetico"),
         ("storage", "drive-harddisk", "Archiviazione", "Dischi e utilizzo dello spazio"),
     ] {
-        system.append(&linked_row(stack, target, icon, title, subtitle));
+        hardware.append(&linked_row(stack, target, icon, title, subtitle));
     }
     group(&system, "Software e utenti");
+    let software = GtkBox::new(Orientation::Vertical, 0);
+    software.add_css_class("settings-group-card");
+    system.append(&software);
     for (target, icon, title, subtitle) in [
         ("account", "avatar-default", "Utenti", "Informazioni sull'account corrente"),
-        ("applications", "application-x-executable", "Applicazioni", "Applicazioni e associazioni file"),
+        ("applications", "applications-other", "Applicazioni", "Applicazioni e associazioni file"),
         ("about", "dialog-information", "Informazioni sul sistema", "Versione di Melania e sistema operativo"),
     ] {
-        system.append(&linked_row(stack, target, icon, title, subtitle));
+        software.append(&linked_row(stack, target, icon, title, subtitle));
     }
     system
 }

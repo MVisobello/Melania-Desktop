@@ -559,6 +559,8 @@ CORE=[
  ('Home','user-home','places'),('Pubblica','folder-publicshare','places'),
  ('Recenti','document-open-recent','actions'),('Preferiti','user-bookmarks','places'),
  ('Cestino','user-trash','places'),('Cestino pieno','user-trash-full','places'),
+ ('Melania','melania','apps'),('Melania Files','org.melaniadesktop.Files','apps'),
+ ('Melania Settings','org.melaniadesktop.Settings','apps'),
  ('Computer','computer','apps'),('Portatile','computer-laptop','devices'),
  ('Disco','drive-harddisk','apps'),('USB','media-flash','devices'),
  ('Rete','network-workgroup','places'),('Server','network-server','places'),

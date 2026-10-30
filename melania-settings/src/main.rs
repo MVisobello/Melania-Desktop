@@ -170,9 +170,10 @@ fn build_ui(
     window.set_titlebar(Some(&titlebar));
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.add_css_class("settings-root");
-    let sidebar = GtkBox::new(Orientation::Vertical, 10);
+    let sidebar = GtkBox::new(Orientation::Vertical, 5);
     sidebar.add_css_class("settings-sidebar");
-    sidebar.set_size_request(258, -1);
+    sidebar.set_size_request(250, -1);
+    sidebar.set_hexpand(false);
     let brand_row = GtkBox::new(Orientation::Horizontal, 10);
     brand_row.add_css_class("settings-brand");
     let brand = symbols::icon("melania", 29);
@@ -181,6 +182,8 @@ fn build_ui(
     sidebar.append(&brand_row);
     let category_search = Entry::new();
     category_search.set_placeholder_text(Some("Cerca nelle impostazioni…"));
+    category_search.set_width_chars(16);
+    category_search.set_max_width_chars(22);
     category_search.set_tooltip_text(Some("Filtra le categorie"));
     category_search.add_css_class("settings-search");
     sidebar.append(&category_search);
@@ -188,7 +191,7 @@ fn build_ui(
     navigation_scroll.set_vexpand(true);
     navigation_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     navigation_scroll.add_css_class("settings-navigation-scroll");
-    let navigation_list = GtkBox::new(Orientation::Vertical, 3);
+    let navigation_list = GtkBox::new(Orientation::Vertical, 1);
     navigation_list.add_css_class("settings-navigation-list");
     navigation_scroll.set_child(Some(&navigation_list));
     sidebar.append(&navigation_scroll);
@@ -404,12 +407,14 @@ fn build_ui(
         button.add_css_class("settings-nav-item");
         button.set_hexpand(true);
         button.set_tooltip_text(Some(name));
-        let row = GtkBox::new(Orientation::Horizontal, 12);
+        let row = GtkBox::new(Orientation::Horizontal, 9);
         row.add_css_class("settings-nav-content");
-        row.append(&symbols::icon(icon_name, 20));
+        row.append(&symbols::icon(icon_name, 19));
         let caption = Label::new(Some(name));
         caption.set_xalign(0.0);
         caption.set_hexpand(true);
+        caption.set_max_width_chars(25);
+        caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
         row.append(&caption);
         button.set_child(Some(&row));
         let navigation_stack = stack.clone();

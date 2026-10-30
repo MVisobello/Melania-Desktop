@@ -18,6 +18,7 @@ import tarfile
 import xml.etree.ElementTree as ET
 from melania_fluent_artwork import artwork,CORE,REVERSE
 from melania_fluent_reference import artwork as approved_artwork
+from melania_fluent_settings_icons import artwork as settings_artwork
 
 ROOT=Path(__file__).resolve().parents[1]
 COVERAGE=ROOT/'branding'/'coverage'
@@ -82,6 +83,11 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
         for _label, name, context in CORE:
             for size in (16,24,32,48,64,96,128,256):
                 unique.add(f'{context}/{size}x{size}/{name}.svg')
+    # Exact GTK application IDs must exist as real theme entries. Without
+    # these names, Start and pinned Files/Settings show missing-image tiles.
+    for app_name in ("melania", "org.melaniadesktop.Files", "org.melaniadesktop.Settings",
+                     "preferences-system-notifications-symbolic"):
+        unique.add(f"apps/scalable/{app_name}.svg")
     paths=sorted(unique)
     if dest.exists():
         raise FileExistsError(f'Output already exists; remove knowingly: {dest}')
@@ -107,6 +113,7 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
             key=(category,name,design,'compact' if size<=24 else 'full')
             if key not in known_assets:
                 svg=(approved_artwork(name,category,'dark' if variant=='dark' else 'light',size)
+                     or settings_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or artwork(name,category,'dark' if variant=='dark' else 'light',size))
                 ET.fromstring(svg)
                 digest=hashlib.sha256(svg.encode('utf8')).hexdigest()

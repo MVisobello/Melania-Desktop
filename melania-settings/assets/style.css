@@ -26,10 +26,10 @@ headerbar.settings-titlebar .title {
 .settings-sidebar {
   background: #f0f2f5;
   border-right: 1px solid #dbe0e8;
-  padding: 17px 11px 12px;
+  padding: 10px 8px 8px;
 }
 .settings-brand {
-  padding: 4px 13px 9px;
+  padding: 3px 10px 5px;
 }
 .settings-brand-name {
   font-weight: 750;
@@ -43,7 +43,7 @@ headerbar.settings-titlebar .title {
   color: #273b52;
   border: 1px solid #d2dae4;
   box-shadow: none;
-  margin: 1px 5px 11px;
+  margin: 1px 3px 4px;
 }
 .settings-navigation-scroll,
 .settings-navigation-scroll > viewport {
@@ -51,11 +51,11 @@ headerbar.settings-titlebar .title {
   border: none;
 }
 .settings-navigation-list {
-  padding: 1px 3px 9px;
+  padding: 1px 2px 7px;
 }
 button.settings-nav-item {
-  min-height: 41px;
-  padding: 7px 12px;
+  min-height: 35px;
+  padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 9px;
   background: transparent;
@@ -75,22 +75,22 @@ button.settings-nav-item.active-section {
 }
 button.settings-nav-item.active-section image { color: #1765b6; }
 .settings-nav-content {
-  border-spacing: 11px;
+  border-spacing: 8px;
 }
 .settings-sidebar-footer {
   font-size: 11px;
   color: #7b8796;
-  margin: 10px 10px 2px;
+  margin: 5px 8px 2px;
 }
 .settings-main, .settings-scroll, .settings-scroll > viewport {
   background: #fafbfc;
 }
 .settings-body {
-  padding: 32px 38px 45px;
-  border-spacing: 11px;
+  padding: 21px 25px 27px;
+  border-spacing: 7px;
 }
 .settings-introduction {
-  margin-bottom: 18px;
+  margin-bottom: 6px;
 }
 .settings-heading {
   font-size: 27px;
@@ -103,7 +103,7 @@ button.settings-nav-item.active-section image { color: #1765b6; }
 }
 .settings-row-description { color: #747f8e; }
 .settings-section-heading {
-  margin: 16px 2px 5px;
+  margin: 9px 2px 2px;
   color: #3b444e;
   font-size: 14px;
   font-weight: 700;
@@ -117,8 +117,8 @@ button.settings-nav-item.active-section image { color: #1765b6; }
   background: #ffffff;
   border: 1px solid #e0e5ec;
   border-radius: 12px;
-  padding: 14px 17px;
-  min-height: 56px;
+  padding: 10px 14px;
+  min-height: 50px;
   box-shadow: 0 1px 2px rgba(24,38,61,.04);
 }
 .settings-card:hover {
