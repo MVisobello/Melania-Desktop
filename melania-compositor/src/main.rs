@@ -51,6 +51,7 @@ use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use melania_core::{Rect as CoreRect, interaction::{Edges, Interaction, Operation}};
 use melania_shell_model::{detect_snap, snap_geometry, Geometry as ShellRect, SnapZone};
 use melania_shell_model::keyboard_navigation::{adjacent_workspace, cycle_window_id};
+use melania_shell_model::workarea::fit_initial_window;
 use melania_control::{Command as ControlCommand, WindowInfo, ACK, respond_error, respond_list, read_command, respond_workspace, SOCKET_ENV};
 use melania_workspaces::Workspaces;
 
@@ -69,6 +70,8 @@ struct ManagedWindow {
     saved_position: (i32, i32),
     /// Geometry before maximizing; necessary to restore rather than guess.
     restore_geometry: Option<CoreRect>,
+    /// Keep initial placement pending until the first non-zero client buffer.
+    initial_fit_pending: bool,
 }
 
 /// Removes a private control socket if Melania terminates normally.
@@ -108,6 +111,9 @@ struct Melania {
     workspaces: Workspaces,
     /// Applies the persisted Aero Snap preference on compositor startup.
     snap_windows: bool,
+    /// Previous compositor-computed area, updated when layer exclusive zones
+    /// or output dimensions change. No guessed fixed taskbar dimensions.
+    last_usable_area: Option<ShellRect>,
     next_window_id: u64,
     active_window: Option<u64>,
     exit_requested: bool,
@@ -136,6 +142,8 @@ impl CompositorHandler for Melania {
         // when the host window is resized. The taskbar's reserved area changes
         // when a layer surface is configured or hidden.
         layer_map_for_output(&self.output).arrange();
+        self.fit_newly_mapped_window(surface);
+        self.refresh_usable_area();
     }
 }
 impl ShmHandler for Melania {
@@ -154,6 +162,7 @@ impl XdgShellHandler for Melania {
             id, window, surface: top.wl_surface().clone(),
             minimized: false, saved_position: (45 + step, 45 + step),
             restore_geometry: None,
+            initial_fit_pending: true,
         });
         // Clients only map after the initial xdg configure round-trip.
         top.send_configure();
@@ -213,6 +222,7 @@ impl WlrLayerShellHandler for Melania {
             return;
         }
         layer_map_for_output(&self.output).arrange();
+        self.refresh_usable_area();
         surface.send_configure();
     }
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
@@ -220,6 +230,7 @@ impl WlrLayerShellHandler for Melania {
             .find(|l| l.wl_surface() == surface.wl_surface()).cloned();
         if let Some(mapped) = mapped { layer_map_for_output(&self.output).unmap_layer(&mapped); }
         layer_map_for_output(&self.output).arrange();
+        self.refresh_usable_area();
     }
 }
 impl SeatHandler for Melania {
@@ -235,6 +246,60 @@ impl SeatHandler for Melania {
     fn cursor_image(&mut self, _: &Seat<Self>, _: CursorImageStatus) {}
 }
 impl Melania {
+    fn usable_area(&self) -> ShellRect {
+        let area = layer_map_for_output(&self.output).non_exclusive_zone();
+        ShellRect::new(area.loc.x,area.loc.y,
+            area.size.w.max(1) as u32,area.size.h.max(1) as u32)
+    }
+
+    /// Apply the real layer-shell exclusive zone to maximized windows.
+    /// Never adjust normal windows after the user has placed them manually.
+    fn refresh_usable_area(&mut self) {
+        let area = self.usable_area();
+        if self.last_usable_area == Some(area) { return; }
+        self.last_usable_area = Some(area);
+        for w in &self.managed {
+            if w.restore_geometry.is_none() { continue; }
+            let Some(top) = w.window.toplevel() else { continue; };
+            if self.workspaces.is_visible(w.id) && !w.minimized {
+                self.space.map_element(w.window.clone(),(area.x,area.y),false);
+            }
+            top.with_pending_state(|state| {
+                state.size=Some((area.width as i32,area.height as i32).into());
+                state.states.set(xdg_toplevel::State::Maximized);
+            });
+            top.send_pending_configure();
+        }
+    }
+
+    /// Use the first real client geometry; fit its origin to the layer-shell
+    /// work area, and request resize only for an oversized initial buffer.
+    /// Existing user moves/resizes are never overridden after that.
+    fn fit_newly_mapped_window(&mut self, surface: &WlSurface) {
+        let Some(index)=self.managed.iter()
+            .position(|w|w.surface==*surface && w.initial_fit_pending) else {return;};
+        let window=self.managed[index].window.clone();
+        let size=window.geometry().size;
+        if size.w<=0 || size.h<=0 {return;}
+        let original=self.space.element_location(&window)
+            .map(|p|(p.x,p.y)).unwrap_or(self.managed[index].saved_position);
+        let original=ShellRect::new(original.0,original.1,size.w as u32,size.h as u32);
+        let area=self.usable_area();
+        let Some(placement)=fit_initial_window(area,original) else {return;};
+        self.managed[index].initial_fit_pending=false;
+        self.managed[index].saved_position=(placement.x,placement.y);
+        self.space.map_element(window.clone(),(placement.x,placement.y),false);
+        if placement.needs_resize {
+            if let Some(top)=window.toplevel() {
+                top.with_pending_state(|state| {
+                    state.size=Some((placement.requested_width as i32,
+                        placement.requested_height as i32).into());
+                });
+                top.send_pending_configure();
+            }
+        }
+    }
+
     /// Honour xdg_toplevel maximize/unmaximize requests. This is independent
     /// of the taskbar IPC and respects the exclusive zone occupied by panels.
     fn set_maximized(&mut self, top:&ToplevelSurface, enabled:bool) {
@@ -589,6 +654,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         managed: Vec::new(),
         workspaces: Workspaces::new(preferences.workspace_count),
         snap_windows: preferences.snap_windows,
+        last_usable_area: None,
         next_window_id: 1,
         active_window: None,
         exit_requested: false,
@@ -633,6 +699,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             WinitEvent::Resized { size, .. } => {
                 output.change_current_state(Some(Mode { size, refresh: 60_000 }), None, None, None);
                 layer_map_for_output(&output).arrange();
+                state.refresh_usable_area();
             }
             WinitEvent::Input(input) => match input {
                 InputEvent::Keyboard { event, .. } => {
