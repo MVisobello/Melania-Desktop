@@ -1,0 +1,103 @@
+name: Melania Linux build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Repository and Python checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Repository audit
+        run: |
+          mkdir -p reports
+          python3 scripts/audit-build.py --json reports/offline-audit.json
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: repository-audit
+          path: reports/
+
+  rust-core:
+    name: Rust core compilation and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Rust workspace core
+        run: |
+          set -o pipefail
+          cargo check -p melania-core -p melania-shell-model -p melania-dnd -p melania-transfer -p melania-control -p melania-config -p melania-services -p melania-filectl -p melania-files-core -p melania-notify-core -p melania-desktop-core -p melania-workspaces --all-targets 2>&1 | tee core-build.log
+      - name: Run core unit tests
+        run: |
+          set -o pipefail
+          cargo test -p melania-core -p melania-shell-model -p melania-dnd -p melania-transfer -p melania-control -p melania-config -p melania-services -p melania-filectl -p melania-files-core -p melania-notify-core -p melania-desktop-core -p melania-workspaces 2>&1 | tee core-tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-build-logs
+          path: core-*.log
+
+  gtk:
+    name: GTK4 Files, panel and settings
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GTK and Wayland development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgtk-4-dev libgtk4-layer-shell-dev libwayland-dev libxkbcommon-dev
+          pkg-config --modversion gtk4 gtk4-layer-shell
+      - name: Compile GTK applications
+        run: |
+          set -o pipefail
+          cargo check -p melania-files -p melania-settings -p melania-preview -p melania-panel -p melania-desktop-surface --all-targets 2>&1 | tee gtk-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gtk-build-log
+          path: gtk-build.log
+
+  compositor:
+    name: Smithay compositor and Linux binaries
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install compositor development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config build-essential libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev
+      - name: Build real Linux desktop binaries
+        run: |
+          set -o pipefail
+          cargo build -p melania-compositor -p melania-control -p melania-files -p melania-desktop-surface -p melania-panel -p melania-settings 2>&1 | tee compositor-build.log
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: melania-linux-binaries
+          path: |
+            target/debug/melania-compositor
+            target/debug/melania-control
+            target/debug/melania-files
+            target/debug/melania-desktop-surface
+            target/debug/melania-panel
+            target/debug/melania-settings
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compositor-build-log
+          path: compositor-build.log
