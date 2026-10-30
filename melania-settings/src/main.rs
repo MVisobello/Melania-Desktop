@@ -308,9 +308,19 @@ fn build_ui(
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
     let network = page("Rete e Bluetooth", "Consulta le informazioni sulle connessioni.");
     network.append(&section("Connessioni"));
-    network.append(&gnome_pages::info_row("network-workgroup", "Rete attuale",
-        &gnome_pages::network_status()));
-    network.append(&text("Informazioni lette da NetworkManager. La connessione viene gestita dal sistema Linux: Melania non cambia i dispositivi senza una richiesta esplicita.", "settings-subtitle"));
+    let live_network = text(&gnome_pages::network_status(), "settings-row-description");
+    live_network.add_css_class("settings-card");
+    network.append(&live_network);
+    let refresh_network = Button::with_label("Aggiorna stato della rete");
+    refresh_network.add_css_class("settings-save");
+    refresh_network.add_css_class("settings-refresh-button");
+    refresh_network.set_halign(gtk::Align::Start);
+    let current_network = live_network.clone();
+    refresh_network.connect_clicked(move |_| {
+        current_network.set_text(&gnome_pages::network_status());
+    });
+    network.append(&refresh_network);
+    network.append(&text("Stato letto da NetworkManager su richiesta. Melania non modifica le connessioni di rete senza un'azione esplicita.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
     let accessibility = page("Accessibilità", "Regola la leggibilità e il movimento dell'interfaccia.");
     accessibility.append(&section("Visione e movimento"));
