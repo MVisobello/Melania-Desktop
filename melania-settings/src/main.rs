@@ -1,4 +1,5 @@
-//! Melania control centre: saved desktop preferences and system status.
+//! Melania control centre: GNOME-inspired Settings UI, native GTK4 behaviour.
+mod gnome_pages;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
 use std::{cell::RefCell, rc::Rc};
@@ -111,28 +112,54 @@ fn build_ui(
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
     let window = ApplicationWindow::builder().application(app).title("Melania — Impostazioni")
-        .default_width(870).default_height(600).build();
+        .default_width(1010).default_height(690).build();
     window.add_css_class("melania-settings-window");
-    // Native client-side decorations retain window dragging and window controls.
+    // GTK owns the actual window; the three Win7-inspired controls call
+    // real minimize/maximize/restore/close operations, never mock actions.
     let titlebar = HeaderBar::new();
     titlebar.add_css_class("settings-titlebar");
-    titlebar.set_show_title_buttons(true);
-    titlebar.set_decoration_layout(Some(":minimize,maximize,close"));
-    let title_text = Label::new(Some("Melania — Impostazioni"));
+    titlebar.set_show_title_buttons(false);
+    titlebar.set_decoration_layout(Some(""));
+    let title_group = GtkBox::new(Orientation::Horizontal, 10);
+    let title_icon = Image::from_icon_name("preferences-system");
+    title_icon.set_pixel_size(20);
+    title_group.append(&title_icon);
+    let title_text = Label::new(Some("Impostazioni"));
     title_text.add_css_class("title");
-    titlebar.set_title_widget(Some(&title_text));
+    title_group.append(&title_text);
+    titlebar.set_title_widget(Some(&title_group));
+    let controls = GtkBox::new(Orientation::Horizontal, 0);
+    controls.add_css_class("win7-window-controls");
+    let minimize = Button::with_label("—");
+    minimize.add_css_class("win7-minimize");
+    minimize.set_tooltip_text(Some("Minimizza"));
+    let maximize = Button::with_label("□");
+    maximize.add_css_class("win7-maximize");
+    maximize.set_tooltip_text(Some("Massimizza / Ripristina"));
+    let close = Button::with_label("×");
+    close.add_css_class("win7-close");
+    close.set_tooltip_text(Some("Chiudi"));
+    let win = window.clone();
+    minimize.connect_clicked(move |_| win.minimize());
+    let win = window.clone();
+    maximize.connect_clicked(move |_| {
+        if win.is_maximized() { win.unmaximize(); } else { win.maximize(); }
+    });
+    let toggle_icon = maximize.clone();
+    window.connect_maximized_notify(move |win| {
+        toggle_icon.set_label(if win.is_maximized() { "❐" } else { "□" });
+    });
+    let win = window.clone();
+    close.connect_clicked(move |_| win.close());
+    for button in [&minimize, &maximize, &close] { controls.append(button); }
+    titlebar.pack_end(&controls);
     window.set_titlebar(Some(&titlebar));
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.add_css_class("settings-root");
-    let sidebar = GtkBox::new(Orientation::Vertical, 9);
+    let sidebar = GtkBox::new(Orientation::Vertical, 10);
     sidebar.add_css_class("settings-sidebar");
-    sidebar.set_size_request(225, -1);
-    let brand = Image::from_icon_name("melania");
-    brand.set_pixel_size(70);
-    brand.set_halign(gtk::Align::Start);
-    sidebar.append(&brand);
-    sidebar.append(&text("MELANIA", "settings-heading"));
-    sidebar.append(&text("Impostazioni", "settings-subtitle"));
+    sidebar.set_size_request(262, -1);
+    sidebar.append(&text("Impostazioni", "settings-sidebar-heading"));
     // GNOME/COSMIC-style section search with familiar Cinnamon navigation.
     let category_search = Entry::new();
     category_search.set_placeholder_text(Some("Cerca nelle impostazioni…"));
@@ -155,7 +182,8 @@ fn build_ui(
     appearance.append(&saved_option("Tema scuro", "Applica subito la variante scura alle Impostazioni.", prefs.borrow().dark_mode, prefs.clone(), |p,v| p.dark_mode = v, Some(apply_style.clone())));
     appearance.append(&text("Pacchetto icone Melania", "settings-hero"));
     let icon_variants = gtk::DropDown::from_strings(&[
-        "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",\n        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
+        "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",
+        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
     ]);
     icon_variants.add_css_class("settings-icon-choice");
     let selected = melania_config::ICON_THEMES.iter()
@@ -266,11 +294,17 @@ fn build_ui(
     keyboard.append(&text("Super + E  ·  Apri Melania Files", "settings-hero"));
     keyboard.append(&text("Le combinazioni sono intercettate dal compositore Melania. Non modificano le scorciatoie del desktop Linux ospitante. La personalizzazione dei tasti arriverà in una milestone successiva.", "settings-subtitle"));
     stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
-    let system = page("Sistema", "Informazioni sull'ambiente Melania.");
-    system.append(&text("Melania Desktop — pre-alpha", "settings-hero"));
-    system.append(&text("Rust · GTK 4 · Wayland (compositore sperimentale in preparazione)", "settings-subtitle"));
-    system.append(&text("Preferenze locali: $XDG_CONFIG_HOME/melania/settings.conf. Le impostazioni hardware sono delegate ai servizi Linux.", "settings-subtitle"));
+    // Real GNOME-like system overview, with navigable rows to implemented pages.
+    gnome_pages::add_pages(&stack);
+    let system = gnome_pages::overview(&stack);
     stack.add_titled(&system, Some("system"), "Sistema");
+    let notifications = page("Notifiche", "Configura le notifiche di Melania Desktop.");
+    notifications.append(&saved_option(
+        "Non disturbare", "Silenzia le notifiche di Melania fino a quando l'opzione viene disattivata.",
+        prefs.borrow().do_not_disturb, prefs.clone(),
+        |p,v| p.do_not_disturb = v, None
+    ));
+    stack.add_titled(&notifications, Some("notifications"), "Notifiche");
     // Expose this live stack only to our own application's command handler,
     // so a second invocation can navigate the existing Settings window.
     *shared_stack.borrow_mut() = Some(stack.clone());
@@ -279,29 +313,51 @@ fn build_ui(
     }
     let navigation: Rc<RefCell<Vec<Button>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
-    for (name, target) in [
-        ("◉  Aspetto", "appearance"),
-        ("▣  Desktop e finestre", "desktop"),
-        ("▦  Spazi di lavoro", "workspaces"),
-        ("⌁  Rete e Bluetooth", "network"),
-        ("♿  Accessibilità", "accessibility"),
-        ("⌨  Scorciatoie", "shortcuts"),
-        ("⚙  Sistema", "system"),
+    let nav_list = GtkBox::new(Orientation::Vertical, 3);
+    nav_list.add_css_class("settings-navigation");
+    for (name, target, icon) in [
+        ("Sistema", "system", "computer"),
+        ("Rete", "network", "network-workgroup"),
+        ("Bluetooth", "bluetooth", "bluetooth"),
+        ("Aspetto", "appearance", "preferences-desktop-theme"),
+        ("Notifiche", "notifications", "preferences-system-notifications"),
+        ("App", "applications", "applications-other"),
+        ("Account", "account", "avatar-default"),
+        ("Data e ora", "datetime", "x-office-calendar"),
+        ("Energia", "power", "battery"),
+        ("Audio", "audio", "audio-volume-high"),
+        ("Dispositivi", "devices", "input-keyboard"),
+        ("Privacy e sicurezza", "privacy", "security-high"),
+        ("Lingua e regione", "region", "preferences-desktop-locale"),
+        ("Accessibilità", "accessibility", "preferences-desktop-accessibility"),
+        ("Informazioni", "about", "dialog-information"),
+        ("Desktop e finestre", "desktop", "user-desktop"),
+        ("Spazi di lavoro", "workspaces", "view-grid-symbolic"),
+        ("Scorciatoie", "shortcuts", "input-keyboard"),
     ] {
-        let b = Button::with_label(name);
+        if target == "desktop" {
+            nav_list.append(&text("PERSONALIZZAZIONE", "settings-side-section"));
+        }
+        let b = Button::new();
+        b.add_css_class("settings-nav-item");
+        let inner = GtkBox::new(Orientation::Horizontal, 12);
+        let image = Image::from_icon_name(icon);
+        image.set_pixel_size(20);
+        inner.append(&image);
+        inner.append(&text(name, "settings-nav-label"));
+        b.set_child(Some(&inner));
+        b.set_tooltip_text(Some(name));
         let s = stack.clone();
         let nav = navigation.clone();
         b.connect_clicked(move |clicked| {
             s.set_visible_child_name(target);
-            for item in nav.borrow().iter() {
-                item.remove_css_class("active-section");
-            }
+            for item in nav.borrow().iter() { item.remove_css_class("active-section"); }
             clicked.add_css_class("active-section");
         });
         if target == initial_page { b.add_css_class("active-section"); }
         navigation.borrow_mut().push(b.clone());
         navigation_labels.borrow_mut().push((b.clone(), name.to_lowercase()));
-        sidebar.append(&b);
+        nav_list.append(&b);
     }
     let categories = navigation_labels.clone();
     category_search.connect_changed(move |search| {
@@ -310,8 +366,11 @@ fn build_ui(
             button.set_visible(query.is_empty() || label.contains(query.as_str()));
         }
     });
-    let warning = text("Il tema Aero è disponibile nell'interfaccia. La sfocatura reale dello sfondo arriverà con il renderer Smithay.", "settings-warning");
-    sidebar.append(&warning);
+    let sidebar_scroll = gtk::ScrolledWindow::new();
+    sidebar_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    sidebar_scroll.set_vexpand(true);
+    sidebar_scroll.set_child(Some(&nav_list));
+    sidebar.append(&sidebar_scroll);
     root.append(&sidebar);
     let main_panel = GtkBox::new(Orientation::Vertical, 0);
     main_panel.add_css_class("settings-main");
@@ -348,8 +407,11 @@ fn setup_melania_icon_theme() {
     }
 }
 
-const SETTINGS_PAGES: [&str; 7] = [
-    "appearance", "desktop", "workspaces", "network", "accessibility", "shortcuts", "system"
+const SETTINGS_PAGES: [&str; 21] = [
+    "system", "network", "bluetooth", "appearance", "notifications", "applications",
+    "account", "datetime", "power", "audio", "devices", "privacy", "region",
+    "accessibility", "about", "desktop", "workspaces", "shortcuts",
+    "display", "storage", "shortcuts"
 ];
 fn is_valid_page(page: &str) -> bool { SETTINGS_PAGES.contains(&page) }
 
@@ -360,7 +422,7 @@ fn main() -> gtk::glib::ExitCode {
         .application_id("org.melaniadesktop.Settings")
         .flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
-    let requested_page: Rc<RefCell<String>> = Rc::new(RefCell::new("appearance".into()));
+    let requested_page: Rc<RefCell<String>> = Rc::new(RefCell::new("system".into()));
     let stack: Rc<RefCell<Option<Stack>>> = Rc::new(RefCell::new(None));
     let requested = requested_page.clone();
     let stack_for_activate = stack.clone();
@@ -378,7 +440,7 @@ fn main() -> gtk::glib::ExitCode {
     let requested = requested_page.clone();
     app.connect_command_line(move |app, command_line| {
         let args = command_line.arguments();
-        let page = args.get(1).and_then(|arg| arg.to_str()).unwrap_or("appearance");
+        let page = args.get(1).and_then(|arg| arg.to_str()).unwrap_or("system");
         if !is_valid_page(page) {
             eprintln!("Melania Settings: sezione non valida: {page}");
             return gtk::glib::ExitCode::FAILURE;
