@@ -37,6 +37,8 @@ class StartTrayDesignContracts(unittest.TestCase):
                       'melania-start-panel .melania-start-shortcuts'):
             self.assertIn(label,css)
         self.assertIn('min-height: 51px;',css)
+        self.assertIn('scroll.set_max_content_height(335);',panel)
+        self.assertIn('scroll.set_propagate_natural_height(true);',panel)
         self.assertIn('window.melania-theme-light .melania-start-panel',css)
         self.assertIn('window.melania-theme-dark .melania-start-panel',css)
         self.assertIn('window.melania-theme-aero .melania-start-panel',css)
