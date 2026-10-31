@@ -120,5 +120,6 @@ jobs:
             reports/wayland-smoke.log
             reports/wayland-full-*.log
             reports/nested-wayland-full-desktop.png
+            reports/start-toggle-reopened.png
             reports/nested-wayland-file-preview.bmp
           if-no-files-found: warn
