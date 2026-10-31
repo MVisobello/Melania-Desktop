@@ -29,6 +29,10 @@ class StartSessionPrivacyContracts(unittest.TestCase):
         self.assertIn('create_dir_all(parent)',self.history)
         self.assertIn('LIMIT: usize = 8',self.history)
         self.assertIn('fs::rename(&temp,path)',self.history)
+        self.assertIn('options.mode(0o600)',self.history)
+        self.assertIn('Permissions::from_mode(0o700)',self.history)
+        self.assertIn('MAX_HISTORY_BYTES',self.history)
+        self.assertIn('create_new(true)',self.history)
         self.assertIn('pub fn recent_apps_path()',self.config)
 
     def test_privacy_page_deletes_exact_recent_app_file_only(self):
@@ -42,6 +46,7 @@ class StartSessionPrivacyContracts(unittest.TestCase):
         self.assertIn('MELANIA_ALLOW_HOST_POWER_ACTIONS',self.session)
         self.assertIn('availability(action)?;',self.session)
         self.assertIn('ControlCommand::Quit',self.session)
+        self.assertIn('request(&path, ControlCommand::List)',self.session)
         self.assertIn('Confermi questa operazione?',self.panel)
 
     def test_rotation_is_discovery_only_until_backend_exists(self):
