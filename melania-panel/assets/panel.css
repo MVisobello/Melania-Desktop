@@ -198,7 +198,7 @@ window { background: transparent; color: #f4f8ff; }
 }
 .melania-window-group {
   min-width: 95px;
-  max-width: 190px;
+  /* GTK CSS does not support max-width; width is bounded by GTK layout. */
   padding: 4px 9px;
   color: #eaf6ff;
   border: 1px solid rgba(170,221,255,0.25);
@@ -285,7 +285,7 @@ window { background: transparent; color: #f4f8ff; }
 .melania-bar .melania-window-group,
 .melania-bar .melania-window {
   min-width: 44px;
-  max-width: 49px;
+  /* GTK CSS does not support max-width; width is bounded by GTK layout. */
   min-height: 39px;
   padding: 3px 5px;
   border-radius: 9px;
