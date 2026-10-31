@@ -304,32 +304,22 @@ impl Melania {
             })
         };
         let keyboard=self.seat.get_keyboard().expect("keyboard");
-        let actually_focused=keyboard.current_focus().as_ref()==self.start_layer.as_ref();
-        // The host X11 window can cause wl_keyboard.leave independently of our
-        // Start visibility flag (e.g. while taking CI screenshots). Compare
-        // the ACTUAL wl_keyboard focus instead of trusting a stale boolean.
-        if visible && !actually_focused {
-            if !self.start_has_focus {
-                self.start_previous_focus=keyboard.current_focus().filter(|surface|
-                    self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
-            }
+        if visible && !self.start_has_focus {
+            self.start_previous_focus=keyboard.current_focus().filter(|surface|
+                self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
             if let Some(surface)=self.start_layer.clone() {
                 keyboard.set_focus(self,Some(surface),SERIAL_COUNTER.next_serial());
                 self.start_has_focus=true;
-                if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
-                    eprintln!("MELANIA_START_KEYBOARD_FOCUSED");
-                }
             }
-        } else if !visible {
-            if actually_focused {
+        } else if !visible && self.start_has_focus {
+            // Do not steal focus back from a window the user has clicked.
+            if keyboard.current_focus().as_ref()==self.start_layer.as_ref() {
                 let previous=self.start_previous_focus.take().filter(|surface|
                     self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
                 keyboard.set_focus(self,previous,SERIAL_COUNTER.next_serial());
             }
             self.start_has_focus=false;
             self.start_previous_focus=None;
-        } else {
-            self.start_has_focus=true;
         }
     }
     fn usable_area(&self) -> ShellRect {
