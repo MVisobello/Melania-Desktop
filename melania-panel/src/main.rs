@@ -349,7 +349,6 @@ fn start_window(app:&Application)->ApplicationWindow {
             button.emit_clicked();
         }
     });
-    scroll.set_child(Some(&apps_box));
     // The same scrolled column contains the most-used launchers followed by
     // the remaining installed apps alphabetically. No item appears twice.
     let content=GtkBox::new(Orientation::Vertical,1);
