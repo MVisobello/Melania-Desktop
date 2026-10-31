@@ -14,6 +14,13 @@ mkdir -p "$HOME/Desktop"
 TEMP="$(mktemp -d -t melania-full-wayland-XXXXXX)"
 mkdir -m 700 "$TEMP/runtime"
 export XDG_RUNTIME_DIR="$TEMP/runtime"
+# Isolated CI-only launch history so the screenshot exercises both sections.
+# Never alter the real user's app statistics or existing home directories.
+export XDG_STATE_HOME="$TEMP/state"
+mkdir -p "$XDG_STATE_HOME/melania"
+chmod 700 "$XDG_STATE_HOME/melania"
+printf 'org.melaniadesktop.Files\t6\norg.melaniadesktop.Settings\t3\n' > "$XDG_STATE_HOME/melania/app-usage"
+chmod 600 "$XDG_STATE_HOME/melania/app-usage"
 PID=''
 cleanup(){
   if [[ -n "$PID" ]]; then
@@ -125,6 +132,38 @@ difference=sum(abs(x-y) for x,y in zip(top,menu))
 assert difference > 25, f'Start menu covers the top of the display; must scroll apps internally ({top=}, {menu=})'
 print(f'PASS: real Xvfb rendering {im.size}, {unique} colors, {bright} bright window samples, Start top clearance {difference}')
 PY
+  # Exercise the fixed local Start command over the 0600 datagram socket:
+  # the open menu must disappear, then reappear on a second toggle.
+  START_SOCKET="$(find "$TEMP/runtime" -maxdepth 1 -type s -name 'melania-*-start.sock' -print -quit)"
+  [[ -n "$START_SOCKET" ]] || { echo 'FAIL: panel did not create a private Super toggle socket' >&2; exit 1; }
+  python3 - "$START_SOCKET" <<'PYSOCKET'
+import os, socket, stat, sys
+path=sys.argv[1]
+assert stat.S_IMODE(os.stat(path).st_mode)==0o600
+with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+    client.sendto(b"TOGGLE_START",path)
+PYSOCKET
+  sleep .4
+  scrot -z -o "$TEMP/start-closed.png"
+  python3 - "$START_SOCKET" <<'PYSOCKET'
+import socket, sys
+with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+    client.sendto(b"TOGGLE_START",sys.argv[1])
+PYSOCKET
+  sleep .4
+  scrot -z -o reports/start-toggle-reopened.png
+  python3 - "$TEMP/start-closed.png" reports/start-toggle-reopened.png <<'PYTOGGLE'
+from PIL import Image, ImageChops
+import sys
+closed=Image.open(sys.argv[1]).convert("RGB")
+reopened=Image.open(sys.argv[2]).convert("RGB")
+# The leftmost launcher is much darker than the underlying Settings window.
+area=(10,180,550,730)
+delta=ImageChops.difference(closed.crop(area),reopened.crop(area))
+changed=sum(1 for pixel in delta.resize((100,100)).getdata() if sum(pixel)>55)
+assert changed>1000, f'Start toggle changed too few visual pixels: {changed}'
+print(f'PASS: private Start toggle hides and reopens the real GTK menu ({changed} changed sampled pixels)')
+PYTOGGLE
   # Both the foreground Settings window and background Files window must
   # display identical Win7 controls in the actual composited screenshot.
   python3 tools/check_shared_window_chrome.py reports/nested-wayland-full-desktop.png
