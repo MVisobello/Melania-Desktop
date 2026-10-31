@@ -41,7 +41,15 @@ fn make_surface(app:&Application,kind:Layer,anchors:&[Edge],width:i32,height:i32
 fn hide_start_surface(w:&ApplicationWindow) {
     w.set_anchor(Edge::Right,true);
     w.set_anchor(Edge::Top,true);
-    w.set_visible(false);
+    // Layer-shell configuration is double buffered. Give GTK one frame to
+    // commit its new anchors before hiding, which resets the role's requested
+    // width/height to zero. Otherwise Smithay receives size=0 with stale
+    // left/bottom-only anchors and disconnects the entire panel.
+    w.queue_allocate();
+    let target=w.clone();
+    glib::timeout_add_local_once(Duration::from_millis(120),move || {
+        if target.is_visible() { target.set_visible(false); }
+    });
 }
 fn present_start_surface(w:&ApplicationWindow) {
     w.set_anchor(Edge::Right,false);
