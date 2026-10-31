@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::UnixListener}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
+use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -43,7 +43,7 @@ use smithay::{
                       DataDeviceHandler, DataDeviceState, ServerDndGrabHandler}, SelectionHandler},
         output::{OutputHandler, OutputManagerState},
         shell::{xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData},
-                wlr_layer::{WlrLayerShellHandler, WlrLayerShellState, LayerSurface as WlrLayerSurface, Layer as WlrLayer}},
+                wlr_layer::{WlrLayerShellHandler, WlrLayerShellState, LayerSurface as WlrLayerSurface, Layer as WlrLayer, LayerSurfaceCachedState, Anchor as LayerAnchor}},
         shm::{ShmHandler, ShmState},
     },
 };
@@ -92,9 +92,18 @@ impl Drop for PreviewCleanup {
 struct ClientState {
     compositor: CompositorClientState,
 }
+/// Smithay 0.7.0 bug #1979: its pre-commit validation hook survives after
+/// the client destroys the layer role, then rejects the valid bufferless
+/// wl_surface commit. The marker is set ONLY on an explicitly destroyed role.
+#[derive(Default)]
+struct LayerRoleTombstone(AtomicBool);
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
-    fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
+    fn disconnected(&self, id: ClientId, reason: DisconnectReason) {
+        // A Wayland protocol error must not appear as an unexplained GTK
+        // exit: expose the exact client disconnect reason for real smoke QA.
+        eprintln!("Melania Wayland client {id:?} disconnected: {reason:?}");
+    }
 }
 
 struct Melania {
@@ -131,6 +140,31 @@ impl CompositorHandler for Melania {
     fn compositor_state(&mut self) -> &mut CompositorState { &mut self.compositor }
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         &client.get_data::<ClientState>().expect("known client").compositor
+    }
+    fn new_surface(&mut self, surface: &WlSurface) {
+        with_states(surface, |states| {
+            states.data_map.insert_if_missing_threadsafe(LayerRoleTombstone::default);
+        });
+        // Registered when wl_surface is created, *before* Smithay adds its
+        // wlr layer-shell validator. Correct only the stale role teardown
+        // state. All validation stays intact for a live layer role.
+        smithay::wayland::compositor::add_pre_commit_hook::<Self, _>(
+            surface, |_state, _dh, surface| {
+                with_states(surface, |states| {
+                    let was_destroyed=states.data_map.get::<LayerRoleTombstone>()
+                        .is_some_and(|marker|marker.0.load(Ordering::Relaxed));
+                    if !was_destroyed{return;}
+                    let mut cache=states.cached_state.get::<LayerSurfaceCachedState>();
+                    let pending=cache.pending();
+                    if pending.size.w==0 {
+                        pending.anchor |= LayerAnchor::LEFT | LayerAnchor::RIGHT;
+                    }
+                    if pending.size.h==0 {
+                        pending.anchor |= LayerAnchor::TOP | LayerAnchor::BOTTOM;
+                    }
+                });
+            },
+        );
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
@@ -220,6 +254,13 @@ impl WlrLayerShellHandler for Melania {
     fn shell_state(&mut self) -> &mut WlrLayerShellState { &mut self.layer_shell }
     fn new_layer_surface(&mut self, surface: WlrLayerSurface,
         _: Option<WlOutput>, _: WlrLayer, namespace: String) {
+        // Reuse of the wl_surface for a NEW live layer role must again be
+        // strictly checked; the previous role's tombstone no longer applies.
+        with_states(surface.wl_surface(), |states| {
+            if let Some(marker)=states.data_map.get::<LayerRoleTombstone>(){
+                marker.0.store(false, Ordering::Relaxed);
+            }
+        });
         let layer = DesktopLayerSurface::new(surface.clone(), namespace);
         if let Err(error) = layer_map_for_output(&self.output).map_layer(&layer) {
             eprintln!("Melania layer map: {error:?}");
@@ -231,6 +272,11 @@ impl WlrLayerShellHandler for Melania {
         surface.send_configure();
     }
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        with_states(surface.wl_surface(), |states| {
+            if let Some(marker)=states.data_map.get::<LayerRoleTombstone>(){
+                marker.0.store(true, Ordering::Relaxed);
+            }
+        });
         let mapped = layer_map_for_output(&self.output).layers()
             .find(|l| l.wl_surface() == surface.wl_surface()).cloned();
         if let Some(mapped) = mapped { layer_map_for_output(&self.output).unmap_layer(&mapped); }
@@ -686,6 +732,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or("XDG_RUNTIME_DIR is required to create the private control socket")?);
     let control_path = runtime.join(format!("melania-{}-control.sock", std::process::id()));
+    let start_socket_path = runtime.join(format!("melania-{}-start.sock", std::process::id()));
     let control_listener = UnixListener::bind(&control_path)?;
     fs::set_permissions(&control_path, fs::Permissions::from_mode(0o600))?;
     control_listener.set_nonblocking(true)?;
@@ -708,6 +755,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // compositor, with no changes to the parent session's environment.
     // These are test clients; the preview is not yet a true layer-shell.
     let mut children = Vec::new();
+    // Super alone toggles Start on key release; Super+E remains a shortcut.
+    let mut super_candidate=false;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         if flag != "--command" {
@@ -716,6 +765,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let program = arguments.next().ok_or("--command requires a program")?;
         children.push(Command::new(program).env("WAYLAND_DISPLAY", &socket)
             .env(SOCKET_ENV, &control_path)
+            .env(melania_control::START_SOCKET_ENV, &start_socket_path)
             .env("XDG_SESSION_TYPE", "wayland")
             .env("XDG_CURRENT_DESKTOP", "Melania")
             .env("MELANIA_NESTED_SESSION", "1")
@@ -733,11 +783,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let serial = SERIAL_COUNTER.next_serial();
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
                     let key_state = event.state();
+                    if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() {
+                        eprintln!("MELANIA_KEY event code={:?} state={key_state:?}",event.key_code());
+                    }
                     let mut open_files = false;
+                    let mut toggle_start = false;
                     keyboard.input::<(), _>(&mut state, event.key_code(), key_state, serial,
                         event.time_msec(), |data, modifiers, keysym| {
                             let symbol = keysym.modified_sym();
+                            if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() {
+                                eprintln!("MELANIA_KEY symbol={symbol:?} logo={} ctrl={} alt={}",
+                                    modifiers.logo,modifiers.ctrl,modifiers.alt);
+                            }
                             let pressed = key_state == KeyState::Pressed;
+                            // Super only is handled by the shell; do not open
+                            // Start after Super+E, Super+Tab or modifier chords.
+                            if symbol == keysyms::KEY_Super_L.into() ||
+                                symbol == keysyms::KEY_Super_R.into() {
+                                if pressed {
+                                    super_candidate = !modifiers.alt && !modifiers.ctrl;
+                                } else {
+                                    if super_candidate {toggle_start=true;}
+                                    super_candidate=false;
+                                }
+                                return FilterResult::Intercept(());
+                            }
+                            if pressed {super_candidate=false;}
                             // Avoid overriding a client's Ctrl+Tab or AltGr
                             // input; only explicitly reserved combinations.
                             if modifiers.alt && !modifiers.ctrl && !modifiers.logo &&
@@ -766,6 +837,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             FilterResult::Forward
                         });
+                    if toggle_start {
+                        // No shell, spawn or host-global shortcut: send one
+                        // fixed command to the current Melania panel only.
+                        match UnixDatagram::unbound().and_then(|socket|
+                            socket.send_to(b"TOGGLE_START", &start_socket_path)) {
+                            Ok(_)=>{},
+                            Err(error)=>eprintln!("Melania Super Start toggle: {error}"),
+                        }
+                    }
                     if open_files {
                         // A fixed, known program; no shell or interpolated input.
                         // Launch only inside the nested Melania Wayland session.
@@ -970,7 +1050,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;
         backend.submit(Some(&[damage]))?;
-        children.retain_mut(|c| c.try_wait().ok().flatten().is_none());
+        children.retain_mut(|child| match child.try_wait() {
+            Ok(Some(status))=>{
+                eprintln!("Melania nested client pid={} exited with {status}",child.id());
+                false
+            },
+            Ok(None)=>true,
+            Err(error)=>{
+                eprintln!("Melania child pid={} status unavailable: {error}",child.id());
+                true
+            }
+        });
         state.space.refresh();
     }
     // Child clients belong to the nested compositor, not the host session.

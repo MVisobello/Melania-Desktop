@@ -19,11 +19,12 @@ class StartSessionPrivacyContracts(unittest.TestCase):
         self.assertNotIn('root.append(&heading);',self.panel)
         self.assertIn('query.connect_changed',self.panel)
         self.assertIn('gdk::Key::Escape',self.panel)
-        self.assertIn('search_focus.grab_focus()',self.panel)
+        self.assertIn('input.grab_focus()',self.panel)
 
     def test_recent_apps_only_successful_launches_and_no_commands_persisted(self):
         self.assertIn('start_history::record_launch(id);',self.panel)
-        self.assertIn('start_history::recent()',self.panel)
+        self.assertIn('start_usage::popular()',self.panel)
+        self.assertIn('crate::start_usage::record_launch(id)',self.history)
         self.assertIn('if let Some(id)=history_id.as_deref()',self.panel)
         self.assertIn('fn valid_id(id: &str)',self.history)
         self.assertIn('create_dir_all(parent)',self.history)
@@ -38,7 +39,8 @@ class StartSessionPrivacyContracts(unittest.TestCase):
     def test_privacy_page_deletes_exact_recent_app_file_only(self):
         self.assertIn('melania_config::recent_apps_path()',self.settings)
         self.assertIn('fs::remove_file(&path)',self.settings)
-        self.assertIn('Cancella app recenti',self.settings)
+        self.assertIn('Cancella cronologia e frequenze',self.settings)
+        self.assertIn('melania_config::app_usage_path()',self.settings)
         self.assertNotIn('remove_dir_all',self.settings)
 
     def test_no_host_shutdown_in_nested_preview(self):

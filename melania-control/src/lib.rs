@@ -5,6 +5,8 @@
 use std::{fmt, io::{self, BufRead, BufReader, Read, Write}, os::unix::net::UnixStream, path::Path, time::Duration};
 
 pub const SOCKET_ENV: &str = "MELANIA_CONTROL_SOCKET";
+/// Session-local Unix datagram endpoint used only for Super-key Start toggling.
+pub const START_SOCKET_ENV: &str = "MELANIA_START_SOCKET";
 pub const MAX_RESPONSE: usize = 128 * 1024;
 /// Maximum wire length for a single command, including its final LF.
 pub const MAX_COMMAND: usize = 64;
