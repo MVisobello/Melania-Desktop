@@ -94,7 +94,11 @@ struct ClientState {
 }
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
-    fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
+    fn disconnected(&self, id: ClientId, reason: DisconnectReason) {
+        // A Wayland protocol error must not appear as an unexplained GTK
+        // exit: expose the exact client disconnect reason for real smoke QA.
+        eprintln!("Melania Wayland client {id:?} disconnected: {reason:?}");
+    }
 }
 
 struct Melania {
