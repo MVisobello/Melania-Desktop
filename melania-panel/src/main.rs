@@ -146,7 +146,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // branding and native GTK actions. The taskbar reserves 52 logical px;
     // its GTK CSS adds ~6 px of visible height. Matching that offset removes
     // the empty strip seen between Start and the taskbar in nested Wayland.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],616,565,0,"melania-start",0);
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],560,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
@@ -388,17 +388,19 @@ fn start_window(app:&Application)->ApplicationWindow {
     let right=GtkBox::new(Orientation::Vertical,1);
     right.set_valign(gtk::Align::Fill);
     right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(226,-1);
+    right.set_size_request(190,-1);
     // Windows 7 places the current account above the system shortcuts.
     let username=std::env::var("USER").ok()
         .filter(|name|!name.trim().is_empty())
         .unwrap_or_else(||"Utente".to_owned());
     let profile=GtkBox::new(Orientation::Horizontal,8);
     profile.add_css_class("melania-start-user");
-    let avatar=Image::from_icon_name("avatar-default-symbolic");
-    avatar.set_pixel_size(22);
-    profile.append(&avatar);
-    profile.append(&label(&username,"melania-start-user-name"));
+    // Profile name stays in the classic sidebar. The actionable avatar sits
+    // in the footer beside the power control, avoiding duplicate account icons.
+    let username_label=label(&username,"melania-start-user-name");
+    username_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    username_label.set_max_width_chars(23);
+    profile.append(&username_label);
     right.append(&profile);
     // The set of destinations mirrors classic Windows 7, but it opens real
     // Linux folders and Melania Settings sections. No Windows-only commands.
@@ -462,15 +464,40 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Keep the search field under the application column and the power
     // controls on the right, in the same places as Windows 7.
     query.set_hexpand(false);
-    query.set_size_request(340,-1);
+    query.set_size_request(300,-1);
     footer.append(&query);
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
     footer_spacer.set_hexpand(true);
     footer.append(&footer_spacer);
-    // Windows 7-like split power control. Unavailable actions are visible
-    // but disabled with explanations. Nested sessions can only disconnect.
-    let power=Button::with_label("Spegni");
+    // Circular account avatar at the left of power, like a small Win7 user
+    // tile. It opens the real Accounts page; it never impersonates a session
+    // manager or directly performs a sensitive action.
+    let account=Button::new();
+    account.add_css_class("melania-account-orb");
+    account.set_tooltip_text(Some("Account · Impostazioni utente"));
+    account.set_accessible_name(Some("Apri le impostazioni dell'account"));
+    let account_icon=Image::from_icon_name("avatar-default-symbolic");
+    account_icon.set_pixel_size(22);
+    account.set_child(Some(&account_icon));
+    let account_menu=w.clone();
+    account.connect_clicked(move |_| {
+        match Command::new("melania-settings").arg("account").spawn() {
+            Ok(_)=>account_menu.set_visible(false),
+            Err(error)=>eprintln!("Melania account settings: {error}"),
+        }
+    });
+    footer.append(&account);
+    let account_spacing=GtkBox::new(Orientation::Horizontal,0);
+    account_spacing.set_size_request(7,-1);
+    footer.append(&account_spacing);
+    // Icon-only power button retains the existing confirmation and safety
+    // checks: no host shutdown from nested Wayland or GUI smoke tests.
+    let power=Button::new();
+    power.set_icon_name("system-shutdown-symbolic");
+    power.set_tooltip_text(Some("Spegni"));
+    power.set_accessible_name(Some("Spegni il computer"));
     power.add_css_class("melania-session-button");
+    power.add_css_class("melania-power-icon-button");
     let power_capability=session_actions::availability(session_actions::Action::PowerOff);
     power.set_sensitive(power_capability.is_ok());
     if let Err(reason)=power_capability { power.set_tooltip_text(Some(&reason)); }
