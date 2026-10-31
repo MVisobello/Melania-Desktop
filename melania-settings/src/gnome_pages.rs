@@ -303,23 +303,26 @@ pub fn add_pages(stack: &Stack) {
     privacy.append(&info_row("user-trash", "Cestino",
         "Il gestore file Melania utilizza il Cestino di GIO, evitando l'eliminazione definitiva non richiesta."));
     group(&privacy, "Cronologia locale");
-    privacy.append(&info_row("document-open-recent", "App recenti nel menu Start",
-        "Melania conserva localmente soltanto gli ID delle ultime applicazioni avviate dal suo menu Start, non i documenti o le attività di navigazione."));
-    let erase_recent=Button::with_label("Cancella app recenti");
+    privacy.append(&info_row("document-open-recent", "App usate di frequente nel menu Start",
+        "Melania conserva sul computer soltanto gli ID e i conteggi delle app avviate dal menu, senza documenti né cronologia web."));
+    let erase_recent=Button::with_label("Cancella cronologia e frequenze");
     erase_recent.add_css_class("settings-save");
     erase_recent.set_halign(Align::Start);
     let erase_feedback=label("", "settings-action-feedback");
     let message=erase_feedback.clone();
     erase_recent.connect_clicked(move |_| {
-        match melania_config::recent_apps_path() {
-            Some(path)=>match fs::remove_file(&path) {
-                Ok(())=>message.set_text("Cronologia delle app recenti cancellata."),
-                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>
-                    message.set_text("Nessuna cronologia di app recenti da cancellare."),
-                Err(error)=>message.set_text(&format!("Impossibile cancellare la cronologia: {error}")),
-            },
-            None=>message.set_text("Directory dello stato utente non disponibile."),
+        let mut failed=Vec::new();
+        let mut removed=0;
+        for path in [melania_config::recent_apps_path(),melania_config::app_usage_path()].into_iter().flatten() {
+            match fs::remove_file(&path) {
+                Ok(())=>removed+=1,
+                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},
+                Err(error)=>failed.push(format!("{}: {error}",path.display())),
+            }
         }
+        if !failed.is_empty(){message.set_text(&format!("Impossibile cancellare alcuni dati: {}",failed.join("; ")));}
+        else if removed>0 {message.set_text("Cronologia e frequenze delle applicazioni cancellate.");}
+        else {message.set_text("Nessun dato locale sulle applicazioni da cancellare.");}
     });
     privacy.append(&erase_recent);
     privacy.append(&erase_feedback);
