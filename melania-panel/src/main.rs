@@ -1285,7 +1285,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notification_button.add_css_class("melania-system");
     let notify=notifications.clone();let sm=start.clone();let qs=quick.clone();
     notification_button.connect_clicked(move |_|{
-        sm.set_visible(false);qs.set_visible(false);
+        hide_start_surface(&sm);qs.set_visible(false);
         if notify.is_visible(){notify.set_visible(false);}else{notify.present();}
     });
     bar.append(&notification_button);
@@ -1297,7 +1297,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     update();glib::timeout_add_seconds_local(20,move ||{update();glib::ControlFlow::Continue});
     let cal=calendar.clone();let qs=quick.clone();let sm=start.clone();let nt=notifications.clone();
     clock.connect_clicked(move |_|{
-        qs.set_visible(false);sm.set_visible(false);nt.set_visible(false);
+        qs.set_visible(false);hide_start_surface(&sm);nt.set_visible(false);
         if cal.is_visible(){cal.set_visible(false);}else{cal.present();}
     });bar.append(&clock);
     w.set_child(Some(&bar));w
