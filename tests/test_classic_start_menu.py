@@ -50,6 +50,8 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('image.set_pixel_size(16);',PANEL)
         self.assertIn('melania-classic-symbolic',CSS)
         self.assertIn('color: #d7e2ee;',CSS)
+        self.assertIn('body_scroll.set_vexpand(true);',PANEL)
+        self.assertIn('right.set_valign(gtk::Align::Fill);',PANEL)
         self.assertIn('footer.append(&query);',PANEL)
         self.assertNotIn('root.append(&query);',PANEL)
         self.assertIn('query.connect_changed',PANEL)
