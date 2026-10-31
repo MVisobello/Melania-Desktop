@@ -144,6 +144,13 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
     client.sendto(b"TOGGLE_START",path)
 PYSOCKET
   sleep .4
+  PANEL_PID="$(pgrep -P "$PID" -f 'target/debug/melania-panel' | head -n1 || true)"
+  if [[ -z "$PANEL_PID" ]]; then
+    echo 'FAIL: Melania Panel exited when Start was hidden (must survive Super toggle)' >&2
+    tail -50 "$TEMP/compositor.log" >&2 || true
+    exit 1
+  fi
+  echo "Start hidden; panel still alive pid=$PANEL_PID, socket: $(stat -c '%a %F' "$START_SOCKET")"
   scrot -z -o "$TEMP/start-closed.png"
   python3 - "$START_SOCKET" <<'PYSOCKET'
 import socket, sys
