@@ -323,7 +323,12 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
         application_dir=root/"apps"/"scalable"
         application_dir.mkdir(parents=True,exist_ok=True)
         for icon_name in melania_aliases:
-            (application_dir/f"{icon_name}.svg").write_text(canonical,encoding="utf8")
+            target=application_dir/f"{icon_name}.svg"
+            # Existing inventory entries may be symlinks to shared assets.
+            # Never overwrite their shared target (possibly in Dark) by
+            # writing through the link: replace only the alias file itself.
+            if target.is_symlink():target.unlink()
+            target.write_text(canonical,encoding="utf8")
     main_cats = sorted(CATEGORIES)
     # Light on Dark Panel: application dialogs get dark-on-light symbols,
     # while the dark taskbar inherits bright status glyphs and panel icons.
