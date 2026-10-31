@@ -9,7 +9,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, path::PathBuf, process::Command, rc::Rc, time::Duration};
+use std::{cell::{Cell, RefCell}, fs, os::unix::{fs::PermissionsExt, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, time::Duration};
 use melania_control::{request as control_request, current_workspace, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -199,8 +199,12 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Start always opens ready to type; closing clears the previous filter.
     let search_focus=query.clone();
     w.connect_notify_local(Some("visible"), move |surface,_| {
-        if surface.is_visible() { let _=search_focus.grab_focus(); }
-        else { search_focus.set_text(""); }
+        if surface.is_visible() {
+            // Wait for mapping to finish; the very first typed character
+            // must reach Start search without clicking into the Entry.
+            let input=search_focus.clone();
+            glib::idle_add_local_once(move || {let _=input.grab_focus();});
+        } else { search_focus.set_text(""); }
     });
     // Escape dismisses Start without modifying the current desktop session.
     let escape=gtk::EventControllerKey::new();
@@ -1237,11 +1241,24 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         if notify.is_visible(){notify.set_visible(false);}else{notify.present();}
     });
     bar.append(&notification_button);
-    let clock=Button::with_label("--:--");clock.add_css_class("melania-system");
+    // Horizontal system clock, with the time to the right of the date.
+    let clock=Button::new();clock.add_css_class("melania-system");
     clock.add_css_class("melania-clock");
-    let refresh=clock.clone();
-    let update=move || {let time=glib::DateTime::now_local().ok().and_then(|t|t.format("%H:%M\n%d/%m/%Y").ok());
-        refresh.set_label(time.as_deref().unwrap_or("--:--"));};
+    let clock_row=GtkBox::new(Orientation::Horizontal,8);
+    clock_row.add_css_class("melania-clock-row");
+    let date_label=Label::new(None);date_label.add_css_class("melania-clock-date");
+    date_label.set_xalign(1.0);
+    let time_label=Label::new(None);time_label.add_css_class("melania-clock-time");
+    time_label.set_xalign(1.0);
+    clock_row.append(&date_label);
+    clock_row.append(&time_label);
+    clock.set_child(Some(&clock_row));
+    let update=move || {
+        if let Ok(now)=glib::DateTime::now_local() {
+            date_label.set_text(&now.format("%d/%m/%Y").unwrap_or_else(|_|glib::GString::from("--/--/----")));
+            time_label.set_text(&now.format("%H:%M").unwrap_or_else(|_|glib::GString::from("--:--")));
+        }
+    };
     update();glib::timeout_add_seconds_local(20,move ||{update();glib::ControlFlow::Continue});
     let cal=calendar.clone();let qs=quick.clone();let sm=start.clone();let nt=notifications.clone();
     clock.connect_clicked(move |_|{
@@ -1250,6 +1267,49 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     });bar.append(&clock);
     w.set_child(Some(&bar));w
 }
+/// Dedicated 0600 per-session socket receives only the fixed toggle token
+/// from our nested compositor. It cannot execute programs or power the host.
+fn install_start_hotkey(start:&ApplicationWindow) {
+    let Some(path)=std::env::var_os(melania_control::START_SOCKET_ENV).map(PathBuf::from) else {
+        return;
+    };
+    // The compositor supplies an endpoint inside this user's XDG_RUNTIME_DIR.
+    let Some(runtime)=std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) else{return;};
+    if path.parent()!=Some(runtime.as_path()) || !path.file_name()
+        .is_some_and(|name|name.to_string_lossy().starts_with("melania-") &&
+            name.to_string_lossy().ends_with("-start.sock")) {
+        eprintln!("Melania Start: refusing unexpected socket path {}",path.display());
+        return;
+    }
+    // A crashed panel can leave behind a stale datagram socket. The per-user
+    // runtime directory is not shared with other users.
+    if path.exists(){let _=fs::remove_file(&path);}
+    let socket=match UnixDatagram::bind(&path){
+        Ok(socket)=>socket,
+        Err(error)=>{eprintln!("Melania Start socket: {error}");return;},
+    };
+    if fs::set_permissions(&path,fs::Permissions::from_mode(0o600)).is_err(){
+        let _=fs::remove_file(&path);return;
+    }
+    if socket.set_nonblocking(true).is_err(){let _=fs::remove_file(&path);return;}
+    let owner=start.clone();
+    glib::timeout_add_local(Duration::from_millis(35),move ||{
+        let mut buf=[0u8;64];
+        loop {
+            match socket.recv(&mut buf) {
+                Ok(size) if &buf[..size]==b"TOGGLE_START"=>{
+                    if owner.is_visible(){owner.set_visible(false);}
+                    else {owner.present();}
+                },
+                Ok(_)=>{}, // no arbitrary commands or user text
+                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
+                Err(error)=>{eprintln!("Melania Start socket recv: {error}");break;},
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
 fn build(app:&Application){
     setup_melania_icon_theme();
     if !gtk4_layer_shell::is_supported() {
@@ -1265,6 +1325,7 @@ fn build(app:&Application){
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
     let start=start_window(app);
+    install_start_hotkey(&start);
     let notifications=notifications_window(app);
     let quick=quick_window(app,&notifications);
     let calendar=calendar_window(app);
