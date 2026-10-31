@@ -4,6 +4,7 @@
 mod window_groups;
 mod session_actions;
 mod start_history;
+mod start_usage;
 use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -229,6 +230,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     apps_box.add_css_class("melania-start-apps");
     // Search-only results remain hidden in the normal classic app list.
     let mut searchable:Vec<(Button,String,bool)>=Vec::new();
+    let mut app_entries:Vec<(Button,String,String)>=Vec::new();
     for (name,program,icon) in [
         ("Melania Files", "melania-files", "org.melaniadesktop.Files"),
         ("Impostazioni", "melania-settings", "org.melaniadesktop.Settings"),
@@ -248,6 +250,7 @@ fn start_window(app:&Application)->ApplicationWindow {
             }
         });
         apps_box.append(&button);
+        app_entries.push((button.clone(),name.to_lowercase(),icon.to_owned()));
         searchable.push((button,name.to_lowercase(),false));
     }
     let mut apps=gio::AppInfo::all().into_iter().filter(|app| {
@@ -272,6 +275,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         button.set_child(Some(&row));
         let menu=w.clone();
         let history_id=app_info.id().map(|id| id.to_string());
+        let listing_id=history_id.clone();
         button.connect_clicked(move |_| {
             match app_info.launch(&[],None::<&gio::AppLaunchContext>) {
                 Ok(())=>{
@@ -282,6 +286,7 @@ fn start_window(app:&Application)->ApplicationWindow {
             }
         });
         apps_box.append(&button);
+        app_entries.push((button.clone(),name.to_lowercase(),listing_id.unwrap_or_default()));
         searchable.push((button,name.to_lowercase(),false));
     }
     // GNOME/COSMIC-inspired unified search without background indexing or
@@ -331,17 +336,6 @@ fn start_window(app:&Application)->ApplicationWindow {
     let empty=label("Nessun risultato: applicazioni, cartelle o impostazioni", "melania-sub");
     empty.set_visible(false);apps_box.append(&empty);
     let searchable=Rc::new(searchable);
-    let searchable_for_filter=searchable.clone();
-    query.connect_changed(move |q| {
-        let term=q.text().trim().to_lowercase();
-        let mut visible=0;
-        for (button,name,search_only) in searchable_for_filter.iter() {
-            let matches=if term.is_empty() { !search_only } else { name.contains(&term) };
-            button.set_visible(matches);
-            if matches {visible+=1;}
-        }
-        empty.set_visible(visible==0);
-    });
     let searchable_for_enter=searchable.clone();
     let entry=query.clone();
     query.connect_activate(move |_| {
@@ -352,73 +346,83 @@ fn start_window(app:&Application)->ApplicationWindow {
         }
     });
     scroll.set_child(Some(&apps_box));
-    // A bounded recent list, refreshed whenever Start opens. Store only
-    // freedesktop desktop IDs, never command lines or filenames. Unknown or
-    // uninstalled entries are skipped without launching anything.
-    let recent_heading=label("RECENTI","melania-section-label");
-    recent_heading.set_visible(false);
-    left.append(&recent_heading);
-    let recent_list=GtkBox::new(Orientation::Vertical,1);
-    recent_list.add_css_class("melania-recent-list");
-    recent_list.set_visible(false);
-    left.append(&recent_list);
-    let menu_for_recent=w.clone();
-    w.connect_notify_local(Some("visible"), move |surface,_| {
-        if !surface.is_visible(){return;}
-        while let Some(child)=recent_list.first_child(){recent_list.remove(&child);}
-        let installed=gio::AppInfo::all();
-        let mut count=0;
-        for id in start_history::recent() {
-            if count>=4 {break;}
-            if id=="org.melaniadesktop.Files" || id=="org.melaniadesktop.Settings" {
-                let (name,program,icon)=if id=="org.melaniadesktop.Files" {
-                    ("Melania Files","melania-files","org.melaniadesktop.Files")
-                } else {("Impostazioni","melania-settings","org.melaniadesktop.Settings")};
-                let launch=icon_row(name,icon,"melania-action");
-                let menu=menu_for_recent.clone();
-                launch.connect_clicked(move |_| {
-                    match Command::new(program).spawn() {
-                        Ok(_)=>{start_history::record_launch(if program=="melania-files" {
-                            "org.melaniadesktop.Files"
-                        } else {"org.melaniadesktop.Settings"});menu.set_visible(false);},
-                        Err(error)=>eprintln!("Melania recent app launch: {error}"),
-                    }
-                });
-                recent_list.append(&launch);
-                count+=1;
-                continue;
-            }
-            let Some(info)=installed.iter().find(|app| app.should_show() &&
-                app.id().as_deref()==Some(id.as_str())).cloned() else {continue;};
-            let launch=Button::new();
-            launch.add_css_class("melania-action");
-            let row=GtkBox::new(Orientation::Horizontal,8);
-            let image=info.icon().map(|icon|Image::from_gicon(&icon))
-                .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
-            image.set_pixel_size(27);
-            row.append(&image);
-            let caption=label(&info.name(),"melania-row-text");
-            caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            caption.set_max_width_chars(13);
-            row.append(&caption);
-            launch.set_child(Some(&row));
-            let menu=menu_for_recent.clone();
-            launch.connect_clicked(move |_| {
-                match info.launch(&[],None::<&gio::AppLaunchContext>) {
-                    Ok(())=>{start_history::record_launch(&id);menu.set_visible(false);},
-                    Err(error)=>eprintln!("Melania recent app launch: {error}"),
-                }
-            });
-            recent_list.append(&launch);
-            count+=1;
-        }
-        recent_heading.set_visible(count>0);
-        recent_list.set_visible(count>0);
-    });
-    // Recent launches belong with applications on the left, not among the
-    // stable system locations on the right.
-    left.append(&label("TUTTE LE APPLICAZIONI","melania-section-label"));
+    // The same scrolled column contains the most-used launchers followed by
+    // the remaining installed apps alphabetically. No item appears twice.
+    let content=GtkBox::new(Orientation::Vertical,1);
+    let frequent_heading=label("PIÙ USATE","melania-section-label");
+    let popular_box=GtkBox::new(Orientation::Vertical,1);
+    popular_box.add_css_class("melania-start-frequent-apps");
+    let divider=gtk::Separator::new(Orientation::Horizontal);
+    divider.add_css_class("melania-start-app-divider");
+    let all_heading=label("TUTTE LE APPLICAZIONI","melania-section-label");
+    content.append(&frequent_heading);
+    content.append(&popular_box);
+    content.append(&divider);
+    content.append(&all_heading);
+    content.append(&apps_box);
+    scroll.set_child(Some(&content));
     left.append(&scroll);
+    // When Start reopens, refresh the ranking from the local per-user counter.
+    // The list remains searchable, keyboard-driven and scrollable.
+    let app_entries=Rc::new(app_entries);
+    let refresh_entries=app_entries.clone();
+    let popular_target=popular_box.clone();
+    let alphabetical_target=apps_box.clone();
+    let heading_for_refresh=frequent_heading.clone();
+    let divider_for_refresh=divider.clone();
+    let query_for_refresh=query.clone();
+    let refresh_groups=move || {
+        let usage=start_usage::popular();
+        let mut alphabetical=refresh_entries.iter().cloned().collect::<Vec<_>>();
+        alphabetical.sort_by(|a,b|a.1.cmp(&b.1));
+        let mut frequent=alphabetical.iter().filter_map(|entry| {
+            let count=usage.iter().find(|(id,_)| id==&entry.2)?.1;
+            Some((entry.clone(),count))
+        }).collect::<Vec<_>>();
+        frequent.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.1.cmp(&b.0.1)));
+        frequent.truncate(5);
+        for (button,_,_) in alphabetical.iter() {
+            if let Some(parent)=button.parent() {
+                if let Ok(container)=parent.downcast::<GtkBox>() {
+                    container.remove(button);
+                }
+            }
+        }
+        for ((button,_,_),_) in frequent.iter() {
+            popular_target.append(button);
+        }
+        for (button,_,id) in alphabetical {
+            if !frequent.iter().any(|((_,_,frequent_id),_)| frequent_id==&id && !id.is_empty()) {
+                alphabetical_target.append(&button);
+            }
+        }
+        let visible=!frequent.is_empty() && query_for_refresh.text().is_empty();
+        heading_for_refresh.set_visible(visible);
+        divider_for_refresh.set_visible(visible);
+    };
+    refresh_groups();
+    w.connect_notify_local(Some("visible"), move |surface,_| {
+        if surface.is_visible(){refresh_groups();}
+    });
+    let searchable_for_filter=searchable.clone();
+    let heading_for_search=frequent_heading.clone();
+    let divider_for_search=divider.clone();
+    let all_heading_for_search=all_heading.clone();
+    let popular_for_search=popular_box.clone();
+    query.connect_changed(move |q| {
+        let searching=!q.text().trim().is_empty();
+        heading_for_search.set_visible(!searching && popular_for_search.first_child().is_some());
+        divider_for_search.set_visible(!searching && popular_for_search.first_child().is_some());
+        all_heading_for_search.set_visible(!searching);
+        let term=q.text().trim().to_lowercase();
+        let mut visible=0;
+        for (button,name,search_only) in searchable_for_filter.iter() {
+            let matches=if term.is_empty() { !search_only } else { name.contains(&term) };
+            button.set_visible(matches);
+            if matches {visible+=1;}
+        }
+        empty.set_visible(visible==0);
+    });
     columns.append(&left);
     let right=GtkBox::new(Orientation::Vertical,1);
     right.set_valign(gtk::Align::Fill);
