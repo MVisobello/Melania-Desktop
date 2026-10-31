@@ -967,3 +967,88 @@ window.melania-theme-light .melania-start-panel button.melania-power-icon-button
 window.melania-theme-light .melania-start-panel button.melania-power-icon-button:hover {
   background: #d8e5f1;
 }
+
+
+/* Final classic Start: clickable circular profile beside a larger username;
+ * the footer holds exactly one power menu control, not a split arrow. */
+.melania-start-panel .melania-start-user {
+  border-spacing: 7px;
+  padding: 1px 3px 8px;
+}
+.melania-start-panel .melania-start-user-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+.melania-start-panel .melania-start-user button.melania-account-orb {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 5px;
+  border-radius: 999px;
+}
+.melania-start-panel .melania-start-frequent-apps {
+  border-spacing: 1px;
+}
+.melania-start-panel .melania-start-frequent-apps .melania-action {
+  min-height: 29px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  border: 1px solid transparent;
+}
+.melania-start-panel .melania-start-frequent-apps .melania-action:hover {
+  background: #d9e9fa;
+  border-color: #a5c5e6;
+}
+window.melania-theme-dark .melania-start-panel .melania-start-frequent-apps .melania-action:hover {
+  background: #3d546e;
+  border-color: #607e9f;
+}
+.melania-start-panel .melania-start-app-divider {
+  background: #c5d5e5;
+  margin: 7px 5px;
+}
+window.melania-theme-dark .melania-start-panel .melania-start-app-divider {
+  background: #566779;
+}
+/* MenuButton is not a Button: style its internal GTK button explicitly. */
+.melania-start-panel menubutton.melania-power-icon-button > button {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 5px;
+  border-radius: 8px;
+  background: #3e4c5d;
+  border: 1px solid #536579;
+  color: #f2f7fc;
+  box-shadow: none;
+}
+.melania-start-panel menubutton.melania-power-icon-button > button:hover {
+  background: #51647a;
+}
+window.melania-theme-light .melania-start-panel menubutton.melania-power-icon-button > button {
+  background: #e9edf3;
+  border-color: #d3dce6;
+  color: #304355;
+}
+window.melania-theme-light .melania-start-panel menubutton.melania-power-icon-button > button:hover {
+  background: #d8e5f1;
+}
+/* Date sits to the left, larger hour to its right; both align right. */
+.melania-bar .melania-clock {
+  padding: 0 8px;
+  min-width: 126px;
+}
+.melania-bar .melania-clock-row { border-spacing: 8px; }
+.melania-bar .melania-clock-date {
+  color: #c2d4e5;
+  font-size: 11px;
+  font-weight: 500;
+}
+.melania-bar .melania-clock-time {
+  color: #f3f9ff;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+window.melania-theme-light .melania-bar .melania-clock-date {color:#596e81;}
+window.melania-theme-light .melania-bar .melania-clock-time {color:#273d52;}
