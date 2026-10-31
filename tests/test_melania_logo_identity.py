@@ -20,7 +20,13 @@ class MelaniaIdentityContracts(unittest.TestCase):
 
     def test_fluent_builder_never_regenerates_original_logo(self):
         builder = (ROOT / "tools" / "build_melania_fluent_themes.py").read_text()
-        self.assertIn("category == 'apps' and name == 'melania'", builder)
+        self.assertIn("category == 'apps' and name in", builder)
+        for name in ('melania', 'start-here', 'distributor-logo',
+                     'org.melaniadesktop.Preview'):
+            self.assertIn(name, builder)
+        legacy=(ROOT / 'tools/build_melania_icon_variants.py').read_text()
+        self.assertIn('branding/icons/melania-symbol.svg', legacy)
+        self.assertIn('"distributor-logo"', legacy)
         self.assertIn("original_melania_logo()", builder)
         self.assertIn("Melania-Fluent-Light", builder)
         self.assertIn("Melania-Fluent-Dark", builder)
