@@ -475,6 +475,9 @@ fn start_window(app:&Application)->ApplicationWindow {
         ("Guida e supporto","help-browser-symbolic","help",""),
     ] {
         let button=classic_link_row(name,icon_name);
+        // Stretch the ten real destinations through the column's remaining
+        // height instead of leaving unused dark space below them.
+        button.set_vexpand(true);
         if name=="Dispositivi e stampanti" {
             button.set_tooltip_text(Some("Apre Dispositivi in Impostazioni; la gestione completa delle stampanti non è ancora disponibile."));
         }
