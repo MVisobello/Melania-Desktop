@@ -74,7 +74,7 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     button.add_css_class(class);
     let row = GtkBox::new(Orientation::Horizontal, 10);
     let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(if class == "melania-shortcut" { 29 } else { 34 });
+    icon.set_pixel_size(if class == "melania-shortcut" { 18 } else { 27 });
     icon.add_css_class("melania-menu-app-icon");
     row.append(&icon);
     let caption = label(text, "melania-row-text");
