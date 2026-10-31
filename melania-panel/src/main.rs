@@ -90,14 +90,16 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
 fn classic_link_row(text: &str, icon_name: &str) -> Button {
     let button=Button::new();
     button.add_css_class("melania-classic-link");
-    let row=GtkBox::new(Orientation::Horizontal,9);
+    let row=GtkBox::new(Orientation::Horizontal,6);
     let image=Image::from_icon_name(icon_name);
     image.set_pixel_size(16);
     image.add_css_class("melania-classic-symbolic");
     row.append(&image);
     let caption=label(text,"melania-classic-link-text");
     caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    caption.set_max_width_chars(25);
+    // Bound GTK Label natural size: max-width-chars(25) previously grew
+    // the right section to almost half the entire popup despite 190px min.
+    caption.set_max_width_chars(19);
     caption.set_hexpand(true);
     row.append(&caption);
     button.set_child(Some(&row));
@@ -181,7 +183,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // branding and native GTK actions. The taskbar reserves 52 logical px;
     // its GTK CSS adds ~6 px of visible height. Matching that offset removes
     // the empty strip seen between Start and the taskbar in nested Wayland.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],560,565,0,"melania-start",0);
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],515,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
@@ -423,7 +425,10 @@ fn start_window(app:&Application)->ApplicationWindow {
     let right=GtkBox::new(Orientation::Vertical,1);
     right.set_valign(gtk::Align::Fill);
     right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(190,-1);
+    // GtkBox size_request is a MINIMUM; cap the natural width of the
+    // link labels too, otherwise GTK silently allocates ~260 px here.
+    right.set_size_request(194,-1);
+    right.set_hexpand(false);
     // Windows 7 places the current account above the system shortcuts.
     let username=std::env::var("USER").ok()
         .filter(|name|!name.trim().is_empty())
@@ -434,7 +439,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // in the footer beside the power control, avoiding duplicate account icons.
     let username_label=label(&username,"melania-start-user-name");
     username_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    username_label.set_max_width_chars(23);
+    username_label.set_max_width_chars(17);
     profile.append(&username_label);
     right.append(&profile);
     // The set of destinations mirrors classic Windows 7, but it opens real
@@ -499,7 +504,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Keep the search field under the application column and the power
     // controls on the right, in the same places as Windows 7.
     query.set_hexpand(false);
-    query.set_size_request(300,-1);
+    query.set_size_request(262,-1);
     footer.append(&query);
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
     footer_spacer.set_hexpand(true);
