@@ -121,5 +121,7 @@ jobs:
             reports/wayland-full-*.log
             reports/nested-wayland-full-desktop.png
             reports/start-toggle-reopened.png
+            reports/start-super-reopened.png
+            reports/start-search-typed.png
             reports/nested-wayland-file-preview.bmp
           if-no-files-found: warn
