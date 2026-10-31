@@ -138,6 +138,22 @@ fn start_window(app:&Application)->ApplicationWindow {
     let query=Entry::builder().placeholder_text("Cerca app, file o impostazioni…").build();
     query.add_css_class("melania-entry");
     root.append(&query);
+    // Start always opens ready to type; closing clears the previous filter.
+    let search_focus=query.clone();
+    w.connect_notify_local(Some("visible"), move |surface,_| {
+        if surface.is_visible() { let _=search_focus.grab_focus(); }
+        else { search_focus.set_text(""); }
+    });
+    // Escape dismisses Start without modifying the current desktop session.
+    let escape=gtk::EventControllerKey::new();
+    let escape_owner=w.clone();
+    escape.connect_key_pressed(move |_,key,_,_| {
+        if key==gdk::Key::Escape {
+            escape_owner.set_visible(false);
+            glib::Propagation::Stop
+        } else { glib::Propagation::Proceed }
+    });
+    w.add_controller(escape);
     let columns=GtkBox::new(Orientation::Horizontal,15);
     columns.add_css_class("melania-start-columns");
     let left=GtkBox::new(Orientation::Vertical,8);
