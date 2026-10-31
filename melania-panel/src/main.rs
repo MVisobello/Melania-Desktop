@@ -183,9 +183,24 @@ fn start_window(app:&Application)->ApplicationWindow {
     // branding and native GTK actions. The taskbar reserves 52 logical px;
     // its GTK CSS adds ~6 px of visible height. Matching that offset removes
     // the empty strip seen between Start and the taskbar in nested Wayland.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],560,565,0,"melania-start",0);
+    // Layer-shell requires BOTH anchors on an axis if a surface becomes
+    // zero-sized during a GTK unmap. GTK4 sends a null buffer when Start is
+    // hidden; Smithay correctly terminates clients that omit opposite anchors.
+    // Bound the full four-anchored area to the approved classic Start geometry
+    // so the popup still sits flush above the taskbar instead of stretching.
+    let w=make_surface(app,Layer::Overlay,&[
+        Edge::Left,Edge::Right,Edge::Top,Edge::Bottom,
+    ],560,565,0,"melania-start",0);
+    w.set_size_request(560,565);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
+    if let Some(monitor)=gdk::Display::default()
+        .and_then(|display|display.monitors().item(0))
+        .and_then(|item|item.downcast::<gdk::Monitor>().ok()) {
+        let geometry=monitor.geometry();
+        w.set_margin(Edge::Right,(geometry.width()-560-8).max(0));
+        w.set_margin(Edge::Top,(geometry.height()-565-6).max(0));
+    }
     w.set_keyboard_mode(KeyboardMode::OnDemand);
     let root=GtkBox::new(Orientation::Vertical,0);
     root.add_css_class("melania-panel");
