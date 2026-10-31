@@ -386,7 +386,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     left.append(&scroll);
     columns.append(&left);
     let right=GtkBox::new(Orientation::Vertical,1);
-    right.set_valign(gtk::Align::Start);
+    right.set_valign(gtk::Align::Fill);
     right.add_css_class("melania-start-shortcuts");
     right.set_size_request(226,-1);
     // Windows 7 places the current account above the system shortcuts.
@@ -445,13 +445,14 @@ fn start_window(app:&Application)->ApplicationWindow {
         }
     }
     columns.append(&right);
-    // Limit the ENTIRE two-column menu, not only the left application list.
-    // Otherwise the quick-access column forces the whole popup to 760px.
+    // Keep the two-column content above the footer: expanding this viewport
+    // lets the search and power buttons hug the taskbar even when the
+    // applications column contains fewer items than the available height.
     let body_scroll = gtk::ScrolledWindow::new();
     body_scroll.add_css_class("melania-start-body-scroll");
     body_scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
     body_scroll.set_propagate_natural_height(true);
-    body_scroll.set_vexpand(false);
+    body_scroll.set_vexpand(true);
     body_scroll.set_min_content_height(280);
     body_scroll.set_max_content_height(452);
     body_scroll.set_child(Some(&columns));
