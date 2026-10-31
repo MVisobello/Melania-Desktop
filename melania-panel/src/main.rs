@@ -6,6 +6,7 @@ mod session_actions;
 mod start_history;
 mod start_usage;
 use gtk::{self, gdk, gio, glib, prelude::*};
+use gio::prelude::ApplicationExtManual;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
@@ -1268,7 +1269,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
 }
 /// Dedicated 0600 per-session socket receives only the fixed toggle token
 /// from our nested compositor. It cannot execute programs or power the host.
-fn install_start_hotkey(start:&ApplicationWindow) {
+fn install_start_hotkey(app:&Application,start:&ApplicationWindow) {
     let Some(path)=std::env::var_os(melania_control::START_SOCKET_ENV).map(PathBuf::from) else {
         return;
     };
@@ -1292,7 +1293,12 @@ fn install_start_hotkey(start:&ApplicationWindow) {
     }
     if socket.set_nonblocking(true).is_err(){let _=fs::remove_file(&path);return;}
     let owner=start.clone();
+    // A hidden layer-shell popup can temporarily leave the application with
+    // no mapped toplevel according to GTK's lifecycle accounting. Keep the
+    // *panel service* alive until this listener source is destroyed.
+    let app_hold=app.hold();
     glib::timeout_add_local(Duration::from_millis(35),move ||{
+        let _keep_running=&app_hold;
         let mut buf=[0u8;64];
         loop {
             match socket.recv(&mut buf) {
@@ -1324,7 +1330,7 @@ fn build(app:&Application){
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
     let start=start_window(app);
-    install_start_hotkey(&start);
+    install_start_hotkey(app,&start);
     let notifications=notifications_window(app);
     let quick=quick_window(app,&notifications);
     let calendar=calendar_window(app);
