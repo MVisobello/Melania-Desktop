@@ -193,7 +193,14 @@ fn start_window(app:&Application)->ApplicationWindow {
         apps_box.append(&button);
         searchable.push((button,name.to_lowercase(),false));
     }
-    let mut apps=gio::AppInfo::all().into_iter().filter(|app|app.should_show()).collect::<Vec<_>>();
+    let mut apps=gio::AppInfo::all().into_iter().filter(|app| {
+        if !app.should_show() { return false; }
+        // Builtin Melania launchers are already shown at the top. Avoid
+        // doubling them when their freedesktop .desktop files are installed.
+        let identifier=app.id().map(|id|id.to_string()).unwrap_or_default();
+        let normalized=identifier.trim_end_matches(".desktop");
+        normalized!="org.melaniadesktop.Files" && normalized!="org.melaniadesktop.Settings"
+    }).collect::<Vec<_>>();
     apps.sort_by_key(|app|app.name().to_string().to_lowercase());
     for app_info in apps {
         let name=app_info.name().to_string();
