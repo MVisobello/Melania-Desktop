@@ -58,6 +58,8 @@ fn xdg_shortcut_directory(kind: &str) -> PathBuf {
         "DOCUMENTS" => &["Documenti", "Documents"],
         "PICTURES" => &["Immagini", "Pictures"],
         "DOWNLOAD" => &["Scaricati", "Download", "Downloads"],
+        "MUSIC" => &["Musica", "Music"],
+        "VIDEOS" => &["Video", "Videos"],
         _ => &[],
     };
     for name in candidates {
@@ -72,10 +74,30 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     button.add_css_class(class);
     let row = GtkBox::new(Orientation::Horizontal, 10);
     let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(if class == "melania-shortcut" { 29 } else { 34 });
+    icon.set_pixel_size(if class == "melania-shortcut" { 18 } else { 27 });
     icon.add_css_class("melania-menu-app-icon");
     row.append(&icon);
     let caption = label(text, "melania-row-text");
+    caption.set_hexpand(true);
+    row.append(&caption);
+    button.set_child(Some(&row));
+    button
+}
+
+
+/// Win7-like Start sidebar links use quiet symbolic glyphs instead of colorful
+/// folder tiles. The system icon theme supplies the *-symbolic artwork.
+fn classic_link_row(text: &str, icon_name: &str) -> Button {
+    let button=Button::new();
+    button.add_css_class("melania-classic-link");
+    let row=GtkBox::new(Orientation::Horizontal,9);
+    let image=Image::from_icon_name(icon_name);
+    image.set_pixel_size(16);
+    image.add_css_class("melania-classic-symbolic");
+    row.append(&image);
+    let caption=label(text,"melania-classic-link-text");
+    caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    caption.set_max_width_chars(25);
     caption.set_hexpand(true);
     row.append(&caption);
     button.set_child(Some(&row));
@@ -120,24 +142,24 @@ fn confirm_session_action(parent: &ApplicationWindow, action: session_actions::A
 }
 
 fn start_window(app:&Application)->ApplicationWindow {
-    // GNOME-inspired clarity with an original Melania identity: generous
-    // application targets, one search field, a calm quick-access section.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],566,545,8,"melania-start",0);
-    // Position 8 px from left, exactly above the 52 px taskbar with 8 px gap.
+    // Two visually distinct Win7-style columns, with the original Melania
+    // branding and native GTK actions. The taskbar reserves 52 logical px;
+    // its GTK CSS adds ~6 px of visible height. Matching that offset removes
+    // the empty strip seen between Start and the taskbar in nested Wayland.
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],616,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
-    w.set_margin(Edge::Bottom,60);
+    w.set_margin(Edge::Bottom,6);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
-    let root=GtkBox::new(Orientation::Vertical,10);
+    let root=GtkBox::new(Orientation::Vertical,0);
     root.add_css_class("melania-panel");
     root.add_css_class("melania-start-panel");
     // Preserve the approved Start surface without an added Melania heading.
-    // Search is the first usable control, just like the classic Start menu.
+    // Keep search instantly focused, but place its widget in the footer like Windows 7.
     if melania_config::load().unwrap_or_default().high_contrast {
         root.add_css_class("high-contrast");
     }
     let query=Entry::builder().placeholder_text("Cerca app, file o impostazioni…").build();
     query.add_css_class("melania-entry");
-    root.append(&query);
     // Start always opens ready to type; closing clears the previous filter.
     let search_focus=query.clone();
     w.connect_notify_local(Some("visible"), move |surface,_| {
@@ -154,11 +176,11 @@ fn start_window(app:&Application)->ApplicationWindow {
         } else { glib::Propagation::Proceed }
     });
     w.add_controller(escape);
-    let columns=GtkBox::new(Orientation::Horizontal,15);
+    let columns=GtkBox::new(Orientation::Horizontal,0);
     columns.add_css_class("melania-start-columns");
     let left=GtkBox::new(Orientation::Vertical,8);
     left.set_hexpand(true);
-    left.append(&label("TUTTE LE APPLICAZIONI", "melania-section-label"));
+    left.add_css_class("melania-start-program-column");
     let scroll=gtk::ScrolledWindow::new();
     // Do not set vexpand: it overrides the content-height cap and stretches
     // the shell layer all the way to the top edge on smaller displays.
@@ -168,7 +190,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     scroll.set_propagate_natural_height(true);
     scroll.set_min_content_height(220);
     scroll.set_max_content_height(302);
-    let apps_box=GtkBox::new(Orientation::Vertical,4);
+    let apps_box=GtkBox::new(Orientation::Vertical,1);
     apps_box.add_css_class("melania-start-apps");
     // Search-only results remain hidden in the normal classic app list.
     let mut searchable:Vec<(Button,String,bool)>=Vec::new();
@@ -208,7 +230,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         let row=GtkBox::new(Orientation::Horizontal,12);
         let icon=app_info.icon().map(|i|Image::from_gicon(&i))
             .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
-        icon.set_pixel_size(34);
+        icon.set_pixel_size(27);
         icon.add_css_class("melania-menu-app-icon");
         row.append(&icon);
         let caption=label(&name,"melania-row-text");caption.set_hexpand(true);row.append(&caption);
@@ -294,38 +316,17 @@ fn start_window(app:&Application)->ApplicationWindow {
             button.emit_clicked();
         }
     });
-    scroll.set_child(Some(&apps_box));left.append(&scroll);
-    columns.append(&left);
-    let right=GtkBox::new(Orientation::Vertical,7);
-    right.set_valign(gtk::Align::Start);
-    right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(175,-1);
-    right.append(&label("ACCESSI RAPIDI","melania-section-label"));
-    let shortcuts = [
-        ("Home", "HOME", "user-home"),
-        ("Documenti", "DOCUMENTS", "folder-documents"),
-        ("Immagini", "PICTURES", "folder-pictures"),
-        ("Download", "DOWNLOAD", "folder-download"),
-    ];
-    for (name,kind,icon_name) in shortcuts {
-        let button=icon_row(name,icon_name,"melania-shortcut");
-        let menu=w.clone();
-        button.connect_clicked(move |_| {
-            let path=xdg_shortcut_directory(kind);
-            if let Err(e)=Command::new("xdg-open").arg(path).spawn(){eprintln!("Melania shortcut: {e}");}
-            menu.set_visible(false);
-        });
-        right.append(&button);
-    }
+    scroll.set_child(Some(&apps_box));
     // A bounded recent list, refreshed whenever Start opens. Store only
     // freedesktop desktop IDs, never command lines or filenames. Unknown or
     // uninstalled entries are skipped without launching anything.
     let recent_heading=label("RECENTI","melania-section-label");
     recent_heading.set_visible(false);
-    right.append(&recent_heading);
-    let recent_list=GtkBox::new(Orientation::Vertical,3);
+    left.append(&recent_heading);
+    let recent_list=GtkBox::new(Orientation::Vertical,1);
     recent_list.add_css_class("melania-recent-list");
-    right.append(&recent_list);
+    recent_list.set_visible(false);
+    left.append(&recent_list);
     let menu_for_recent=w.clone();
     w.connect_notify_local(Some("visible"), move |surface,_| {
         if !surface.is_visible(){return;}
@@ -338,7 +339,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                 let (name,program,icon)=if id=="org.melaniadesktop.Files" {
                     ("Melania Files","melania-files","org.melaniadesktop.Files")
                 } else {("Impostazioni","melania-settings","org.melaniadesktop.Settings")};
-                let launch=icon_row(name,icon,"melania-shortcut");
+                let launch=icon_row(name,icon,"melania-action");
                 let menu=menu_for_recent.clone();
                 launch.connect_clicked(move |_| {
                     match Command::new(program).spawn() {
@@ -355,11 +356,11 @@ fn start_window(app:&Application)->ApplicationWindow {
             let Some(info)=installed.iter().find(|app| app.should_show() &&
                 app.id().as_deref()==Some(id.as_str())).cloned() else {continue;};
             let launch=Button::new();
-            launch.add_css_class("melania-shortcut");
+            launch.add_css_class("melania-action");
             let row=GtkBox::new(Orientation::Horizontal,8);
             let image=info.icon().map(|icon|Image::from_gicon(&icon))
                 .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
-            image.set_pixel_size(24);
+            image.set_pixel_size(27);
             row.append(&image);
             let caption=label(&info.name(),"melania-row-text");
             caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -377,26 +378,95 @@ fn start_window(app:&Application)->ApplicationWindow {
             count+=1;
         }
         recent_heading.set_visible(count>0);
+        recent_list.set_visible(count>0);
     });
-    // Files and Settings remain in the full list as well: those entries
-    // are launchers, while the right-side history is a genuine recent list.
+    // Recent launches belong with applications on the left, not among the
+    // stable system locations on the right.
+    left.append(&label("TUTTE LE APPLICAZIONI","melania-section-label"));
+    left.append(&scroll);
+    columns.append(&left);
+    let right=GtkBox::new(Orientation::Vertical,1);
+    right.set_valign(gtk::Align::Fill);
+    right.add_css_class("melania-start-shortcuts");
+    right.set_size_request(226,-1);
+    // Windows 7 places the current account above the system shortcuts.
+    let username=std::env::var("USER").ok()
+        .filter(|name|!name.trim().is_empty())
+        .unwrap_or_else(||"Utente".to_owned());
+    let profile=GtkBox::new(Orientation::Horizontal,8);
+    profile.add_css_class("melania-start-user");
+    let avatar=Image::from_icon_name("avatar-default-symbolic");
+    avatar.set_pixel_size(22);
+    profile.append(&avatar);
+    profile.append(&label(&username,"melania-start-user-name"));
+    right.append(&profile);
+    // The set of destinations mirrors classic Windows 7, but it opens real
+    // Linux folders and Melania Settings sections. No Windows-only commands.
+    for (name,icon_name,action,arg) in [
+        ("Documenti","folder-documents-symbolic","folder","DOCUMENTS"),
+        ("Immagini","folder-pictures-symbolic","folder","PICTURES"),
+        ("Musica","folder-music-symbolic","folder","MUSIC"),
+        ("Video","folder-videos-symbolic","folder","VIDEOS"),
+        ("Download","folder-download-symbolic","folder","DOWNLOAD"),
+        ("Computer","computer-symbolic","computer",""),
+        ("Pannello di controllo","preferences-system-symbolic","settings","system"),
+        ("Dispositivi e stampanti","printer-symbolic","settings","devices"),
+        ("Programmi predefiniti","preferences-desktop-default-applications-symbolic","settings","applications"),
+        ("Guida e supporto","help-browser-symbolic","help",""),
+    ] {
+        let button=classic_link_row(name,icon_name);
+        if name=="Dispositivi e stampanti" {
+            button.set_tooltip_text(Some("Apre Dispositivi in Impostazioni; la gestione completa delle stampanti non è ancora disponibile."));
+        }
+        if name=="Programmi predefiniti" {
+            button.set_tooltip_text(Some("Apre Applicazioni in Impostazioni; la scelta dei programmi predefiniti è in sviluppo."));
+        }
+        let menu=w.clone();
+        button.connect_clicked(move |_| {
+            let result=match action {
+                "folder"=>Command::new("melania-files")
+                    .arg(xdg_shortcut_directory(arg)).spawn(),
+                "computer"=>Command::new("melania-files").arg("/").spawn(),
+                "settings"=>Command::new("melania-settings").arg(arg).spawn(),
+                "help"=>Command::new("xdg-open")
+                    .arg("https://github.com/MVisobello/Melania-Desktop#readme").spawn(),
+                _=>return,
+            };
+            match result {
+                Ok(_)=>{menu.set_visible(false);},
+                Err(e)=>eprintln!("Melania Start shortcut {name}: {e}"),
+            }
+        });
+        right.append(&button);
+        if name=="Download" || name=="Computer" || name=="Dispositivi e stampanti" {
+            let divider=gtk::Separator::new(Orientation::Horizontal);
+            divider.add_css_class("melania-classic-divider");
+            right.append(&divider);
+        }
+    }
     columns.append(&right);
-    // Limit the ENTIRE two-column menu, not only the left application list.
-    // Otherwise the quick-access column forces the whole popup to 760px.
+    // Keep the two-column content above the footer: expanding this viewport
+    // lets the search and power buttons hug the taskbar even when the
+    // applications column contains fewer items than the available height.
     let body_scroll = gtk::ScrolledWindow::new();
     body_scroll.add_css_class("melania-start-body-scroll");
     body_scroll.set_policy(gtk::PolicyType::Never,gtk::PolicyType::Automatic);
     body_scroll.set_propagate_natural_height(true);
-    body_scroll.set_vexpand(false);
+    body_scroll.set_vexpand(true);
     body_scroll.set_min_content_height(280);
-    body_scroll.set_max_content_height(350);
+    body_scroll.set_max_content_height(452);
     body_scroll.set_child(Some(&columns));
     root.append(&body_scroll);
-    let footer=GtkBox::new(Orientation::Horizontal,10);
+    let footer=GtkBox::new(Orientation::Horizontal,9);
     footer.add_css_class("melania-start-footer");
-    let spacer=GtkBox::new(Orientation::Horizontal,0);
-    spacer.set_hexpand(true);
-    footer.append(&spacer);
+    // Keep the search field under the application column and the power
+    // controls on the right, in the same places as Windows 7.
+    query.set_hexpand(false);
+    query.set_size_request(340,-1);
+    footer.append(&query);
+    let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
+    footer_spacer.set_hexpand(true);
+    footer.append(&footer_spacer);
     // Windows 7-like split power control. Unavailable actions are visible
     // but disabled with explanations. Nested sessions can only disconnect.
     let power=Button::with_label("Spegni");

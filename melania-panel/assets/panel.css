@@ -741,3 +741,165 @@ window.melania-theme-light popover.melania-session-popup button.melania-session-
 window.melania-theme-light popover.melania-session-popup button.melania-session-choice:hover {
   background: #e2edf9;
 }
+
+
+/* Melania classic Start — Windows 7 information architecture with original
+ * Melania identity. Only Start is restyled: the taskbar and other popups stay
+ * independent. GTK4 does not implement max-width or CSS positioning. */
+.melania-start-panel {
+  padding: 10px 10px 4px;
+  border-radius: 15px 15px 3px 3px;
+}
+.melania-start-panel .melania-start-columns {
+  border-spacing: 0;
+  margin-top: 0;
+}
+.melania-start-panel .melania-start-program-column {
+  padding: 8px 9px 6px;
+  background: #f1f4f8;
+  border-radius: 9px 0 0 0;
+}
+.melania-start-panel .melania-start-program-column .melania-section-label {
+  color: #4b647f;
+  padding: 4px 5px 6px;
+}
+.melania-start-panel .melania-start-program-column .melania-row-text {
+  color: #26384a;
+  font-size: 13px;
+  font-weight: 500;
+}
+.melania-start-panel .melania-start-program-column .melania-menu-app-icon {
+  min-width: 27px;
+  min-height: 27px;
+}
+.melania-start-panel .melania-start-apps,
+.melania-start-panel .melania-recent-list {
+  border-spacing: 1px;
+}
+.melania-start-panel .melania-start-apps .melania-action,
+.melania-start-panel .melania-recent-list .melania-action {
+  min-height: 29px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.melania-start-panel .melania-start-program-column .melania-action:hover,
+.melania-start-panel .melania-start-program-column .melania-action:focus-visible {
+  background: #d9e9fa;
+  border-color: #a5c5e6;
+}
+.melania-start-panel .melania-start-shortcuts {
+  padding: 7px 9px 7px 10px;
+  background: #394e65;
+  border: 0;
+  border-left: 1px solid #7992ad;
+  border-radius: 0 9px 0 0;
+  border-spacing: 1px;
+}
+.melania-start-panel .melania-start-user {
+  padding: 1px 5px 7px;
+  margin-bottom: 1px;
+  border-bottom: 1px solid #697f96;
+  border-spacing: 10px;
+}
+.melania-start-panel .melania-start-user image {
+  color: #f3f8ff;
+}
+.melania-start-panel .melania-start-user-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: #f3f7ff;
+}
+.melania-start-panel .melania-start-shortcuts .melania-classic-link {
+  min-height: 23px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.melania-start-panel .melania-start-shortcuts .melania-classic-link:hover,
+.melania-start-panel .melania-start-shortcuts .melania-classic-link:focus-visible {
+  background: #4d6a88;
+  border-color: #718ea9;
+}
+.melania-start-panel .melania-classic-link-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: #f0f5fa;
+}
+.melania-start-panel .melania-classic-symbolic {
+  color: #d7e2ee;
+  min-width: 16px;
+  min-height: 16px;
+}
+.melania-start-panel .melania-classic-divider {
+  margin: 3px 5px;
+  background: #637b94;
+}
+.melania-start-panel .melania-start-footer {
+  margin-top: 0;
+  padding: 9px 3px 4px;
+  border-top: 1px solid #64798f;
+  border-spacing: 8px;
+}
+.melania-start-panel .melania-start-footer .melania-entry {
+  min-height: 32px;
+  padding: 4px 9px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.melania-start-panel .melania-start-footer .melania-session-button,
+.melania-start-panel .melania-start-footer menubutton.melania-session-more > button {
+  min-height: 32px;
+  border-radius: 5px;
+}
+
+/* Dark keeps the approved quiet Melania palette instead of pretending to
+ * provide compositor-level Aero blur. */
+window.melania-theme-dark .melania-start-panel .melania-start-program-column {
+  background: #2b343f;
+}
+window.melania-theme-dark .melania-start-panel .melania-start-program-column .melania-row-text {
+  color: #f0f4f9;
+}
+window.melania-theme-dark .melania-start-panel .melania-start-program-column .melania-section-label {
+  color: #aebfd1;
+}
+window.melania-theme-dark .melania-start-panel .melania-start-program-column .melania-action:hover {
+  background: #3d546e;
+  border-color: #607e9f;
+}
+window.melania-theme-dark .melania-start-panel .melania-start-shortcuts {
+  background: #353e4a;
+  border-left-color: #556679;
+}
+
+/* Light: soft neutral system sidebar and a white application list. */
+window.melania-theme-light .melania-start-panel .melania-start-program-column {
+  background: #fff;
+}
+window.melania-theme-light .melania-start-panel .melania-start-shortcuts {
+  background: #e7edf5;
+  border-left-color: #c5d1df;
+}
+window.melania-theme-light .melania-start-panel .melania-classic-link-text,
+window.melania-theme-light .melania-start-panel .melania-start-user-name {
+  color: #30475d;
+}
+window.melania-theme-light .melania-start-panel .melania-classic-symbolic,
+window.melania-theme-light .melania-start-panel .melania-start-user image {
+  color: #607990;
+}
+window.melania-theme-light .melania-start-panel .melania-start-user {
+  border-bottom-color: #c4d2e0;
+}
+window.melania-theme-light .melania-start-panel .melania-classic-divider {
+  background: #ccd8e5;
+}
+window.melania-theme-light .melania-start-panel .melania-start-shortcuts .melania-classic-link:hover {
+  background: #d4e4f6;
+  border-color: #afc8e3;
+}

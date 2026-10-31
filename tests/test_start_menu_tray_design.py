@@ -28,7 +28,7 @@ class StartTrayDesignContracts(unittest.TestCase):
         self.assertNotIn('root.append(&heading);', panel)
         self.assertIn('mod session_actions;', panel)
         self.assertIn('confirm_session_action(', panel)
-        for phrase in ('melania-menu-app-icon', 'icon.set_pixel_size(34);',
+        for phrase in ('melania-menu-app-icon', 'icon.set_pixel_size(27);',
                        '"org.melaniadesktop.Settings"',
                        '"org.melaniadesktop.Files"',
                        'MELANIA_SMOKE_OPEN_START'):
@@ -42,8 +42,8 @@ class StartTrayDesignContracts(unittest.TestCase):
         self.assertIn('min-height: 47px;',css)
         self.assertIn('scroll.set_max_content_height(302);',panel)
         self.assertIn('scroll.set_vexpand(false);',panel)
-        self.assertIn('body_scroll.set_max_content_height(350);',panel)
-        self.assertIn('body_scroll.set_vexpand(false);',panel)
+        self.assertIn('body_scroll.set_max_content_height(452);',panel)
+        self.assertIn('body_scroll.set_vexpand(true);',panel)
         self.assertIn('root.append(&body_scroll);',panel)
         self.assertIn('scroll.set_propagate_natural_height(true);',panel)
         self.assertIn('window.melania-theme-light .melania-start-panel',css)
