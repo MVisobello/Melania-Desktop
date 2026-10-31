@@ -1,6 +1,6 @@
 //! Recent Start launches. Store desktop IDs only, never executable commands.
 //! Privacy: local user-owned state; no telemetry or background application scan.
-use std::{env, fs, io, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
+use std::{env, fs, io, path::Path, time::{SystemTime, UNIX_EPOCH}};
 
 pub const LIMIT: usize = 8;
 
@@ -9,12 +9,8 @@ pub fn valid_id(id: &str) -> bool {
     id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-pub fn history_path() -> Option<PathBuf> {
-    let root = env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").filter(|v| !v.is_empty())
-            .map(|v| PathBuf::from(v).join(".local/state")))?;
-    Some(root.join("melania").join("recent-applications"))
+pub fn history_path() -> Option<std::path::PathBuf> {
+    melania_config::recent_apps_path()
 }
 
 pub fn load_from(path: &Path) -> Vec<String> {
