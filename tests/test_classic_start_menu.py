@@ -66,12 +66,15 @@ class ClassicStartLayout(unittest.TestCase):
 
     def test_circular_account_and_icon_only_power_are_functional(self):
         self.assertIn('account.add_css_class("melania-account-orb");',PANEL)
-        self.assertIn('account_icon.set_pixel_size(22);',PANEL)
+        self.assertIn('classic_control_glyph("account",light_controls)',PANEL)
         self.assertIn('Command::new("melania-settings").arg("account").spawn()',PANEL)
         self.assertIn('footer.append(&account);',PANEL)
         self.assertIn('footer.append(&power);',PANEL)
         self.assertLess(PANEL.index('footer.append(&account);'), PANEL.index('footer.append(&power);'))
-        self.assertIn('power.set_icon_name("system-shutdown-symbolic");',PANEL)
+        self.assertIn('classic_control_glyph("power",light_controls)',PANEL)
+        self.assertIn('drawing.set_draw_func(',PANEL)
+        self.assertNotIn('power.set_icon_name("system-shutdown-symbolic");',PANEL)
+        self.assertNotIn('Image::from_icon_name("avatar-default-symbolic")',PANEL)
         self.assertNotIn('Button::with_label("Spegni")',PANEL)
         self.assertIn('session_actions::availability(session_actions::Action::PowerOff)',PANEL)
         self.assertIn('confirm_session_action(&owner, session_actions::Action::PowerOff)',PANEL)
