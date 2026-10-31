@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::UnixListener}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
+use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -53,7 +53,7 @@ use melania_core::{Rect as CoreRect, interaction::{Edges, Interaction, Operation
 use melania_shell_model::{detect_snap, snap_geometry, Geometry as ShellRect, SnapZone};
 use melania_shell_model::keyboard_navigation::{adjacent_workspace, cycle_window_id};
 use melania_shell_model::workarea::fit_initial_window;
-use melania_control::{Command as ControlCommand, WindowInfo, ACK, respond_error, respond_list, read_command, respond_workspace, SOCKET_ENV};
+use melania_control::{start_toggle_socket_path, Command as ControlCommand, WindowInfo, ACK, respond_error, respond_list, read_command, respond_workspace, SOCKET_ENV};
 use melania_workspaces::Workspaces;
 
 /// Valid for exactly one pointer press. Requests using old or fabricated serials
@@ -113,6 +113,11 @@ struct Melania {
     last_press: Option<PressRecord>,
     interaction: Option<ActiveInteraction>,
     managed: Vec<ManagedWindow>,
+    /// The GTK Start layer is a shell surface, not an xdg_toplevel window.
+    start_layer: Option<WlSurface>,
+    /// Preserve the last application focus while the Start search is open.
+    start_has_focus: bool,
+    start_previous_focus: Option<WlSurface>,
     workspaces: Workspaces,
     /// Applies the persisted Aero Snap preference on compositor startup.
     snap_windows: bool,
@@ -149,6 +154,9 @@ impl CompositorHandler for Melania {
         layer_map_for_output(&self.output).arrange();
         self.fit_newly_mapped_window(surface);
         self.refresh_usable_area();
+        if self.start_layer.as_ref()==Some(surface) {
+            self.refresh_start_focus();
+        }
     }
 }
 impl ShmHandler for Melania {
@@ -220,6 +228,9 @@ impl WlrLayerShellHandler for Melania {
     fn shell_state(&mut self) -> &mut WlrLayerShellState { &mut self.layer_shell }
     fn new_layer_surface(&mut self, surface: WlrLayerSurface,
         _: Option<WlOutput>, _: WlrLayer, namespace: String) {
+        if namespace=="melania-start" {
+            self.start_layer=Some(surface.wl_surface().clone());
+        }
         let layer = DesktopLayerSurface::new(surface.clone(), namespace);
         if let Err(error) = layer_map_for_output(&self.output).map_layer(&layer) {
             eprintln!("Melania layer map: {error:?}");
@@ -234,8 +245,12 @@ impl WlrLayerShellHandler for Melania {
         let mapped = layer_map_for_output(&self.output).layers()
             .find(|l| l.wl_surface() == surface.wl_surface()).cloned();
         if let Some(mapped) = mapped { layer_map_for_output(&self.output).unmap_layer(&mapped); }
+        if self.start_layer.as_ref()==Some(surface.wl_surface()) {
+            self.start_layer=None;
+        }
         layer_map_for_output(&self.output).arrange();
         self.refresh_usable_area();
+        self.refresh_start_focus();
     }
 }
 impl SeatHandler for Melania {
@@ -251,6 +266,41 @@ impl SeatHandler for Melania {
     fn cursor_image(&mut self, _: &Seat<Self>, _: CursorImageStatus) {}
 }
 impl Melania {
+    /// On an actual mapped overlay, take keyboard focus so typing after
+    /// pressing Super lands straight in the Start search. Restore the
+    /// previously focused application when the GTK layer disappears.
+    fn refresh_start_focus(&mut self) {
+        let visible={
+            let layers=layer_map_for_output(&self.output);
+            self.start_layer.as_ref().is_some_and(|surface| {
+                layers.layers_on(WlrLayer::Overlay).any(|layer| {
+                    if layer.wl_surface()!=surface {return false;}
+                    layers.layer_geometry(layer).is_some_and(|geometry| {
+                        let center=(geometry.size.w as f64/2.0,geometry.size.h as f64/2.0);
+                        layer.surface_under(center,WindowSurfaceType::ALL).is_some()
+                    })
+                })
+            })
+        };
+        let keyboard=self.seat.get_keyboard().expect("keyboard");
+        if visible && !self.start_has_focus {
+            self.start_previous_focus=keyboard.current_focus().filter(|surface|
+                self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
+            if let Some(surface)=self.start_layer.clone() {
+                keyboard.set_focus(self,Some(surface),SERIAL_COUNTER.next_serial());
+                self.start_has_focus=true;
+            }
+        } else if !visible && self.start_has_focus {
+            // Do not steal focus back from a window the user has clicked.
+            if keyboard.current_focus().as_ref()==self.start_layer.as_ref() {
+                let previous=self.start_previous_focus.take().filter(|surface|
+                    self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
+                keyboard.set_focus(self,previous,SERIAL_COUNTER.next_serial());
+            }
+            self.start_has_focus=false;
+            self.start_previous_focus=None;
+        }
+    }
     fn usable_area(&self) -> ShellRect {
         let area = layer_map_for_output(&self.output).non_exclusive_zone();
         ShellRect::new(area.loc.x,area.loc.y,
@@ -671,6 +721,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         last_press: None,
         interaction: None,
         managed: Vec::new(),
+        start_layer: None,
+        start_has_focus: false,
+        start_previous_focus: None,
         workspaces: Workspaces::new(preferences.workspace_count),
         snap_windows: preferences.snap_windows,
         last_usable_area: None,
@@ -708,6 +761,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // compositor, with no changes to the parent session's environment.
     // These are test clients; the preview is not yet a true layer-shell.
     let mut children = Vec::new();
+    // A lone Super press/release toggles Start; using Super with any other key
+    // must not toggle it (e.g. Super+E continues opening Melania Files).
+    let mut super_pressed_alone=false;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         if flag != "--command" {
@@ -734,10 +790,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
                     let key_state = event.state();
                     let mut open_files = false;
+                    let mut toggle_start = false;
+                    // If the popup appeared through Super, focus its search
+                    // before the next character can be forwarded.
+                    state.refresh_start_focus();
                     keyboard.input::<(), _>(&mut state, event.key_code(), key_state, serial,
                         event.time_msec(), |data, modifiers, keysym| {
                             let symbol = keysym.modified_sym();
                             let pressed = key_state == KeyState::Pressed;
+                            let super_key=symbol==keysyms::KEY_Super_L.into()
+                                || symbol==keysyms::KEY_Super_R.into();
+                            if super_key {
+                                if pressed {
+                                    super_pressed_alone=!modifiers.ctrl && !modifiers.alt;
+                                } else {
+                                    if super_pressed_alone {toggle_start=true;}
+                                    super_pressed_alone=false;
+                                }
+                                return FilterResult::Intercept(());
+                            }
+                            if pressed && super_pressed_alone {
+                                // Any combination including Super is not a
+                                // standalone Start toggle.
+                                super_pressed_alone=false;
+                            }
                             // Avoid overriding a client's Ctrl+Tab or AltGr
                             // input; only explicitly reserved combinations.
                             if modifiers.alt && !modifiers.ctrl && !modifiers.logo &&
@@ -766,6 +842,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             FilterResult::Forward
                         });
+                    if toggle_start {
+                        // Only a private, PID-qualified Unix socket; never
+                        // send keystrokes to the parent/host desktop.
+                        let destination=start_toggle_socket_path(&control_path);
+                        match UnixDatagram::unbound()
+                            .and_then(|socket|socket.send_to(b"TOGGLE_START",&destination)) {
+                            Ok(_) => (),
+                            Err(error)=>eprintln!("Melania Super shortcut: {error}"),
+                        }
+                    }
                     if open_files {
                         // A fixed, known program; no shell or interpolated input.
                         // Launch only inside the nested Melania Wayland session.
@@ -968,6 +1054,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if state.exit_requested { break; }
         display.dispatch_clients(&mut state)?;
+        state.refresh_start_focus();
         display.flush_clients()?;
         backend.submit(Some(&[damage]))?;
         children.retain_mut(|c| c.try_wait().ok().flatten().is_none());
