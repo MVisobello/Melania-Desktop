@@ -58,9 +58,11 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('search_focus.grab_focus()',PANEL)
 
     def test_compact_menu_sidebar_and_search(self):
-        self.assertIn('],560,565,0,"melania-start",0)',PANEL)
-        self.assertIn('right.set_size_request(190,-1);',PANEL)
-        self.assertIn('query.set_size_request(300,-1);',PANEL)
+        self.assertIn('],515,565,0,"melania-start",0)',PANEL)
+        self.assertIn('right.set_size_request(194,-1);',PANEL)
+        self.assertIn('caption.set_max_width_chars(19);',PANEL)
+        self.assertIn('right.set_hexpand(false);',PANEL)
+        self.assertIn('query.set_size_request(262,-1);',PANEL)
         self.assertIn('w.set_margin(Edge::Bottom,6);',PANEL)
         self.assertIn('right.add_css_class("melania-start-shortcuts");',PANEL)
 
