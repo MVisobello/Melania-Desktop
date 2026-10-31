@@ -185,7 +185,18 @@ pub fn add_pages(stack: &Stack) {
         "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
     group(&display, "Rotazione dello schermo");
     display.append(&info_row("video-display", "Sensore di orientamento",
-        sensors::explanation(sensors::accelerometer())));
+        "Disponibilità del sensore interrogata tramite iio-sensor-proxy."));
+    let sensor_status=label(sensors::explanation(sensors::accelerometer()),"settings-row-description");
+    sensor_status.add_css_class("settings-card");
+    display.append(&sensor_status);
+    let sensor_refresh=Button::with_label("Rileva nuovamente i sensori");
+    sensor_refresh.add_css_class("settings-save");
+    sensor_refresh.set_halign(Align::Start);
+    let sensor_description=sensor_status.clone();
+    sensor_refresh.connect_clicked(move |_| {
+        sensor_description.set_text(sensors::explanation(sensors::accelerometer()));
+    });
+    display.append(&sensor_refresh);
     display.append(&info_row("dialog-information", "Rotazione manuale e blocco",
         "Non ancora disponibili: occorre una connessione al compositore Wayland, con sincronizzazione di touchscreen, finestre e area utile. Nessun comando esterno modifica lo schermo."));
     stack.add_titled(&display, Some("display"), "Schermo");
