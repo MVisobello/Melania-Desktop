@@ -180,7 +180,64 @@ PYTOGGLE
   # must follow the compositor's actual keyboard path (not just the socket).
   echo 'X11 windows during nested session:'
   xwininfo -root -tree | tail -25
-  HOST_WINDOW="$(xdotool search --onlyvisible --name '.*' 2>/dev/null | head -n1 || true)"
+  HOST_WINDOW="$(xdotool search --onlyvisible --name '^Smithay
+  [[ -n "$HOST_WINDOW" ]] || { echo 'FAIL: cannot locate nested compositor X11 host window' >&2; exit 1; }
+  echo "Host window id=$HOST_WINDOW name=$(xdotool getwindowname "$HOST_WINDOW" 2>/dev/null || true)"
+  xdotool windowfocus "$HOST_WINDOW"
+  echo "X11 focus id=$(xdotool getwindowfocus 2>/dev/null || true)"
+  xdotool keydown Super_L
+  sleep .12
+  xdotool keyup Super_L
+  sleep .35
+  scrot -z -o "$TEMP/start-super-closed.png"
+  xdotool keydown Super_L
+  sleep .12
+  xdotool keyup Super_L
+  sleep .35
+  scrot -z -o reports/start-super-reopened.png
+  python3 - "$TEMP/start-super-closed.png" reports/start-super-reopened.png <<'PYKEY'
+from PIL import Image, ImageChops
+import sys
+closed=Image.open(sys.argv[1]).convert('RGB')
+opened=Image.open(sys.argv[2]).convert('RGB')
+area=(10,180,550,730)
+delta=ImageChops.difference(closed.crop(area),opened.crop(area))
+changed=sum(1 for pixel in delta.resize((100,100)).getdata() if sum(pixel)>55)
+assert changed>1000, f'Physical Super key did not toggle Start ({changed} changed pixels)'
+print(f'PASS: XTEST Super_L opened/closed Start ({changed} changed sampled pixels)')
+PYKEY
+  # The mapped search entry must accept the next typed characters without a
+  # mouse click. Save a real screenshot for visual QA of the search result.
+  xdotool type --clearmodifiers --delay 55 'CMake'
+  sleep .4
+  scrot -z -o reports/start-search-typed.png
+  python3 - reports/start-super-reopened.png reports/start-search-typed.png <<'PYTYPE'
+from PIL import Image, ImageChops
+import sys
+before=Image.open(sys.argv[1]).convert('RGB')
+after=Image.open(sys.argv[2]).convert('RGB')
+area=(25,650,330,725)
+diff=ImageChops.difference(before.crop(area),after.crop(area))
+changed=sum(1 for pixel in diff.getdata() if sum(pixel)>65)
+assert changed>130, f'Typing did not visibly change Start search ({changed} pixels)'
+print(f'PASS: keyboard typed into Start search without mouse click ({changed} changed pixels)')
+PYTYPE
+  # Both the foreground Settings window and background Files window must
+  # display identical Win7 controls in the actual composited screenshot.
+  python3 tools/check_shared_window_chrome.py reports/nested-wayland-full-desktop.png
+fi
+kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
+target/debug/melania-winctl quit >/dev/null
+for i in $(seq 1 60); do
+  if ! kill -0 "$PID" 2>/dev/null; then break; fi
+  sleep .1
+done
+if kill -0 "$PID" 2>/dev/null; then echo 'FAIL: quit did not close compositor' >&2; exit 1; fi
+wait "$PID" || { echo 'FAIL: compositor exited with error' >&2; exit 1; }
+PID=''
+echo 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit'
+echo 'NOT TESTED: hardware DRM/seat, XWayland, HiDPI, drag-and-drop or production Aero.'
+ 2>/dev/null | head -n1 || true)"
   [[ -n "$HOST_WINDOW" ]] || { echo 'FAIL: cannot locate nested compositor X11 host window' >&2; exit 1; }
   echo "Host window id=$HOST_WINDOW name=$(xdotool getwindowname "$HOST_WINDOW" 2>/dev/null || true)"
   xdotool windowfocus "$HOST_WINDOW"
