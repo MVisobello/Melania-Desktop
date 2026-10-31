@@ -94,7 +94,11 @@ struct ClientState {
 }
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
-    fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
+    fn disconnected(&self, id: ClientId, reason: DisconnectReason) {
+        // Visible in isolated Wayland smoke logs when a layer-shell client is
+        // disconnected due to a protocol error or an ordinary process exit.
+        eprintln!("MELANIA_WAYLAND_DISCONNECTED client={id:?} reason={reason:?}");
+    }
 }
 
 struct Melania {
