@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
+use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::PathBuf, process::Command, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -43,7 +43,7 @@ use smithay::{
                       DataDeviceHandler, DataDeviceState, ServerDndGrabHandler}, SelectionHandler},
         output::{OutputHandler, OutputManagerState},
         shell::{xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData},
-                wlr_layer::{WlrLayerShellHandler, WlrLayerShellState, LayerSurface as WlrLayerSurface, Layer as WlrLayer}},
+                wlr_layer::{WlrLayerShellHandler, WlrLayerShellState, LayerSurface as WlrLayerSurface, Layer as WlrLayer, LayerSurfaceCachedState, Anchor as LayerAnchor}},
         shm::{ShmHandler, ShmState},
     },
 };
@@ -92,6 +92,11 @@ impl Drop for PreviewCleanup {
 struct ClientState {
     compositor: CompositorClientState,
 }
+/// Smithay 0.7.0 bug #1979: its pre-commit validation hook survives after
+/// the client destroys the layer role, then rejects the valid bufferless
+/// wl_surface commit. The marker is set ONLY on an explicitly destroyed role.
+#[derive(Default)]
+struct LayerRoleTombstone(AtomicBool);
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
     fn disconnected(&self, id: ClientId, reason: DisconnectReason) {
@@ -135,6 +140,31 @@ impl CompositorHandler for Melania {
     fn compositor_state(&mut self) -> &mut CompositorState { &mut self.compositor }
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         &client.get_data::<ClientState>().expect("known client").compositor
+    }
+    fn new_surface(&mut self, surface: &WlSurface) {
+        with_states(surface, |states| {
+            states.data_map.insert_if_missing_threadsafe(LayerRoleTombstone::default);
+        });
+        // Registered when wl_surface is created, *before* Smithay adds its
+        // wlr layer-shell validator. Correct only the stale role teardown
+        // state. All validation stays intact for a live layer role.
+        smithay::wayland::compositor::add_pre_commit_hook::<Self, _>(
+            surface, |_state, _dh, surface| {
+                with_states(surface, |states| {
+                    let was_destroyed=states.data_map.get::<LayerRoleTombstone>()
+                        .is_some_and(|marker|marker.0.load(Ordering::Relaxed));
+                    if !was_destroyed{return;}
+                    let mut cache=states.cached_state.get::<LayerSurfaceCachedState>();
+                    let pending=cache.pending();
+                    if pending.size.w==0 {
+                        pending.anchor |= LayerAnchor::LEFT | LayerAnchor::RIGHT;
+                    }
+                    if pending.size.h==0 {
+                        pending.anchor |= LayerAnchor::TOP | LayerAnchor::BOTTOM;
+                    }
+                });
+            },
+        );
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
@@ -224,6 +254,13 @@ impl WlrLayerShellHandler for Melania {
     fn shell_state(&mut self) -> &mut WlrLayerShellState { &mut self.layer_shell }
     fn new_layer_surface(&mut self, surface: WlrLayerSurface,
         _: Option<WlOutput>, _: WlrLayer, namespace: String) {
+        // Reuse of the wl_surface for a NEW live layer role must again be
+        // strictly checked; the previous role's tombstone no longer applies.
+        with_states(surface.wl_surface(), |states| {
+            if let Some(marker)=states.data_map.get::<LayerRoleTombstone>(){
+                marker.0.store(false, Ordering::Relaxed);
+            }
+        });
         let layer = DesktopLayerSurface::new(surface.clone(), namespace);
         if let Err(error) = layer_map_for_output(&self.output).map_layer(&layer) {
             eprintln!("Melania layer map: {error:?}");
@@ -235,6 +272,11 @@ impl WlrLayerShellHandler for Melania {
         surface.send_configure();
     }
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        with_states(surface.wl_surface(), |states| {
+            if let Some(marker)=states.data_map.get::<LayerRoleTombstone>(){
+                marker.0.store(true, Ordering::Relaxed);
+            }
+        });
         let mapped = layer_map_for_output(&self.output).layers()
             .find(|l| l.wl_surface() == surface.wl_surface()).cloned();
         if let Some(mapped) = mapped { layer_map_for_output(&self.output).unmap_layer(&mapped); }
