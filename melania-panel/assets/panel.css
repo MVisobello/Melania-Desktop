@@ -684,10 +684,28 @@ window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbo
   background: linear-gradient(to bottom, #114377, #237bce);
   box-shadow: inset 0 2px 5px rgba(0,0,0,.30);
 }
-.melania-start-panel .melania-session-more {
-  border-radius: 7px;
-  padding: 2px 5px;
+/* GTK4 MenuButton owns a nested <button>; style the inner control
+ * so the split power arrow matches the dark Start menu, not host Adwaita. */
+.melania-start-panel menubutton.melania-session-more {
   min-width: 30px;
+}
+.melania-start-panel menubutton.melania-session-more > button {
+  min-height: 34px;
+  min-width: 32px;
+  border-radius: 8px;
+  padding: 2px 5px;
+  background: #3e4c5d;
+  color: #f2f7fc;
+  border: 1px solid #536579;
+  box-shadow: none;
+}
+.melania-start-panel menubutton.melania-session-more > button:hover {
+  background: #51647a;
+}
+window.melania-theme-light .melania-start-panel menubutton.melania-session-more > button {
+  background: #e9edf3;
+  color: #304355;
+  border-color: #d3dce6;
 }
 .melania-session-choices { padding: 9px; min-width: 215px; }
 .melania-session-choices .melania-session-choice {
