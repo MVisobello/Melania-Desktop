@@ -66,9 +66,10 @@ mod tests {
         for id in ["org.melaniadesktop.Files","org.gnome.Nautilus.desktop","firefox"] {
             assert!(valid_id(id));
         }
-        for id in ["","/usr/bin/firefox","firefox\nnotepad","a;rm","$(command)","a".repeat(181).as_str()] {
+        for id in ["","/usr/bin/firefox","firefox\nnotepad","a;rm","$(command)"] {
             assert!(!valid_id(id),"{id:?}");
         }
+        assert!(!valid_id(&"a".repeat(181)));
     }
     #[test]
     fn recent_history_keeps_unique_latest_first_with_cap() {
