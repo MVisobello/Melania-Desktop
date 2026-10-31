@@ -291,6 +291,12 @@ impl Melania {
                 layers.layers_on(WlrLayer::Overlay).any(|layer| {
                     if layer.wl_surface()!=surface {return false;}
                     layers.layer_geometry(layer).is_some_and(|geometry| {
+                        // The Start window stays *mapped* off-screen when hidden
+                        // to avoid GTK/Smithay's layer-role-destruction bug.
+                        // Treat its negative margin as hidden so keyboard focus
+                        // returns to the last application while it is concealed.
+                        if geometry.loc.x+geometry.size.w<=0 ||
+                           geometry.loc.y+geometry.size.h<=0 {return false;}
                         let center=(geometry.size.w as f64/2.0,geometry.size.h as f64/2.0);
                         layer.surface_under(center,WindowSurfaceType::ALL).is_some()
                     })
