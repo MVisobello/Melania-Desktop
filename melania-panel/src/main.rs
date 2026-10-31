@@ -96,6 +96,8 @@ fn classic_link_row(text: &str, icon_name: &str) -> Button {
     image.add_css_class("melania-classic-symbolic");
     row.append(&image);
     let caption=label(text,"melania-classic-link-text");
+    caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    caption.set_max_width_chars(25);
     caption.set_hexpand(true);
     row.append(&caption);
     button.set_child(Some(&row));
@@ -386,7 +388,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let right=GtkBox::new(Orientation::Vertical,1);
     right.set_valign(gtk::Align::Start);
     right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(204,-1);
+    right.set_size_request(226,-1);
     // Windows 7 places the current account above the system shortcuts.
     let username=std::env::var("USER").ok()
         .filter(|name|!name.trim().is_empty())
@@ -456,9 +458,14 @@ fn start_window(app:&Application)->ApplicationWindow {
     root.append(&body_scroll);
     let footer=GtkBox::new(Orientation::Horizontal,9);
     footer.add_css_class("melania-start-footer");
-    query.set_hexpand(true);
-    query.set_width_chars(20);
+    // Keep the search field under the application column and the power
+    // controls on the right, in the same places as Windows 7.
+    query.set_hexpand(false);
+    query.set_size_request(340,-1);
     footer.append(&query);
+    let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
+    footer_spacer.set_hexpand(true);
+    footer.append(&footer_spacer);
     // Windows 7-like split power control. Unavailable actions are visible
     // but disabled with explanations. Nested sessions can only disconnect.
     let power=Button::with_label("Spegni");
