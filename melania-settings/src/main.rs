@@ -1,6 +1,7 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
 mod symbols;
+mod sensors;
 #[path = "../../branding/window_controls.rs"]
 mod window_controls;
 use gtk::prelude::*;

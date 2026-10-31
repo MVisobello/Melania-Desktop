@@ -198,7 +198,7 @@ window { background: transparent; color: #f4f8ff; }
 }
 .melania-window-group {
   min-width: 95px;
-  max-width: 190px;
+  /* GTK CSS does not support max-width; width is bounded by GTK layout. */
   padding: 4px 9px;
   color: #eaf6ff;
   border: 1px solid rgba(170,221,255,0.25);
@@ -285,7 +285,7 @@ window { background: transparent; color: #f4f8ff; }
 .melania-bar .melania-window-group,
 .melania-bar .melania-window {
   min-width: 44px;
-  max-width: 49px;
+  /* GTK CSS does not support max-width; width is bounded by GTK layout. */
   min-height: 39px;
   padding: 3px 5px;
   border-radius: 9px;
@@ -663,4 +663,81 @@ window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbo
   background: rgba(153,184,216,.45);
   min-width: 4px;
   border-radius: 4px;
+}
+
+/* Win7-inspired Start orb: only the launcher is round. All taskbar app
+ * buttons keep their existing rectangular geometry. */
+.melania-bar button.melania-start {
+  min-width: 43px;
+  min-height: 43px;
+  padding: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to bottom, #3f9dfb, #1455a5);
+  border: 1px solid rgba(213,237,255,.64);
+  box-shadow: inset 0 1px rgba(255,255,255,.32), 0 1px 5px rgba(0,0,0,.28);
+}
+.melania-bar button.melania-start:hover {
+  background: linear-gradient(to bottom, #69b9ff, #2473c8);
+}
+.melania-bar button.melania-start:active,
+.melania-bar button.melania-start.melania-start-open {
+  background: linear-gradient(to bottom, #114377, #237bce);
+  box-shadow: inset 0 2px 5px rgba(0,0,0,.30);
+}
+/* GTK4 MenuButton owns a nested <button>; style the inner control
+ * so the split power arrow matches the dark Start menu, not host Adwaita. */
+.melania-start-panel menubutton.melania-session-more {
+  min-width: 30px;
+}
+.melania-start-panel menubutton.melania-session-more > button {
+  min-height: 34px;
+  min-width: 32px;
+  border-radius: 8px;
+  padding: 2px 5px;
+  background: #3e4c5d;
+  color: #f2f7fc;
+  border: 1px solid #536579;
+  box-shadow: none;
+}
+.melania-start-panel menubutton.melania-session-more > button:hover {
+  background: #51647a;
+}
+window.melania-theme-light .melania-start-panel menubutton.melania-session-more > button {
+  background: #e9edf3;
+  color: #304355;
+  border-color: #d3dce6;
+}
+.melania-session-choices { padding: 9px; min-width: 215px; }
+.melania-session-choices .melania-session-choice {
+  min-height: 35px; border-radius: 7px;
+}
+.melania-session-choices .melania-session-choice:disabled { opacity: .45; }
+.melania-session-hint { font-size: 11px; opacity: .8; margin: 6px; }
+
+/* The associated split-button popover remains a Melania surface, not a
+ * disconnected stock GTK menu, in each appearance mode. */
+popover.melania-session-popup > contents {
+  background: #122c48;
+  color: #f2f8ff;
+  border: 1px solid rgba(171,211,249,.42);
+  border-radius: 12px;
+}
+popover.melania-session-popup button.melania-session-choice {
+  color: #eff7ff;
+  background: transparent;
+  border: 0;
+}
+popover.melania-session-popup button.melania-session-choice:hover {
+  background: rgba(66,146,230,.28);
+}
+window.melania-theme-light popover.melania-session-popup > contents {
+  background: #f5f8fc;
+  color: #24394f;
+  border-color: #cddbe9;
+}
+window.melania-theme-light popover.melania-session-popup button.melania-session-choice {
+  color: #263a50;
+}
+window.melania-theme-light popover.melania-session-popup button.melania-session-choice:hover {
+  background: #e2edf9;
 }

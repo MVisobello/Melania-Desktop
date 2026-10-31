@@ -24,15 +24,18 @@ class StartTrayDesignContracts(unittest.TestCase):
     def test_start_menu_has_real_larger_icons_and_search(self):
         panel=(ROOT/"melania-panel/src/main.rs").read_text()
         css=(ROOT/"melania-panel/assets/panel.css").read_text()
-        for phrase in ('label("Applicazioni", "melania-start-title")',
-                       'heading.add_css_class("melania-start-heading")',
-                       'melania-menu-app-icon', 'icon.set_pixel_size(34);',
+        self.assertNotIn('Il tuo spazio Melania', panel)
+        self.assertNotIn('root.append(&heading);', panel)
+        self.assertIn('mod session_actions;', panel)
+        self.assertIn('confirm_session_action(', panel)
+        for phrase in ('melania-menu-app-icon', 'icon.set_pixel_size(34);',
                        '"org.melaniadesktop.Settings"',
                        '"org.melaniadesktop.Files"',
                        'MELANIA_SMOKE_OPEN_START'):
             self.assertIn(phrase,panel)
-        for label in ('melania-start-panel .melania-start-heading',
-                      'melania-start-panel .melania-start-title',
+        for label in ('button.melania-start',
+                      '.melania-start-open',
+                      '.melania-session-choices',
                       'melania-start-panel .melania-start-apps .melania-action',
                       'melania-start-panel .melania-start-shortcuts'):
             self.assertIn(label,css)

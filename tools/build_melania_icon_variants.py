@@ -259,7 +259,10 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                 asset_dir = root / "_melania-assets"
                 asset_dir.mkdir(exist_ok=True)
                 asset = asset_dir / (hashlib.sha256(repr(key).encode()).hexdigest()[:28] + ".svg")
-                img = reference_artwork(name, context, variant, symbolic, size)
+                img = ((ROOT / "branding/icons/melania-symbol.svg").read_text(encoding="utf8")
+                       if context == "apps" and name in
+                       ("melania", "start-here", "distributor-logo", "org.melaniadesktop.Preview")
+                       else reference_artwork(name, context, variant, symbolic, size))
                 if img is None:
                     img = refined_artwork(name, context, variant, symbolic, size)
                 if img is None:
@@ -298,7 +301,10 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                     symlink_relative(target, dark / subdir / f"{name}.svg")
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                img = reference_artwork(name, context, variant, False, size)
+                img = ((ROOT / "branding/icons/melania-symbol.svg").read_text(encoding="utf8")
+                       if context == "apps" and name in
+                       ("melania", "start-here", "distributor-logo", "org.melaniadesktop.Preview")
+                       else reference_artwork(name, context, variant, False, size))
                 if img is None:
                     img = refined_artwork(name, context, variant, False, size)
                 if img is None:
@@ -307,6 +313,22 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                     continue
                 ET.fromstring(img)
                 target.write_text(img, encoding="utf8")
+    # The inventories reflect third-party freedesktop names, not Melania's
+    # own application ID. Always install the canonical mark explicitly:
+    # otherwise GTK's Image::from_icon_name("melania") can be blank in Aero.
+    canonical=(ROOT/"branding/icons/melania-symbol.svg").read_text(encoding="utf8")
+    ET.fromstring(canonical)
+    melania_aliases=("melania","start-here","distributor-logo","org.melaniadesktop.Preview")
+    for root in (dark, light):
+        application_dir=root/"apps"/"scalable"
+        application_dir.mkdir(parents=True,exist_ok=True)
+        for icon_name in melania_aliases:
+            target=application_dir/f"{icon_name}.svg"
+            # Existing inventory entries may be symlinks to shared assets.
+            # Never overwrite their shared target (possibly in Dark) by
+            # writing through the link: replace only the alias file itself.
+            if target.is_symlink():target.unlink()
+            target.write_text(canonical,encoding="utf8")
     main_cats = sorted(CATEGORIES)
     # Light on Dark Panel: application dialogs get dark-on-light symbols,
     # while the dark taskbar inherits bright status glyphs and panel icons.
@@ -334,7 +356,11 @@ def verify(destination: Path, dark_paths: list[str], light_paths: list[str]):
         cfg=configparser.ConfigParser(interpolation=None,strict=False)
         cfg.read(folder/"index.theme",encoding="utf8")
         assert cfg["Icon Theme"]["Name"].startswith("Melania ")
+    canonical=(ROOT/"branding/icons/melania-symbol.svg").read_text(encoding="utf8")
     for theme in ("Melania-Dark","Melania-Light","Melania-Light-on-Dark-Panel"):
+        for icon_name in ("melania","start-here","distributor-logo","org.melaniadesktop.Preview"):
+            file=destination/theme/"apps"/"scalable"/f"{icon_name}.svg"
+            assert file.is_file() and file.read_text(encoding="utf8")==canonical, (theme,icon_name)
         for essential in ("folder","user-home","user-trash"):
             assert (destination/theme/f"places/scalable/{essential}.svg").is_file(),(theme,essential)
         assert (destination/theme/"apps/scalable/computer.svg").is_file(), theme

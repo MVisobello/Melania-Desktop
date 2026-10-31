@@ -2,6 +2,8 @@
 //! This requires a compositor advertising zwlr_layer_shell_v1.
 //! Window list comes from compositor IPC; thumbnails still require compositor capture.
 mod window_groups;
+mod session_actions;
+mod start_history;
 use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -80,35 +82,78 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     button
 }
 
+fn confirm_session_action(parent: &ApplicationWindow, action: session_actions::Action) {
+    // A separate positive response is required for every action, including
+    // log out; merely opening Start can never change system/session state.
+    if let Err(reason) = session_actions::availability(action) {
+        eprintln!("Melania session action unavailable: {reason}");
+        return;
+    }
+    let dialog = gtk::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .message_type(gtk::MessageType::Question)
+        .buttons(gtk::ButtonsType::None)
+        .text(format!("{}?", action.label()))
+        .secondary_text("Confermi questa operazione? I documenti non salvati potrebbero andare persi.")
+        .build();
+    dialog.add_button("Annulla", gtk::ResponseType::Cancel);
+    dialog.add_button("Conferma", gtk::ResponseType::Accept);
+    let owner = parent.clone();
+    dialog.connect_response(move |dialog, response| {
+        dialog.close();
+        if response != gtk::ResponseType::Accept { return; }
+        if let Err(reason) = session_actions::perform(action) {
+            let error = gtk::MessageDialog::builder()
+                .transient_for(&owner)
+                .modal(true)
+                .message_type(gtk::MessageType::Error)
+                .buttons(gtk::ButtonsType::Close)
+                .text("Operazione non riuscita")
+                .secondary_text(&reason)
+                .build();
+            error.connect_response(|dialog, _| dialog.close());
+            error.present();
+        }
+    });
+    dialog.present();
+}
+
 fn start_window(app:&Application)->ApplicationWindow {
     // GNOME-inspired clarity with an original Melania identity: generous
     // application targets, one search field, a calm quick-access section.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],566,590,8,"melania-start",0);
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],566,545,8,"melania-start",0);
     // Position 8 px from left, exactly above the 52 px taskbar with 8 px gap.
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,60);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
-    let root=GtkBox::new(Orientation::Vertical,12);
+    let root=GtkBox::new(Orientation::Vertical,10);
     root.add_css_class("melania-panel");
     root.add_css_class("melania-start-panel");
-    let heading = GtkBox::new(Orientation::Horizontal,12);
-    heading.add_css_class("melania-start-heading");
-    let brand_icon = Image::from_icon_name("melania");
-    brand_icon.set_pixel_size(37);
-    brand_icon.add_css_class("melania-start-heading-logo");
-    heading.append(&brand_icon);
-    let heading_copy = GtkBox::new(Orientation::Vertical,2);
-    heading_copy.append(&label("Applicazioni", "melania-start-title"));
-    heading_copy.append(&label("Il tuo spazio Melania", "melania-start-subtitle"));
-    heading_copy.set_hexpand(true);
-    heading.append(&heading_copy);
-    root.append(&heading);
+    // Preserve the approved Start surface without an added Melania heading.
+    // Search is the first usable control, just like the classic Start menu.
     if melania_config::load().unwrap_or_default().high_contrast {
         root.add_css_class("high-contrast");
     }
     let query=Entry::builder().placeholder_text("Cerca app, file o impostazioni…").build();
     query.add_css_class("melania-entry");
     root.append(&query);
+    // Start always opens ready to type; closing clears the previous filter.
+    let search_focus=query.clone();
+    w.connect_notify_local(Some("visible"), move |surface,_| {
+        if surface.is_visible() { let _=search_focus.grab_focus(); }
+        else { search_focus.set_text(""); }
+    });
+    // Escape dismisses Start without modifying the current desktop session.
+    let escape=gtk::EventControllerKey::new();
+    let escape_owner=w.clone();
+    escape.connect_key_pressed(move |_,key,_,_| {
+        if key==gdk::Key::Escape {
+            escape_owner.set_visible(false);
+            glib::Propagation::Stop
+        } else { glib::Propagation::Proceed }
+    });
+    w.add_controller(escape);
     let columns=GtkBox::new(Orientation::Horizontal,15);
     columns.add_css_class("melania-start-columns");
     let left=GtkBox::new(Orientation::Vertical,8);
@@ -133,11 +178,29 @@ fn start_window(app:&Application)->ApplicationWindow {
     ] {
         let button=icon_row(name,icon,"melania-action");
         let menu=w.clone();
-        button.connect_clicked(move |_| { run(program); menu.set_visible(false); });
+        button.connect_clicked(move |_| {
+            match Command::new(program).spawn() {
+                Ok(_) => {
+                    let id=if program=="melania-files" {
+                        "org.melaniadesktop.Files"
+                    } else { "org.melaniadesktop.Settings" };
+                    start_history::record_launch(id);
+                    menu.set_visible(false);
+                }
+                Err(error) => eprintln!("Melania app launch: {error}"),
+            }
+        });
         apps_box.append(&button);
         searchable.push((button,name.to_lowercase(),false));
     }
-    let mut apps=gio::AppInfo::all().into_iter().filter(|app|app.should_show()).collect::<Vec<_>>();
+    let mut apps=gio::AppInfo::all().into_iter().filter(|app| {
+        if !app.should_show() { return false; }
+        // Builtin Melania launchers are already shown at the top. Avoid
+        // doubling them when their freedesktop .desktop files are installed.
+        let identifier=app.id().map(|id|id.to_string()).unwrap_or_default();
+        let normalized=identifier.trim_end_matches(".desktop");
+        normalized!="org.melaniadesktop.Files" && normalized!="org.melaniadesktop.Settings"
+    }).collect::<Vec<_>>();
     apps.sort_by_key(|app|app.name().to_string().to_lowercase());
     for app_info in apps {
         let name=app_info.name().to_string();
@@ -151,9 +214,14 @@ fn start_window(app:&Application)->ApplicationWindow {
         let caption=label(&name,"melania-row-text");caption.set_hexpand(true);row.append(&caption);
         button.set_child(Some(&row));
         let menu=w.clone();
+        let history_id=app_info.id().map(|id| id.to_string());
         button.connect_clicked(move |_| {
             match app_info.launch(&[],None::<&gio::AppLaunchContext>) {
-                Ok(())=>menu.set_visible(false),Err(e)=>eprintln!("Melania app launch: {e}")
+                Ok(())=>{
+                    if let Some(id)=history_id.as_deref() {start_history::record_launch(id);}
+                    menu.set_visible(false);
+                },
+                Err(e)=>eprintln!("Melania app launch: {e}")
             }
         });
         apps_box.append(&button);
@@ -249,9 +317,69 @@ fn start_window(app:&Application)->ApplicationWindow {
         });
         right.append(&button);
     }
-    // Files and Settings already have larger launchers in the application
-    // list. Duplicating them here made a redundant, half-clipped section.
-    // Keep all four useful folders completely visible in this sidebar.
+    // A bounded recent list, refreshed whenever Start opens. Store only
+    // freedesktop desktop IDs, never command lines or filenames. Unknown or
+    // uninstalled entries are skipped without launching anything.
+    let recent_heading=label("RECENTI","melania-section-label");
+    recent_heading.set_visible(false);
+    right.append(&recent_heading);
+    let recent_list=GtkBox::new(Orientation::Vertical,3);
+    recent_list.add_css_class("melania-recent-list");
+    right.append(&recent_list);
+    let menu_for_recent=w.clone();
+    w.connect_notify_local(Some("visible"), move |surface,_| {
+        if !surface.is_visible(){return;}
+        while let Some(child)=recent_list.first_child(){recent_list.remove(&child);}
+        let installed=gio::AppInfo::all();
+        let mut count=0;
+        for id in start_history::recent() {
+            if count>=4 {break;}
+            if id=="org.melaniadesktop.Files" || id=="org.melaniadesktop.Settings" {
+                let (name,program,icon)=if id=="org.melaniadesktop.Files" {
+                    ("Melania Files","melania-files","org.melaniadesktop.Files")
+                } else {("Impostazioni","melania-settings","org.melaniadesktop.Settings")};
+                let launch=icon_row(name,icon,"melania-shortcut");
+                let menu=menu_for_recent.clone();
+                launch.connect_clicked(move |_| {
+                    match Command::new(program).spawn() {
+                        Ok(_)=>{start_history::record_launch(if program=="melania-files" {
+                            "org.melaniadesktop.Files"
+                        } else {"org.melaniadesktop.Settings"});menu.set_visible(false);},
+                        Err(error)=>eprintln!("Melania recent app launch: {error}"),
+                    }
+                });
+                recent_list.append(&launch);
+                count+=1;
+                continue;
+            }
+            let Some(info)=installed.iter().find(|app| app.should_show() &&
+                app.id().as_deref()==Some(id.as_str())).cloned() else {continue;};
+            let launch=Button::new();
+            launch.add_css_class("melania-shortcut");
+            let row=GtkBox::new(Orientation::Horizontal,8);
+            let image=info.icon().map(|icon|Image::from_gicon(&icon))
+                .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
+            image.set_pixel_size(24);
+            row.append(&image);
+            let caption=label(&info.name(),"melania-row-text");
+            caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            caption.set_max_width_chars(13);
+            row.append(&caption);
+            launch.set_child(Some(&row));
+            let menu=menu_for_recent.clone();
+            launch.connect_clicked(move |_| {
+                match info.launch(&[],None::<&gio::AppLaunchContext>) {
+                    Ok(())=>{start_history::record_launch(&id);menu.set_visible(false);},
+                    Err(error)=>eprintln!("Melania recent app launch: {error}"),
+                }
+            });
+            recent_list.append(&launch);
+            count+=1;
+        }
+        recent_heading.set_visible(count>0);
+    });
+    // Files and Settings remain in the full list as well: those entries
+    // are launchers, while the right-side history is a genuine recent list.
     columns.append(&right);
     // Limit the ENTIRE two-column menu, not only the left application list.
     // Otherwise the quick-access column forces the whole popup to 760px.
@@ -266,24 +394,49 @@ fn start_window(app:&Application)->ApplicationWindow {
     root.append(&body_scroll);
     let footer=GtkBox::new(Orientation::Horizontal,10);
     footer.add_css_class("melania-start-footer");
-    let logo=Image::from_icon_name("melania");logo.set_pixel_size(31);footer.append(&logo);
-    let user=label("Melania Desktop", "melania-start-footer-name");
-    user.set_hexpand(true);footer.append(&user);
-    // Never power down the host from a nested compositor preview.
-    let exit=Button::with_label("Esci da Melania");
-    exit.add_css_class("melania-session-button");
-    // EXIT means stop only our nested Wayland session. It never invokes
-    // systemctl poweroff or another host-wide shutdown command.
-    let socket=std::env::var_os(SOCKET_ENV).map(PathBuf::from);
-    exit.set_sensitive(socket.is_some());
-    exit.connect_clicked(move |_| {
-        if let Some(socket)=socket.as_ref() {
-            if let Err(e)=control_request(socket,WindowCommand::Quit) {
-                eprintln!("Melania session exit: {e}");
-            }
-        }
+    let spacer=GtkBox::new(Orientation::Horizontal,0);
+    spacer.set_hexpand(true);
+    footer.append(&spacer);
+    // Windows 7-like split power control. Unavailable actions are visible
+    // but disabled with explanations. Nested sessions can only disconnect.
+    let power=Button::with_label("Spegni");
+    power.add_css_class("melania-session-button");
+    let power_capability=session_actions::availability(session_actions::Action::PowerOff);
+    power.set_sensitive(power_capability.is_ok());
+    if let Err(reason)=power_capability { power.set_tooltip_text(Some(&reason)); }
+    let owner=w.clone();
+    power.connect_clicked(move |_| {
+        confirm_session_action(&owner, session_actions::Action::PowerOff);
     });
-    footer.append(&exit);
+    footer.append(&power);
+    let more=gtk::MenuButton::new();
+    more.set_icon_name("pan-down-symbolic");
+    more.add_css_class("melania-session-more");
+    more.set_tooltip_text(Some("Altre opzioni di alimentazione e sessione"));
+    let popover=gtk::Popover::new();
+    popover.add_css_class("melania-session-popup");
+    let choices=GtkBox::new(Orientation::Vertical,4);
+    choices.add_css_class("melania-session-choices");
+    for action in session_actions::Action::ALL {
+        let choice=Button::with_label(action.label());
+        choice.add_css_class("melania-session-choice");
+        if let Err(reason)=session_actions::availability(action) {
+            choice.set_sensitive(false);
+            choice.set_tooltip_text(Some(&reason));
+        }
+        let owner=w.clone();
+        choice.connect_clicked(move |_| confirm_session_action(&owner,action));
+        choices.append(&choice);
+    }
+    if let Err(reason)=session_actions::availability(session_actions::Action::PowerOff) {
+        let explanation=label(&reason,"melania-session-hint");
+        explanation.set_wrap(true);
+        explanation.set_max_width_chars(35);
+        choices.append(&explanation);
+    }
+    popover.set_child(Some(&choices));
+    more.set_popover(Some(&popover));
+    footer.append(&more);
     root.append(&footer);
     w.set_child(Some(&root));w
 }
@@ -837,9 +990,16 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         bar.add_css_class("high-contrast");
     }
     let menu=Button::new();menu.add_css_class("melania-start");
-    let logo=Image::from_icon_name("melania");logo.set_pixel_size(31);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
+    let logo=Image::from_icon_name("melania");logo.set_pixel_size(30);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
+    menu.set_size_request(43,43); // only Start is circular; other task buttons stay rectangular.
     let sm=start.clone();let qs=quick.clone();let nt=notifications.clone();
-    menu.connect_clicked(move |_|{nt.set_visible(false);toggle_surface(&sm,&qs);});bar.append(&menu);
+    menu.connect_clicked(move |_|{nt.set_visible(false);toggle_surface(&sm,&qs);});
+    let start_button=menu.clone();
+    start.connect_notify_local(Some("visible"),move |surface,_| {
+        if surface.is_visible(){start_button.add_css_class("melania-start-open");}
+        else{start_button.remove_css_class("melania-start-open");}
+    });
+    bar.append(&menu);
     // App pins are genuine GTK drop targets. Dragging reorders the buttons.
     // A dropped file is NOT silently moved/deleted, and cannot execute arbitrary .desktop files.
     let pinned=GtkBox::new(Orientation::Horizontal,6);

@@ -2,7 +2,7 @@
 //! Settings displayed here never mutate host GNOME/Cinnamon configuration.
 use gtk::prelude::*;
 use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack, Scale};
-use crate::symbols;
+use crate::{symbols, sensors};
 use std::{env, fs, process::Command};
 
 fn label(value: &str, class: &str) -> Label {
@@ -183,6 +183,22 @@ pub fn add_pages(stack: &Stack) {
         &format!("{monitor_count} monitor rilevati da GTK nella sessione corrente.")));
     display.append(&info_row("dialog-information", "Risoluzione e scala",
         "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
+    group(&display, "Rotazione dello schermo");
+    display.append(&info_row("video-display", "Sensore di orientamento",
+        "Disponibilità del sensore interrogata tramite iio-sensor-proxy."));
+    let sensor_status=label(sensors::explanation(sensors::accelerometer()),"settings-row-description");
+    sensor_status.add_css_class("settings-card");
+    display.append(&sensor_status);
+    let sensor_refresh=Button::with_label("Rileva nuovamente i sensori");
+    sensor_refresh.add_css_class("settings-save");
+    sensor_refresh.set_halign(Align::Start);
+    let sensor_description=sensor_status.clone();
+    sensor_refresh.connect_clicked(move |_| {
+        sensor_description.set_text(sensors::explanation(sensors::accelerometer()));
+    });
+    display.append(&sensor_refresh);
+    display.append(&info_row("dialog-information", "Rotazione manuale e blocco",
+        "Non ancora disponibili: occorre una connessione al compositore Wayland, con sincronizzazione di touchscreen, finestre e area utile. Nessun comando esterno modifica lo schermo."));
     stack.add_titled(&display, Some("display"), "Schermo");
 
     let audio = page("Audio", "Volume e uscita audio tramite PipeWire/WirePlumber.", "audio-card");
@@ -286,6 +302,27 @@ pub fn add_pages(stack: &Stack) {
         "Le autorizzazioni delle applicazioni sono amministrate dai servizi e dai portali di Linux."));
     privacy.append(&info_row("user-trash", "Cestino",
         "Il gestore file Melania utilizza il Cestino di GIO, evitando l'eliminazione definitiva non richiesta."));
+    group(&privacy, "Cronologia locale");
+    privacy.append(&info_row("document-open-recent", "App recenti nel menu Start",
+        "Melania conserva localmente soltanto gli ID delle ultime applicazioni avviate dal suo menu Start, non i documenti o le attività di navigazione."));
+    let erase_recent=Button::with_label("Cancella app recenti");
+    erase_recent.add_css_class("settings-save");
+    erase_recent.set_halign(Align::Start);
+    let erase_feedback=label("", "settings-action-feedback");
+    let message=erase_feedback.clone();
+    erase_recent.connect_clicked(move |_| {
+        match melania_config::recent_apps_path() {
+            Some(path)=>match fs::remove_file(&path) {
+                Ok(())=>message.set_text("Cronologia delle app recenti cancellata."),
+                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>
+                    message.set_text("Nessuna cronologia di app recenti da cancellare."),
+                Err(error)=>message.set_text(&format!("Impossibile cancellare la cronologia: {error}")),
+            },
+            None=>message.set_text("Directory dello stato utente non disponibile."),
+        }
+    });
+    privacy.append(&erase_recent);
+    privacy.append(&erase_feedback);
     stack.add_titled(&privacy, Some("privacy"), "Privacy");
 
     let region = page("Lingua e regione", "Impostazioni internazionali.", "preferences-desktop-locale");

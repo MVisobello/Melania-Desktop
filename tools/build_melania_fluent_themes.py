@@ -75,6 +75,11 @@ def _theme_index(title:str, paths:set[str])->str:
         result.append('')
     return '\n'.join(result)
 
+def original_melania_logo() -> str:
+    """The exact approved vector, never a generated generic application mark."""
+    source = ROOT / 'branding' / 'icons' / 'melania-symbol.svg'
+    return source.read_text(encoding='utf8')
+
 def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
     for path in paths:validate_name(path)
     unique=set(paths)
@@ -86,7 +91,8 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
                 unique.add(f'{context}/{size}x{size}/{name}.svg')
     # Exact GTK application IDs must exist as real theme entries. Without
     # these names, Start and pinned Files/Settings show missing-image tiles.
-    for app_name in ("melania", "org.melaniadesktop.Files", "org.melaniadesktop.Settings",
+    for app_name in ("melania", "start-here", "distributor-logo", "org.melaniadesktop.Preview",
+                     "org.melaniadesktop.Files", "org.melaniadesktop.Settings",
                      "preferences-system-notifications-symbolic"):
         unique.add(f"apps/scalable/{app_name}.svg")
     # Guarantee every exact symbolic name used by the sidebar and taskbar.
@@ -123,7 +129,9 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
             if not contrast:design='color'
             key=(category,name,design,'compact' if size<=24 else 'full')
             if key not in known_assets:
-                svg=(shell_artwork(name,category,'dark' if variant=='dark' else 'light',size)
+                svg=(original_melania_logo() if category == 'apps' and name in
+                     ('melania','start-here','distributor-logo','org.melaniadesktop.Preview') else
+                     shell_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or approved_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or settings_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or artwork(name,category,'dark' if variant=='dark' else 'light',size))
