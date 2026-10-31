@@ -905,10 +905,13 @@ window.melania-theme-light .melania-start-panel .melania-start-shortcuts .melani
 }
 
 
-/* Compact Start footer: account orb, safe power glyph and original classic
- * proportions. All sizing stays within the 560px overall launcher width. */
+/* Compact Start: the account portrait is in the RIGHT column header;
+ * the bottom row contains ONLY search and one power-menu control. */
 .melania-start-panel .melania-start-user {
-  padding: 4px 5px 9px;
+  padding: 3px 3px 8px;
+  margin-bottom: 3px;
+  min-height: 54px;
+  border-spacing: 8px;
 }
 .melania-start-panel .melania-start-user-name {
   font-size: 13px;
@@ -917,9 +920,9 @@ window.melania-theme-light .melania-start-panel .melania-start-shortcuts .melani
   border-spacing: 7px;
 }
 .melania-start-panel button.melania-account-orb {
-  min-width: 38px;
-  min-height: 38px;
-  padding: 5px;
+  min-width: 46px;
+  min-height: 46px;
+  padding: 7px;
   border-radius: 999px;
   background: #4b627b;
   border: 1px solid #9bb5d0;
@@ -931,18 +934,18 @@ window.melania-theme-light .melania-start-panel .melania-start-shortcuts .melani
   background: #5b7b9e;
   border-color: #c4dfff;
 }
-.melania-start-panel button.melania-power-icon-button {
-  min-width: 38px;
-  min-height: 38px;
-  padding: 5px;
+.melania-start-panel menubutton.melania-power-icon-button > button {
+  min-width: 42px;
+  min-height: 40px;
+  padding: 6px;
   border-radius: 8px;
   background: #3e4c5d;
   color: #f2f7fc;
 }
-.melania-start-panel button.melania-power-icon-button:hover {
+.melania-start-panel menubutton.melania-power-icon-button > button:hover {
   background: #51647a;
 }
-.melania-start-panel button.melania-power-icon-button:disabled {
+.melania-start-panel menubutton.melania-power-icon-button > button:disabled {
   opacity: .55;
 }
 .melania-start-panel .melania-start-footer menubutton.melania-session-more > button {
@@ -959,11 +962,20 @@ window.melania-theme-light .melania-start-panel button.melania-account-orb:hover
   background: #cddff2;
   border-color: #84aacd;
 }
-window.melania-theme-light .melania-start-panel button.melania-power-icon-button {
+window.melania-theme-light .melania-start-panel menubutton.melania-power-icon-button > button {
   background: #e9edf3;
   border-color: #d3dce6;
   color: #304355;
 }
-window.melania-theme-light .melania-start-panel button.melania-power-icon-button:hover {
+window.melania-theme-light .melania-start-panel menubutton.melania-power-icon-button > button:hover {
   background: #d8e5f1;
+}
+
+/* The right-side links occupy the vertical column, like Windows 7, rather
+ * than floating above a large unused panel. GTK's vexpand controls spacing. */
+.melania-start-panel .melania-start-shortcuts .melania-classic-link {
+  min-height: 27px;
+}
+.melania-start-panel .melania-start-shortcuts .melania-classic-link-text {
+  font-size: 11px;
 }
