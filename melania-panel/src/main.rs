@@ -181,7 +181,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // branding and native GTK actions. The taskbar reserves 52 logical px;
     // its GTK CSS adds ~6 px of visible height. Matching that offset removes
     // the empty strip seen between Start and the taskbar in nested Wayland.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],560,565,0,"melania-start",0);
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],510,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
@@ -423,7 +423,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let right=GtkBox::new(Orientation::Vertical,1);
     right.set_valign(gtk::Align::Fill);
     right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(190,-1);
+    right.set_size_request(158,-1);
     // Windows 7 places the current account above the system shortcuts.
     let username=std::env::var("USER").ok()
         .filter(|name|!name.trim().is_empty())
@@ -499,7 +499,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Keep the search field under the application column and the power
     // controls on the right, in the same places as Windows 7.
     query.set_hexpand(false);
-    query.set_size_request(300,-1);
+    query.set_size_request(250,-1);
     footer.append(&query);
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
     footer_spacer.set_hexpand(true);
