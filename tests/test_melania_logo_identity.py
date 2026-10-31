@@ -31,6 +31,15 @@ class MelaniaIdentityContracts(unittest.TestCase):
         self.assertIn("Melania-Fluent-Light", builder)
         self.assertIn("Melania-Fluent-Dark", builder)
 
+    def test_aero_always_materializes_logo_even_when_reference_omits_it(self):
+        source=(ROOT/'tools/build_melania_icon_variants.py').read_text()
+        inventory=(ROOT/'branding/coverage/reference-dark-paths.txt').read_text()
+        self.assertNotIn('apps/scalable/melania.svg', inventory)
+        self.assertIn('melania_aliases=',source)
+        self.assertIn('target.is_symlink():target.unlink()',source)
+        self.assertIn('target.write_text(canonical',source)
+        self.assertIn('assert file.is_file() and file.read_text(encoding="utf8")==canonical',source)
+
     def test_nested_wayland_clients_cannot_request_host_shutdown(self):
         compositor = (ROOT / "melania-compositor" / "src" / "main.rs").read_text()
         session = (ROOT / "melania-panel" / "src" / "session_actions.rs").read_text()
