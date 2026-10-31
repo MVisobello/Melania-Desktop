@@ -101,6 +101,14 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('state.refresh_start_focus();',COMPOSITOR)
         self.assertIn('socket.send_to(b"TOGGLE_START",&destination)',COMPOSITOR)
         self.assertIn('pub fn start_toggle_socket_path(control: &Path)',CONTROL)
+        self.assertIn('const START_HIDE_OFFSET: i32 = -4000;',PANEL)
+        self.assertIn('w.set_margin(Edge::Left,START_HIDE_OFFSET);',PANEL)
+        self.assertIn('w.set_opacity(0.0);',PANEL)
+        self.assertIn('w.set_opacity(1.0);',PANEL)
+        self.assertIn('w.has_css_class("melania-start-concealed")',PANEL)
+        self.assertIn('if geometry.loc.x+geometry.size.w<=0',COMPOSITOR)
+        self.assertIn('hide_start_surface(&sm);',PANEL)
+        self.assertNotIn('menu.set_visible(false);',PANEL[PANEL.index('fn start_window('):PANEL.index('fn binary(')])
 
     def test_power_menu_only_in_footer_and_sidebar_uses_height(self):
         self.assertIn('button.set_vexpand(true);',PANEL)
