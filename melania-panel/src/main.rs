@@ -8,8 +8,8 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, path::PathBuf, process::Command, rc::Rc, time::Duration};
-use melania_control::{request as control_request, current_workspace, Command as WindowCommand, WindowInfo, SOCKET_ENV};
+use std::{cell::{Cell, RefCell}, fs, os::unix::{fs::{FileTypeExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, time::Duration};
+use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
 const ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon.png");
@@ -111,8 +111,9 @@ fn classic_link_row(text: &str, icon_name: &str) -> Button {
 /// installed separately from the Melania Panel binary.
 fn classic_control_glyph(kind: &'static str, light: bool) -> gtk::DrawingArea {
     let drawing=gtk::DrawingArea::new();
-    drawing.set_content_width(22);
-    drawing.set_content_height(22);
+    let size=if kind=="account" {27} else {22};
+    drawing.set_content_width(size);
+    drawing.set_content_height(size);
     drawing.set_draw_func(move |_, cr, width, height| {
         if width<=0 || height<=0 { return; }
         cr.scale(width as f64 / 24.0, height as f64 / 24.0);
@@ -184,7 +185,9 @@ fn start_window(app:&Application)->ApplicationWindow {
     let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],510,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
-    w.set_keyboard_mode(KeyboardMode::OnDemand);
+    // Layer-shell keyboard focus is explicitly granted by the Melania compositor
+    // when this overlay is mapped; search can receive keystrokes immediately.
+    w.set_keyboard_mode(KeyboardMode::Exclusive);
     let root=GtkBox::new(Orientation::Vertical,0);
     root.add_css_class("melania-panel");
     root.add_css_class("melania-start-panel");
@@ -198,9 +201,15 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Start always opens ready to type; closing clears the previous filter.
     let search_focus=query.clone();
     w.connect_notify_local(Some("visible"), move |surface,_| {
-        if surface.is_visible() { let _=search_focus.grab_focus(); }
-        else { search_focus.set_text(""); }
+        if surface.is_visible() {
+            // GTK may not have mapped the layer when "visible" changes.
+            // Defer the focus grab so typed text reaches the search entry.
+            let query=search_focus.clone();
+            glib::idle_add_local_once(move || { let _=query.grab_focus(); });
+        } else { search_focus.set_text(""); }
     });
+    let mapped_search=query.clone();
+    w.connect_map(move |_| { let _=mapped_search.grab_focus(); });
     // Escape dismisses Start without modifying the current desktop session.
     let escape=gtk::EventControllerKey::new();
     let escape_owner=w.clone();
@@ -428,13 +437,27 @@ fn start_window(app:&Application)->ApplicationWindow {
     let username=std::env::var("USER").ok()
         .filter(|name|!name.trim().is_empty())
         .unwrap_or_else(||"Utente".to_owned());
-    let profile=GtkBox::new(Orientation::Horizontal,8);
+    let profile=GtkBox::new(Orientation::Horizontal,9);
     profile.add_css_class("melania-start-user");
-    // Profile name stays in the classic sidebar. The actionable avatar sits
-    // in the footer beside the power control, avoiding duplicate account icons.
+    // A single larger, circular account avatar lives beside the user name at
+    // the TOP of the system column, exactly like the classic Start portrait.
+    let account=Button::new();
+    account.add_css_class("melania-account-orb");
+    account.set_tooltip_text(Some("Account · Impostazioni utente"));
+    let light_controls=melania_config::load().unwrap_or_default().appearance_theme()=="light";
+    let account_icon=classic_control_glyph("account",light_controls);
+    account.set_child(Some(&account_icon));
+    let account_menu=w.clone();
+    account.connect_clicked(move |_| {
+        match Command::new("melania-settings").arg("account").spawn() {
+            Ok(_)=>account_menu.set_visible(false),
+            Err(error)=>eprintln!("Melania account settings: {error}"),
+        }
+    });
+    profile.append(&account);
     let username_label=label(&username,"melania-start-user-name");
     username_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    username_label.set_max_width_chars(23);
+    username_label.set_max_width_chars(14);
     profile.append(&username_label);
     right.append(&profile);
     // The set of destinations mirrors classic Windows 7, but it opens real
@@ -504,47 +527,14 @@ fn start_window(app:&Application)->ApplicationWindow {
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
     footer_spacer.set_hexpand(true);
     footer.append(&footer_spacer);
-    // Circular account avatar at the left of power, like a small Win7 user
-    // tile. It opens the real Accounts page; it never impersonates a session
-    // manager or directly performs a sensitive action.
-    let account=Button::new();
-    account.add_css_class("melania-account-orb");
-    account.set_tooltip_text(Some("Account · Impostazioni utente"));
-    // GTK 4.8-compatible tooltip; no unsupported set_accessible_name API.
-    let light_controls=melania_config::load().unwrap_or_default().appearance_theme()=="light";
-    let account_icon=classic_control_glyph("account",light_controls);
-    account.set_child(Some(&account_icon));
-    let account_menu=w.clone();
-    account.connect_clicked(move |_| {
-        match Command::new("melania-settings").arg("account").spawn() {
-            Ok(_)=>account_menu.set_visible(false),
-            Err(error)=>eprintln!("Melania account settings: {error}"),
-        }
-    });
-    footer.append(&account);
-    let account_spacing=GtkBox::new(Orientation::Horizontal,0);
-    account_spacing.set_size_request(7,-1);
-    footer.append(&account_spacing);
-    // Icon-only power button retains the existing confirmation and safety
-    // checks: no host shutdown from nested Wayland or GUI smoke tests.
-    let power=Button::new();
-    let power_icon=classic_control_glyph("power",light_controls);
-    power.set_child(Some(&power_icon));
-    power.set_tooltip_text(Some("Spegni"));
-    power.add_css_class("melania-session-button");
-    power.add_css_class("melania-power-icon-button");
-    let power_capability=session_actions::availability(session_actions::Action::PowerOff);
-    power.set_sensitive(power_capability.is_ok());
-    if let Err(reason)=power_capability { power.set_tooltip_text(Some(&reason)); }
-    let owner=w.clone();
-    power.connect_clicked(move |_| {
-        confirm_session_action(&owner, session_actions::Action::PowerOff);
-    });
-    footer.append(&power);
+    // One power icon, one click: open session choices. Never power off the
+    // host directly from the Start footer; each action retains its own
+    // availability guard and explicit confirmation dialog.
     let more=gtk::MenuButton::new();
-    more.set_icon_name("pan-down-symbolic");
+    more.set_child(Some(&classic_control_glyph("power",light_controls)));
     more.add_css_class("melania-session-more");
-    more.set_tooltip_text(Some("Altre opzioni di alimentazione e sessione"));
+    more.add_css_class("melania-power-icon-button");
+    more.set_tooltip_text(Some("Alimentazione e sessione"));
     let popover=gtk::Popover::new();
     popover.add_css_class("melania-session-popup");
     let choices=GtkBox::new(Orientation::Vertical,4);
@@ -1262,6 +1252,68 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     });bar.append(&clock);
     w.set_child(Some(&bar));w
 }
+/// Local private datagram channel: the compositor alone owns the Super key,
+/// while the panel alone owns the Start window's GTK state. A per-compositor
+/// control-socket-derived name keeps nested sessions independent.
+fn install_start_hotkey_listener(
+    app: &Application,
+    start: &ApplicationWindow,
+    quick: &ApplicationWindow,
+    notifications: &ApplicationWindow,
+) {
+    let Some(control)=std::env::var_os(SOCKET_ENV).filter(|v|!v.is_empty()) else { return; };
+    let path=start_toggle_socket_path(&PathBuf::from(control));
+    // Never follow a symlink or replace a live listener. The parent is the
+    // user's private 0700 XDG_RUNTIME_DIR.
+    if let Ok(meta)=fs::symlink_metadata(&path) {
+        if !meta.file_type().is_socket() {
+            eprintln!("Melania Start hotkey: unexpected socket path {:?}", path);
+            return;
+        }
+        if UnixDatagram::unbound().is_ok_and(|sock|sock.connect(&path).is_ok()) {
+            eprintln!("Melania Start hotkey: listener already running");
+            return;
+        }
+        let _=fs::remove_file(&path);
+    }
+    let socket=match UnixDatagram::bind(&path) {
+        Ok(socket)=>socket,
+        Err(error)=>{eprintln!("Melania Start hotkey socket: {error}");return;},
+    };
+    if let Err(error)=fs::set_permissions(&path,fs::Permissions::from_mode(0o600)) {
+        eprintln!("Melania Start hotkey permissions: {error}");
+        let _=fs::remove_file(&path);
+        return;
+    }
+    if let Err(error)=socket.set_nonblocking(true) {
+        eprintln!("Melania Start hotkey nonblocking: {error}");
+        let _=fs::remove_file(&path);
+        return;
+    }
+    let cleanup_path=path.clone();
+    app.connect_shutdown(move |_| { let _=fs::remove_file(&cleanup_path); });
+    let open=start.clone();
+    let quick=quick.clone();
+    let notifications=notifications.clone();
+    glib::timeout_add_local(Duration::from_millis(30),move || {
+        let mut packet=[0u8;32];
+        // Bounded work per UI tick even if a sender floods the local socket.
+        for _ in 0..8 {
+            match socket.recv(&mut packet) {
+                Ok(n) if &packet[..n]==b"TOGGLE_START"=>{
+                    notifications.set_visible(false);
+                    toggle_surface(&open,&quick);
+                }
+                Ok(n) if &packet[..n]==b"CLOSE_START" => open.set_visible(false),
+                Ok(_)=>{},
+                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
+                Err(error)=>{eprintln!("Melania Start hotkey receive: {error}");break;},
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
 fn build(app:&Application){
     setup_melania_icon_theme();
     if !gtk4_layer_shell::is_supported() {
@@ -1280,6 +1332,7 @@ fn build(app:&Application){
     let notifications=notifications_window(app);
     let quick=quick_window(app,&notifications);
     let calendar=calendar_window(app);
+    install_start_hotkey_listener(app,&start,&quick,&notifications);
     // Do not present popup windows until the user clicks.
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);bar.present();
     // CI-only: show the *real* launcher in the nested compositor screenshot.
