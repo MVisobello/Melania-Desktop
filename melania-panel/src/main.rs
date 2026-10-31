@@ -314,6 +314,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     more.add_css_class("melania-session-more");
     more.set_tooltip_text(Some("Altre opzioni di alimentazione e sessione"));
     let popover=gtk::Popover::new();
+    popover.add_css_class("melania-session-popup");
     let choices=GtkBox::new(Orientation::Vertical,4);
     choices.add_css_class("melania-session-choices");
     for action in session_actions::Action::ALL {
