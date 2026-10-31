@@ -692,7 +692,34 @@ window.melania-theme-light .melania-bar .melania-tray-button .melania-tray-symbo
 .melania-session-choices { padding: 9px; min-width: 215px; }
 .melania-session-choices .melania-session-choice {
   min-height: 35px; border-radius: 7px;
-  text-align: left;
 }
 .melania-session-choices .melania-session-choice:disabled { opacity: .45; }
 .melania-session-hint { font-size: 11px; opacity: .8; margin: 6px; }
+
+/* The associated split-button popover remains a Melania surface, not a
+ * disconnected stock GTK menu, in each appearance mode. */
+popover.melania-session-popup > contents {
+  background: #122c48;
+  color: #f2f8ff;
+  border: 1px solid rgba(171,211,249,.42);
+  border-radius: 12px;
+}
+popover.melania-session-popup button.melania-session-choice {
+  color: #eff7ff;
+  background: transparent;
+  border: 0;
+}
+popover.melania-session-popup button.melania-session-choice:hover {
+  background: rgba(66,146,230,.28);
+}
+window.melania-theme-light popover.melania-session-popup > contents {
+  background: #f5f8fc;
+  color: #24394f;
+  border-color: #cddbe9;
+}
+window.melania-theme-light popover.melania-session-popup button.melania-session-choice {
+  color: #263a50;
+}
+window.melania-theme-light popover.melania-session-popup button.melania-session-choice:hover {
+  background: #e2edf9;
+}
