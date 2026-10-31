@@ -104,6 +104,41 @@ fn classic_link_row(text: &str, icon_name: &str) -> Button {
     button
 }
 
+
+/// Original vector glyphs drawn in Cairo, not themed freedesktop aliases.
+/// Several user icon packs remap system-shutdown or avatar-default to a blank
+/// dot/document: drawing these two controls avoids that and needs no assets
+/// installed separately from the Melania Panel binary.
+fn classic_control_glyph(kind: &'static str, light: bool) -> gtk::DrawingArea {
+    let drawing=gtk::DrawingArea::new();
+    drawing.set_content_width(22);
+    drawing.set_content_height(22);
+    drawing.set_draw_func(move |_, cr, width, height| {
+        if width<=0 || height<=0 { return; }
+        cr.scale(width as f64 / 24.0, height as f64 / 24.0);
+        if light { cr.set_source_rgb(0.20,0.30,0.42); }
+        else { cr.set_source_rgb(0.94,0.97,1.0); }
+        if kind=="account" {
+            cr.arc(12.0,7.4,4.0,0.0,std::f64::consts::TAU);
+            let _=cr.fill();
+            cr.move_to(3.9,21.0);
+            cr.curve_to(4.3,15.0,8.0,13.6,12.0,13.6);
+            cr.curve_to(16.0,13.6,19.7,15.0,20.1,21.0);
+            cr.close_path();
+            let _=cr.fill();
+        } else {
+            // Familiar power glyph with a deliberate break at the top.
+            cr.set_line_width(2.5);
+            cr.arc(12.0,12.5,8.0,-1.03,4.17);
+            let _=cr.stroke();
+            cr.move_to(12.0,2.0);
+            cr.line_to(12.0,11.2);
+            let _=cr.stroke();
+        }
+    });
+    drawing
+}
+
 fn confirm_session_action(parent: &ApplicationWindow, action: session_actions::Action) {
     // A separate positive response is required for every action, including
     // log out; merely opening Start can never change system/session state.
@@ -146,7 +181,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // branding and native GTK actions. The taskbar reserves 52 logical px;
     // its GTK CSS adds ~6 px of visible height. Matching that offset removes
     // the empty strip seen between Start and the taskbar in nested Wayland.
-    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],616,565,0,"melania-start",0);
+    let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],560,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
     w.set_keyboard_mode(KeyboardMode::OnDemand);
@@ -388,17 +423,19 @@ fn start_window(app:&Application)->ApplicationWindow {
     let right=GtkBox::new(Orientation::Vertical,1);
     right.set_valign(gtk::Align::Fill);
     right.add_css_class("melania-start-shortcuts");
-    right.set_size_request(226,-1);
+    right.set_size_request(190,-1);
     // Windows 7 places the current account above the system shortcuts.
     let username=std::env::var("USER").ok()
         .filter(|name|!name.trim().is_empty())
         .unwrap_or_else(||"Utente".to_owned());
     let profile=GtkBox::new(Orientation::Horizontal,8);
     profile.add_css_class("melania-start-user");
-    let avatar=Image::from_icon_name("avatar-default-symbolic");
-    avatar.set_pixel_size(22);
-    profile.append(&avatar);
-    profile.append(&label(&username,"melania-start-user-name"));
+    // Profile name stays in the classic sidebar. The actionable avatar sits
+    // in the footer beside the power control, avoiding duplicate account icons.
+    let username_label=label(&username,"melania-start-user-name");
+    username_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    username_label.set_max_width_chars(23);
+    profile.append(&username_label);
     right.append(&profile);
     // The set of destinations mirrors classic Windows 7, but it opens real
     // Linux folders and Melania Settings sections. No Windows-only commands.
@@ -462,15 +499,40 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Keep the search field under the application column and the power
     // controls on the right, in the same places as Windows 7.
     query.set_hexpand(false);
-    query.set_size_request(340,-1);
+    query.set_size_request(300,-1);
     footer.append(&query);
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
     footer_spacer.set_hexpand(true);
     footer.append(&footer_spacer);
-    // Windows 7-like split power control. Unavailable actions are visible
-    // but disabled with explanations. Nested sessions can only disconnect.
-    let power=Button::with_label("Spegni");
+    // Circular account avatar at the left of power, like a small Win7 user
+    // tile. It opens the real Accounts page; it never impersonates a session
+    // manager or directly performs a sensitive action.
+    let account=Button::new();
+    account.add_css_class("melania-account-orb");
+    account.set_tooltip_text(Some("Account · Impostazioni utente"));
+    // GTK 4.8-compatible tooltip; no unsupported set_accessible_name API.
+    let light_controls=melania_config::load().unwrap_or_default().appearance_theme()=="light";
+    let account_icon=classic_control_glyph("account",light_controls);
+    account.set_child(Some(&account_icon));
+    let account_menu=w.clone();
+    account.connect_clicked(move |_| {
+        match Command::new("melania-settings").arg("account").spawn() {
+            Ok(_)=>account_menu.set_visible(false),
+            Err(error)=>eprintln!("Melania account settings: {error}"),
+        }
+    });
+    footer.append(&account);
+    let account_spacing=GtkBox::new(Orientation::Horizontal,0);
+    account_spacing.set_size_request(7,-1);
+    footer.append(&account_spacing);
+    // Icon-only power button retains the existing confirmation and safety
+    // checks: no host shutdown from nested Wayland or GUI smoke tests.
+    let power=Button::new();
+    let power_icon=classic_control_glyph("power",light_controls);
+    power.set_child(Some(&power_icon));
+    power.set_tooltip_text(Some("Spegni"));
     power.add_css_class("melania-session-button");
+    power.add_css_class("melania-power-icon-button");
     let power_capability=session_actions::availability(session_actions::Action::PowerOff);
     power.set_sensitive(power_capability.is_ok());
     if let Err(reason)=power_capability { power.set_tooltip_text(Some(&reason)); }

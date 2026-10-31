@@ -57,6 +57,31 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('query.connect_changed',PANEL)
         self.assertIn('search_focus.grab_focus()',PANEL)
 
+    def test_compact_menu_sidebar_and_search(self):
+        self.assertIn('],560,565,0,"melania-start",0)',PANEL)
+        self.assertIn('right.set_size_request(190,-1);',PANEL)
+        self.assertIn('query.set_size_request(300,-1);',PANEL)
+        self.assertIn('w.set_margin(Edge::Bottom,6);',PANEL)
+        self.assertIn('right.add_css_class("melania-start-shortcuts");',PANEL)
+
+    def test_circular_account_and_icon_only_power_are_functional(self):
+        self.assertIn('account.add_css_class("melania-account-orb");',PANEL)
+        self.assertIn('classic_control_glyph("account",light_controls)',PANEL)
+        self.assertIn('Command::new("melania-settings").arg("account").spawn()',PANEL)
+        self.assertIn('footer.append(&account);',PANEL)
+        self.assertIn('footer.append(&power);',PANEL)
+        self.assertLess(PANEL.index('footer.append(&account);'), PANEL.index('footer.append(&power);'))
+        self.assertIn('classic_control_glyph("power",light_controls)',PANEL)
+        self.assertIn('drawing.set_draw_func(',PANEL)
+        self.assertNotIn('power.set_icon_name("system-shutdown-symbolic");',PANEL)
+        self.assertNotIn('Image::from_icon_name("avatar-default-symbolic")',PANEL)
+        self.assertNotIn('Button::with_label("Spegni")',PANEL)
+        self.assertIn('session_actions::availability(session_actions::Action::PowerOff)',PANEL)
+        self.assertIn('confirm_session_action(&owner, session_actions::Action::PowerOff)',PANEL)
+        self.assertIn('border-radius: 999px;',CSS)
+        self.assertIn('button.melania-account-orb',CSS)
+        self.assertIn('button.melania-power-icon-button',CSS)
+
     def test_recent_apps_stay_on_application_side(self):
         self.assertIn('left.append(&recent_heading);',PANEL)
         self.assertIn('left.append(&recent_list);',PANEL)

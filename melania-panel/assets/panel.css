@@ -903,3 +903,67 @@ window.melania-theme-light .melania-start-panel .melania-start-shortcuts .melani
   background: #d4e4f6;
   border-color: #afc8e3;
 }
+
+
+/* Compact Start footer: account orb, safe power glyph and original classic
+ * proportions. All sizing stays within the 560px overall launcher width. */
+.melania-start-panel .melania-start-user {
+  padding: 4px 5px 9px;
+}
+.melania-start-panel .melania-start-user-name {
+  font-size: 13px;
+}
+.melania-start-panel .melania-start-footer {
+  border-spacing: 7px;
+}
+.melania-start-panel button.melania-account-orb {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 5px;
+  border-radius: 999px;
+  background: #4b627b;
+  border: 1px solid #9bb5d0;
+  color: #f1f7fc;
+  box-shadow: inset 0 1px rgba(255,255,255,.22);
+}
+.melania-start-panel button.melania-account-orb:hover,
+.melania-start-panel button.melania-account-orb:focus-visible {
+  background: #5b7b9e;
+  border-color: #c4dfff;
+}
+.melania-start-panel button.melania-power-icon-button {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 5px;
+  border-radius: 8px;
+  background: #3e4c5d;
+  color: #f2f7fc;
+}
+.melania-start-panel button.melania-power-icon-button:hover {
+  background: #51647a;
+}
+.melania-start-panel button.melania-power-icon-button:disabled {
+  opacity: .55;
+}
+.melania-start-panel .melania-start-footer menubutton.melania-session-more > button {
+  min-width: 30px;
+  min-height: 38px;
+  border-radius: 7px;
+}
+window.melania-theme-light .melania-start-panel button.melania-account-orb {
+  background: #e3edf8;
+  border-color: #a4bdd7;
+  color: #365570;
+}
+window.melania-theme-light .melania-start-panel button.melania-account-orb:hover {
+  background: #cddff2;
+  border-color: #84aacd;
+}
+window.melania-theme-light .melania-start-panel button.melania-power-icon-button {
+  background: #e9edf3;
+  border-color: #d3dce6;
+  color: #304355;
+}
+window.melania-theme-light .melania-start-panel button.melania-power-icon-button:hover {
+  background: #d8e5f1;
+}
