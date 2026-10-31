@@ -19,7 +19,7 @@ class StartSessionPrivacyContracts(unittest.TestCase):
         self.assertNotIn('root.append(&heading);',self.panel)
         self.assertIn('query.connect_changed',self.panel)
         self.assertIn('gdk::Key::Escape',self.panel)
-        self.assertIn('search_focus.grab_focus()',self.panel)
+        self.assertIn('input.grab_focus()',self.panel)
 
     def test_recent_apps_only_successful_launches_and_no_commands_persisted(self):
         self.assertIn('start_history::record_launch(id);',self.panel)
