@@ -783,11 +783,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let serial = SERIAL_COUNTER.next_serial();
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
                     let key_state = event.state();
+                    if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() {
+                        eprintln!("MELANIA_KEY event code={} state={key_state:?}",event.key_code());
+                    }
                     let mut open_files = false;
                     let mut toggle_start = false;
                     keyboard.input::<(), _>(&mut state, event.key_code(), key_state, serial,
                         event.time_msec(), |data, modifiers, keysym| {
                             let symbol = keysym.modified_sym();
+                            if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() {
+                                eprintln!("MELANIA_KEY symbol={symbol:?} logo={} ctrl={} alt={}",
+                                    modifiers.logo,modifiers.ctrl,modifiers.alt);
+                            }
                             let pressed = key_state == KeyState::Pressed;
                             // Super only is handled by the shell; do not open
                             // Start after Super+E, Super+Tab or modifier chords.
