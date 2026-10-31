@@ -55,7 +55,7 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('footer.append(&query);',PANEL)
         self.assertNotIn('root.append(&query);',PANEL)
         self.assertIn('query.connect_changed',PANEL)
-        self.assertIn('search_focus.grab_focus()',PANEL)
+        self.assertIn('input.grab_focus()',PANEL)
 
     def test_compact_menu_sidebar_and_search(self):
         self.assertIn('],560,565,0,"melania-start",0)',PANEL)
