@@ -43,7 +43,7 @@ class StartTrayDesignContracts(unittest.TestCase):
         self.assertIn('scroll.set_max_content_height(302);',panel)
         self.assertIn('scroll.set_vexpand(false);',panel)
         self.assertIn('body_scroll.set_max_content_height(452);',panel)
-        self.assertIn('body_scroll.set_vexpand(false);',panel)
+        self.assertIn('body_scroll.set_vexpand(true);',panel)
         self.assertIn('root.append(&body_scroll);',panel)
         self.assertIn('scroll.set_propagate_natural_height(true);',panel)
         self.assertIn('window.melania-theme-light .melania-start-panel',css)
