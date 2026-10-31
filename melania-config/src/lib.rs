@@ -41,6 +41,11 @@ pub fn recent_apps_path() -> Option<PathBuf> {
     Some(root.join("melania").join("recent-applications"))
 }
 
+/// Per-user bounded app launch counts; same owner-only XDG state tree as recent apps.
+pub fn app_usage_path() -> Option<PathBuf> {
+    recent_apps_path().map(|p|p.with_file_name("app-usage"))
+}
+
 pub const ICON_THEMES: [&str; 6] = [
     "Melania-Fluent-Light", "Melania-Fluent-Dark", "Melania-Fluent-Light-on-Dark-Panel",
     "Melania-Light", "Melania-Dark", "Melania-Light-on-Dark-Panel"
