@@ -67,10 +67,16 @@ fn parse_logind_capability(answer: &str) -> Result<(), String> {
 
 pub fn availability(action: Action) -> Result<(), String> {
     if action == Action::Logout {
-        return env::var_os(SOCKET_ENV)
+        // A stale environment variable must never advertise a functioning
+        // logout button. LIST is read-only and has a fully parsed IPC reply;
+        // STATUS has a different response framing.
+        let path = env::var_os(SOCKET_ENV)
             .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| "Socket della sessione Melania non disponibile.".to_owned())?;
+        return request(&path, ControlCommand::List)
             .map(|_| ())
-            .ok_or_else(|| "Controllo della sessione Melania non disponibile.".into());
+            .map_err(|e| format!("Il compositore Melania non risponde: {e}"));
     }
     if action == Action::Lock {
         return Err("Blocco schermo non ancora implementato nel compositore Melania.".into());
