@@ -164,6 +164,44 @@ changed=sum(1 for pixel in delta.resize((100,100)).getdata() if sum(pixel)>55)
 assert changed>1000, f'Start toggle changed too few visual pixels: {changed}'
 print(f'PASS: private Start toggle hides and reopens the real GTK menu ({changed} changed sampled pixels)')
 PYTOGGLE
+  # XTEST events sent through Xvfb reach the winit/X11 host window and
+  # must follow the compositor's actual keyboard path (not just the socket).
+  HOST_WINDOW="$(xdotool search --onlyvisible --name '.*' 2>/dev/null | head -n1 || true)"
+  [[ -n "$HOST_WINDOW" ]] || { echo 'FAIL: cannot locate nested compositor X11 host window' >&2; exit 1; }
+  xdotool windowfocus "$HOST_WINDOW"
+  xdotool key --clearmodifiers Super_L
+  sleep .35
+  scrot -z -o "$TEMP/start-super-closed.png"
+  xdotool key --clearmodifiers Super_L
+  sleep .35
+  scrot -z -o reports/start-super-reopened.png
+  python3 - "$TEMP/start-super-closed.png" reports/start-super-reopened.png <<'PYKEY'
+from PIL import Image, ImageChops
+import sys
+closed=Image.open(sys.argv[1]).convert('RGB')
+opened=Image.open(sys.argv[2]).convert('RGB')
+area=(10,180,550,730)
+delta=ImageChops.difference(closed.crop(area),opened.crop(area))
+changed=sum(1 for pixel in delta.resize((100,100)).getdata() if sum(pixel)>55)
+assert changed>1000, f'Physical Super key did not toggle Start ({changed} changed pixels)'
+print(f'PASS: XTEST Super_L opened/closed Start ({changed} changed sampled pixels)')
+PYKEY
+  # The mapped search entry must accept the next typed characters without a
+  # mouse click. Save a real screenshot for visual QA of the search result.
+  xdotool type --clearmodifiers --delay 55 'CMake'
+  sleep .4
+  scrot -z -o reports/start-search-typed.png
+  python3 - reports/start-super-reopened.png reports/start-search-typed.png <<'PYTYPE'
+from PIL import Image, ImageChops
+import sys
+before=Image.open(sys.argv[1]).convert('RGB')
+after=Image.open(sys.argv[2]).convert('RGB')
+area=(25,650,330,725)
+diff=ImageChops.difference(before.crop(area),after.crop(area))
+changed=sum(1 for pixel in diff.getdata() if sum(pixel)>65)
+assert changed>130, f'Typing did not visibly change Start search ({changed} pixels)'
+print(f'PASS: keyboard typed into Start search without mouse click ({changed} changed pixels)')
+PYTYPE
   # Both the foreground Settings window and background Files window must
   # display identical Win7 controls in the actual composited screenshot.
   python3 tools/check_shared_window_chrome.py reports/nested-wayland-full-desktop.png
