@@ -475,7 +475,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let account=Button::new();
     account.add_css_class("melania-account-orb");
     account.set_tooltip_text(Some("Account · Impostazioni utente"));
-    account.set_accessible_name(Some("Apri le impostazioni dell'account"));
+    // GTK 4.8-compatible tooltip; no unsupported set_accessible_name API.
     let account_icon=Image::from_icon_name("avatar-default-symbolic");
     account_icon.set_pixel_size(22);
     account.set_child(Some(&account_icon));
@@ -495,7 +495,6 @@ fn start_window(app:&Application)->ApplicationWindow {
     let power=Button::new();
     power.set_icon_name("system-shutdown-symbolic");
     power.set_tooltip_text(Some("Spegni"));
-    power.set_accessible_name(Some("Spegni il computer"));
     power.add_css_class("melania-session-button");
     power.add_css_class("melania-power-icon-button");
     let power_capability=session_actions::availability(session_actions::Action::PowerOff);
