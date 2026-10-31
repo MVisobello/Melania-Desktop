@@ -791,7 +791,7 @@ window.melania-theme-light popover.melania-session-popup button.melania-session-
   border-color: #a5c5e6;
 }
 .melania-start-panel .melania-start-shortcuts {
-  padding: 7px 9px 7px 10px;
+  padding: 7px 6px 7px 7px;
   background: #394e65;
   border: 0;
   border-left: 1px solid #7992ad;
@@ -825,8 +825,8 @@ window.melania-theme-light popover.melania-session-popup button.melania-session-
   background: #4d6a88;
   border-color: #718ea9;
 }
-.melania-start-panel .melania-classic-link-text {
-  font-size: 12px;
+ .melania-start-panel .melania-classic-link-text {
+  font-size: 11px;
   font-weight: 500;
   color: #f0f5fa;
 }
@@ -966,4 +966,14 @@ window.melania-theme-light .melania-start-panel button.melania-power-icon-button
 }
 window.melania-theme-light .melania-start-panel button.melania-power-icon-button:hover {
   background: #d8e5f1;
+}
+
+/* Tight 515px Win7 launcher: let the left program list keep the space saved
+ * by the actual GTK link size cap. Do not widen via a child min-content. */
+.melania-start-panel .melania-start-shortcuts .melania-classic-link {
+  padding-left: 3px;
+  padding-right: 3px;
+}
+.melania-start-panel .melania-start-program-column .melania-row-text {
+  letter-spacing: 0;
 }
