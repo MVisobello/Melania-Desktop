@@ -34,9 +34,28 @@ fn make_surface(app:&Application,kind:Layer,anchors:&[Edge],width:i32,height:i32
     w.set_exclusive_zone(exclusive);
     w
 }
+/// GTK4 layer-shell resets the requested size to zero while hiding its
+/// layer role. The wlroots protocol rejects that unless both horizontal and
+/// vertical anchors are set. Temporarily set all anchors before unmapping;
+/// restore classic left/bottom placement when the Start role is recreated.
+fn hide_start_surface(w:&ApplicationWindow) {
+    w.set_anchor(Edge::Right,true);
+    w.set_anchor(Edge::Top,true);
+    w.set_visible(false);
+}
+fn present_start_surface(w:&ApplicationWindow) {
+    w.set_anchor(Edge::Right,false);
+    w.set_anchor(Edge::Top,false);
+    w.present();
+}
 fn toggle_surface(w:&ApplicationWindow,other:&ApplicationWindow) {
-    other.set_visible(false);
-    if w.is_visible() { w.set_visible(false); } else { w.present(); }
+    if other.has_css_class("melania-start-surface") {
+        hide_start_surface(other);
+    } else { other.set_visible(false); }
+    if w.has_css_class("melania-start-surface") {
+        if w.is_visible() {hide_start_surface(w);}
+        else {present_start_surface(w);}
+    } else if w.is_visible() { w.set_visible(false); } else { w.present(); }
 }
 /// XDG user dirs are normally stored in user-dirs.dirs, not exported as
 /// XDG_DOCUMENTS_DIR environment variables. Ask the desktop service first,
@@ -185,6 +204,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let w=make_surface(app,Layer::Overlay,&[Edge::Left,Edge::Bottom],510,565,0,"melania-start",0);
     w.set_margin(Edge::Left,8);
     w.set_margin(Edge::Bottom,6);
+    w.add_css_class("melania-start-surface");
     // Layer-shell keyboard focus is explicitly granted by the Melania compositor
     // when this overlay is mapped; search can receive keystrokes immediately.
     w.set_keyboard_mode(KeyboardMode::Exclusive);
@@ -1316,7 +1336,7 @@ fn install_start_hotkey_listener(
                         eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible());
                     }
                 }
-                Ok(n) if &packet[..n]==b"CLOSE_START" => open.set_visible(false),
+                Ok(n) if &packet[..n]==b"CLOSE_START" => hide_start_surface(&open),
                 Ok(_)=>{},
                 Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
                 Err(error)=>{eprintln!("Melania Start hotkey receive: {error}");break;},
