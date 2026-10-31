@@ -36,7 +36,7 @@ class InteractionContracts(unittest.TestCase):
         self.assertIn('toggle_start=true;',COMP)
         self.assertIn('socket.send_to(b"TOGGLE_START"',COMP)
         self.assertIn('melania_control::START_SOCKET_ENV',COMP)
-        self.assertIn('install_start_hotkey(&start)',PANEL)
+        self.assertIn('install_start_hotkey(app,&start)',PANEL)
         self.assertIn('socket.set_nonblocking(true)',PANEL)
         self.assertIn('fs::Permissions::from_mode(0o600)',PANEL)
         self.assertIn('if owner.is_visible(){owner.set_visible(false);}',PANEL)
