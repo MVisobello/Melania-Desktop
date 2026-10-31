@@ -129,6 +129,50 @@ PY
   # display identical Win7 controls in the actual composited screenshot.
   python3 tools/check_shared_window_chrome.py reports/nested-wayland-full-desktop.png
 fi
+# The first screenshot intentionally shows Start at launch. Now exercise the
+# REAL keyboard path through the nested X11 host: Super closes and reopens it,
+# then ordinary typing must go straight into the focused Start search entry.
+# Never inject host-wide keys outside isolated xvfb-run.
+if command -v xdotool >/dev/null; then
+  HOST_WINDOW="$(xdotool search --onlyvisible --pid "$PID" 2>/dev/null | head -n1 || true)"
+  if [[ -z "$HOST_WINDOW" ]]; then
+    HOST_WINDOW="$(xdotool search --onlyvisible --name . 2>/dev/null | head -n1 || true)"
+  fi
+  [[ -n "$HOST_WINDOW" ]] || { echo 'FAIL: no Xvfb Melania compositor window for keyboard QA' >&2; exit 1; }
+  xdotool windowfocus --sync "$HOST_WINDOW"
+  xdotool key --clearmodifiers Super_L
+  for i in $(seq 1 35); do
+    grep -q 'MELANIA_START_IPC toggled open=false' "$TEMP/compositor.log" && break
+    sleep .1
+  done
+  grep -q 'MELANIA_START_IPC toggled open=false' "$TEMP/compositor.log" || {
+    echo 'FAIL: Super did not close Start' >&2
+    tail -70 "$TEMP/compositor.log" >&2; exit 1;
+  }
+  xdotool key --clearmodifiers Super_L
+  for i in $(seq 1 35); do
+    grep -q 'MELANIA_START_IPC toggled open=true' "$TEMP/compositor.log" && break
+    sleep .1
+  done
+  grep -q 'MELANIA_START_IPC toggled open=true' "$TEMP/compositor.log" || {
+    echo 'FAIL: Super did not reopen Start' >&2
+    tail -70 "$TEMP/compositor.log" >&2; exit 1;
+  }
+  xdotool type --clearmodifiers --delay 50 'melaniasearch'
+  for i in $(seq 1 35); do
+    grep -q 'MELANIA_START_SEARCH_RECEIVED' "$TEMP/compositor.log" && break
+    sleep .1
+  done
+  grep -q 'MELANIA_START_SEARCH_RECEIVED' "$TEMP/compositor.log" || {
+    echo 'FAIL: typed keys did not reach the Start search field' >&2
+    tail -70 "$TEMP/compositor.log" >&2; exit 1;
+  }
+  if command -v scrot >/dev/null; then
+    sleep .25
+    scrot -z -o reports/nested-wayland-start-search.png
+  fi
+  echo 'PASS: lone Super toggles Start closed/open, text reaches search without mouse click'
+fi
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
 for i in $(seq 1 60); do
