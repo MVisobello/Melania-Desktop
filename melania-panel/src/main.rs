@@ -1363,5 +1363,6 @@ fn setup_melania_icon_theme() {
 
 fn main()->glib::ExitCode {
     let app=Application::builder().application_id(APP_ID).build();
+    app.connect_shutdown(|_|eprintln!("Melania Panel GTK shutdown"));
     app.connect_activate(build);app.run()
 }
