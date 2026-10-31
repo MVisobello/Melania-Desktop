@@ -246,11 +246,22 @@ impl WlrLayerShellHandler for Melania {
             .find(|l| l.wl_surface() == surface.wl_surface()).cloned();
         if let Some(mapped) = mapped { layer_map_for_output(&self.output).unmap_layer(&mapped); }
         if self.start_layer.as_ref()==Some(surface.wl_surface()) {
+            // GTK destroys the layer role when Start hides. Restore keyboard
+            // focus while its wl_surface is STILL valid, before discarding
+            // the cached Start ID. A dangling focus here disconnects the
+            // panel and makes the next Super toggle fail.
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            if keyboard.current_focus().as_ref()==self.start_layer.as_ref() {
+                let previous=self.start_previous_focus.take().filter(|candidate|
+                    self.managed.iter().any(|w|w.surface==*candidate && !w.minimized));
+                keyboard.set_focus(self,previous,SERIAL_COUNTER.next_serial());
+            }
+            self.start_has_focus=false;
+            self.start_previous_focus=None;
             self.start_layer=None;
         }
         layer_map_for_output(&self.output).arrange();
         self.refresh_usable_area();
-        self.refresh_start_focus();
     }
 }
 impl SeatHandler for Melania {
