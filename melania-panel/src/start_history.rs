@@ -70,6 +70,8 @@ pub fn record_at(path: &Path, id: &str) -> io::Result<()> {
 }
 
 pub fn record_launch(id: &str) {
+    if !valid_id(id) {return;}
+    crate::start_usage::record_launch(id);
     if let Some(path) = history_path() {
         if let Err(error) = record_at(&path,id) {
             eprintln!("Melania Start: cannot remember recent application: {error}");
