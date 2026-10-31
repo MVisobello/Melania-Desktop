@@ -2,7 +2,7 @@
 //! Settings displayed here never mutate host GNOME/Cinnamon configuration.
 use gtk::prelude::*;
 use gtk::{Align, Box as GtkBox, Button, Image, Label, Orientation, Stack, Scale};
-use crate::symbols;
+use crate::{symbols, sensors};
 use std::{env, fs, process::Command};
 
 fn label(value: &str, class: &str) -> Label {
@@ -183,6 +183,11 @@ pub fn add_pages(stack: &Stack) {
         &format!("{monitor_count} monitor rilevati da GTK nella sessione corrente.")));
     display.append(&info_row("dialog-information", "Risoluzione e scala",
         "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
+    group(&display, "Rotazione dello schermo");
+    display.append(&info_row("video-display", "Sensore di orientamento",
+        sensors::explanation(sensors::accelerometer())));
+    display.append(&info_row("dialog-information", "Rotazione manuale e blocco",
+        "Non ancora disponibili: occorre una connessione al compositore Wayland, con sincronizzazione di touchscreen, finestre e area utile. Nessun comando esterno modifica lo schermo."));
     stack.add_titled(&display, Some("display"), "Schermo");
 
     let audio = page("Audio", "Volume e uscita audio tramite PipeWire/WirePlumber.", "audio-card");
