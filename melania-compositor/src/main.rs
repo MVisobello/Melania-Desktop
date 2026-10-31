@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::UnixListener}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
+use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -686,6 +686,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or("XDG_RUNTIME_DIR is required to create the private control socket")?);
     let control_path = runtime.join(format!("melania-{}-control.sock", std::process::id()));
+    let start_socket_path = runtime.join(format!("melania-{}-start.sock", std::process::id()));
     let control_listener = UnixListener::bind(&control_path)?;
     fs::set_permissions(&control_path, fs::Permissions::from_mode(0o600))?;
     control_listener.set_nonblocking(true)?;
@@ -708,6 +709,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // compositor, with no changes to the parent session's environment.
     // These are test clients; the preview is not yet a true layer-shell.
     let mut children = Vec::new();
+    // Super alone toggles Start on key release; Super+E remains a shortcut.
+    let mut super_candidate=false;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         if flag != "--command" {
@@ -716,6 +719,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let program = arguments.next().ok_or("--command requires a program")?;
         children.push(Command::new(program).env("WAYLAND_DISPLAY", &socket)
             .env(SOCKET_ENV, &control_path)
+            .env(melania_control::START_SOCKET_ENV, &start_socket_path)
             .env("XDG_SESSION_TYPE", "wayland")
             .env("XDG_CURRENT_DESKTOP", "Melania")
             .env("MELANIA_NESTED_SESSION", "1")
@@ -734,10 +738,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
                     let key_state = event.state();
                     let mut open_files = false;
+                    let mut toggle_start = false;
                     keyboard.input::<(), _>(&mut state, event.key_code(), key_state, serial,
                         event.time_msec(), |data, modifiers, keysym| {
                             let symbol = keysym.modified_sym();
                             let pressed = key_state == KeyState::Pressed;
+                            // Super only is handled by the shell; do not open
+                            // Start after Super+E, Super+Tab or modifier chords.
+                            if symbol == keysyms::KEY_Super_L.into() ||
+                                symbol == keysyms::KEY_Super_R.into() {
+                                if pressed {
+                                    super_candidate = !modifiers.alt && !modifiers.ctrl;
+                                } else {
+                                    if super_candidate {toggle_start=true;}
+                                    super_candidate=false;
+                                }
+                                return FilterResult::Intercept(());
+                            }
+                            if pressed {super_candidate=false;}
                             // Avoid overriding a client's Ctrl+Tab or AltGr
                             // input; only explicitly reserved combinations.
                             if modifiers.alt && !modifiers.ctrl && !modifiers.logo &&
@@ -766,6 +784,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             FilterResult::Forward
                         });
+                    if toggle_start {
+                        // No shell, spawn or host-global shortcut: send one
+                        // fixed command to the current Melania panel only.
+                        match UnixDatagram::unbound().and_then(|socket|
+                            socket.send_to(b"TOGGLE_START", &start_socket_path)) {
+                            Ok(_)=>{},
+                            Err(error)=>eprintln!("Melania Super Start toggle: {error}"),
+                        }
+                    }
                     if open_files {
                         // A fixed, known program; no shell or interpolated input.
                         // Launch only inside the nested Melania Wayland session.
