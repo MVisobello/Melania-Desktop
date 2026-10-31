@@ -784,7 +784,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
                     let key_state = event.state();
                     if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() {
-                        eprintln!("MELANIA_KEY event code={} state={key_state:?}",event.key_code());
+                        eprintln!("MELANIA_KEY event code={:?} state={key_state:?}",event.key_code());
                     }
                     let mut open_files = false;
                     let mut toggle_start = false;
