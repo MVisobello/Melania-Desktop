@@ -430,11 +430,23 @@ fn start_window(app:&Application)->ApplicationWindow {
         .unwrap_or_else(||"Utente".to_owned());
     let profile=GtkBox::new(Orientation::Horizontal,8);
     profile.add_css_class("melania-start-user");
-    // Profile name stays in the classic sidebar. The actionable avatar sits
-    // in the footer beside the power control, avoiding duplicate account icons.
+    // Classic profile header: circular action immediately beside the name.
+    let light_controls=melania_config::load().unwrap_or_default().appearance_theme()=="light";
+    let account=Button::new();
+    account.add_css_class("melania-account-orb");
+    account.set_tooltip_text(Some("Account · Impostazioni utente"));
+    account.set_child(Some(&classic_control_glyph("account",light_controls)));
+    let account_menu=w.clone();
+    account.connect_clicked(move |_| {
+        match Command::new("melania-settings").arg("account").spawn() {
+            Ok(_)=>account_menu.set_visible(false),
+            Err(error)=>eprintln!("Melania account settings: {error}"),
+        }
+    });
+    profile.append(&account);
     let username_label=label(&username,"melania-start-user-name");
     username_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    username_label.set_max_width_chars(23);
+    username_label.set_max_width_chars(16);
     profile.append(&username_label);
     right.append(&profile);
     // The set of destinations mirrors classic Windows 7, but it opens real
@@ -504,52 +516,24 @@ fn start_window(app:&Application)->ApplicationWindow {
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
     footer_spacer.set_hexpand(true);
     footer.append(&footer_spacer);
-    // Circular account avatar at the left of power, like a small Win7 user
-    // tile. It opens the real Accounts page; it never impersonates a session
-    // manager or directly performs a sensitive action.
-    let account=Button::new();
-    account.add_css_class("melania-account-orb");
-    account.set_tooltip_text(Some("Account · Impostazioni utente"));
-    // GTK 4.8-compatible tooltip; no unsupported set_accessible_name API.
-    let light_controls=melania_config::load().unwrap_or_default().appearance_theme()=="light";
-    let account_icon=classic_control_glyph("account",light_controls);
-    account.set_child(Some(&account_icon));
-    let account_menu=w.clone();
-    account.connect_clicked(move |_| {
-        match Command::new("melania-settings").arg("account").spawn() {
-            Ok(_)=>account_menu.set_visible(false),
-            Err(error)=>eprintln!("Melania account settings: {error}"),
-        }
-    });
-    footer.append(&account);
-    let account_spacing=GtkBox::new(Orientation::Horizontal,0);
-    account_spacing.set_size_request(7,-1);
-    footer.append(&account_spacing);
-    // Icon-only power button retains the existing confirmation and safety
-    // checks: no host shutdown from nested Wayland or GUI smoke tests.
-    let power=Button::new();
-    let power_icon=classic_control_glyph("power",light_controls);
-    power.set_child(Some(&power_icon));
-    power.set_tooltip_text(Some("Spegni"));
-    power.add_css_class("melania-session-button");
+    // One power menu button, not a split dropdown. Opening it never changes
+    // the host's power state; each available choice still requires confirmation.
+    let power=gtk::MenuButton::new();
+    power.set_child(Some(&classic_control_glyph("power",light_controls)));
     power.add_css_class("melania-power-icon-button");
-    let power_capability=session_actions::availability(session_actions::Action::PowerOff);
-    power.set_sensitive(power_capability.is_ok());
-    if let Err(reason)=power_capability { power.set_tooltip_text(Some(&reason)); }
-    let owner=w.clone();
-    power.connect_clicked(move |_| {
-        confirm_session_action(&owner, session_actions::Action::PowerOff);
-    });
-    footer.append(&power);
-    let more=gtk::MenuButton::new();
-    more.set_icon_name("pan-down-symbolic");
-    more.add_css_class("melania-session-more");
-    more.set_tooltip_text(Some("Altre opzioni di alimentazione e sessione"));
+    power.set_tooltip_text(Some("Opzioni di alimentazione e sessione"));
     let popover=gtk::Popover::new();
     popover.add_css_class("melania-session-popup");
     let choices=GtkBox::new(Orientation::Vertical,4);
     choices.add_css_class("melania-session-choices");
-    for action in session_actions::Action::ALL {
+    for action in [
+        session_actions::Action::Lock,
+        session_actions::Action::Suspend,
+        session_actions::Action::PowerOff,
+        session_actions::Action::Restart,
+        session_actions::Action::Logout,
+        session_actions::Action::Hibernate,
+    ] {
         let choice=Button::with_label(action.label());
         choice.add_css_class("melania-session-choice");
         if let Err(reason)=session_actions::availability(action) {
@@ -567,8 +551,8 @@ fn start_window(app:&Application)->ApplicationWindow {
         choices.append(&explanation);
     }
     popover.set_child(Some(&choices));
-    more.set_popover(Some(&popover));
-    footer.append(&more);
+    power.set_popover(Some(&popover));
+    footer.append(&power);
     root.append(&footer);
     w.set_child(Some(&root));w
 }
