@@ -246,7 +246,7 @@ headerbar.files-aero-header {
 .files-top-tab {
   min-height: 35px;
   min-width: 100px;
-  max-width: 215px;
+  /* GTK CSS does not support max-width; tab label sizing is managed by GTK. */
   border-radius: 10px 10px 4px 4px;
   background: rgba(229,244,255,0.31);
   border: 1px solid rgba(150,199,236,0.44);
