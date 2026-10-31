@@ -31,6 +31,16 @@ impl Default for Preferences {
         icon_theme: "Melania-Fluent-Light".into(),
     } }
 }
+/// Per-user recent Start launches shared between Panel and Settings.
+/// This does not touch GNOME/XFCE/KDE recent documents or system settings.
+pub fn recent_apps_path() -> Option<PathBuf> {
+    let root=std::env::var_os("XDG_STATE_HOME").filter(|v|!v.is_empty())
+        .map(PathBuf::from)
+        .or_else(||std::env::var_os("HOME").filter(|v|!v.is_empty())
+            .map(|v|PathBuf::from(v).join(".local/state")))?;
+    Some(root.join("melania").join("recent-applications"))
+}
+
 pub const ICON_THEMES: [&str; 6] = [
     "Melania-Fluent-Light", "Melania-Fluent-Dark", "Melania-Fluent-Light-on-Dark-Panel",
     "Melania-Light", "Melania-Dark", "Melania-Light-on-Dark-Panel"
