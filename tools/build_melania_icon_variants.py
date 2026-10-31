@@ -259,7 +259,10 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                 asset_dir = root / "_melania-assets"
                 asset_dir.mkdir(exist_ok=True)
                 asset = asset_dir / (hashlib.sha256(repr(key).encode()).hexdigest()[:28] + ".svg")
-                img = reference_artwork(name, context, variant, symbolic, size)
+                img = ((ROOT / "branding/icons/melania-symbol.svg").read_text(encoding="utf8")
+                       if context == "apps" and name in
+                       ("melania", "start-here", "distributor-logo", "org.melaniadesktop.Preview")
+                       else reference_artwork(name, context, variant, symbolic, size))
                 if img is None:
                     img = refined_artwork(name, context, variant, symbolic, size)
                 if img is None:
@@ -298,7 +301,10 @@ def build(dest: Path, dark_paths: list[str], light_paths: list[str]) -> dict:
                     symlink_relative(target, dark / subdir / f"{name}.svg")
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                img = reference_artwork(name, context, variant, False, size)
+                img = ((ROOT / "branding/icons/melania-symbol.svg").read_text(encoding="utf8")
+                       if context == "apps" and name in
+                       ("melania", "start-here", "distributor-logo", "org.melaniadesktop.Preview")
+                       else reference_artwork(name, context, variant, False, size))
                 if img is None:
                     img = refined_artwork(name, context, variant, False, size)
                 if img is None:
