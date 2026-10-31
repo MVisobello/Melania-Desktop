@@ -178,13 +178,21 @@ print(f'PASS: private Start toggle hides and reopens the real GTK menu ({changed
 PYTOGGLE
   # XTEST events sent through Xvfb reach the winit/X11 host window and
   # must follow the compositor's actual keyboard path (not just the socket).
+  echo 'X11 windows during nested session:'
+  xwininfo -root -tree | tail -25
   HOST_WINDOW="$(xdotool search --onlyvisible --name '.*' 2>/dev/null | head -n1 || true)"
   [[ -n "$HOST_WINDOW" ]] || { echo 'FAIL: cannot locate nested compositor X11 host window' >&2; exit 1; }
+  echo "Host window id=$HOST_WINDOW name=$(xdotool getwindowname "$HOST_WINDOW" 2>/dev/null || true)"
   xdotool windowfocus "$HOST_WINDOW"
-  xdotool key --clearmodifiers Super_L
+  echo "X11 focus id=$(xdotool getwindowfocus 2>/dev/null || true)"
+  xdotool keydown Super_L
+  sleep .12
+  xdotool keyup Super_L
   sleep .35
   scrot -z -o "$TEMP/start-super-closed.png"
-  xdotool key --clearmodifiers Super_L
+  xdotool keydown Super_L
+  sleep .12
+  xdotool keyup Super_L
   sleep .35
   scrot -z -o reports/start-super-reopened.png
   python3 - "$TEMP/start-super-closed.png" reports/start-super-reopened.png <<'PYKEY'
