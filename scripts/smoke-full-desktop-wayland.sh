@@ -180,7 +180,7 @@ PYTOGGLE
   # must follow the compositor's actual keyboard path (not just the socket).
   echo 'X11 windows during nested session:'
   xwininfo -root -tree | tail -25
-  HOST_WINDOW="$(xdotool search --onlyvisible --name '^Smithay
+  HOST_WINDOW="$(xdotool search --onlyvisible --name 'Smithay' 2>/dev/null | head -n1 || true)"
   [[ -n "$HOST_WINDOW" ]] || { echo 'FAIL: cannot locate nested compositor X11 host window' >&2; exit 1; }
   echo "Host window id=$HOST_WINDOW name=$(xdotool getwindowname "$HOST_WINDOW" 2>/dev/null || true)"
   xdotool windowfocus "$HOST_WINDOW"
