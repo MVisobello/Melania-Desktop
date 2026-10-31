@@ -34,35 +34,48 @@ fn make_surface(app:&Application,kind:Layer,anchors:&[Edge],width:i32,height:i32
     w.set_exclusive_zone(exclusive);
     w
 }
-/// GTK4 layer-shell resets the requested size to zero while hiding its
-/// layer role. The wlroots protocol rejects that unless both horizontal and
-/// vertical anchors are set. Temporarily set all anchors before unmapping;
-/// restore classic left/bottom placement when the Start role is recreated.
+/// Smithay 0.7 retains a pre-commit layer role validator on the underlying
+/// wl_surface after GTK destroys a layer role; GTK then commits an empty
+/// buffer and the validator disconnects the whole Panel. Preserve the real
+/// layer role instead: slide Start completely outside the output and release
+/// keyboard focus, then bring it back on demand. The hidden surface is still
+/// alive, so a second Super press does not recreate a broken Wayland role.
+const START_HIDE_OFFSET: i32 = -4000;
+const START_LEFT_MARGIN: i32 = 8;
+fn start_search_entry(w:&ApplicationWindow) -> Option<Entry> {
+    let root=w.child()?;
+    let footer=root.last_child()?;
+    footer.first_child()?.downcast::<Entry>().ok()
+}
 fn hide_start_surface(w:&ApplicationWindow) {
-    w.set_anchor(Edge::Right,true);
-    w.set_anchor(Edge::Top,true);
-    // Layer-shell configuration is double buffered. Give GTK one frame to
-    // commit its new anchors before hiding, which resets the role's requested
-    // width/height to zero. Otherwise Smithay receives size=0 with stale
-    // left/bottom-only anchors and disconnects the entire panel.
-    w.queue_allocate();
-    let target=w.clone();
-    glib::timeout_add_local_once(Duration::from_millis(120),move || {
-        if target.is_visible() { target.set_visible(false); }
-    });
+    if !w.is_visible() || w.has_css_class("melania-start-concealed") {return;}
+    w.add_css_class("melania-start-concealed");
+    w.set_keyboard_mode(KeyboardMode::None);
+    w.set_margin(Edge::Left,START_HIDE_OFFSET);
+    w.set_opacity(0.0);
+    if let Some(entry)=start_search_entry(w) { entry.set_text(""); }
 }
 fn present_start_surface(w:&ApplicationWindow) {
-    w.set_anchor(Edge::Right,false);
-    w.set_anchor(Edge::Top,false);
-    w.present();
+    let was_hidden=w.has_css_class("melania-start-concealed");
+    w.remove_css_class("melania-start-concealed");
+    w.set_margin(Edge::Left,START_LEFT_MARGIN);
+    w.set_opacity(1.0);
+    w.set_keyboard_mode(KeyboardMode::Exclusive);
+    if !w.is_visible() {w.present();}
+    if was_hidden {
+        if let Some(entry)=start_search_entry(w) {
+            glib::idle_add_local_once(move || { let _=entry.grab_focus(); });
+        }
+    }
 }
 fn toggle_surface(w:&ApplicationWindow,other:&ApplicationWindow) {
     if other.has_css_class("melania-start-surface") {
         hide_start_surface(other);
     } else { other.set_visible(false); }
     if w.has_css_class("melania-start-surface") {
-        if w.is_visible() {hide_start_surface(w);}
-        else {present_start_surface(w);}
+        if w.is_visible() && !w.has_css_class("melania-start-concealed") {
+            hide_start_surface(w);
+        } else {present_start_surface(w);}
     } else if w.is_visible() { w.set_visible(false); } else { w.present(); }
 }
 /// XDG user dirs are normally stored in user-dirs.dirs, not exported as
@@ -243,7 +256,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let escape_owner=w.clone();
     escape.connect_key_pressed(move |_,key,_,_| {
         if key==gdk::Key::Escape {
-            escape_owner.set_visible(false);
+            hide_start_surface(&escape_owner);
             glib::Propagation::Stop
         } else { glib::Propagation::Proceed }
     });
@@ -279,7 +292,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                         "org.melaniadesktop.Files"
                     } else { "org.melaniadesktop.Settings" };
                     start_history::record_launch(id);
-                    menu.set_visible(false);
+                    hide_start_surface(&menu);
                 }
                 Err(error) => eprintln!("Melania app launch: {error}"),
             }
@@ -313,7 +326,7 @@ fn start_window(app:&Application)->ApplicationWindow {
             match app_info.launch(&[],None::<&gio::AppLaunchContext>) {
                 Ok(())=>{
                     if let Some(id)=history_id.as_deref() {start_history::record_launch(id);}
-                    menu.set_visible(false);
+                    hide_start_surface(&menu);
                 },
                 Err(e)=>eprintln!("Melania app launch: {e}")
             }
@@ -340,7 +353,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         button.connect_clicked(move |_| {
             if let Err(e)=Command::new("melania-settings").arg(page).spawn() {
                 eprintln!("Melania settings search: {e}");
-            } else { menu.set_visible(false); }
+            } else { hide_start_surface(&menu); }
         });
         searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),keywords),true));
         apps_box.append(&button);
@@ -360,7 +373,7 @@ fn start_window(app:&Application)->ApplicationWindow {
             let folder=xdg_shortcut_directory(kind);
             if let Err(e)=Command::new("melania-files").arg(folder).spawn() {
                 eprintln!("Melania folder search: {e}");
-            } else {menu.set_visible(false);}
+            } else {hide_start_surface(&menu);}
         });
         searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),kind.to_lowercase()),true));
         apps_box.append(&button);
@@ -423,7 +436,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                     match Command::new(program).spawn() {
                         Ok(_)=>{start_history::record_launch(if program=="melania-files" {
                             "org.melaniadesktop.Files"
-                        } else {"org.melaniadesktop.Settings"});menu.set_visible(false);},
+                        } else {"org.melaniadesktop.Settings"});hide_start_surface(&menu);},
                         Err(error)=>eprintln!("Melania recent app launch: {error}"),
                     }
                 });
@@ -448,7 +461,7 @@ fn start_window(app:&Application)->ApplicationWindow {
             let menu=menu_for_recent.clone();
             launch.connect_clicked(move |_| {
                 match info.launch(&[],None::<&gio::AppLaunchContext>) {
-                    Ok(())=>{start_history::record_launch(&id);menu.set_visible(false);},
+                    Ok(())=>{start_history::record_launch(&id);hide_start_surface(&menu);},
                     Err(error)=>eprintln!("Melania recent app launch: {error}"),
                 }
             });
@@ -484,7 +497,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let account_menu=w.clone();
     account.connect_clicked(move |_| {
         match Command::new("melania-settings").arg("account").spawn() {
-            Ok(_)=>account_menu.set_visible(false),
+            Ok(_)=>hide_start_surface(&account_menu),
             Err(error)=>eprintln!("Melania account settings: {error}"),
         }
     });
@@ -530,7 +543,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                 _=>return,
             };
             match result {
-                Ok(_)=>{menu.set_visible(false);},
+                Ok(_)=>{hide_start_surface(&menu);},
                 Err(e)=>eprintln!("Melania Start shortcut {name}: {e}"),
             }
         });
@@ -1341,7 +1354,7 @@ fn install_start_hotkey_listener(
                     notifications.set_visible(false);
                     toggle_surface(&open,&quick);
                     if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
-                        eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible());
+                        eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible() && !open.has_css_class("melania-start-concealed"));
                     }
                 }
                 Ok(n) if &packet[..n]==b"CLOSE_START" => hide_start_surface(&open),
