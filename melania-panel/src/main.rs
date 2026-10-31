@@ -343,6 +343,12 @@ fn start_window(app:&Application)->ApplicationWindow {
     let searchable_for_filter=searchable.clone();
     query.connect_changed(move |q| {
         let term=q.text().trim().to_lowercase();
+        if !term.is_empty() &&
+            std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
+            // Record only the fact that typing reached search in isolated CI,
+            // not the user's actual input content.
+            eprintln!("MELANIA_START_SEARCH_RECEIVED");
+        }
         let mut visible=0;
         for (button,name,search_only) in searchable_for_filter.iter() {
             let matches=if term.is_empty() { !search_only } else { name.contains(&term) };
@@ -1306,6 +1312,9 @@ fn install_start_hotkey_listener(
                 Ok(n) if &packet[..n]==b"TOGGLE_START"=>{
                     notifications.set_visible(false);
                     toggle_surface(&open,&quick);
+                    if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
+                        eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible());
+                    }
                 }
                 Ok(n) if &packet[..n]==b"CLOSE_START" => open.set_visible(false),
                 Ok(_)=>{},
