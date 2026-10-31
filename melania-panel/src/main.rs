@@ -104,6 +104,41 @@ fn classic_link_row(text: &str, icon_name: &str) -> Button {
     button
 }
 
+
+/// Original vector glyphs drawn in Cairo, not themed freedesktop aliases.
+/// Several user icon packs remap system-shutdown or avatar-default to a blank
+/// dot/document: drawing these two controls avoids that and needs no assets
+/// installed separately from the Melania Panel binary.
+fn classic_control_glyph(kind: &'static str, light: bool) -> gtk::DrawingArea {
+    let drawing=gtk::DrawingArea::new();
+    drawing.set_content_width(22);
+    drawing.set_content_height(22);
+    drawing.set_draw_func(move |_, cr, width, height| {
+        if width<=0 || height<=0 { return; }
+        cr.scale(width as f64 / 24.0, height as f64 / 24.0);
+        if light { cr.set_source_rgb(0.20,0.30,0.42); }
+        else { cr.set_source_rgb(0.94,0.97,1.0); }
+        if kind=="account" {
+            cr.arc(12.0,7.4,4.0,0.0,std::f64::consts::TAU);
+            let _=cr.fill();
+            cr.move_to(3.9,21.0);
+            cr.curve_to(4.3,15.0,8.0,13.6,12.0,13.6);
+            cr.curve_to(16.0,13.6,19.7,15.0,20.1,21.0);
+            cr.close_path();
+            let _=cr.fill();
+        } else {
+            // Familiar power glyph with a deliberate break at the top.
+            cr.set_line_width(2.5);
+            cr.arc(12.0,12.5,8.0,-1.03,4.17);
+            let _=cr.stroke();
+            cr.move_to(12.0,2.0);
+            cr.line_to(12.0,11.2);
+            let _=cr.stroke();
+        }
+    });
+    drawing
+}
+
 fn confirm_session_action(parent: &ApplicationWindow, action: session_actions::Action) {
     // A separate positive response is required for every action, including
     // log out; merely opening Start can never change system/session state.
@@ -476,8 +511,8 @@ fn start_window(app:&Application)->ApplicationWindow {
     account.add_css_class("melania-account-orb");
     account.set_tooltip_text(Some("Account · Impostazioni utente"));
     // GTK 4.8-compatible tooltip; no unsupported set_accessible_name API.
-    let account_icon=Image::from_icon_name("avatar-default-symbolic");
-    account_icon.set_pixel_size(22);
+    let light_controls=melania_config::load().unwrap_or_default().appearance_theme()=="light";
+    let account_icon=classic_control_glyph("account",light_controls);
     account.set_child(Some(&account_icon));
     let account_menu=w.clone();
     account.connect_clicked(move |_| {
@@ -493,7 +528,8 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Icon-only power button retains the existing confirmation and safety
     // checks: no host shutdown from nested Wayland or GUI smoke tests.
     let power=Button::new();
-    power.set_icon_name("system-shutdown-symbolic");
+    let power_icon=classic_control_glyph("power",light_controls);
+    power.set_child(Some(&power_icon));
     power.set_tooltip_text(Some("Spegni"));
     power.add_css_class("melania-session-button");
     power.add_css_class("melania-power-icon-button");
