@@ -3,6 +3,7 @@
 //! Window list comes from compositor IPC; thumbnails still require compositor capture.
 mod window_groups;
 mod session_actions;
+mod start_history;
 use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -161,7 +162,18 @@ fn start_window(app:&Application)->ApplicationWindow {
     ] {
         let button=icon_row(name,icon,"melania-action");
         let menu=w.clone();
-        button.connect_clicked(move |_| { run(program); menu.set_visible(false); });
+        button.connect_clicked(move |_| {
+            match Command::new(program).spawn() {
+                Ok(_) => {
+                    let id=if program=="melania-files" {
+                        "org.melaniadesktop.Files"
+                    } else { "org.melaniadesktop.Settings" };
+                    start_history::record_launch(id);
+                    menu.set_visible(false);
+                }
+                Err(error) => eprintln!("Melania app launch: {error}"),
+            }
+        });
         apps_box.append(&button);
         searchable.push((button,name.to_lowercase(),false));
     }
@@ -179,9 +191,14 @@ fn start_window(app:&Application)->ApplicationWindow {
         let caption=label(&name,"melania-row-text");caption.set_hexpand(true);row.append(&caption);
         button.set_child(Some(&row));
         let menu=w.clone();
+        let history_id=app_info.id().map(|id| id.to_string());
         button.connect_clicked(move |_| {
             match app_info.launch(&[],None::<&gio::AppLaunchContext>) {
-                Ok(())=>menu.set_visible(false),Err(e)=>eprintln!("Melania app launch: {e}")
+                Ok(())=>{
+                    if let Some(id)=history_id.as_deref() {start_history::record_launch(id);}
+                    menu.set_visible(false);
+                },
+                Err(e)=>eprintln!("Melania app launch: {e}")
             }
         });
         apps_box.append(&button);
@@ -277,9 +294,69 @@ fn start_window(app:&Application)->ApplicationWindow {
         });
         right.append(&button);
     }
-    // Files and Settings already have larger launchers in the application
-    // list. Duplicating them here made a redundant, half-clipped section.
-    // Keep all four useful folders completely visible in this sidebar.
+    // A bounded recent list, refreshed whenever Start opens. Store only
+    // freedesktop desktop IDs, never command lines or filenames. Unknown or
+    // uninstalled entries are skipped without launching anything.
+    let recent_heading=label("RECENTI","melania-section-label");
+    recent_heading.set_visible(false);
+    right.append(&recent_heading);
+    let recent_list=GtkBox::new(Orientation::Vertical,3);
+    recent_list.add_css_class("melania-recent-list");
+    right.append(&recent_list);
+    let menu_for_recent=w.clone();
+    w.connect_notify_local(Some("visible"), move |surface,_| {
+        if !surface.is_visible(){return;}
+        while let Some(child)=recent_list.first_child(){recent_list.remove(&child);}
+        let installed=gio::AppInfo::all();
+        let mut count=0;
+        for id in start_history::recent() {
+            if count>=4 {break;}
+            if id=="org.melaniadesktop.Files" || id=="org.melaniadesktop.Settings" {
+                let (name,program,icon)=if id=="org.melaniadesktop.Files" {
+                    ("Melania Files","melania-files","org.melaniadesktop.Files")
+                } else {("Impostazioni","melania-settings","org.melaniadesktop.Settings")};
+                let launch=icon_row(name,icon,"melania-shortcut");
+                let menu=menu_for_recent.clone();
+                launch.connect_clicked(move |_| {
+                    match Command::new(program).spawn() {
+                        Ok(_)=>{start_history::record_launch(if program=="melania-files" {
+                            "org.melaniadesktop.Files"
+                        } else {"org.melaniadesktop.Settings"});menu.set_visible(false);},
+                        Err(error)=>eprintln!("Melania recent app launch: {error}"),
+                    }
+                });
+                recent_list.append(&launch);
+                count+=1;
+                continue;
+            }
+            let Some(info)=installed.iter().find(|app| app.should_show() &&
+                app.id().as_deref()==Some(id.as_str())).cloned() else {continue;};
+            let launch=Button::new();
+            launch.add_css_class("melania-shortcut");
+            let row=GtkBox::new(Orientation::Horizontal,8);
+            let image=info.icon().map(|icon|Image::from_gicon(&icon))
+                .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
+            image.set_pixel_size(24);
+            row.append(&image);
+            let caption=label(&info.name(),"melania-row-text");
+            caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            caption.set_max_width_chars(13);
+            row.append(&caption);
+            launch.set_child(Some(&row));
+            let menu=menu_for_recent.clone();
+            launch.connect_clicked(move |_| {
+                match info.launch(&[],None::<&gio::AppLaunchContext>) {
+                    Ok(())=>{start_history::record_launch(&id);menu.set_visible(false);},
+                    Err(error)=>eprintln!("Melania recent app launch: {error}"),
+                }
+            });
+            recent_list.append(&launch);
+            count+=1;
+        }
+        recent_heading.set_visible(count>0);
+    });
+    // Files and Settings remain in the full list as well: those entries
+    // are launchers, while the right-side history is a genuine recent list.
     columns.append(&right);
     // Limit the ENTIRE two-column menu, not only the left application list.
     // Otherwise the quick-access column forces the whole popup to 760px.
