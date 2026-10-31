@@ -144,6 +144,11 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
     client.sendto(b"TOGGLE_START",path)
 PYSOCKET
   sleep .4
+  if ! kill -0 "$PID" 2>/dev/null; then
+    echo 'FAIL: compositor exited when a layer-shell Start popup was hidden' >&2
+    tail -80 "$TEMP/compositor.log" >&2 || true
+    exit 1
+  fi
   PANEL_PID="$(pgrep -P "$PID" -f 'target/debug/melania-panel' | head -n1 || true)"
   if [[ -z "$PANEL_PID" ]]; then
     echo 'FAIL: Melania Panel exited when Start was hidden (must survive Super toggle)' >&2
