@@ -997,7 +997,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;
         backend.submit(Some(&[damage]))?;
-        children.retain_mut(|c| c.try_wait().ok().flatten().is_none());
+        children.retain_mut(|child| match child.try_wait() {
+            Ok(Some(status))=>{
+                eprintln!("Melania nested client pid={} exited with {status}",child.id());
+                false
+            },
+            Ok(None)=>true,
+            Err(error)=>{
+                eprintln!("Melania child pid={} status unavailable: {error}",child.id());
+                true
+            }
+        });
         state.space.refresh();
     }
     // Child clients belong to the nested compositor, not the host session.
