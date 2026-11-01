@@ -1,6 +1,8 @@
 //! Early working filesystem browser, not a replacement for a mature file manager yet.
 #[path = "../../branding/window_controls.rs"]
 mod window_controls;
+mod gio_backend;
+mod gio_remote;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use melania_transfer as transfer;
@@ -242,6 +244,56 @@ fn start_background_copy(browser: &Browser, sources: Vec<PathBuf>, target: PathB
             return glib::ControlFlow::Break;
         }
         glib::ControlFlow::Continue
+    });
+}
+
+/// GIO supports local and remote URIs; use it for mixed clipboard payloads
+/// while keeping the existing optimized local-to-local background transfer.
+fn start_gio_copy_into_local(browser:&Browser, sources:Vec<String>, dest:PathBuf) {
+    if browser.active_job.borrow().is_some(){
+        browser.status.set_text("C'è già un trasferimento attivo.");return;
+    }
+    let destination=gio::File::for_path(dest).uri().to_string();
+    let cancel=Arc::new(AtomicBool::new(false));
+    *browser.active_job.borrow_mut()=Some(cancel.clone());
+    browser.transfer_progress.set_visible(true);
+    browser.transfer_progress.pulse();
+    browser.transfer_cancel.set_visible(true);
+    browser.status.set_text("Copia da GVfs in corso…");
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move ||{
+        let result=gio_backend::copy_uris(&sources,&destination,&cancel);
+        let _=tx.send(result);
+    });
+    let state=browser.clone();
+    glib::timeout_add_local(Duration::from_millis(70),move ||match rx.try_recv(){
+        Ok(Ok(n))=>{
+            state.active_job.borrow_mut().take();
+            state.transfer_progress.set_visible(false);
+            state.transfer_cancel.set_visible(false);
+            refresh(&state);
+            state.status.set_text(&format!("{n} elementi copiati da GIO/GVfs."));
+            glib::ControlFlow::Break
+        },
+        Ok(Err(error))=>{
+            state.active_job.borrow_mut().take();
+            state.transfer_progress.set_visible(false);
+            state.transfer_cancel.set_visible(false);
+            refresh(&state);
+            state.status.set_text(&format!("Copia non completata: {error}"));
+            glib::ControlFlow::Break
+        },
+        Err(std::sync::mpsc::TryRecvError::Empty)=>{
+            state.transfer_progress.pulse();
+            glib::ControlFlow::Continue
+        },
+        Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+            state.active_job.borrow_mut().take();
+            state.transfer_progress.set_visible(false);
+            state.transfer_cancel.set_visible(false);
+            state.status.set_text("Operazione GVfs interrotta; controlla la destinazione.");
+            glib::ControlFlow::Break
+        }
     });
 }
 
@@ -1228,7 +1280,8 @@ fn open_batch_rename_dialog(browser: &Browser) {
     window.present();
 }
 
-fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfer>>>, tab_title: Label) -> GtkBox {
+fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfer>>>,
+            tab_title: Label, open_remote: Rc<dyn Fn(String)>) -> GtkBox {
     let root = GtkBox::new(Orientation::Vertical, 0);
     let toolbar = GtkBox::new(Orientation::Horizontal, 9);
     toolbar.add_css_class("files-toolbar");
@@ -1666,6 +1719,10 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     browser.location.connect_activate(move |entry| {
         let typed = entry.text().to_string();
         let typed = typed.trim();
+        if typed.contains("://") {
+            open_remote(typed.to_string());
+            return;
+        }
         let target = if let Some(tail) = typed.strip_prefix("~/") { home().join(tail) }
             else if typed.starts_with('/') { PathBuf::from(typed) }
             else { state.current.borrow().join(typed) };
@@ -1974,17 +2031,17 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
                 let Ok(list)=value.get::<gdk::FileList>() else {
                     state_done.status.set_text("Formato file degli appunti non supportato.");return;
                 };
-                let mut sources=Vec::new();
-                for file in list.files() {
-                    let Some(path)=file.path() else {
-                        state_done.status.set_text("Copia da URI remoti non ancora disponibile.");return;
-                    };
-                    sources.push(path);
-                }
-                if sources.is_empty() {
+                let files=list.files();
+                if files.is_empty() {
                     state_done.status.set_text("Nessun file negli appunti.");return;
                 }
-                start_background_copy(&state_done, sources, target);
+                if files.iter().all(|f|f.path().is_some()){
+                    let sources=files.iter().filter_map(|f|f.path()).collect();
+                    start_background_copy(&state_done,sources,target);
+                } else {
+                    let sources=files.iter().map(|f|f.uri().to_string()).collect();
+                    start_gio_copy_into_local(&state_done,sources,target);
+                }
             }
         );
     });
@@ -2101,15 +2158,39 @@ fn append_browser_tab(
     path: PathBuf,
     pending: Rc<RefCell<Option<PendingTransfer>>>,
     title: &str,
+    open_remote: Rc<dyn Fn(String)>,
 ) {
     let text = Label::new(Some(title));
-    let child = file_tab(path, pending, text.clone());
+    let child = file_tab(path, pending, text.clone(), open_remote);
+    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic");
+}
+fn append_remote_tab(
+    notebook: &gtk::Notebook,
+    tab_strip: &GtkBox,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
+    window: &ApplicationWindow,
+    uri: &str,
+) {
+    let title=Label::new(Some("Rete"));
+    let child=gio_remote::create(uri,title.clone());
+    append_file_page(notebook,tab_strip,headers,window,title,child,"network-server-symbolic");
+}
+/// Shared Melania tab rail for local and GVfs pages.
+fn append_file_page(
+    notebook: &gtk::Notebook,
+    tab_strip: &GtkBox,
+    headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
+    window: &ApplicationWindow,
+    text: Label,
+    child: GtkBox,
+    icon_name: &str,
+) {
     let tab = GtkBox::new(Orientation::Horizontal, 3);
     tab.add_css_class("files-top-tab");
     let tab_button = Button::new();
     tab_button.add_css_class("files-top-tab-select");
     let tab_contents = GtkBox::new(Orientation::Horizontal, 6);
-    let icon = Image::from_icon_name("folder-symbolic");
+    let icon = Image::from_icon_name(icon_name);
     icon.set_pixel_size(16);
     text.set_ellipsize(gtk::pango::EllipsizeMode::End);
     text.set_max_width_chars(16);
@@ -2226,6 +2307,10 @@ fn build_ui(app: &Application) {
     tab_rail.add_css_class("files-tab-rail");
     tab_rail.append(&tab_scroll);
     tab_rail.append(&add_button);
+    let network_button=Button::from_icon_name("network-server-symbolic");
+    network_button.add_css_class("files-new-tab");
+    network_button.set_tooltip_text(Some("Rete e server SMB/SFTP/WebDAV (GVfs)"));
+    tab_rail.append(&network_button);
     aero_header.pack_start(&tab_rail);
     window.set_titlebar(Some(&aero_header));
     let frame = GtkBox::new(Orientation::Vertical, 0);
@@ -2241,20 +2326,37 @@ fn build_ui(app: &Application) {
         sync_tab_highlights(notebook, &headers_for_switch, &window_for_switch);
     });
 
+    let weak_tabs=tabs.downgrade();
+    let weak_strip=tab_strip.downgrade();
+    let weak_window=window.downgrade();
+    let headers_for_remote=tab_headers.clone();
+    let open_remote:Rc<dyn Fn(String)>=Rc::new(move |uri:String| {
+        if let (Some(tabs),Some(strip),Some(window))=(
+            weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade()) {
+            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri);
+        }
+    });
+    let open_network=open_remote.clone();
+    network_button.connect_clicked(move |_|open_network("network:///".to_owned()));
+    let requested_uri=std::env::args_os().nth(1).and_then(|s|s.into_string().ok())
+        .filter(|s|s.contains("://"));
     let starting = std::env::args_os().nth(1).map(PathBuf::from)
         .filter(|p| p.is_dir()).unwrap_or_else(home);
     let shared_pending: Rc<RefCell<Option<PendingTransfer>>> = Rc::new(RefCell::new(None));
     let initial_title = starting.file_name().map(|s|s.to_string_lossy().into_owned())
         .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_string());
-    append_browser_tab(&tabs, &tab_strip, &tab_headers, &window, starting, shared_pending.clone(), &initial_title);
+    append_browser_tab(&tabs, &tab_strip, &tab_headers, &window, starting,
+        shared_pending.clone(), &initial_title, open_remote.clone());
+    if let Some(uri)=requested_uri {open_remote(uri);}
     let notebook = tabs.clone();
     let pending_for_add = shared_pending.clone();
     let header_for_add = tab_headers.clone();
     let rail_for_add = tab_strip.clone();
     let window_for_add = window.clone();
+    let remote_for_add=open_remote.clone();
     add_button.connect_clicked(move |_| {
         append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
-            home(), pending_for_add.clone(), "Home");
+            home(), pending_for_add.clone(), "Home", remote_for_add.clone());
     });
     frame.append(&tabs);
 
