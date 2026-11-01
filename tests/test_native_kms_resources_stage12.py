@@ -41,7 +41,7 @@ class NativeKmsResourcesStage12(unittest.TestCase):
         self.assertIn('kms_resources::capture_read_only(&fd,&after)',KMS)
         self.assertIn('guard.verify_after(&after,&resources_after,seat_active(),Instant::now())',KMS)
         self.assertIn('resources_unchanged:true',KMS)
-        self.assertIn('resource_copies.copied_blob_count()',KMS)
+        self.assertIn('guard.copied_blobs()',KMS)
         self.assertIn('report.resources_unchanged',MAIN)
         self.assertIn('report.restoration_implemented',MAIN)
         self.assertIn('visible_frame_submitted:false',KMS)
