@@ -39,7 +39,7 @@ class NativeKmsResourcesStage12(unittest.TestCase):
     def test_vm_preflight_rechecks_blob_bytes_and_framebuffer_links(self):
         self.assertIn('kms_resources::capture_read_only(&fd,&baseline)',KMS)
         self.assertIn('kms_resources::capture_read_only(&fd,&after)',KMS)
-        self.assertIn('guard.verify_after(&after,&resources_after,seat_active(),Instant::now())',KMS)
+        self.assertIn('guard.verify_after(&after,&resources_after,seat_active()?,Instant::now())',KMS)
         self.assertIn('resources_unchanged:true',KMS)
         self.assertIn('guard.copied_blobs()',KMS)
         self.assertIn('report.resources_unchanged',MAIN)
