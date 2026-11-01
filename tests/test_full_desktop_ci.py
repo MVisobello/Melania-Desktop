@@ -17,6 +17,9 @@ class RealNestedUI(unittest.TestCase):
         self.assertIn("python3-pil",CI)
         self.assertIn("xdotool",CI)
         self.assertIn("LIBGL_ALWAYS_SOFTWARE",CI)
+        self.assertIn('MELANIA_DEBUG_RENDER: "1"',CI)
+        self.assertIn("dbus-run-session -- bash",CI)
+        self.assertIn("dbus-x11",CI)
         self.assertIn("melania-real-full-desktop-screens",CI)
 
     def test_ui_smoke_checks_rendered_pixels_not_just_process_presence(self):
