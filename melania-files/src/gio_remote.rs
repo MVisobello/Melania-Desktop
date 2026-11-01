@@ -266,6 +266,81 @@ fn open_text_quicklook(remote:&Remote,uri:String){
     });
 }
 
+/// Encoded bytes are transferred and decoded in a worker thread, never in
+/// the GTK main loop. The worker sends only a bounded, scaled RGBA buffer.
+fn open_image_quicklook(remote:&Remote,uri:String){
+    let window=gtk::Window::builder()
+        .title("Anteprima immagine — Melania Files")
+        .default_width(850).default_height(710).build();
+    window.set_transient_for(remote.rows.root()
+        .and_then(|root|root.downcast::<gtk::Window>().ok()).as_ref());
+    let layout=GtkBox::new(Orientation::Vertical,8);
+    layout.set_margin_top(12);
+    layout.set_margin_bottom(12);
+    layout.set_margin_start(12);
+    layout.set_margin_end(12);
+    let status=Label::new(Some("Lettura e decodifica immagine in corso…"));
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    layout.append(&status);
+    let scroll=ScrolledWindow::new();
+    scroll.set_hexpand(true);
+    scroll.set_vexpand(true);
+    let picture=gtk::Picture::new();
+    picture.set_can_shrink(true);
+    picture.set_content_fit(gtk::ContentFit::Contain);
+    scroll.set_child(Some(&picture));
+    layout.append(&scroll);
+    let close=Button::with_label("Chiudi");
+    let closing=window.clone();
+    close.connect_clicked(move |_|closing.close());
+    layout.append(&close);
+    window.set_child(Some(&layout));
+    let cancelled=Arc::new(AtomicBool::new(false));
+    let stop=cancelled.clone();
+    window.connect_close_request(move |_|{
+        stop.store(true,Ordering::Release);
+        glib::Propagation::Proceed
+    });
+    window.present();
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    let worker_stop=cancelled.clone();
+    std::thread::spawn(move ||{
+        let result=gio_backend::image_quicklook(&uri,&worker_stop);
+        let _=tx.send(result);
+    });
+    glib::timeout_add_local(Duration::from_millis(70),move ||{
+        if !window.is_visible(){
+            cancelled.store(true,Ordering::Release);
+            return glib::ControlFlow::Break;
+        }
+        match rx.try_recv(){
+            Ok(Ok(image))=>{
+                let bytes=glib::Bytes::from_owned(image.rgba);
+                let texture=gdk::MemoryTexture::new(
+                    image.width as i32,image.height as i32,
+                    gdk::MemoryFormat::R8g8b8a8,&bytes,
+                    image.width as usize*4);
+                picture.set_paintable(Some(&texture));
+                status.set_text(&format!(
+                    "{} · originale {}×{} · anteprima {}×{} · {} byte letti",
+                    image.mime,image.original_width,image.original_height,
+                    image.width,image.height,image.transferred_bytes));
+                glib::ControlFlow::Break
+            },
+            Ok(Err(error))=>{
+                status.set_text(&error);
+                glib::ControlFlow::Break
+            },
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                status.set_text("Anteprima interrotta.");
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
 fn open_properties(remote:&Remote,uri:String) {
     let window=gtk::Window::builder().title("Proprietà — Melania Files")
         .default_width(460).default_height(370).build();
@@ -764,8 +839,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let deep_search=Button::with_label("Cerca nelle sottocartelle");
     deep_search.set_tooltip_text(Some("Ricerca ricorsiva GVfs con limiti di sicurezza; usa il filtro come testo di ricerca"));
     let properties=Button::with_label("Proprietà");
-    let quicklook=Button::with_label("Anteprima testo");
-    quicklook.set_tooltip_text(Some("F3: mostra fino a 64 KiB di testo in sola lettura, senza eseguirlo"));
+    let quicklook=Button::with_label("Anteprima");
+    quicklook.set_tooltip_text(Some("F3: anteprima sicura di testo o immagini PNG/JPEG/WebP"));
     let add_bookmark=Button::with_label("☆ Preferito");
     let remove_bookmark=Button::with_label("− Preferito");
     let bookmarks=Button::with_label("Preferiti rete");
@@ -1047,9 +1122,18 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     quicklook.connect_clicked(move |_|{
         let selected=ui.selected_paths.borrow();
         if selected.len()!=1{
-            ui.status.set_text("Seleziona un solo file di testo per l'anteprima.");
+            ui.status.set_text("Seleziona un solo file per l'anteprima.");
         }else if let Some(uri)=selected.iter().next(){
-            open_text_quicklook(&ui,uri.clone());
+            let uri=uri.clone();
+            let is_image=ui.selected.borrow().as_ref()
+                .filter(|item|item.uri==uri)
+                .map(|item|item.content_type.starts_with("image/"))
+                .unwrap_or(false);
+            if is_image{
+                open_image_quicklook(&ui,uri);
+            }else{
+                open_text_quicklook(&ui,uri);
+            }
         }
     });
     let ui=state.clone();

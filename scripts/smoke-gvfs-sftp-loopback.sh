@@ -27,6 +27,19 @@ mkdir -p "$TEMP/home/.ssh" "$TEMP/fixture/target"
 chmod 700 "$TEMP/home/.ssh"
 printf 'melania-sftp-sample\n' > "$TEMP/fixture/melania-sftp-fixture.txt"
 [[ "$(wc -c < "$TEMP/fixture/melania-sftp-fixture.txt")" == 20 ]] || exit 1
+# Tiny 2x2 RGBA PNG generated using stdlib: no external image dependency.
+python3 - "$TEMP/fixture/preview-test.png" <<'PYIMG'
+import pathlib, struct, sys, zlib
+pixels = bytes([12,34,56,255])*2
+raw = (b'\x00'+pixels)*2
+def chunk(tag,data):
+    return struct.pack('!I',len(data))+tag+data+struct.pack('!I',zlib.crc32(tag+data)&0xffffffff)
+png = (b'\x89PNG\r\n\x1a\n'
+       +chunk(b'IHDR',struct.pack('!2I5B',2,2,8,6,0,0,0))
+       +chunk(b'IDAT',zlib.compress(raw))
+       +chunk(b'IEND',b''))
+pathlib.Path(sys.argv[1]).write_bytes(png)
+PYIMG
 ssh-keygen -q -t ed25519 -N '' -f "$TEMP/client-key"
 ssh-keygen -q -t ed25519 -N '' -f "$TEMP/host-key"
 cp "$TEMP/client-key.pub" "$TEMP/authorized_keys"
