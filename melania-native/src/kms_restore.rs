@@ -192,7 +192,8 @@ mod tests {
         missing.objects[2].properties.retain(|p| p.name != "FB_ID");
         assert!(missing.validate().is_err());
         let mut duplicate=baseline();
-        duplicate.objects[0].properties.push(duplicate.objects[0].properties[0].clone());
+        let repeated_property=duplicate.objects[0].properties[0].clone();
+        duplicate.objects[0].properties.push(repeated_property);
         assert!(duplicate.validate().is_err());
         let mut repeated=baseline();
         repeated.objects.push(repeated.objects[1].clone());
