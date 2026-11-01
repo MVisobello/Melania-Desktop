@@ -3,6 +3,7 @@
 //! This is actual Smithay libseat/udev integration, deliberately separate from
 //! the existing winit compositor. It does not acquire DRM framebuffers, open
 //! libinput devices, switch VTs, or advertise a functioning native session.
+pub mod outputs;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
