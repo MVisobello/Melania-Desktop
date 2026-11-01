@@ -114,3 +114,115 @@ mod tests {
         assert!(!crate::NativeLifecycle::default().can_present_kms());
     }
 }
+
+
+/// CRTC compatibility discovered through real DRM encoders. This is an
+/// *advisory* route, not an activated scanout or a claimed plane.
+#[derive(Debug,Clone,PartialEq,Eq)]
+pub struct OutputRoute {
+    pub connector: String,
+    pub possible_crtcs: Vec<String>,
+}
+/// Each connector is enumerated independently so a removed encoder does not
+/// make every monitor disappear during hotplug.
+pub fn inspect_output_routes(fd:&DrmDeviceFd) -> Result<Vec<OutputRoute>,String> {
+    let resources=fd.resource_handles()
+        .map_err(|e|format!("DRM CRTC discovery failed: {e}"))?;
+    let mut routes=Vec::new();
+    for connector_handle in resources.connectors() {
+        let info=match fd.get_connector(*connector_handle,false) {
+            Ok(info)=>info,
+            Err(error)=>{
+                eprintln!("Melania: connector vanished while matching CRTC: {error}");
+                continue;
+            }
+        };
+        if info.state()!=connector::State::Connected || info.modes().is_empty(){
+            continue;
+        }
+        let name=format!("{}-{}",info.interface().as_str(),info.interface_id());
+        let mut possible_crtcs=Vec::new();
+        for handle in info.encoders() {
+            let encoder=match fd.get_encoder(*handle) {
+                Ok(encoder)=>encoder,
+                Err(error)=>{
+                    eprintln!("Melania: encoder vanished for {name}: {error}");
+                    continue;
+                }
+            };
+            for crtc in resources.filter_crtcs(encoder.possible_crtcs()) {
+                possible_crtcs.push(format!("{crtc:?}"));
+            }
+        }
+        possible_crtcs.sort();
+        possible_crtcs.dedup();
+        routes.push(OutputRoute{connector:name,possible_crtcs});
+    }
+    routes.sort_by(|a,b|a.connector.cmp(&b.connector));
+    Ok(routes)
+}
+
+/// Find a maximum-cardinality one-to-one mapping of candidate connectors to
+/// CRTCs, without ever touching a KMS plane. A simple greedy pass can lose
+/// a usable display when two connectors share one CRTC; augmenting paths
+/// relocate already assigned connectors to alternatives.
+pub fn plan_crtc_routes(routes:&[OutputRoute]) -> Vec<(String,String)> {
+    use std::collections::{BTreeMap,BTreeSet};
+    fn assign(name:&str, by_name:&BTreeMap<String,&OutputRoute>,
+              seen:&mut BTreeSet<String>, owners:&mut BTreeMap<String,String>) -> bool {
+        let Some(route)=by_name.get(name) else {return false;};
+        for crtc in &route.possible_crtcs {
+            if !seen.insert(crtc.clone()){continue;}
+            let previous=owners.get(crtc).cloned();
+            if previous.is_none_or(|old|assign(&old,by_name,seen,owners)) {
+                owners.insert(crtc.clone(),name.to_owned());
+                return true;
+            }
+        }
+        false
+    }
+    let mut by_name=BTreeMap::new();
+    for route in routes {
+        by_name.insert(route.connector.clone(),route);
+    }
+    let mut owners=BTreeMap::new();
+    for name in by_name.keys(){
+        let mut seen=BTreeSet::new();
+        assign(name,&by_name,&mut seen,&mut owners);
+    }
+    let mut layout=owners.into_iter().map(|(crtc,connector)|(connector,crtc))
+        .collect::<Vec<_>>();
+    layout.sort();
+    layout
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    fn r(name:&str, crtcs:&[&str])->OutputRoute {
+        OutputRoute{
+            connector:name.into(),
+            possible_crtcs:crtcs.iter().map(|c|c.to_string()).collect()
+        }
+    }
+    #[test]
+    fn two_monitors_never_share_a_crtc() {
+        let actual=plan_crtc_routes(&[r("DP-1",&["1","2"]),r("HDMI-A-1",&["1"])]);
+        assert_eq!(actual.len(),2);
+        assert_eq!(actual[0],("DP-1".into(),"2".into()));
+        assert_eq!(actual[1],("HDMI-A-1".into(),"1".into()));
+    }
+    #[test]
+    fn planner_does_not_invent_crtcs_for_unrouteable_monitors() {
+        let actual=plan_crtc_routes(&[r("DP-1",&[]),r("DP-2",&["1"]),r("DP-3",&["1"])]);
+        assert_eq!(actual.len(),1);
+        assert!(actual[0].0=="DP-2" || actual[0].0=="DP-3");
+        assert_eq!(actual[0].1,"1");
+    }
+    #[test]
+    fn order_of_discovery_does_not_change_mapping() {
+        let a=[r("eDP-1",&["1","3"]),r("DP-2",&["1","2"]),r("DP-1",&["3"])];
+        let b=[a[2].clone(),a[0].clone(),a[1].clone()];
+        assert_eq!(plan_crtc_routes(&a),plan_crtc_routes(&b));
+    }
+}
