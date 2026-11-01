@@ -978,18 +978,20 @@ fn workspace_switcher() -> gtk::MenuButton {
             cr.close_path();
         };
         cr.set_line_width(1.65);
-        rounded(2.3,5.0,8.7,12.0,1.8);
+        // Two landscape desktop thumbnails with understated monitor feet.
+        rounded(1.2,6.0,10.0,8.5,1.6);
         cr.set_source_rgba(0.33,0.68,0.96,if light {0.28} else {0.46});
         let _=cr.fill_preserve();
         if light {cr.set_source_rgb(0.19,0.33,0.47);}
         else {cr.set_source_rgb(0.94,0.97,1.0);}
         let _=cr.stroke();
-        rounded(13.0,5.0,8.7,12.0,1.8);
+        rounded(12.8,6.0,10.0,8.5,1.6);
         let _=cr.stroke();
-        // Subtle active-desktop underline gives this control a clear identity.
         cr.set_line_width(1.5);
-        cr.move_to(4.6,19.8);
-        cr.line_to(8.7,19.8);
+        cr.move_to(4.0,17.5);
+        cr.line_to(8.5,17.5);
+        cr.move_to(15.6,17.5);
+        cr.line_to(20.1,17.5);
         let _=cr.stroke();
     });
     let active_label=Label::new(Some("–"));
