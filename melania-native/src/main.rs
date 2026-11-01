@@ -10,7 +10,7 @@ use smithay::{
         input::{Device as InputDevice, InputEvent},
         udev::{UdevBackend, UdevEvent},
     },
-    reexports::{rustix::fs::OFlags, input::{DeviceCapability, Libinput}},
+    reexports::{rustix::fs::OFlags, input::{self as libinput, DeviceCapability, Libinput}},
     utils::DeviceFd,
 };
 use melania_native::NativeLifecycle;
@@ -80,6 +80,23 @@ fn print_capabilities() {
     println!("NATIVE_SESSION_READY=false");
 }
 
+/// Register a device discovered by libinput. Only category and stable sysname
+/// are tracked; keycodes, typed text and pointer positions are never stored.
+fn register_input_device(
+    state:&mut NativeLifecycle,
+    device:libinput::Device,
+) {
+    let id=InputDevice::id(&device);
+    let caps=melania_native::input_registry::InputCapabilities {
+        keyboard:device.has_capability(DeviceCapability::Keyboard),
+        pointer:device.has_capability(DeviceCapability::Pointer),
+        touch:device.has_capability(DeviceCapability::Touch),
+    };
+    if caps.any() {
+        let _=state.input_registry_mut().device_added(id,caps);
+    }
+}
+
 fn experiment() -> Result<(),Box<dyn Error>> {
     assert_dedicated_console();
 
@@ -93,11 +110,21 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     );
     input_context.udev_assign_seat(&seat_name)
         .map_err(|()| "Melania libinput could not assign the selected libseat/udev seat")?;
-    let input_backend=LibinputInputBackend::new(input_context.clone());
     let mut state=NativeLifecycle::default();
     if session.is_active() {
         state.on_session(SessionEvent::ActivateSession);
     }
+    // libinput has already enumerated devices during udev_assign_seat.
+    // Drain these queued DeviceAdded events before polling its fd; otherwise
+    // a quiet keyboard/tablet may never trigger a new readiness callback.
+    input_context.dispatch()?;
+    for event in &mut input_context {
+        if let libinput::Event::Device(libinput::event::DeviceEvent::Added(added))=event {
+            let device=libinput::event::EventTrait::device(&added);
+            register_input_device(&mut state,device);
+        }
+    }
+    let input_backend=LibinputInputBackend::new(input_context.clone());
     for (device_id,path) in udev.device_list() {
         state.on_device(melania_native::DeviceChange::Added {
             id: device_id as u64,
@@ -113,15 +140,7 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     loop_events.handle().insert_source(input_backend,|event,_,state| {
         match event {
             InputEvent::DeviceAdded { device } => {
-                let id=InputDevice::id(&device);
-                let caps=melania_native::input_registry::InputCapabilities {
-                    keyboard:device.has_capability(DeviceCapability::Keyboard),
-                    pointer:device.has_capability(DeviceCapability::Pointer),
-                    touch:device.has_capability(DeviceCapability::Touch),
-                };
-                if caps.any() {
-                    let _=state.input_registry_mut().device_added(id,caps);
-                }
+                register_input_device(state,device);
             }
             InputEvent::DeviceRemoved { device } => {
                 state.input_registry_mut().device_removed(&InputDevice::id(&device));
