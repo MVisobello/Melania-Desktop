@@ -76,13 +76,30 @@ class TaskbarDesktopClock(unittest.TestCase):
     def test_tray_is_compact_and_clock_lines_have_equal_size(self):
         self.assertIn('trailing.add_css_class("melania-trailing");',PANEL)
         self.assertIn('bar.append(&trailing);',PANEL)
-        self.assertIn('let status_row=GtkBox::new(Orientation::Horizontal,6);',PANEL)
-        self.assertIn('.melania-bar .melania-trailing { border-spacing: 3px; }',CSS)
-        self.assertIn('.melania-bar .melania-trailing .melania-status-icons { border-spacing: 6px; }',CSS)
+        self.assertIn('let status_row=GtkBox::new(Orientation::Horizontal,3);',PANEL)
+        self.assertIn('.melania-bar .melania-trailing {',CSS)
+        self.assertIn('border-spacing: 2px;',CSS)
+        self.assertIn('.melania-bar .melania-trailing .melania-status-icons {',CSS)
         self.assertIn('.melania-bar .melania-trailing .melania-clock-time,',CSS)
         self.assertIn('.melania-bar .melania-trailing .melania-clock-date {',CSS)
         self.assertIn('font-size: 12px;',CSS)
         self.assertIn('font-weight: 400;',CSS)
+
+    def test_clock_has_no_expandable_blank_area_between_tray_and_time(self):
+        taskbar=PANEL[PANEL.index('fn taskbar('):PANEL.index('fn install_start_hotkey_listener(')]
+        self.assertIn('trailing.set_hexpand(false);',taskbar)
+        self.assertIn('trailing.set_halign(gtk::Align::End);',taskbar)
+        self.assertIn('clock.set_hexpand(false);',taskbar)
+        self.assertIn('clock.set_halign(gtk::Align::Start);',taskbar)
+        self.assertIn('let trailing=GtkBox::new(Orientation::Horizontal,2);',taskbar)
+        self.assertLess(taskbar.index('trailing.append(&status);'),
+                        taskbar.index('trailing.append(&notification_button);'))
+        self.assertLess(taskbar.index('trailing.append(&notification_button);'),
+                        taskbar.index('trailing.append(&clock_separator);'))
+        self.assertLess(taskbar.index('trailing.append(&clock_separator);'),
+                        taskbar.index('trailing.append(&clock);'))
+        self.assertIn('min-width: 84px;',CSS)
+        self.assertIn('margin: 8px 2px 8px 1px;',CSS)
 
 if __name__=="__main__":
     unittest.main(verbosity=2)

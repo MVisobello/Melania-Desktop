@@ -1375,8 +1375,13 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let space=GtkBox::new(Orientation::Horizontal,1);space.set_hexpand(true);bar.append(&space);
     // One compact trailing cluster keeps tray, notifications and clock close together
     // regardless of panel width, position or the number of running windows.
-    let trailing=GtkBox::new(Orientation::Horizontal,3);
+    let trailing=GtkBox::new(Orientation::Horizontal,2);
     trailing.add_css_class("melania-trailing");
+    // Do not let GTK give the system area the spare width of the taskbar.
+    // Otherwise the clock button stretches and leaves a very wide blank
+    // region between the notification hairline and the right-aligned time.
+    trailing.set_hexpand(false);
+    trailing.set_halign(gtk::Align::End);
     bar.append(&trailing);
     // Keep the desktop switcher beside the tray instead of centered on the bar.
     trailing.append(&workspace_switcher());
@@ -1384,7 +1389,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let status=Button::new();status.add_css_class("melania-system");
     status.add_css_class("melania-tray-button");
     status.set_tooltip_text(Some("Rete, Bluetooth, audio e alimentazione"));
-    let status_row=GtkBox::new(Orientation::Horizontal,6);
+    let status_row=GtkBox::new(Orientation::Horizontal,3);
     status_row.add_css_class("melania-status-icons");
     let light_tray=melania_config::load().unwrap_or_default().appearance_theme()=="light";
     for (icon_name, icon_class) in [
@@ -1450,6 +1455,10 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let clock=Button::new();
     clock.add_css_class("melania-system");
     clock.add_css_class("melania-clock");
+    // Never stretch the clock to fill the trailing cluster: use only its
+    // natural two-line text width plus minimal horizontal hit-target padding.
+    clock.set_hexpand(false);
+    clock.set_halign(gtk::Align::Start);
     let clock_row=GtkBox::new(Orientation::Vertical,0);
     clock_row.add_css_class("melania-clock-row");
     // A shared width and fill alignment make both strings end at the exact

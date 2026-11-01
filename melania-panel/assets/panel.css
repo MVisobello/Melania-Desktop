@@ -1241,3 +1241,27 @@ window.melania-theme-light .melania-bar.melania-bar-top { border-bottom-color: #
   padding: 1px 5px;
 }
 .melania-bar.melania-bar-top .melania-trailing button.melania-clock { min-height: 33px; }
+
+/* Compact right cluster: the Windows-style two-line clock is a natural-width
+ * control immediately beside the tray and the thin separator. The horizontal
+ * spacer belongs BEFORE this entire cluster, never inside the clock button. */
+.melania-bar .melania-trailing {
+  border-spacing: 2px;
+}
+.melania-bar .melania-trailing .melania-status-icons {
+  border-spacing: 3px;
+}
+.melania-bar .melania-trailing button.melania-tray-button {
+  padding: 1px 2px;
+  min-width: 0;
+}
+.melania-bar .melania-trailing separator.melania-clock-separator {
+  min-width: 1px;
+  margin: 8px 2px 8px 1px;
+  padding: 0;
+}
+.melania-bar .melania-trailing button.melania-clock {
+  min-width: 84px;
+  min-height: 35px;
+  padding: 0 2px;
+}
