@@ -6,9 +6,11 @@ use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
+        libinput::{LibinputInputBackend, LibinputSessionInterface},
+        input::{Device as InputDevice, InputEvent},
         udev::{UdevBackend, UdevEvent},
     },
-    reexports::rustix::fs::OFlags,
+    reexports::{rustix::fs::OFlags, input::{DeviceCapability, Libinput}},
     utils::DeviceFd,
 };
 use melania_native::NativeLifecycle;
@@ -84,6 +86,13 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     let (session,notifier)=LibSeatSession::new()?;
     let seat_name=session.seat();
     let udev=UdevBackend::new(&seat_name)?;
+    // Input can be opened ONLY through the same libseat session; no
+    // direct host /dev/input access or global keyboard hooks are used.
+    let mut input_context=Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
+        session.clone().into()
+    );
+    input_context.udev_assign_seat(&seat_name)?;
+    let input_backend=LibinputInputBackend::new(input_context.clone());
     let mut state=NativeLifecycle::default();
     if session.is_active() {
         state.on_session(SessionEvent::ActivateSession);
@@ -96,11 +105,45 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     }
     println!("Melania native stage1: seat={seat_name}, known GPUs={}",
         state.devices().len());
+    // Device enumeration only: input events are not yet routed to Wayland.
+    // Record device classes but never store or print keys, text or pointer
+    // coordinates. A seat pause invalidates every registered device.
+    loop_events.handle().insert_source(input_backend,|event,_,state| {
+        match event {
+            InputEvent::DeviceAdded { device } => {
+                let id=InputDevice::id(&device);
+                let caps=melania_native::input_registry::InputCapabilities {
+                    keyboard:device.has_capability(DeviceCapability::Keyboard),
+                    pointer:device.has_capability(DeviceCapability::Pointer),
+                    touch:device.has_capability(DeviceCapability::Touch),
+                };
+                if caps.any() {
+                    let _=state.input_registry_mut().device_added(id,caps);
+                }
+            }
+            InputEvent::DeviceRemoved { device } => {
+                state.input_registry_mut().device_removed(&InputDevice::id(&device));
+            }
+            // Keyboard/mouse/touch payloads are deliberately not forwarded
+            // in this experiment; native Wayland seat routing is not ready.
+            _ => {}
+        }
+    })?;
     // Register the actual Smithay libseat notifier and udev hotplug sources.
     // Nothing opens a DRM FD, creates a framebuffer, or takes over a VT.
     let mut loop_events=calloop::EventLoop::<NativeLifecycle>::try_new()?;
     loop_events.handle().insert_source(notifier,
-        |event,_,state| {
+        move |event,_,state| {
+            match event {
+                SessionEvent::PauseSession => input_context.suspend(),
+                SessionEvent::ActivateSession => {
+                    if let Err(error)=input_context.resume() {
+                        eprintln!("Melania libinput resume refused: {error:?}");
+                        state.on_session(SessionEvent::PauseSession);
+                        return;
+                    }
+                }
+            }
             state.on_session(event);
             eprintln!("Melania libseat state: active={}",state.seat_active());
         })?;
@@ -121,6 +164,9 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     }
     println!("Melania native stage1 closed; seen={} GPU events={}",
         state.devices().len(),state.event_count());
+    let (keyboards,pointers,touch)=state.input_registry().counts();
+    println!("MELANIA_NATIVE_INPUT_ENUMERATED keyboards={keyboards} pointers={pointers} touch={touch} forwarded=false");
+    println!("MELANIA_NATIVE_INPUT_WAYLAND_READY=false");
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }
