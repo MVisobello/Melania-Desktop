@@ -44,6 +44,9 @@ libseat/logind completo.
   PR #92 aggiunge la stessa anteprima F3 per PNG/JPEG/WebP (6 MiB massimo,
   dimensioni e pixel limitati, decodifica in worker Rust), collaudata anche
   con lettura e verifica dei pixel su un vero server SFTP temporaneo.
+  PR #93 consente a F3 di riconoscere le immagini anche quando un provider
+  GVfs non comunica il MIME nell'elenco, verificando comunque il formato
+  effettivo dei dati prima di mostrare l'anteprima.
   Build Rust/GTK, Wayland e integrazione desktop passati.
   Restano adapter PathBuf per viste locali avanzate e funzioni POSIX,
   test SMB/WebDAV, dialoghi di password reali e dispositivi fisici, oltre
