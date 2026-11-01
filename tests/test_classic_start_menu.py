@@ -64,6 +64,12 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('w.set_margin(Edge::Bottom,6);',PANEL)
         self.assertIn('right.add_css_class("melania-start-shortcuts");',PANEL)
 
+    def test_footer_search_and_power_are_vertically_compact(self):
+        self.assertIn('query.set_valign(gtk::Align::Center);',PANEL)
+        self.assertIn('power.set_valign(gtk::Align::Center);',PANEL)
+        self.assertRegex(CSS, r'(?s)\.melania-start-panel \.melania-start-footer \.melania-entry \{\s*min-height: 28px;\s*padding: 2px 9px;')
+        self.assertRegex(CSS, r'(?s)\.melania-start-panel menubutton\.melania-power-icon-button > button \{\s*min-width: 34px;\s*min-height: 28px;\s*padding: 2px;')
+
     def test_circular_account_and_icon_only_power_are_functional(self):
         self.assertIn('account.add_css_class("melania-account-orb");',PANEL)
         self.assertIn('classic_control_glyph("account",light_controls)',PANEL)
