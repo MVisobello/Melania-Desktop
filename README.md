@@ -39,11 +39,13 @@ libseat/logind completo.
   PR #90 introduce Annulla/Ripeti per una rinomina per scheda, con controllo
   d'identità del file, nessuna sovrascrittura intenzionale, Ctrl+Z e
   Ctrl+Maiusc+Z; ora la CI esegue anche i test reali del backend Melania Files.
+  PR #91 aggiunge Anteprima testo/F3 per file locali e remoti via GIO/GVfs,
+  in sola lettura e limitata a 64 KiB; provata anche via SFTP autenticato.
   Build Rust/GTK, Wayland e integrazione desktop passati.
   Restano adapter PathBuf per viste locali avanzate e funzioni POSIX,
   test SMB/WebDAV, dialoghi di password reali e dispositivi fisici, oltre
-  a undo/redo completo per copie e spostamenti, anteprime e proprietà avanzate.
-  La parità Nautilus **non è ancora completa**.
+  a undo/redo completo per copie e spostamenti, anteprime immagini/PDF/video
+  e proprietà avanzate. La parità Nautilus **non è ancora completa**.
   Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md),
   [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md),
   [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md),
@@ -51,7 +53,8 @@ libseat/logind completo.
   [annullamento nativo](docs/FILES-GVFS-NATIVE-CANCELLATION.md),
   [ricerca ricorsiva](docs/FILES-GVFS-RECURSIVE-SEARCH.md) e
   [test SFTP autenticato](docs/FILES-GVFS-SFTP-LOOPBACK-TEST.md) e
-  [Annulla/Ripeti rinomina](docs/FILES-GVFS-RENAME-UNDO.md).
+  [Annulla/Ripeti rinomina](docs/FILES-GVFS-RENAME-UNDO.md) e
+  [Anteprima testo GIO/GVfs](docs/FILES-GVFS-TEXT-QUICKLOOK.md).
 
 ## Avvio e sicurezza
 
