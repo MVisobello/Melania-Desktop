@@ -33,10 +33,10 @@ class NativeKmsRollbackBaseline(unittest.TestCase):
 
     def test_kms_test_must_fail_when_observed_state_changes(self):
         self.assertEqual(KMS.count("kms_restore::capture_read_only(&fd)"), 2)
-        self.assertIn("if !after.unchanged_since(&baseline)", KMS)
+        self.assertIn('guard.verify_after(&after,&resources_after,seat_active(),Instant::now())', KMS)
         self.assertIn("KMS baseline changed during TEST_ONLY preflight", KMS)
         self.assertIn("baseline_unchanged:true", KMS)
-        self.assertIn("restoration_implemented:baseline.restoration_implemented()", KMS)
+        self.assertIn("restoration_implemented:guard.restoration_implemented()", KMS)
         self.assertIn("report.baseline_unchanged", MAIN)
         self.assertIn("report.restoration_implemented", MAIN)
 
