@@ -82,10 +82,18 @@ jobs:
             sleep 2
             kill -0 $pid
             capture_ready reports/settings-xfce-preferred-gtk.png
+            target/debug/melania-settings xfce-panel
+            sleep 2
+            kill -0 $pid
+            capture_ready reports/settings-xfce-panel-gtk.png
+            target/debug/melania-settings xfce-desktop
+            sleep 2
+            kill -0 $pid
+            capture_ready reports/settings-xfce-desktop-gtk.png
           '
           python3 - <<'PY'
           from PIL import Image, ImageStat
-          for name in ("system", "appearance", "xfce", "xfce-preferred"):
+          for name in ("system", "appearance", "xfce", "xfce-preferred", "xfce-panel", "xfce-desktop"):
               path=f"reports/settings-{name}-gtk.png"
               with Image.open(path) as im:
                   assert im.size == (1280, 800), (path, im.size)

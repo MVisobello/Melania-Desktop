@@ -27,6 +27,10 @@ pub struct Preferences {
     pub panel_auto_hide: bool,
     /// Percentage of panel surface opacity, 40–100; 94 matches Aero default.
     pub panel_opacity: u8,
+    /// Empty means Melania's bundled original wallpaper.
+    pub desktop_wallpaper: String,
+    pub desktop_wallpaper_fit: String,
+    pub desktop_show_icons: bool,
 }
 impl Default for Preferences {
     fn default() -> Self { Self {
@@ -37,6 +41,8 @@ impl Default for Preferences {
         icon_theme: "Melania-Fluent-Light".into(),
         panel_height: 52, panel_position: "bottom".into(),
         panel_auto_hide: false, panel_opacity: 94,
+        desktop_wallpaper: String::new(), desktop_wallpaper_fit: "cover".into(),
+        desktop_show_icons: true,
     } }
 }
 /// Per-user recent Start launches shared between Panel and Settings.
@@ -124,17 +130,25 @@ impl Preferences {
                 "panel_opacity" => if let Ok(n)=v.parse::<u8>() {
                     if (40..=100).contains(&n){prefs.panel_opacity=n;}
                 },
+                "desktop_wallpaper" if (v.is_empty() ||
+                    (v.starts_with('/') && v.len() <= 1024 &&
+                    !v.chars().any(char::is_control))) =>
+                    prefs.desktop_wallpaper=v.to_owned(),
+                "desktop_wallpaper_fit" if matches!(v,"cover"|"contain"|"fill") =>
+                    prefs.desktop_wallpaper_fit=v.to_owned(),
+                "desktop_show_icons" => if let Some(b)=as_bool(){prefs.desktop_show_icons=b;},
                 _ => {}, // future versions can read older/newer files
             }
         }
         prefs
     }
     pub fn to_text(&self) -> String { format!(
-        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\nicon_theme={}\npanel_height={}\npanel_position={}\npanel_auto_hide={}\npanel_opacity={}\n",
+        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\nicon_theme={}\npanel_height={}\npanel_position={}\npanel_auto_hide={}\npanel_opacity={}\ndesktop_wallpaper={}\ndesktop_wallpaper_fit={}\ndesktop_show_icons={}\n",
         self.dark_mode, self.aero_glass, self.animations, self.snap_windows,
         self.preview_windows, self.do_not_disturb, self.blur_strength, self.workspace_count,
         self.group_windows, self.reduce_motion, self.high_contrast, self.icon_theme,
-        self.panel_height, self.panel_position, self.panel_auto_hide, self.panel_opacity)
+        self.panel_height, self.panel_position, self.panel_auto_hide, self.panel_opacity,
+        self.desktop_wallpaper, self.desktop_wallpaper_fit, self.desktop_show_icons)
     }
     pub fn read_from(path: &Path) -> io::Result<Self> {
         match fs::read_to_string(path) {
@@ -201,6 +215,21 @@ mod tests {
         let mut p = Preferences::default();
         p.dark_mode = false; p.do_not_disturb = true;
         assert_eq!(Preferences::from_text(&p.to_text()), p);
+    }
+    #[test] fn wallpaper_preferences_validate_and_preserve_old_visuals() {
+        let defaults=Preferences::default();
+        assert_eq!(defaults.desktop_wallpaper,"");
+        assert_eq!(defaults.desktop_wallpaper_fit,"cover");
+        assert!(defaults.desktop_show_icons);
+        let edited=Preferences::from_text(
+            "desktop_wallpaper=/tmp/Test image.png\ndesktop_wallpaper_fit=contain\ndesktop_show_icons=false");
+        assert_eq!(edited.desktop_wallpaper,"/tmp/Test image.png");
+        assert_eq!(edited.desktop_wallpaper_fit,"contain");
+        assert!(!edited.desktop_show_icons);
+        assert_eq!(edited,Preferences::from_text(&edited.to_text()));
+        let invalid=Preferences::from_text(
+            "desktop_wallpaper=relative/path.png\ndesktop_wallpaper_fit=not-a-fit\ndesktop_show_icons=maybe");
+        assert_eq!(invalid,defaults);
     }
     #[test] fn panel_controls_validate_and_keep_approved_defaults() {
         let default=Preferences::default();

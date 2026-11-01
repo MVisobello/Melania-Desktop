@@ -59,9 +59,24 @@ reali, soprattutto per popup, dispositivi touchscreen e più monitor.
 
 Pannelli multipli e plugin di terze parti restano da sviluppare.
 
+## Scrivania e sfondo — seconda integrazione funzionale
+
+La pagina `melania-settings xfce-desktop` permette di selezionare uno
+sfondo locale PNG/JPEG/WebP/BMP (massimo 40 MB), cambiarne la modalità di
+adattamento (ritaglio, intera immagine o riempimento) e nascondere le
+icone. Il file viene scelto con il selettore GTK e validato prima del
+salvataggio. Il desktop GTK4 layer-shell osserva le nuove preferenze e
+aggiorna l'immagine e la visibilità delle icone **senza riavvio**.
+
+Il ripristino riporta allo sfondo originale e mostra nuovamente le
+icone, senza eliminare alcun file e senza cambiare lo sfondo del desktop
+ospitante. L'override `MELANIA_WALLPAPER` resta prioritario per i
+collaudi isolati. Le preferenze di monitor multipli, disposizione
+manuale delle icone e rotazione ciclica restano da sviluppare.
+
 ## Parità ancora da sviluppare
 
-- Desktop: sfondo per monitor/spazio, posizionamento icone, menu desktop.
+- Desktop: sfondo per monitor/spazio, disposizione manuale delle icone, rotazione sfondi.
 - Finestre: focus, decorazioni, scorciatoie personalizzate e opzioni compositor.
 - Pannello: editor dell'ordine dei singoli elementi, plugin, supporto più pannelli e ulteriore collaudo auto-hide.
 - Input: libinput mouse/touchpad, layout e ripetizione tastiera, mappature tasti.

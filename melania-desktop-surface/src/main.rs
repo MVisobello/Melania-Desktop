@@ -4,11 +4,33 @@
 use gtk::{self, gdk, gio, prelude::*};
 use gtk::{Align, Application, ApplicationWindow, Box as GtkBox, Button, FlowBox, Image, Label, Orientation, Overlay, Picture};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
-use std::{cell::RefCell, path::{Path, PathBuf}, process::Command, rc::Rc};
+use std::{cell::RefCell, path::{Path, PathBuf}, process::Command, rc::Rc, time::Duration};
 use melania_desktop_core::{Selection, list_desktop, create_unique_folder};
 
 const APP_ID: &str = "org.melaniadesktop.Desktop";
 const WALLPAPER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wallpaper.png");
+
+/// User-defined wallpaper takes effect only in Melania. The CI/one-shot
+/// MELANIA_WALLPAPER override retains precedence for isolated screenshots.
+fn wallpaper_path(prefs:&melania_config::Preferences)->PathBuf {
+    std::env::var_os("MELANIA_WALLPAPER")
+        .map(PathBuf::from).filter(|path|path.is_file())
+        .or_else(||{
+            if prefs.desktop_wallpaper.is_empty(){None}
+            else {
+                let path=PathBuf::from(&prefs.desktop_wallpaper);
+                path.is_file().then_some(path)
+            }
+        })
+        .unwrap_or_else(||PathBuf::from(WALLPAPER))
+}
+fn wallpaper_fit(value:&str)->gtk::ContentFit {
+    match value {
+        "contain"=>gtk::ContentFit::Contain,
+        "fill"=>gtk::ContentFit::Fill,
+        _=>gtk::ContentFit::Cover,
+    }
+}
 
 fn desktop_directory() -> PathBuf {
     if let Ok(output) = Command::new("xdg-user-dir").arg("DESKTOP").output() {
@@ -196,11 +218,10 @@ fn build(app: &Application) {
     window.set_exclusive_zone(0);
     let overlay = Overlay::new();
     overlay.add_css_class("melania-desktop-root");
-    let image_path = std::env::var_os("MELANIA_WALLPAPER")
-        .map(PathBuf::from).filter(|p| p.is_file())
-        .unwrap_or_else(|| PathBuf::from(WALLPAPER));
-    let wallpaper = Picture::for_filename(&image_path);
-    wallpaper.set_content_fit(gtk::ContentFit::Cover);
+    let initial_prefs=melania_config::load().unwrap_or_default();
+    let image_path=wallpaper_path(&initial_prefs);
+    let wallpaper=Picture::for_filename(&image_path);
+    wallpaper.set_content_fit(wallpaper_fit(&initial_prefs.desktop_wallpaper_fit));
     wallpaper.set_can_shrink(true);
     overlay.set_child(Some(&wallpaper));
     let layer = GtkBox::new(Orientation::Vertical, 12);
@@ -209,6 +230,7 @@ fn build(app: &Application) {
     layer.set_margin_start(18);
     layer.set_margin_top(20);
     layer.set_margin_bottom(64);
+    layer.set_visible(initial_prefs.desktop_show_icons);
     let grid = FlowBox::new();
     grid.set_orientation(Orientation::Vertical);
     grid.set_max_children_per_line(9);
@@ -225,6 +247,30 @@ fn build(app: &Application) {
     message.set_valign(Align::End);
     message.set_margin_bottom(70);
     overlay.add_overlay(&message);
+    // Real live reload: Settings writes the shared per-user XDG file, and
+    // this desktop changes only its own layer (never the host wallpaper).
+    // Retain all GTK updates on the main thread.
+    let current_prefs=Rc::new(RefCell::new(initial_prefs));
+    let live_prefs=current_prefs.clone();
+    let live_picture=wallpaper.clone();
+    let live_icons=layer.clone();
+    gtk::glib::timeout_add_local(Duration::from_millis(700),move ||{
+        if let Ok(next)=melania_config::load() {
+            let mut prior=live_prefs.borrow_mut();
+            if prior.desktop_wallpaper!=next.desktop_wallpaper {
+                let selected=gio::File::for_path(wallpaper_path(&next));
+                live_picture.set_file(Some(&selected));
+            }
+            if prior.desktop_wallpaper_fit!=next.desktop_wallpaper_fit {
+                live_picture.set_content_fit(wallpaper_fit(&next.desktop_wallpaper_fit));
+            }
+            if prior.desktop_show_icons!=next.desktop_show_icons {
+                live_icons.set_visible(next.desktop_show_icons);
+            }
+            *prior=next;
+        }
+        gtk::glib::ControlFlow::Continue
+    });
     let directory = desktop_directory();
     let selected: DesktopSelection = Rc::new(RefCell::new(Selection::default()));
     let icon_registry: IconRegistry = Rc::new(RefCell::new(Vec::new()));

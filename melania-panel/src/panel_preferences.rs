@@ -59,13 +59,14 @@ fn apply_preferences(
     bar.set_size_request(-1,i32::from(prefs.panel_height).saturating_sub(10));
     set_revealed(panel,prefs,revealed);
 
-    let popup_offset=i32::from(prefs.panel_height)+13;
-    // Keep the approved lower-edge offsets, not the incorrect earlier
-    // change that left a gap beside the Win7 Start menu.
-    relocate(start,top,if top {popup_offset}else{6});
-    relocate(quick,top,if top {popup_offset}else{65});
-    relocate(notifications,top,if top {popup_offset}else{65});
-    relocate(calendar,top,if top {popup_offset}else{58});
+    // The compositor accounts for the layer's exclusive top zone itself.
+    // Adding the entire panel height here would double that offset and leave
+    // an 80px gap above Start when the taskbar moves to the upper edge.
+    // Preserve all approved bottom-edge popup distances.
+    relocate(start,top,6);
+    relocate(quick,top,if top {12}else{65});
+    relocate(notifications,top,if top {12}else{65});
+    relocate(calendar,top,if top {12}else{58});
     install_opacity(opacity_provider,prefs);
 }
 
