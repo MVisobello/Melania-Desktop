@@ -24,11 +24,15 @@ libseat/logind completo.
   Creazione esclusiva di file/cartelle, rinomina e Cestino sono instradati
   attraverso il backend comune (PR #82); su Linux la rinomina locale conserva
   la garanzia atomica anti-sovrascrittura. I volumi GVfs montati sono accessibili
-  dalla barra laterale. Build Rust/GTK, Wayland e integrazione desktop passati.
+  dalla barra laterale. PR #83 aggiunge la connessione autenticata tramite
+  GtkMountOperation e i controlli Monta/Smonta/Espelli non forzati con conferma;
+  PR #84 mostra byte reali ed elementi completati durante le copie GVfs.
+  Build Rust/GTK, Wayland e integrazione desktop passati.
   Restano alcuni adapter PathBuf per le viste locali avanzate e le operazioni
-  POSIX specializzate; GVfs SMB/SFTP/WebDAV richiede ancora autenticazione,
-  test server reali e montaggio interattivo. Parità Nautilus **non completa**.
-  Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md).
+  POSIX specializzate, e servono ancora test reali con SMB/SFTP/WebDAV,
+  autenticazione e dispositivi rimovibili. Parità Nautilus **non completa**.
+  Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md)
+  e [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md).
 
 ## Avvio e sicurezza
 
