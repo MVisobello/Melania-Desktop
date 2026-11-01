@@ -37,11 +37,33 @@ valgono anche fuori dalla sessione Melania. Il cambio è possibile soltanto
 con un clic esplicito su "Imposta come predefinita", con esito visibile
 nella stessa pagina.
 
+## Impostazioni del pannello — prima integrazione funzionale
+
+La pagina `melania-settings xfce-panel` applica direttamente le
+preferenze al vero pannello GTK4 layer-shell:
+
+- Altezza da 52 a 96 pixel, con valore originale 52.
+- Barra in alto oppure in basso: Start, Quick Settings, notifiche e
+  calendario seguono il bordo scelto.
+- Nascondimento automatico: il layer-shell rimane mappato lasciando una
+  zona di richiamo di 3 pixel, così non perde il ruolo Wayland.
+- Opacità 40–100%, rispettando i colori dei tre temi Aero/Light/Dark.
+- Ripristino esplicito dei soli valori del pannello, senza cancellare
+  icone, temi, preferiti o configurazioni delle finestre.
+
+I controlli rileggono il file XDG al momento del salvataggio, conservano
+le altre impostazioni e aggiornano la taskbar in esecuzione. Il valore
+predefinito non modifica l'estetica già approvata. La funzione auto-hide
+richiede comunque un collaudo manuale approfondito nelle sessioni Linux
+reali, soprattutto per popup, dispositivi touchscreen e più monitor.
+
+Pannelli multipli e plugin di terze parti restano da sviluppare.
+
 ## Parità ancora da sviluppare
 
 - Desktop: sfondo per monitor/spazio, posizionamento icone, menu desktop.
 - Finestre: focus, decorazioni, scorciatoie personalizzate e opzioni compositor.
-- Pannello: dimensioni, posizione, auto-hide, elementi, plugin e più pannelli.
+- Pannello: editor dell'ordine dei singoli elementi, plugin, supporto più pannelli e ulteriore collaudo auto-hide.
 - Input: libinput mouse/touchpad, layout e ripetizione tastiera, mappature tasti.
 - Display: modi, rotazioni, profili monitor con rollback.
 - Energia: sleep, ibernazione, coperchio laptop, tasti e profili energia.
