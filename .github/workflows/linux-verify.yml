@@ -68,6 +68,10 @@ jobs:
         run: |
           set -o pipefail
           cargo check -p melania-files -p melania-settings -p melania-preview -p melania-panel -p melania-desktop-surface --all-targets 2>&1 | tee gtk-build.log
+      - name: Run Melania Files GIO backend and undo/redo unit tests
+        run: |
+          set -o pipefail
+          cargo test -p melania-files --bin melania-files 2>&1 | tee gtk-files-tests.log
       - name: Capture native GTK Settings with classic window controls
         run: |
           set -euo pipefail
@@ -92,6 +96,7 @@ jobs:
           name: gtk-build-log
           path: |
             gtk-build.log
+            gtk-files-tests.log
             gtk-panel-tests.log
             reports/melania-settings-gnome-style.png
             reports/settings-gtk.log
