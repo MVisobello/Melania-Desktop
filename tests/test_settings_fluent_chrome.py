@@ -23,7 +23,7 @@ class MelaniaDesignContract(unittest.TestCase):
         self.assertIn('stack.connect_visible_child_name_notify', source)
         self.assertIn('category_search.connect_changed', source)
         self.assertIn('saved_option(', source)
-        self.assertIn('melania_config::save(&preferences)', source)
+        self.assertIn("melania_config::save(&latest)", source)
         for category in ("appearance","desktop","workspaces","network",
                          "accessibility","shortcuts","system"):
             self.assertIn(f'"{category}"', source)
