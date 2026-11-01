@@ -165,6 +165,16 @@ fn experimental_drm() -> Result<(),Box<dyn Error>> {
                     }
                     Err(error)=>eprintln!("Melania DRM routes {}: {error}",path.display()),
                 }
+                // Stage 5: initialize a real GBM/EGL/GLES context from the
+                // same libseat-managed DRM descriptor, then drop it. This is
+                // capability detection only: no KMS surface or modesetting.
+                match melania_native::renderer::inspect_gbm_egl(device.device_fd().clone()) {
+                    Ok(capabilities)=>{
+                        println!("Melania GPU renderer: GBM={} EGL/GLES ready, DMA-BUF render formats={} (NO scanout)",
+                            capabilities.gbm_backend,capabilities.dmabuf_render_formats);
+                    }
+                    Err(error)=>eprintln!("Melania GPU renderer unavailable {}: {error}",path.display()),
+                }
                 // Device ownership and DRM master return to libseat on drop.
             }
             Err(error)=>{
