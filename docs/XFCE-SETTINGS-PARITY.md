@@ -26,7 +26,7 @@ La corrispondenza non va confusa con parità già ottenuta.
 | Audio | Volume uscita PipeWire, se disponibile |
 | Rete / Bluetooth | Informazioni NetworkManager e BlueZ |
 | Display | Enumerazione monitor e sensori, lettura |
-| Energia | Stato batterie, lettura |
+| Energia | Stato batterie e selezione esplicita di profili power-profiles-daemon, se disponibili |
 | App preferite | Browser http/https e gestore email mailto tramite GIO |
 | Sessione e avvio | Abilita/disabilita voci di autostart già presenti nell'XDG_CONFIG_HOME dell'utente, con salvataggio atomico e protezione symlink |
 | Associazioni MIME | Editor GIO per tipi comuni o MIME inserito dall'utente |
