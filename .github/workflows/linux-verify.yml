@@ -147,6 +147,12 @@ jobs:
             exit 1
           fi
           grep -q 'NATIVE_STAGE1_BLOCKED' native-stage1-denied.log
+          # Likewise the DRM path must not acquire a device on this runner.
+          if MELANIA_EXPERIMENTAL_SEAT=1 cargo run -p melania-native -- --experimental-drm > native-stage2-denied.log 2>&1; then
+            echo 'ERROR: native DRM inspection ran outside a dedicated TTY' >&2
+            exit 1
+          fi
+          grep -q 'NATIVE_STAGE1_BLOCKED' native-stage2-denied.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -168,3 +174,4 @@ jobs:
             native-stage1-tests.log
             native-stage1-capabilities.log
             native-stage1-denied.log
+            native-stage2-denied.log

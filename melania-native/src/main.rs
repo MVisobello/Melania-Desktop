@@ -2,9 +2,14 @@
 //! Must be invoked explicitly in a dedicated TTY or VM; never from a login
 //! manager and never as an automatic fallback from the nested compositor.
 use std::{env, error::Error, fs, os::unix::fs::FileTypeExt, path::Path, time::Duration};
-use smithay::backend::{
-    session::{libseat::LibSeatSession, Session, Event as SessionEvent},
-    udev::{UdevBackend, UdevEvent},
+use smithay::{
+    backend::{
+        drm::{DrmDevice, DrmDeviceFd},
+        session::{libseat::LibSeatSession, Session, Event as SessionEvent},
+        udev::{UdevBackend, UdevEvent},
+    },
+    reexports::rustix::fs::OFlags,
+    utils::DeviceFd,
 };
 use melania_native::NativeLifecycle;
 
@@ -104,6 +109,47 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     Ok(())
 }
 
+/// Stage2: a deliberate, short-lived DRM capability inspection. libseat owns
+/// the device open; KMS connectors are NOT reset, mode-set or rendered into.
+fn experimental_drm() -> Result<(),Box<dyn Error>> {
+    assert_dedicated_console();
+    let (mut session,notifier)=LibSeatSession::new()?;
+    let udev=UdevBackend::new(session.seat())?;
+    let mut scanned=0usize;
+    let mut initialized=0usize;
+    for (_,path) in udev.device_list() {
+        scanned+=1;
+        let descriptor=match session.open(
+            path,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        ) {
+            Ok(fd)=>fd,
+            Err(error)=>{
+                eprintln!("Melania DRM: unable to open {} via libseat: {error}",path.display());
+                continue;
+            },
+        };
+        let fd=DrmDeviceFd::new(DeviceFd::from(descriptor));
+        // false preserves existing connector state: no automatic blanking
+        // while inspecting available CRTC scanout controllers.
+        match DrmDevice::new(fd,false) {
+            Ok((device,_events))=>{
+                initialized+=1;
+                println!("Melania DRM {}: atomic={} CRTCs={}",
+                    path.display(),device.is_atomic(),device.crtcs().len());
+                // Device ownership and DRM master return to libseat on drop.
+            }
+            Err(error)=>{
+                eprintln!("Melania DRM: unable to initialize {}: {error}",path.display());
+            }
+        }
+    }
+    drop(notifier);
+    println!("Melania native stage2: scanned={scanned}, initialized={initialized}");
+    println!("NATIVE_SESSION_READY=false");
+    Ok(())
+}
+
 fn main() {
     match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [flag] if flag=="--capabilities" =>print_capabilities(),
@@ -113,8 +159,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        [flag] if flag=="--experimental-drm" =>{
+            if let Err(error)=experimental_drm(){
+                eprintln!("Melania native stage2: {error}");
+                std::process::exit(1);
+            }
+        }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm");
             std::process::exit(2);
         }
     }
