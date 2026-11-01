@@ -70,6 +70,18 @@ class FramebufferGemStage21(unittest.TestCase):
         self.assertIn("bash -n scripts/run-qemu-melania-native.sh", CI)
         self.assertIn("bash -n scripts/melania-qemu-native-guest.sh", CI)
 
+    def test_guest_serial_crlf_is_accepted_without_allowing_zero_handles(self):
+        # QEMU's serial console emits CRLF; grep '$' without allowing CR
+        # incorrectly marks a successful GEM acquisition as failed.
+        expression = r'^MELANIA_FB2_GEM_HANDLES_ACQUIRED=[1-9][0-9]*[[:space:]]*$'
+        self.assertIn(expression, HOST)
+        for value, expected in (("1\\r\\n", 0), ("13\\n", 0),
+                                ("0\\r\\n", 1), ("bogus\\r\\n", 1)):
+            run = subprocess.run(["grep", "-E", expression],
+                                 input="MELANIA_FB2_GEM_HANDLES_ACQUIRED="+value,
+                                 capture_output=True, text=True, timeout=5)
+            self.assertEqual(run.returncode, expected, value)
+
     def test_compiled_with_libdrm_in_existing_vm_not_on_host(self):
         self.assertIn('scripts/melania-qemu-fb2-probe.c',CI)
         self.assertIn('-o target/debug/melania-qemu-fb2-probe -ldrm',CI)
