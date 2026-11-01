@@ -35,6 +35,14 @@ class NativeStage1Contracts(unittest.TestCase):
 
     def test_state_machine_never_misrepresents_kms(self):
         self.assertIn('SessionEvent::PauseSession',STATE)
+        gate=(ROOT/"melania-native/src/frame_gate.rs").read_text()
+        self.assertIn("self.frame_gate.set_seat_active(false);",STATE)
+        self.assertIn("self.frame_gate.set_seat_active(true);",STATE)
+        self.assertIn("self.frame_gate.invalidate();",STATE)
+        self.assertIn("pause_resume_invalidates_old_gpu_fences",gate)
+        self.assertIn("gpu_hotplug_rejects_prior_candidate",gate)
+        self.assertIn("pub fn actual_kms_submission_enabled(&self)->bool {false}",gate)
+        self.assertNotIn("page_flip(",gate)
         self.assertIn('SessionEvent::ActivateSession',STATE)
         self.assertIn('DeviceChange::Added',STATE)
         self.assertIn('DeviceChange::Removed',STATE)
