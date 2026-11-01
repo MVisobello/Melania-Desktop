@@ -8,6 +8,8 @@ use std::{cell::{Cell,RefCell},collections::BTreeSet,rc::Rc,sync::{Arc,atomic::{
           time::Duration};
 use super::gio_backend::{self,Item};
 use super::gio_mount;
+use melania_files_core as model;
+use std::time::{SystemTime,UNIX_EPOCH};
 
 #[derive(Clone)]
 struct Remote {
@@ -26,6 +28,11 @@ struct Remote {
     status: Label,
     title: Label,
     hidden: Rc<Cell<bool>>,
+    sort_by:Rc<Cell<model::SortBy>>,
+    descending:Rc<Cell<bool>>,
+    monitor:Rc<RefCell<Option<gio::FileMonitor>>>,
+    monitor_uri:Rc<RefCell<Option<String>>>,
+    refresh_pending:Rc<Cell<bool>>,
     generation: Rc<Cell<u64>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     job_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
@@ -45,6 +52,10 @@ fn navigation(remote:&Remote,uri:String,remember:bool) {
         remote.forward.borrow_mut().clear();
     }
     *remote.current.borrow_mut()=uri;
+    // A monitor from the old folder must never trigger changes in the new one.
+    if let Some(previous)=remote.monitor.borrow_mut().take(){previous.cancel();}
+    remote.monitor_uri.borrow_mut().take();
+    remote.refresh_pending.set(false);
     refresh(remote);
 }
 fn refresh(remote:&Remote) {
@@ -68,11 +79,14 @@ fn refresh(remote:&Remote) {
     remote.status.set_text("Connessione e lettura in corso…");
     let filter=remote.search.text().to_string();
     let show_hidden=remote.hidden.get();
+    let sort=remote.sort_by.get();
+    let descending=remote.descending.get();
     let cancelled=Arc::new(AtomicBool::new(false));
     *remote.listing_cancel.borrow_mut()=Some(cancelled.clone());
     let (tx,rx)=std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let output=gio_backend::list_uri(&uri,&filter,show_hidden,&cancelled);
+        let output=gio_backend::list_uri_sorted(&uri,&filter,show_hidden,
+            sort,descending,&cancelled);
         let _=tx.send(output);
     });
     let ui=remote.clone();
@@ -84,6 +98,7 @@ fn refresh(remote:&Remote) {
                 *ui.visible_uris.borrow_mut()=listing.items.iter()
                     .map(|item|item.uri.clone()).collect();
                 for item in listing.items {render_row(&ui,item);}
+                watch_current_directory(&ui);
                 ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
                     if listing.truncated {" (limite visualizzazione raggiunto)"} else {""}));
                 if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some() {
@@ -103,6 +118,108 @@ fn refresh(remote:&Remote) {
         }
     });
 }
+fn format_size(size:u64)->String {
+    if size<1024{return format!("{size} B");}
+    let (value,suffix)=if size<1024*1024{(size as f64/1024.0,"KiB")}
+        else if size<1024*1024*1024{(size as f64/(1024*1024) as f64,"MiB")}
+        else {(size as f64/(1024u64.pow(3) as f64),"GiB")};
+    format!("{value:.1} {suffix}")
+}
+fn format_modified(time:Option<SystemTime>)->String {
+    let Some(seconds)=time.and_then(|t|t.duration_since(UNIX_EPOCH).ok())
+        .and_then(|d|i64::try_from(d.as_secs()).ok()) else{return "—".into();};
+    glib::DateTime::from_unix_local(seconds).ok()
+        .and_then(|date|date.format("%d/%m/%Y %H:%M").ok())
+        .map(|date|date.to_string()).unwrap_or_else(||"—".into())
+}
+
+/// Use the provider's native GIO monitor when available. Unsupported GVfs
+/// providers keep manual F5, and no watch is established until the first
+/// successful enumeration. Debounce noisy change storms to one refresh.
+fn watch_current_directory(remote:&Remote) {
+    let uri=remote.current.borrow().clone();
+    if remote.monitor_uri.borrow().as_deref()==Some(uri.as_str()){return;}
+    if let Some(old)=remote.monitor.borrow_mut().take(){old.cancel();}
+    *remote.monitor_uri.borrow_mut()=Some(uri.clone());
+    if let Ok(monitor)=gio::File::for_uri(&uri).monitor_directory(
+        gio::FileMonitorFlags::NONE,None::<&gio::Cancellable>) {
+        let state=remote.clone();
+        monitor.connect_changed(move |_,_,_,_|{
+            if state.current.borrow().as_str()!=uri {return;}
+            if state.refresh_pending.replace(true){return;}
+            let next=state.clone();
+            glib::timeout_add_local_once(Duration::from_millis(260),move ||{
+                next.refresh_pending.set(false);
+                if next.job_cancel.borrow().is_none() {refresh(&next);}
+            });
+        });
+        *remote.monitor.borrow_mut()=Some(monitor);
+    }
+}
+
+/// Metadata is queried off the GTK thread; the window owns no file handles
+/// and never recursively scans directories or follows symlinks.
+fn open_properties(remote:&Remote,uri:String) {
+    let window=gtk::Window::builder().title("Proprietà — Melania Files")
+        .default_width(460).default_height(370).build();
+    let content=GtkBox::new(Orientation::Vertical,10);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+    content.set_margin_start(16);
+    content.set_margin_end(16);
+    let heading=Label::new(Some("Caricamento proprietà GIO…"));
+    heading.set_xalign(0.0);
+    content.append(&heading);
+    let fields=Label::new(Some("Lettura dei metadati dal provider…"));
+    fields.set_xalign(0.0);
+    fields.set_wrap(true);
+    fields.set_selectable(true);
+    content.append(&fields);
+    let close=Button::with_label("Chiudi");
+    let win=window.clone();
+    close.connect_clicked(move |_|win.close());
+    content.append(&close);
+    window.set_child(Some(&content));
+    window.set_transient_for(remote.rows.root()
+        .and_then(|root|root.downcast::<gtk::Window>().ok()).as_ref());
+    window.present();
+    let cancelled=Rc::new(Cell::new(false));
+    let closed=cancelled.clone();
+    window.connect_close_request(move |_|{
+        closed.set(true);
+        glib::Propagation::Proceed
+    });
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result=gio_backend::query_details(&uri);
+        let _=tx.send(result);
+    });
+    glib::timeout_add_local(Duration::from_millis(45),move ||{
+        if cancelled.get(){return glib::ControlFlow::Break;}
+        match rx.try_recv(){
+            Ok(Ok(detail))=>{
+                heading.set_text(&detail.name);
+                let kind=if detail.is_directory{"Cartella"}
+                    else if detail.symlink{"Collegamento"}else{"File"};
+                let size=detail.size.map(format_size).unwrap_or_else(||"—".into());
+                fields.set_text(&format!(
+                    "Tipo: {kind}\nMIME: {}\nDimensione: {size}\nUltima modifica: {}\nLettura: {}\nScrittura: {}\nEsecuzione: {}",
+                    detail.content_type,format_modified(detail.modified),
+                    if detail.can_read{"consentita"}else{"non consentita o non disponibile"},
+                    if detail.can_write{"consentita"}else{"non consentita o non disponibile"},
+                    if detail.can_execute{"consentita"}else{"non consentita o non disponibile"}));
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error))=>{fields.set_text(&error);glib::ControlFlow::Break}
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                fields.set_text("Impossibile caricare i metadati.");
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
 fn render_row(remote:&Remote,item:Item) {
     let button=Button::new();
     button.add_css_class("files-list-row");
@@ -111,7 +228,8 @@ fn render_row(remote:&Remote,item:Item) {
     let row=GtkBox::new(Orientation::Horizontal,10);
     row.set_margin_top(4);
     row.set_margin_bottom(4);
-    let icon=gtk::Image::from_icon_name(if item.directory {"folder-symbolic"}else {"text-x-generic-symbolic"});
+    let icon=gtk::Image::from_icon_name(if item.directory {"folder-symbolic"}
+        else if item.symlink{"emblem-symbolic-link"}else {"text-x-generic-symbolic"});
     icon.set_pixel_size(22);
     row.append(&icon);
     let name=Label::new(Some(&item.name));
@@ -119,9 +237,17 @@ fn render_row(remote:&Remote,item:Item) {
     name.set_hexpand(true);
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     row.append(&name);
-    let size=Label::new(Some(if item.directory {"Cartella"} else {"File"}));
-    size.set_width_chars(9);
+    let size=Label::new(Some(if item.directory {"—"} else {"0"}));
+    size.set_text(&if item.directory{"—".into()}else{format_size(item.size)});
+    size.set_width_chars(10);
     row.append(&size);
+    let mime=Label::new(Some(if item.directory{"Cartella"}else{&item.content_type}));
+    mime.set_width_chars(16);
+    mime.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    row.append(&mime);
+    let date=Label::new(Some(&format_modified(item.modified)));
+    date.set_width_chars(17);
+    row.append(&date);
     button.set_child(Some(&row));
     remote.row_buttons.borrow_mut().push((item.uri.clone(),button.clone()));
     let modifiers=Rc::new(Cell::new(gdk::ModifierType::empty()));
@@ -325,6 +451,17 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     search.set_placeholder_text(Some("Filtra…"));
     search.set_width_chars(16);
     toolbar.append(&search);
+    let sort=gtk::DropDown::from_strings(&[
+        "Nome","Ultima modifica","Dimensione","Tipo"]);
+    sort.set_tooltip_text(Some("Ordina con i metadati GIO, cartelle sempre prima"));
+    sort.set_selected(0);
+    toolbar.append(&sort);
+    let descending=gtk::CheckButton::with_label("↓");
+    descending.set_tooltip_text(Some("Inverti ordinamento, mantenendo le cartelle in alto"));
+    toolbar.append(&descending);
+    let show_hidden=gtk::CheckButton::with_label("Nascosti");
+    show_hidden.set_tooltip_text(Some("Mostra file nascosti (Ctrl+H)"));
+    toolbar.append(&show_hidden);
     root.append(&toolbar);
 
     let actionbar=GtkBox::new(Orientation::Horizontal,6);
@@ -344,6 +481,7 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     folder_field.set_width_chars(16);
     let folder=Button::with_label("Nuova cartella");
     let trash=Button::with_label("Cestino");
+    let properties=Button::with_label("Proprietà");
     let add_bookmark=Button::with_label("☆ Preferito");
     let remove_bookmark=Button::with_label("− Preferito");
     let bookmarks=Button::with_label("Preferiti rete");
@@ -356,6 +494,7 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     actionbar.append(&folder_field);
     actionbar.append(&folder);
     actionbar.append(&trash);
+    actionbar.append(&properties);
     actionbar.append(&add_bookmark);
     actionbar.append(&remove_bookmark);
     actionbar.append(&bookmarks);
@@ -394,6 +533,11 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         row_buttons:Rc::new(RefCell::new(Vec::new())),
         rows, location, search, status, title:tab_title,
         hidden:Rc::new(Cell::new(false)),
+        sort_by:Rc::new(Cell::new(model::SortBy::Name)),
+        descending:Rc::new(Cell::new(false)),
+        monitor:Rc::new(RefCell::new(None)),
+        monitor_uri:Rc::new(RefCell::new(None)),
+        refresh_pending:Rc::new(Cell::new(false)),
         generation:Rc::new(Cell::new(0)),
         listing_cancel:Rc::new(RefCell::new(None)),
         job_cancel:Rc::new(RefCell::new(None)),
@@ -430,6 +574,21 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
             }
             Err(error)=>ui.status.set_text(&error),
         }
+    });
+    let ui=state.clone();
+    sort.connect_selected_notify(move |drop|{
+        ui.sort_by.set(model::SortBy::from_index(drop.selected()));
+        refresh(&ui);
+    });
+    let ui=state.clone();
+    descending.connect_toggled(move |toggle|{
+        ui.descending.set(toggle.is_active());
+        refresh(&ui);
+    });
+    let ui=state.clone();
+    show_hidden.connect_toggled(move |toggle|{
+        ui.hidden.set(toggle.is_active());
+        refresh(&ui);
     });
     let ui=state.clone();
     state.location.connect_activate(move |input| {
@@ -557,6 +716,15 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         });
     });
     let ui=state.clone();
+    properties.connect_clicked(move |_|{
+        let selected=ui.selected_paths.borrow();
+        if selected.len()!=1 {
+            ui.status.set_text("Seleziona un solo elemento per visualizzarne le proprietà.");
+        }else if let Some(uri)=selected.iter().next(){
+            open_properties(&ui,uri.clone());
+        }
+    });
+    let ui=state.clone();
     add_bookmark.connect_clicked(move |_|{
         let uri=ui.current.borrow().clone();
         match gio_backend::add_bookmark(&uri){
@@ -605,15 +773,26 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let search_entry=state.search.clone();
     let copy_button=copy.clone();
     let paste_button=paste.clone();
+    let hidden_button=show_hidden.clone();
+    let properties_button=properties.clone();
     keyboard.connect_key_pressed(move |_,key,_,modifiers|{
         if key==gdk::Key::F5 {refresh_button.emit_clicked();return glib::Propagation::Stop;}
         if modifiers.contains(gdk::ModifierType::CONTROL_MASK){
+            if key==gdk::Key::h {
+                hidden_button.set_active(!hidden_button.is_active());
+                return glib::Propagation::Stop;
+            }
             if key==gdk::Key::l {location_entry.grab_focus();location_entry.select_region(0,-1);return glib::Propagation::Stop;}
             if key==gdk::Key::f {search_entry.grab_focus();return glib::Propagation::Stop;}
             if !location_entry.has_focus() && !search_entry.has_focus(){
                 if key==gdk::Key::c {copy_button.emit_clicked();return glib::Propagation::Stop;}
                 if key==gdk::Key::v {paste_button.emit_clicked();return glib::Propagation::Stop;}
             }
+        }
+        if modifiers.contains(gdk::ModifierType::ALT_MASK)
+            && key==gdk::Key::Return {
+            properties_button.emit_clicked();
+            return glib::Propagation::Stop;
         }
         if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
             && key==gdk::Key::a
@@ -631,6 +810,15 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         glib::Propagation::Proceed
     });
     root.add_controller(keyboard);
+    // Close file monitors on tab teardown to break GIO callback ownership
+    // cycles; monitors must not hold removed GTK tabs alive.
+    let cleanup=state.clone();
+    root.connect_unrealize(move |_| {
+        if let Some(monitor)=cleanup.monitor.borrow_mut().take(){monitor.cancel();}
+        if let Some(cancel)=cleanup.listing_cancel.borrow_mut().take(){
+            cancel.store(true,Ordering::Release);
+        }
+    });
     refresh(&state);
     root
 }
