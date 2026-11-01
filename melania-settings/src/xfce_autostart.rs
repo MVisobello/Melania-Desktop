@@ -131,18 +131,6 @@ pub fn session_page()->GtkBox {
     let body=GtkBox::new(Orientation::Vertical,12);
     body.add_css_class("settings-body");
     body.append(&make_label("Sessione e avvio","settings-heading"));
-    body.append(&make_label(
-        "Gestisci l'avvio automatico delle applicazioni configurate dall'utente, come in XFCE.",
-        "settings-subtitle"));
-    body.append(&make_label(
-        "I controlli modificano i file XDG dell'utente e valgono per tutte le sessioni Linux. "
-        ,"settings-row-description"));
-    body.append(&make_label(
-        "In questa fase sono gestite solo le voci già presenti nella cartella personale autostart; "
-        ,"settings-row-description"));
-    body.append(&make_label(
-        "le applicazioni di sistema, i servizi e il ripristino della sessione restano da integrare.",
-        "settings-row-description"));
     let Some(dir)=autostart_dir() else {
         body.append(&make_label("Directory utente XDG non disponibile.","settings-row-description"));
         return body;

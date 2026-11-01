@@ -24,13 +24,6 @@ pub fn page()->GtkBox {
     let body=GtkBox::new(Orientation::Vertical,12);
     body.add_css_class("settings-body");
     body.append(&label("Scrivania e sfondo","settings-heading"));
-    body.append(&label(
-        "Cambia lo sfondo della vera scrivania Melania e la visualizzazione delle icone, come in XFCE.",
-        "settings-subtitle"));
-    body.append(&label(
-        "La modifica non cambia lo sfondo di GNOME, XFCE o degli altri desktop. File PNG, JPEG, WebP e BMP fino a 40 MB.",
-        "settings-row-description"));
-
     let path=Entry::new();
     path.set_text(&prefs.desktop_wallpaper);
     path.set_placeholder_text(Some("Vuoto = sfondo originale di Melania"));
@@ -94,7 +87,7 @@ pub fn page()->GtkBox {
     actions.append(&apply);
     actions.append(&reset);
     body.append(&actions);
-    let feedback=label("La scrivania aggiorna lo sfondo automaticamente.",
+    let feedback=label("",
         "settings-row-description");
     body.append(&feedback);
 
@@ -144,10 +137,6 @@ pub fn page()->GtkBox {
             Err(error)=>status.set_text(&format!("Impossibile ripristinare: {error}")),
         }
     });
-    body.append(&label("Da completare","settings-section-heading"));
-    body.append(&label(
-        "Sfondi diversi per monitor o desktop virtuale, ordinamento manuale delle icone e cambio automatico dello sfondo.",
-        "settings-row-description"));
     body
 }
 

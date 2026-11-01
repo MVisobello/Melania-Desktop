@@ -12,7 +12,7 @@ fn label(value: &str, class: &str) -> Label {
     label.add_css_class(class);
     label
 }
-fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
+fn page(title: &str, icon: &str) -> GtkBox {
     let page = GtkBox::new(Orientation::Vertical, 7);
     page.add_css_class("settings-body");
     let heading = GtkBox::new(Orientation::Horizontal, 11);
@@ -22,7 +22,6 @@ fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
     heading.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 2);
     words.append(&label(title, "settings-heading"));
-    words.append(&label(subtitle, "settings-subtitle"));
     heading.append(&words);
     page.append(&heading);
     page
@@ -166,9 +165,7 @@ fn os_name() -> String {
 }
 
 pub fn overview(stack: &Stack) -> GtkBox {
-    let system = page("Sistema",
-        "Gestisci le opzioni del sistema e i dispositivi del tuo computer.",
-        "computer");
+    let system = page("Sistema", "computer");
     group(&system, "Hardware");
     let hardware = GtkBox::new(Orientation::Vertical, 0);
     hardware.add_css_class("settings-group-card");
@@ -195,7 +192,7 @@ pub fn overview(stack: &Stack) -> GtkBox {
     system
 }
 pub fn add_pages(stack: &Stack) {
-    let display = page("Schermo", "Informazioni sul display della sessione.", "video-display");
+    let display = page("Schermo", "video-display");
     let monitor_count = gtk::gdk::Display::default()
         .map(|d| d.monitors().n_items()).unwrap_or(0);
     group(&display, "Monitor");
@@ -221,7 +218,7 @@ pub fn add_pages(stack: &Stack) {
         "Non ancora disponibili: occorre una connessione al compositore Wayland, con sincronizzazione di touchscreen, finestre e area utile. Nessun comando esterno modifica lo schermo."));
     stack.add_titled(&display, Some("display"), "Schermo");
 
-    let audio = page("Audio", "Volume e uscita audio tramite PipeWire/WirePlumber.", "audio-card");
+    let audio = page("Audio", "audio-card");
     group(&audio, "Uscita audio");
     let current_volume = read_command("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
         .and_then(|output| parse_volume(&output));
@@ -260,7 +257,7 @@ pub fn add_pages(stack: &Stack) {
     }
     stack.add_titled(&audio, Some("audio"), "Audio");
 
-    let power = page("Alimentazione", "Stato e risparmio energetico.", "battery");
+    let power = page("Alimentazione", "battery");
     group(&power, "Batteria");
     let charge = battery_status();
     power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
@@ -318,7 +315,7 @@ pub fn add_pages(stack: &Stack) {
         "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
     stack.add_titled(&power, Some("power"), "Alimentazione");
 
-    let storage = page("Archiviazione", "Informazioni sulle unità locali.", "drive-harddisk");
+    let storage = page("Archiviazione", "drive-harddisk");
     group(&storage, "Dischi");
     let space = root_storage();
     storage.append(&info_row("drive-harddisk", "Filesystem principale", &space));
@@ -326,7 +323,7 @@ pub fn add_pages(stack: &Stack) {
         "Le operazioni sui dischi rimangono affidate alle utility del sistema operativo."));
     stack.add_titled(&storage, Some("storage"), "Archiviazione");
 
-    let bluetooth = page("Bluetooth", "Connessioni e periferiche Bluetooth.", "bluetooth");
+    let bluetooth = page("Bluetooth", "bluetooth");
     group(&bluetooth, "Stato");
     bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
         &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
@@ -335,7 +332,7 @@ pub fn add_pages(stack: &Stack) {
     // controls; never misrepresent a setting as applied to the host.
 
 
-    let applications = page("App", "Programmi e preferenze applicative.", "application-x-executable");
+    let applications = page("App", "application-x-executable");
     group(&applications, "Applicazioni");
     applications.append(&info_row("applications-other", "Applicazioni installate",
         "Le applicazioni disponibili compaiono nel menu Start di Melania."));
@@ -343,7 +340,7 @@ pub fn add_pages(stack: &Stack) {
         "Le associazioni dei file sono gestite tramite XDG e le impostazioni delle singole applicazioni."));
     stack.add_titled(&applications, Some("applications"), "App");
 
-    let account = page("Account", "Informazioni sull'utente attuale.", "avatar-default");
+    let account = page("Account", "avatar-default");
     group(&account, "Utente");
     account.append(&info_row("avatar-default", "Account corrente",
         &env::var("USER").unwrap_or_else(|_| "Utente non disponibile".into())));
@@ -351,7 +348,7 @@ pub fn add_pages(stack: &Stack) {
         "Password e autorizzazioni sono gestite dal sistema Linux; Melania non modifica le credenziali."));
     stack.add_titled(&account, Some("account"), "Account");
 
-    let datetime = page("Data e ora", "Orologio, calendario e fuso orario.", "x-office-calendar");
+    let datetime = page("Data e ora", "x-office-calendar");
     group(&datetime, "Sistema");
     datetime.append(&info_row("x-office-calendar", "Ora del sistema",
         &read_command("date", &["+%d/%m/%Y %H:%M %Z"])
@@ -360,13 +357,13 @@ pub fn add_pages(stack: &Stack) {
         "Data e fuso orario vengono regolati dai servizi del sistema operativo."));
     stack.add_titled(&datetime, Some("datetime"), "Data e ora");
 
-    let devices = page("Dispositivi", "Periferiche collegate al computer.", "input-keyboard");
+    let devices = page("Dispositivi", "input-keyboard");
     group(&devices, "Hardware");
     devices.append(&info_row("input-keyboard", "Input e periferiche",
         "Tastiera, mouse e dispositivi USB vengono gestiti dal sottosistema Linux."));
     stack.add_titled(&devices, Some("devices"), "Dispositivi");
 
-    let privacy = page("Privacy e sicurezza", "Protezione dei dati e permessi.", "security-high");
+    let privacy = page("Privacy e sicurezza", "security-high");
     group(&privacy, "Privacy");
     privacy.append(&info_row("security-high", "Permessi applicazioni",
         "Le autorizzazioni delle applicazioni sono amministrate dai servizi e dai portali di Linux."));
@@ -395,13 +392,13 @@ pub fn add_pages(stack: &Stack) {
     privacy.append(&erase_feedback);
     stack.add_titled(&privacy, Some("privacy"), "Privacy");
 
-    let region = page("Lingua e regione", "Impostazioni internazionali.", "preferences-desktop-locale");
+    let region = page("Lingua e regione", "preferences-desktop-locale");
     group(&region, "Lingua");
     region.append(&info_row("preferences-desktop-locale", "Lingua della sessione",
         &env::var("LANG").unwrap_or_else(|_| "Locale non disponibile".into())));
     stack.add_titled(&region, Some("region"), "Lingua e regione");
 
-    let about = page("Informazioni", "Informazioni su Melania Desktop.", "dialog-information");
+    let about = page("Informazioni", "dialog-information");
     group(&about, "Versione");
     about.append(&info_row("computer", "Melania Desktop",
         &format!("Versione {} · progetto sperimentale GTK 4 / Wayland",

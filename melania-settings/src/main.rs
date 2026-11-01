@@ -61,13 +61,12 @@ fn saved_option(
     row
 }
 
-fn page(title: &str, description: &str) -> GtkBox {
+fn page(title: &str) -> GtkBox {
     let body = GtkBox::new(Orientation::Vertical, 12);
     body.add_css_class("settings-body");
     let introduction = GtkBox::new(Orientation::Vertical, 5);
     introduction.add_css_class("settings-introduction");
     introduction.append(&text(title, "settings-heading"));
-    introduction.append(&text(description, "settings-subtitle"));
     body.append(&introduction);
     body
 }
@@ -196,8 +195,7 @@ fn build_ui(
     let apply_style: Rc<dyn Fn(&Preferences)> = Rc::new(move |p| {
         refresh_theme(&themed_root, &themed_header, p);
     });
-    let appearance = page("Aspetto", "Personalizza colori, interfaccia e icone di Melania Desktop.");
-    appearance.append(&section("Tema dell'interfaccia"));
+    let appearance = page("Aspetto");
     let appearance_row = GtkBox::new(Orientation::Horizontal, 14);
     appearance_row.add_css_class("settings-card");
     let appearance_summary = GtkBox::new(Orientation::Vertical, 3);
@@ -226,7 +224,6 @@ fn build_ui(
     });
     appearance_row.append(&appearance_picker);
     appearance.append(&appearance_row);
-    appearance.append(&text("Il tema viene applicato subito alle Impostazioni. Files e barra delle applicazioni lo leggeranno alla prossima apertura.", "settings-subtitle"));
     appearance.append(&section("Comportamento"));
     appearance.append(&saved_option("Animazioni GTK", "Attiva le transizioni nelle finestre Melania, salvo la preferenza Riduci movimento.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, Some(apply_style.clone())));
     appearance.append(&section("Pacchetto di icone"));
@@ -299,17 +296,14 @@ fn build_ui(
     });
     appearance.append(&save_blur);
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
-    let desktop = page("Desktop e finestre", "Gestisci il comportamento delle finestre nella sessione Melania.");
-    desktop.append(&section("Finestre"));
+    let desktop = page("Desktop e finestre");
     desktop.append(&saved_option("Snap finestre", "Aggancio ai bordi gestito dal compositore dal prossimo avvio della sessione.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
     desktop.append(&saved_option("Anteprime sulla barra", "Catture GPU delle sole finestre della sessione Melania nel selettore al passaggio del mouse. Riavvia il pannello.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
     desktop.append(&saved_option("Raggruppa finestre nella barra", "Un pulsante per applicazione con menu delle sue finestre. Richiede il riavvio del pannello Melania.", prefs.borrow().group_windows, prefs.clone(), |p,v| p.group_windows = v, None));
-    desktop.append(&text("Lo Snap salvato viene letto dal compositore al successivo avvio. Le anteprime sulla barra restano in sviluppo.", "settings-subtitle"));
     stack.add_titled(&desktop, Some("desktop"), "Desktop");
     // Saved workspace count is applied on compositor/panel startup.
     // Changing mappings while windows are open would risk losing them.
-    let workspaces = page("Spazi di lavoro", "Organizza finestre e applicazioni su desktop separati.");
-    workspaces.append(&section("Organizzazione"));
+    let workspaces = page("Spazi di lavoro");
     workspaces.append(&text("Numero di spazi di lavoro fissi (da 1 a 8)", "settings-hero"));
     let workspace_picker = SpinButton::with_range(1.0, 8.0, 1.0);
     workspace_picker.set_value(prefs.borrow().workspace_count as f64);
@@ -317,10 +311,6 @@ fn build_ui(
     workspace_picker.set_halign(gtk::Align::Start);
     workspace_picker.add_css_class("settings-workspace-picker");
     workspaces.append(&workspace_picker);
-    workspaces.append(&text(
-        "Il nuovo numero si applica dopo il riavvio della sessione Melania, senza spostare le finestre già aperte.",
-        "settings-subtitle"
-    ));
     let apply_workspaces = Button::with_label("Salva numero di spazi di lavoro");
     apply_workspaces.add_css_class("settings-save");
     apply_workspaces.set_halign(gtk::Align::Start);
@@ -342,8 +332,7 @@ fn build_ui(
     workspaces.append(&apply_workspaces);
     workspaces.append(&workspace_feedback);
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
-    let network = page("Rete e Bluetooth", "Consulta le informazioni sulle connessioni.");
-    network.append(&section("Connessioni"));
+    let network = page("Rete");
     let live_network = text(&gnome_pages::network_status(), "settings-row-description");
     live_network.add_css_class("settings-card");
     network.append(&live_network);
@@ -356,10 +345,8 @@ fn build_ui(
         current_network.set_text(&gnome_pages::network_status());
     });
     network.append(&refresh_network);
-    network.append(&text("Stato letto da NetworkManager su richiesta. Melania non modifica le connessioni di rete senza un'azione esplicita.", "settings-subtitle"));
     stack.add_titled(&network, Some("network"), "Rete");
-    let accessibility = page("Accessibilità", "Regola la leggibilità e il movimento dell'interfaccia.");
-    accessibility.append(&section("Visione e movimento"));
+    let accessibility = page("Accessibilità");
     accessibility.append(&saved_option(
         "Riduci movimento",
         "Disattiva le animazioni GTK di Melania; non cambia quelle delle altre applicazioni Linux.",
@@ -372,23 +359,19 @@ fn build_ui(
         prefs.borrow().high_contrast, prefs.clone(),
         |p,v| p.high_contrast = v, Some(apply_style.clone())
     ));
-    accessibility.append(&text("Le preferenze dei pannelli si applicano al prossimo avvio; questa finestra cambia subito.", "settings-subtitle"));
     stack.add_titled(&accessibility, Some("accessibility"), "Accessibilità");
-    let keyboard = page("Scorciatoie", "Navigazione rapida nella sessione Wayland di Melania.");
-    keyboard.append(&section("Tastiera"));
+    let keyboard = page("Scorciatoie");
     keyboard.append(&text("Alt + Tab  ·  Finestra successiva", "settings-hero"));
     keyboard.append(&text("Alt + Maiusc + Tab  ·  Finestra precedente", "settings-subtitle"));
     keyboard.append(&text("Ctrl + Alt + Freccia sinistra/destra  ·  Cambia spazio di lavoro", "settings-hero"));
     keyboard.append(&text("Super + E  ·  Apri Melania Files", "settings-hero"));
-    keyboard.append(&text("Le combinazioni sono intercettate dal compositore Melania. Non modificano le scorciatoie del desktop Linux ospitante. La personalizzazione dei tasti arriverà in una milestone successiva.", "settings-subtitle"));
     stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
     // Summary and category pages reflect actual status, without fake hardware switches.
     gnome_pages::add_pages(&stack);
     xfce_pages::add_pages(&stack);
     let system = gnome_pages::overview(&stack);
     stack.add_titled(&system, Some("system"), "Sistema");
-    let notifications = page("Notifiche", "Gestisci il comportamento delle notifiche di Melania.");
-    notifications.append(&section("Avvisi"));
+    let notifications = page("Notifiche");
     notifications.append(&saved_option("Non disturbare",
         "Silenzia gli avvisi di Melania finché non disattivi l'opzione.",
         prefs.borrow().do_not_disturb, prefs.clone(), |p,v| p.do_not_disturb=v, None));
@@ -397,41 +380,21 @@ fn build_ui(
     // so a second invocation can navigate the existing Settings window.
     *shared_stack.borrow_mut() = Some(stack.clone());
     if is_valid_page(initial_page) {
-        stack.set_visible_child_name(initial_page);
+        stack.set_visible_child_name(xfce_pages::canonical_page(initial_page));
     }
     let navigation: Rc<RefCell<Vec<(Button, &'static str)>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_headings: Rc<RefCell<Vec<Label>>> = Rc::new(RefCell::new(Vec::new()));
     let navigation_labels: Rc<RefCell<Vec<(Button, String)>>> = Rc::new(RefCell::new(Vec::new()));
-    for (name, target, icon_name) in [
-        ("Sistema", "system", "computer"),
-        ("Rete", "network", "network-workgroup"),
-        ("Bluetooth", "bluetooth", "bluetooth"),
-        ("Aspetto", "appearance", "preferences-desktop-theme"),
-        ("Notifiche", "notifications", "preferences-system-notifications"),
-        ("App", "applications", "applications-other"),
-        ("Account", "account", "avatar-default"),
-        ("Data e ora", "datetime", "x-office-calendar"),
-        ("Energia", "power", "battery"),
-        ("Audio", "audio", "audio-volume-high"),
-        ("Dispositivi", "devices", "input-keyboard"),
-        ("Privacy e sicurezza", "privacy", "security-high"),
-        ("Lingua e regione", "region", "preferences-desktop-locale"),
-        ("Accessibilità", "accessibility", "preferences-desktop-accessibility"),
-        ("Informazioni", "about", "dialog-information"),
-        ("Desktop e finestre", "desktop", "user-desktop"),
-        ("Spazi di lavoro", "workspaces", "view-grid"),
-        ("Scorciatoie", "shortcuts", "input-keyboard"),
-        ("Schermo", "display", "video-display"),
-        ("Archiviazione", "storage", "drive-harddisk"),
-        ("Impostazioni complete XFCE", "xfce", "preferences-system"),
-    ] {
+    // Every real Settings page appears in this sidebar; no extra catalogue
+    // is required to discover a live control. The same registry validates CLI pages.
+    for &(name, target, icon_name) in SETTINGS_NAVIGATION.iter() {
         // Group headings make the long navigation easier to scan.
         let group = match target {
             "system" => Some("SISTEMA"),
             "appearance" => Some("PERSONALIZZAZIONE"),
-            "account" => Some("UTENTI E APPLICAZIONI"),
-            "desktop" => Some("DESKTOP E FINESTRE"),
-            "xfce" => Some("CATALOGO COMPLETO XFCE 4.20"),
+            "applications" => Some("APPLICAZIONI"),
+            "account" => Some("ACCOUNT E PRIVACY"),
+            "region" => Some("ALTRE IMPOSTAZIONI"),
             _ => None,
         };
         if let Some(group) = group {
@@ -455,7 +418,7 @@ fn build_ui(
         button.set_child(Some(&row));
         let navigation_stack = stack.clone();
         button.connect_clicked(move |_| navigation_stack.set_visible_child_name(target));
-        if target == initial_page { button.add_css_class("active-section"); }
+        if target == xfce_pages::canonical_page(initial_page) { button.add_css_class("active-section"); }
         navigation.borrow_mut().push((button.clone(), target));
         navigation_labels.borrow_mut().push((button.clone(), name.to_lowercase()));
         navigation_list.append(&button);
@@ -541,13 +504,39 @@ fn setup_melania_icon_theme() {
     }
 }
 
-const SETTINGS_PAGES: [&str; 21] = [
-    "system", "network", "bluetooth", "appearance", "notifications", "applications",
-    "account", "datetime", "power", "audio", "devices", "privacy", "region",
-    "accessibility", "about", "desktop", "workspaces", "shortcuts", "display", "storage", "xfce"
+// Canonical category map: all 25 registered pages have an accessible sidebar
+// entry, and the CLI uses the same names. Legacy XFCE deep links are redirected
+// to these pages rather than opening redundant, unreachable placeholder tabs.
+const SETTINGS_NAVIGATION: [(&str, &str, &str); 25] = [
+    ("Sistema", "system", "computer"),
+    ("Schermo", "display", "video-display"),
+    ("Audio", "audio", "audio-volume-high"),
+    ("Alimentazione", "power", "battery"),
+    ("Archiviazione", "storage", "drive-harddisk"),
+    ("Rete", "network", "network-workgroup"),
+    ("Bluetooth", "bluetooth", "bluetooth"),
+    ("Dispositivi", "devices", "input-keyboard"),
+    ("Sessione e avvio", "xfce-session", "system-run"),
+    ("Aspetto", "appearance", "preferences-desktop-theme"),
+    ("Scrivania e sfondo", "xfce-desktop", "user-desktop"),
+    ("Desktop e finestre", "desktop", "preferences-system-windows"),
+    ("Pannello e barra", "xfce-panel", "preferences-desktop-toolbar"),
+    ("Spazi di lavoro", "workspaces", "view-grid"),
+    ("Scorciatoie", "shortcuts", "input-keyboard"),
+    ("Notifiche", "notifications", "preferences-system-notifications"),
+    ("Accessibilità", "accessibility", "preferences-desktop-accessibility"),
+    ("App", "applications", "applications-other"),
+    ("App predefinite", "xfce-preferred", "applications-default"),
+    ("Associazioni file", "xfce-mime", "text-x-generic"),
+    ("Account", "account", "avatar-default"),
+    ("Privacy e sicurezza", "privacy", "security-high"),
+    ("Lingua e regione", "region", "preferences-desktop-locale"),
+    ("Data e ora", "datetime", "x-office-calendar"),
+    ("Informazioni", "about", "dialog-information"),
 ];
 fn is_valid_page(page: &str) -> bool {
-    SETTINGS_PAGES.contains(&page) || xfce_pages::is_known_page(page)
+    SETTINGS_NAVIGATION.iter().any(|(_, target, _)| *target == page)
+        || xfce_pages::is_known_page(page)
 }
 
 fn main() -> gtk::glib::ExitCode {
@@ -580,7 +569,7 @@ fn main() -> gtk::glib::ExitCode {
             eprintln!("Melania Settings: sezione non valida: {page}");
             return gtk::glib::ExitCode::FAILURE;
         }
-        *requested.borrow_mut() = page.to_string();
+        *requested.borrow_mut() = xfce_pages::canonical_page(page).to_string();
         app.activate();
         gtk::glib::ExitCode::SUCCESS
     });
