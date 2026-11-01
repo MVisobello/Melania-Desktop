@@ -4,6 +4,7 @@ mod xfce_catalog;
 mod xfce_defaults;
 mod xfce_autostart;
 mod xfce_pages;
+mod xfce_panel;
 mod symbols;
 mod sensors;
 #[path = "../../branding/window_controls.rs"]
