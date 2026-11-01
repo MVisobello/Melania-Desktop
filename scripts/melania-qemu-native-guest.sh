@@ -53,6 +53,15 @@ set -e
 report "MELANIA_QEMU_NATIVE_KMS_EXIT=$code"
 [[ "$code" -eq 0 ]] || fatal 'native_KMS_TEST_ONLY_failed'
 report 'MELANIA_QEMU_NATIVE_KMS_PASS=true'
+
+# Only AFTER the native process returns, confirm the console can still be
+# changed and restored via Linux VT ioctl in the SAME disposable guest.
+# This is a real VT test but NOT a rollback after visible scanout.
+vt_probe=/mnt/melania-native/melania-vt-guest.py
+[[ -f "$vt_probe" ]] || fatal 'vt_recovery_probe_missing_from_payload'
+timeout --signal=TERM --kill-after=3s 25s python3 "$vt_probe" ||
+  fatal 'post_KMS_linux_VT_recovery_failed'
+report 'MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
