@@ -3,6 +3,7 @@
 mod window_controls;
 mod gio_backend;
 mod gio_remote;
+mod gio_mount;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use melania_transfer as transfer;
@@ -626,21 +627,118 @@ fn repaint_volumes(browser: &Browser) {
     heading.add_css_class("files-sidebar-heading");
     heading.set_xalign(0.0);
     browser.mounts_box.append(&heading);
-    // VolumeMonitor exposes local and remote mounts as GIO Files. Remote
-    // roots must not be hidden merely because they lack a POSIX PathBuf.
+    // Mounted local paths and remote GVfs URIs share the sidebar. Never
+    // offer unsafe forced unmount of the root filesystem.
     for mount in gio::VolumeMonitor::get().mounts() {
         let root=mount.root();
+        let row=GtkBox::new(Orientation::Horizontal,5);
+        let label=mount.name().to_string();
         if let Some(path)=root.path().filter(|p|p.is_dir()){
-            browser.mounts_box.append(&navigation_button_with_icon(
-                &mount.name(),path,browser,Some("drive-harddisk-symbolic")));
+            let open=navigation_button_with_icon(&label,path,browser,Some("drive-harddisk-symbolic"));
+            open.set_hexpand(true);
+            row.append(&open);
         } else {
-            let button=Button::with_label(&mount.name());
+            let button=Button::with_label(&label);
+            button.set_hexpand(true);
             button.set_tooltip_text(Some(&root.uri()));
             let uri=root.uri().to_string();
             let open=browser.open_remote.clone();
             button.connect_clicked(move |_|open(uri.clone()));
-            browser.mounts_box.append(&button);
+            row.append(&button);
         }
+        if root.uri()!="file:///" && mount.can_unmount() {
+            let button=Button::from_icon_name("media-eject-symbolic");
+            button.set_tooltip_text(Some(&format!("Smonta {label} dopo conferma, senza forzare")));
+            let active=browser.clone();
+            let target=mount.clone();
+            let mount_label=label.clone();
+            button.connect_clicked(move |_|{
+                let parent=active.mounts_box.root().and_then(|r|r.downcast::<gtk::Window>().ok());
+                let selected=target.clone();
+                let state=active.clone();
+                let title=format!("Smontare {mount_label}?");
+                gio_mount::confirm_mount_action(parent.as_ref(),&title,
+                    "Chiudi i file aperti e completa eventuali copie prima di smontare. L'operazione non sarà forzata.",
+                    "Smonta",move ||{
+                        let parent=state.mounts_box.root().and_then(|r|r.downcast::<gtk::Window>().ok());
+                        let state_done=state.clone();
+                        match gio_mount::unmount(&selected,parent.as_ref(),move |result|{
+                            state_done.status.set_text(match &result{
+                                Ok(())=>"Volume smontato correttamente.",
+                                Err(e)=>e.as_str()
+                            });
+                            repaint_volumes(&state_done);
+                        }){
+                            Ok(_)=>state.status.set_text("Smontaggio in corso…"),
+                            Err(e)=>state.status.set_text(&e),
+                        }
+                    });
+            });
+            row.append(&button);
+        }
+        if root.uri()!="file:///" && mount.can_eject() {
+            let button=Button::from_icon_name("media-removable-symbolic");
+            button.set_tooltip_text(Some(&format!("Espelli {label} dopo conferma, senza forzare")));
+            let active=browser.clone();
+            let target=mount.clone();
+            let mount_label=label.clone();
+            button.connect_clicked(move |_|{
+                let parent=active.mounts_box.root().and_then(|r|r.downcast::<gtk::Window>().ok());
+                let selected=target.clone();
+                let state=active.clone();
+                let title=format!("Espellere {mount_label}?");
+                gio_mount::confirm_mount_action(parent.as_ref(),&title,
+                    "Verifica di aver salvato i file e terminato i trasferimenti. Nessuna espulsione forzata.",
+                    "Espelli",move ||{
+                        let parent=state.mounts_box.root().and_then(|r|r.downcast::<gtk::Window>().ok());
+                        let done=state.clone();
+                        match gio_mount::eject(&selected,parent.as_ref(),move |result|{
+                            done.status.set_text(match &result{
+                                Ok(())=>"Dispositivo espulso correttamente.",
+                                Err(e)=>e.as_str()
+                            });
+                            repaint_volumes(&done);
+                        }){
+                            Ok(_)=>state.status.set_text("Espulsione in corso…"),
+                            Err(e)=>state.status.set_text(&e),
+                        }
+                    });
+            });
+            row.append(&button);
+        }
+        browser.mounts_box.append(&row);
+    }
+    // Expose removable volumes not yet mounted, rather than silently hiding
+    // them. The user explicitly clicks Mount and GTK handles credentials.
+    for volume in gio::VolumeMonitor::get().volumes() {
+        if volume.get_mount().is_some() || !volume.can_mount(){continue;}
+        let row=GtkBox::new(Orientation::Horizontal,5);
+        let name=volume.name().to_string();
+        let description=Label::new(Some(&name));
+        description.set_xalign(0.0);
+        description.set_hexpand(true);
+        row.append(&description);
+        let button=Button::with_label("Monta");
+        button.set_tooltip_text(Some("Monta questo volume tramite GIO, chiedendo autorizzazione se necessaria"));
+        let active=browser.clone();
+        let selected=volume.clone();
+        button.connect_clicked(move |clicked|{
+            clicked.set_sensitive(false);
+            let parent=active.mounts_box.root().and_then(|r|r.downcast::<gtk::Window>().ok());
+            let done=active.clone();
+            let button=clicked.clone();
+            gio_mount::mount_volume(&selected,parent.as_ref(),move |result|{
+                button.set_sensitive(true);
+                done.status.set_text(match &result {
+                    Ok(())=>"Volume montato. Aprilo dalla barra laterale.",
+                    Err(e)=>e.as_str()
+                });
+                repaint_volumes(&done);
+            });
+            active.status.set_text("Montaggio richiesto: conferma le eventuali credenziali.");
+        });
+        row.append(&button);
+        browser.mounts_box.append(&row);
     }
 }
 
@@ -1734,6 +1832,12 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     volumes.connect_mount_added(move |_, _| repaint_volumes(&on_mount));
     let on_unmount = browser.clone();
     volumes.connect_mount_removed(move |_, _| repaint_volumes(&on_unmount));
+    let on_vol_added=browser.clone();
+    volumes.connect_volume_added(move |_,_|repaint_volumes(&on_vol_added));
+    let on_vol_removed=browser.clone();
+    volumes.connect_volume_removed(move |_,_|repaint_volumes(&on_vol_removed));
+    let on_vol_changed=browser.clone();
+    volumes.connect_volume_changed(move |_,_|repaint_volumes(&on_vol_changed));
     sidebar.append(&browser.favorites_box);
     repaint_favorites(&browser);
     let state=browser.clone();
