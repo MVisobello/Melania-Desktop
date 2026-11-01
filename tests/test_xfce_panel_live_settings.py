@@ -57,7 +57,7 @@ class PanelFunctionalSettings(unittest.TestCase):
         self.assertIn('clock_row.append(&date_label);',PANEL)
         self.assertIn('clock_row.set_size_request(84,-1);',PANEL)
         self.assertIn('menu.set_size_request(43,43);',PANEL)
-        self.assertIn('bar.append(&clock_separator);',PANEL)
+        self.assertIn('trailing.append(&clock_separator);',PANEL)
 
 if __name__=="__main__":
     unittest.main()
