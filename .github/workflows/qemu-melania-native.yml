@@ -1,0 +1,63 @@
+name: Melania native KMS TEST_ONLY inside QEMU
+
+on:
+  pull_request:
+    paths:
+      - scripts/melania-qemu-native-guest.sh
+      - scripts/run-qemu-melania-native.sh
+      - tests/test_qemu_native_stage17.py
+      - .github/workflows/qemu-melania-native.yml
+      - melania-native/**
+  push:
+    branches: [main]
+    paths:
+      - scripts/melania-qemu-native-guest.sh
+      - scripts/run-qemu-melania-native.sh
+      - tests/test_qemu_native_stage17.py
+      - .github/workflows/qemu-melania-native.yml
+      - melania-native/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-kms:
+    name: Rust melania-native KMS TEST_ONLY in isolated VirtIO GPU guest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 29
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate fail-closed native VM harness
+        run: |
+          set -euo pipefail
+          bash -n scripts/melania-qemu-native-guest.sh scripts/run-qemu-melania-native.sh
+          python3 -m unittest discover -s tests -p 'test_qemu_native_stage17.py' -v
+      - name: Build actual Rust backend on same Ubuntu release as guest
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libgles2-mesa-dev libudev-dev libseat-dev \
+            libdrm-dev libgbm-dev libinput-dev qemu-system-x86 \
+            qemu-utils cloud-image-utils genisoimage curl
+          cargo test -p melania-native --all-targets
+          cargo build -p melania-native
+          ldd target/debug/melania-native | tee native-runtime-libs.txt
+          test -x target/debug/melania-native
+      - name: Boot QEMU guest and execute REAL binary against virtual DRM card
+        env:
+          MELANIA_QEMU_NATIVE_VM: YES_DISPOSABLE_QEMU
+          MELANIA_QEMU_NATIVE_REPORT_DIR: reports/qemu-native
+        run: bash scripts/run-qemu-melania-native.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-real-melania-native-evidence
+          path: |
+            reports/qemu-native/
+            native-runtime-libs.txt
+          if-no-files-found: warn

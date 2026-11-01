@@ -533,6 +533,52 @@ Nessuna prova ha ancora eseguito il backend Rust Melania nel guest,
 un TEST_ONLY Smithay con GBM/EGL, la conservazione dei framebuffer
 originali o il rollback KMS. Questi sono i prossimi passi.
 
+## Fase 18 — test riuscito del vero binario Rust in una VM QEMU
+
+Dopo la verifica delle capacità KMS tramite un piccolo probe C della
+fase 17, il workflow `.github/workflows/qemu-melania-native.yml`
+**compila il binario Rust reale** con
+`cargo build -p melania-native` su Ubuntu 24.04, esegue i relativi
+unit test e trasferisce l'ELF in una VM Ubuntu 24.04 isolata su ISO
+read-only. La VM usa una GPU VirtIO emulata, QEMU TCG, un disco
+temporaneo, `seatd` e la console dedicata `/dev/tty1`.
+
+Dentro il guest, dopo i controlli DMI, VT e card DRM, vengono
+eseguiti **realmente**
+`melania-native --capabilities` e
+`melania-native --experimental-kms-test`. Il percorso già protetto
+confronta proprietà KMS, buffer e blob prima e dopo
+l'operazione `TEST_ONLY` con renderer GLES/GBM offscreen;
+non effettua commit/page flip o scanout.
+
+**Risultato verificato il 1° novembre 2026 nel workflow
+41329898771:** il job e la VM sono terminati con codice 0.
+La seriale contiene:
+
+```text
+MELANIA_QEMU_NATIVE_DRM_PRESENT=true
+MELANIA_QEMU_NATIVE_SEATD_READY=true
+Melania QEMU atomic TEST_ONLY passed: Virtual-1 640x480, offscreen=true crtc_readable=true baseline_unchanged=true resource_blobs=1 borrowed_fbs=1 resources_unchanged=true restore_ready=false visible=false
+MELANIA_QEMU_NATIVE_KMS_EXIT=0
+MELANIA_QEMU_NATIVE_KMS_PASS=true
+MELANIA_QEMU_NATIVE_GUEST_EXIT=0
+```
+
+La prova è riproducibile tramite
+`MELANIA_QEMU_NATIVE_VM=YES_DISPOSABLE_QEMU bash scripts/run-qemu-melania-native.sh`
+su un host di collaudo con QEMU, dopo la build Rust. Il workflow
+conserva un artifact `qemu-real-melania-native-evidence` con
+log seriale e dipendenze dinamiche.
+
+**Limiti:** `restore_ready=false` e `visible=false` sono
+espliciti. Si tratta del primo test atomico **non visibile**
+del backend Rust nella VM, **non** di un compositore nativo autonomo,
+né di un rollback della console dopo uno scanout. Rimangono
+da sviluppare acquisizione e conservazione dei framebuffer
+del kernel, commit grafico con ripristino verificato in VM,
+gestione input libinput e avvio di una sessione di login.
+Non provare sul computer principale.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
