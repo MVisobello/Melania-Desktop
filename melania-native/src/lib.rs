@@ -13,6 +13,7 @@ pub mod kms_resources;
 pub mod preflight_guard;
 pub mod device_epoch;
 pub mod rollback_audit;
+pub mod framebuffer_lease;
 pub mod input_registry;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
