@@ -332,7 +332,7 @@ fn build_ui(
     workspaces.append(&apply_workspaces);
     workspaces.append(&workspace_feedback);
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
-    let network = page("Rete e Bluetooth");
+    let network = page("Rete");
     let live_network = text(&gnome_pages::network_status(), "settings-row-description");
     live_network.add_css_class("settings-card");
     network.append(&live_network);
