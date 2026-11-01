@@ -1,6 +1,7 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
 mod connectivity_controls;
+mod display_controls;
 mod xfce_catalog;
 mod xfce_defaults;
 mod xfce_autostart;
