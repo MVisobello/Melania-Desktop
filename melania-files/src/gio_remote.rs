@@ -34,6 +34,8 @@ struct Remote {
     monitor_uri:Rc<RefCell<Option<String>>>,
     refresh_pending:Rc<Cell<bool>>,
     generation: Rc<Cell<u64>>,
+    listing_running: Rc<Cell<bool>>,
+    listing_pending: Rc<RefCell<Option<RemoteListingRequest>>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     job_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     copy_progress: Rc<RefCell<Option<Arc<gio_backend::CopyProgress>>>>,
@@ -58,8 +60,70 @@ fn navigation(remote:&Remote,uri:String,remember:bool) {
     remote.refresh_pending.set(false);
     refresh(remote);
 }
+/// New filter/navigation requests replace the queued scan, not an entire
+/// thread. A tab has at most one active GIO enumeration worker. Slow providers
+/// may not honor cancellation until the next I/O boundary, but can no longer
+/// create an unbounded number of concurrent threads as the user types.
+struct RemoteListingRequest {
+    generation:u64,
+    uri:String,
+    filter:String,
+    hidden:bool,
+    sort:model::SortBy,
+    descending:bool,
+    cancelled:Arc<AtomicBool>,
+}
+fn start_listing_worker(remote:&Remote) {
+    if remote.listing_running.get(){return;}
+    let task=remote.listing_pending.borrow_mut().take();
+    let Some(request)=task else {return;};
+    remote.listing_running.set(true);
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move ||{
+        let result=gio_backend::list_uri_sorted(&request.uri,&request.filter,
+            request.hidden,request.sort,request.descending,&request.cancelled);
+        let _=tx.send((request.generation,result));
+    });
+    let ui=remote.clone();
+    glib::timeout_add_local(Duration::from_millis(45),move || {
+        match rx.try_recv() {
+            Ok((gen,result))=>{
+                ui.listing_running.set(false);
+                // Never render results for an obsolete location or filter.
+                if ui.generation.get()==gen {
+                    match result {
+                        Ok(listing)=>{
+                            let count=listing.items.len();
+                            *ui.visible_uris.borrow_mut()=listing.items.iter()
+                                .map(|item|item.uri.clone()).collect();
+                            for item in listing.items{render_row(&ui,item);}
+                            watch_current_directory(&ui);
+                            ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
+                                if listing.truncated{" (limite visualizzazione raggiunto)"}else{""}));
+                            if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some(){
+                                eprintln!("MELANIA_GIO_LISTING_READY count={count}");
+                            }
+                        },
+                        Err(error)=>ui.status.set_text(&error),
+                    }
+                }
+                start_listing_worker(&ui);
+                glib::ControlFlow::Break
+            },
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                ui.listing_running.set(false);
+                if ui.listing_pending.borrow().is_none(){
+                    ui.status.set_text("Lettura GVfs interrotta; riprova con F5.");
+                }
+                start_listing_worker(&ui);
+                glib::ControlFlow::Break
+            },
+        }
+    });
+}
 fn refresh(remote:&Remote) {
-    if let Some(old)=remote.listing_cancel.borrow_mut().take() {
+    if let Some(old)=remote.listing_cancel.borrow_mut().take(){
         old.store(true,Ordering::Release);
     }
     let gen=remote.generation.get().wrapping_add(1);
@@ -74,49 +138,17 @@ fn refresh(remote:&Remote) {
     let uri=remote.current.borrow().clone();
     remote.location.set_text(&uri);
     let place=gio::File::for_uri(&uri).basename()
-        .map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||String::from("Rete"));
+        .map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||"Rete".into());
     remote.title.set_text(&place);
     remote.status.set_text("Connessione e lettura in corso…");
-    let filter=remote.search.text().to_string();
-    let show_hidden=remote.hidden.get();
-    let sort=remote.sort_by.get();
-    let descending=remote.descending.get();
     let cancelled=Arc::new(AtomicBool::new(false));
     *remote.listing_cancel.borrow_mut()=Some(cancelled.clone());
-    let (tx,rx)=std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let output=gio_backend::list_uri_sorted(&uri,&filter,show_hidden,
-            sort,descending,&cancelled);
-        let _=tx.send(output);
+    *remote.listing_pending.borrow_mut()=Some(RemoteListingRequest{
+        generation:gen,uri,filter:remote.search.text().to_string(),
+        hidden:remote.hidden.get(),sort:remote.sort_by.get(),
+        descending:remote.descending.get(),cancelled,
     });
-    let ui=remote.clone();
-    glib::timeout_add_local(Duration::from_millis(45),move || {
-        if ui.generation.get()!=gen {return glib::ControlFlow::Break;}
-        match rx.try_recv() {
-            Ok(Ok(listing)) => {
-                let count=listing.items.len();
-                *ui.visible_uris.borrow_mut()=listing.items.iter()
-                    .map(|item|item.uri.clone()).collect();
-                for item in listing.items {render_row(&ui,item);}
-                watch_current_directory(&ui);
-                ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
-                    if listing.truncated {" (limite visualizzazione raggiunto)"} else {""}));
-                if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some() {
-                    eprintln!("MELANIA_GIO_LISTING_READY count={count}");
-                }
-                glib::ControlFlow::Break
-            },
-            Ok(Err(message)) => {
-                ui.status.set_text(&message);
-                glib::ControlFlow::Break
-            },
-            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
-                ui.status.set_text("Connessione interrotta");
-                glib::ControlFlow::Break
-            },
-        }
-    });
+    start_listing_worker(remote);
 }
 fn format_size(size:u64)->String {
     if size<1024{return format!("{size} B");}
@@ -539,6 +571,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         monitor_uri:Rc::new(RefCell::new(None)),
         refresh_pending:Rc::new(Cell::new(false)),
         generation:Rc::new(Cell::new(0)),
+        listing_running:Rc::new(Cell::new(false)),
+        listing_pending:Rc::new(RefCell::new(None)),
         listing_cancel:Rc::new(RefCell::new(None)),
         job_cancel:Rc::new(RefCell::new(None)),
         copy_progress:Rc::new(RefCell::new(None)),
@@ -818,6 +852,7 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         if let Some(cancel)=cleanup.listing_cancel.borrow_mut().take(){
             cancel.store(true,Ordering::Release);
         }
+        cleanup.listing_pending.borrow_mut().take();
     });
     refresh(&state);
     root

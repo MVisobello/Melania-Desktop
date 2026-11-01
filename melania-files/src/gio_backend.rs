@@ -103,6 +103,10 @@ pub fn list_uri_sorted(uri:&str,text_filter:&str,show_hidden:bool,
 fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
                     cancelled:&Arc<AtomicBool>)->Result<Listing,String> {
     validate_uri(uri)?;
+    // A superseded request must not even start a blocking GVfs call.
+    if cancelled.load(Ordering::Acquire){
+        return Err(error("Lettura annullata"));
+    }
     let location = gio::File::for_uri(uri);
     let enumerator = location.enumerate_children(
         "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,standard::content-type,time::modified",
@@ -550,6 +554,12 @@ mod tests {
         assert!(folder.is_directory);
         assert_eq!(folder.size,None);
         let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn superseded_request_never_starts_remote_enumeration() {
+        let stopped=Arc::new(AtomicBool::new(true));
+        let result=list_uri_sorted("sftp://unreachable.invalid/share","",false,
+            model::SortBy::Name,false,&stopped);
+        assert!(result.unwrap_err().contains("annullata"));
     }
     #[test] fn can_enumerate_local_through_same_gio_backend() {
         let dir=std::env::temp_dir().join(format!("melania-gio-{}",std::process::id()));
