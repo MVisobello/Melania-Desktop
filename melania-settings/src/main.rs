@@ -2,6 +2,7 @@
 mod gnome_pages;
 mod xfce_catalog;
 mod xfce_defaults;
+mod xfce_autostart;
 mod xfce_pages;
 mod symbols;
 mod sensors;
