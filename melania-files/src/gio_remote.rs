@@ -252,6 +252,126 @@ fn open_properties(remote:&Remote,uri:String) {
     });
 }
 
+/// Deliberate user-triggered search, distinct from the quick current-folder
+/// filter. Server-side work stays on one worker and never touches GTK objects.
+fn open_deep_search(remote:&Remote){
+    let query=remote.search.text().trim().to_string();
+    if query.chars().count()<2 || query.chars().count()>120{
+        remote.status.set_text("Scrivi almeno 2 caratteri nel filtro prima di cercare nelle sottocartelle.");
+        return;
+    }
+    let uri=remote.current.borrow().clone();
+    let hidden=remote.hidden.get();
+    let window=gtk::Window::builder()
+        .title("Ricerca nelle sottocartelle — Melania Files")
+        .default_width(640).default_height(500).build();
+    window.set_transient_for(remote.rows.root()
+        .and_then(|root|root.downcast::<gtk::Window>().ok()).as_ref());
+    let panel=GtkBox::new(Orientation::Vertical,8);
+    panel.set_margin_top(12);
+    panel.set_margin_bottom(12);
+    panel.set_margin_start(12);
+    panel.set_margin_end(12);
+    let message=Label::new(Some("Ricerca GIO in corso…"));
+    message.set_xalign(0.0);
+    message.set_wrap(true);
+    panel.append(&message);
+    let scroll=ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    let rows=GtkBox::new(Orientation::Vertical,3);
+    scroll.set_child(Some(&rows));
+    panel.append(&scroll);
+    let buttons=GtkBox::new(Orientation::Horizontal,8);
+    let cancel_button=Button::with_label("Annulla ricerca");
+    let close_button=Button::with_label("Chiudi");
+    buttons.append(&cancel_button);
+    buttons.append(&close_button);
+    panel.append(&buttons);
+    window.set_child(Some(&panel));
+    let stop=Arc::new(AtomicBool::new(false));
+    let stop_click=stop.clone();
+    let feedback=message.clone();
+    cancel_button.connect_clicked(move |_|{
+        stop_click.store(true,Ordering::Release);
+        feedback.set_text("Annullamento della ricerca richiesto…");
+    });
+    let exit=stop.clone();
+    window.connect_close_request(move |_|{
+        exit.store(true,Ordering::Release);
+        glib::Propagation::Proceed
+    });
+    let close_win=window.clone();
+    close_button.connect_clicked(move |_|close_win.close());
+    window.present();
+
+    let progress=Arc::new(gio_backend::SearchProgress::default());
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    let search_stop=stop.clone();
+    let search_progress=progress.clone();
+    std::thread::spawn(move ||{
+        let result=gio_backend::search_tree(&uri,&query,hidden,&search_stop,
+            Some(search_progress.as_ref()));
+        let _=tx.send(result);
+    });
+    let source=remote.clone();
+    glib::timeout_add_local(Duration::from_millis(85),move ||{
+        // Window teardown requests cancellation and stops UI polling.
+        if !window.is_visible(){
+            stop.store(true,Ordering::Release);
+            return glib::ControlFlow::Break;
+        }
+        match rx.try_recv(){
+            Ok(Ok(report))=>{
+                cancel_button.set_sensitive(false);
+                message.set_text(&format!(
+                    "{} risultati · {} elementi esaminati · {} cartelle non leggibili{}",
+                    report.hits.len(),report.scanned,report.skipped_folders,
+                    if report.limited{" · Limite di sicurezza raggiunto"}else{""}));
+                if report.hits.is_empty(){
+                    rows.append(&Label::new(Some("Nessun risultato.")));
+                }
+                for hit in report.hits {
+                    let name=hit.name.clone();
+                    let button=Button::with_label(&format!(
+                        "{}  —  {}",
+                        if hit.directory{"📁"}else{"📄"},name));
+                    button.set_tooltip_text(Some(&hit.uri));
+                    let selected=source.clone();
+                    let dialog=window.clone();
+                    button.connect_clicked(move |_|{
+                        if hit.directory{
+                            navigation(&selected,hit.uri.clone(),true);
+                            dialog.close();
+                        }else if let Err(e)=gio::AppInfo::launch_default_for_uri(
+                            &hit.uri,None::<&gio::AppLaunchContext>){
+                            selected.status.set_text(&format!("Impossibile aprire il risultato: {e}"));
+                        }
+                    });
+                    rows.append(&button);
+                }
+                glib::ControlFlow::Break
+            },
+            Ok(Err(error))=>{
+                cancel_button.set_sensitive(false);
+                message.set_text(&error);
+                glib::ControlFlow::Break
+            },
+            Err(std::sync::mpsc::TryRecvError::Empty)=>{
+                let (scanned,found)=progress.snapshot();
+                if !stop.load(Ordering::Acquire){
+                    message.set_text(&format!(
+                        "Ricerca GIO… {scanned} elementi esaminati, {found} corrispondenze"));
+                }
+                glib::ControlFlow::Continue
+            },
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                message.set_text("Ricerca terminata senza risultati disponibili.");
+                glib::ControlFlow::Break
+            },
+        }
+    });
+}
+
 fn render_row(remote:&Remote,item:Item) {
     let button=Button::new();
     button.add_css_class("files-list-row");
@@ -513,6 +633,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     folder_field.set_width_chars(16);
     let folder=Button::with_label("Nuova cartella");
     let trash=Button::with_label("Cestino");
+    let deep_search=Button::with_label("Cerca nelle sottocartelle");
+    deep_search.set_tooltip_text(Some("Ricerca ricorsiva GVfs con limiti di sicurezza; usa il filtro come testo di ricerca"));
     let properties=Button::with_label("Proprietà");
     let add_bookmark=Button::with_label("☆ Preferito");
     let remove_bookmark=Button::with_label("− Preferito");
@@ -526,6 +648,7 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     actionbar.append(&folder_field);
     actionbar.append(&folder);
     actionbar.append(&trash);
+    actionbar.append(&deep_search);
     actionbar.append(&properties);
     actionbar.append(&add_bookmark);
     actionbar.append(&remove_bookmark);
@@ -749,6 +872,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
             Ok(format!("{moved} elementi spostati nel Cestino."))
         });
     });
+    let ui=state.clone();
+    deep_search.connect_clicked(move |_|open_deep_search(&ui));
     let ui=state.clone();
     properties.connect_clicked(move |_|{
         let selected=ui.selected_paths.borrow();
