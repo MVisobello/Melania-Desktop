@@ -7,6 +7,7 @@ pub mod outputs;
 pub mod renderer;
 pub mod planes;
 pub mod frame_gate;
+pub mod kms_test;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,

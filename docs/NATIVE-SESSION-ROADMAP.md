@@ -211,6 +211,36 @@ Per il rendering reale serviranno inoltre sospensione libinput, rilascio
 dei buffer pendenti, un backup del vecchio stato KMS e una prova di
 recupero della VT in VM con timeout e procedura di rollback.
 
+## Fase 9 — prova atomica KMS TEST_ONLY, riservata a QEMU
+
+Melania ora dispone di un esperimento che costruisce una superficie DRM
+sulla prima uscita virtuale idonea, crea uno swapchain GBM con
+`RENDERING | SCANOUT`, richiede al driver una validazione **atomic
+TEST_ONLY** tramite `GbmBufferedSurface::new`, quindi disegna un
+frame GLES nel buffer e lo sincronizza **senza inviarlo allo schermo**.
+
+La prova è disattivata per impostazione predefinita e richiede
+simultaneamente: vera console `/dev/ttyN`, nessun server grafico
+ospitante, libseat, riconoscimento QEMU/KVM da DMI e le due variabili di
+opt-in. **Non provarla sul computer principale o su una VM condivisa.**
+
+Solo dopo aver predisposto una VM Linux dedicata, da una console testuale
+della VM:
+
+```sh
+MELANIA_EXPERIMENTAL_SEAT=1 MELANIA_KMS_TEST_ONLY=YES_QEMU_VM \
+  cargo run -p melania-native -- --experimental-kms-test
+```
+
+Se l'hardware virtuale non supporta DRM atomic, EGL, formati GBM o plane
+compatibili, il comando termina con errore. La CI compila questo percorso
+ma non lo esegue su dispositivi grafici. In particolare, **non esegue
+mai commit, page flip, modeset o configurazione del display manager**.
+Neanche un TEST_ONLY superato costituisce una prova di scanout o
+ripristino della console. Prima di abilitare un primo frame visibile sono
+necessari un event loop DRM/vblank, gestione corretta di pausa/ripresa
+libseat, un rollback della configurazione KMS e collaudo manuale su VM.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
