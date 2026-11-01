@@ -345,6 +345,35 @@ una transazione atomica di ripristino, un watchdog di recovery verificato
 e prove distruttive **solo** in una VM con ritorno certo alla console.
 Non eseguire la procedura sul computer principale.
 
+## Fase 13 — guardia RAII dello snapshot, scadenza e controlli del seat
+
+Il test QEMU `--experimental-kms-test` ora trasferisce i dati atomici
+e le copie temporanee dei blob a una **guardia Rust RAII**
+(`melania-native/src/preflight_guard.rs`). La guardia ne controlla
+insieme la validità, lo stato del seat e una scadenza interna massima
+di 40 secondi (nell'esperimento 36 secondi). I checkpoint operativi
+precedono la preparazione del buffer, seguono la sincronizzazione GPU e
+precedono il risultato. Se il seat non è attivo, la scadenza è superata,
+cambia uno dei valori KMS o variano i byte dei blob, l'esperimento
+è respinto e la guardia non può essere riutilizzata. I test Rust
+simulano pausa/ripresa, hotplug, scadenza e modifiche dello stato.
+
+La guardia è proprietaria **delle copie in memoria degli snapshot**,
+non dei vecchi oggetti kernel DRM, e ne ripulisce le copie dei blob
+alla distruzione in modalità *best effort*. Non vengono creati
+framebuffer o blob DRM per ripristinare una configurazione. Il controllo
+`session.is_active()` senza dispatch completo dei notifier libseat
+non è un rilevamento in tempo reale garantito della perdita della VT.
+Analogamente, il deadline cooperativo non interrompe un ioctl bloccato:
+rimane necessario il `timeout` esterno allo script QEMU. Nessuno dei
+due meccanismi garantisce da solo la restituzione della console.
+
+**Restano quindi disabilitati scanout visibile e restore**. La fase
+successiva richiede la gestione effettiva degli eventi libseat/udev
+mentre il test GPU è in esecuzione, la conservazione dei vecchi oggetti
+framebuffer e blob DRM nel kernel, rollback atomico verificabile e
+prove reali del passaggio di VT nella sola macchina virtuale isolata.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
