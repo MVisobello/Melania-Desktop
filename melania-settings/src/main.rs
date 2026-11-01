@@ -418,7 +418,7 @@ fn build_ui(
         button.set_child(Some(&row));
         let navigation_stack = stack.clone();
         button.connect_clicked(move |_| navigation_stack.set_visible_child_name(target));
-        if target == initial_page { button.add_css_class("active-section"); }
+        if target == xfce_pages::canonical_page(initial_page) { button.add_css_class("active-section"); }
         navigation.borrow_mut().push((button.clone(), target));
         navigation_labels.borrow_mut().push((button.clone(), name.to_lowercase()));
         navigation_list.append(&button);
