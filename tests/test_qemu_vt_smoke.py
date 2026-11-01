@@ -36,7 +36,8 @@ class QemuVtSmokeTests(unittest.TestCase):
 
         output = io.StringIO()
         with mock.patch.object(guest, "dmi_is_qemu", return_value=True), \
-             mock.patch.object(guest, "drm_card_present", return_value=True), \
+             mock.patch.object(guest, "virtual_vga_present", return_value=True), \
+             mock.patch.object(guest, "drm_card_present", return_value=False), \
              mock.patch.object(guest.os, "open", return_value=23), \
              mock.patch.object(guest.os, "close"), \
              mock.patch.object(guest.fcntl, "ioctl", side_effect=fake_ioctl), \
@@ -52,7 +53,8 @@ class QemuVtSmokeTests(unittest.TestCase):
     def test_restoration_attempted_when_first_switch_raises(self):
         calls = []
         with mock.patch.object(guest, "dmi_is_qemu", return_value=True), \
-             mock.patch.object(guest, "drm_card_present", return_value=True), \
+             mock.patch.object(guest, "virtual_vga_present", return_value=True), \
+             mock.patch.object(guest, "drm_card_present", return_value=False), \
              mock.patch.object(guest.os, "open", return_value=12), \
              mock.patch.object(guest.os, "close"), \
              mock.patch.object(guest, "active_vt", return_value=1), \
@@ -65,6 +67,12 @@ class QemuVtSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unavailable"):
                 guest.main()
         self.assertEqual(calls, [2, 1])
+
+    def test_qemu_without_drm_driver_still_reports_vga_separately(self):
+        self.assertIn("MELANIA_QEMU_VGA_ENUMERATED=true", GUEST.read_text())
+        self.assertIn("MELANIA_QEMU_DRM_ENUMERATED=", GUEST.read_text())
+        self.assertIn("MELANIA_QEMU_VGA_ENUMERATED=true", RUNNER.read_text())
+        self.assertIn("MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false", RUNNER.read_text())
 
     def test_guest_refuses_non_qemu_before_touching_console(self):
         with mock.patch.object(guest, "dmi_is_qemu", return_value=False), \
