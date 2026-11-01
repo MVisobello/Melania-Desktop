@@ -642,13 +642,17 @@ Se resume fallisce il seat rimane inattivo per il codice Melania.
 Il registro ha test unitari per hot-unplug, periferiche multi-capacità,
 pause/resume, eventi da device non registrati e contatori saturanti.
 
-La VM QEMU già usata dal test KMS esegue anche
+La VM QEMU già usata dal test KMS emula **una tastiera USB e
+un puntatore USB** con controller XHCI (sempre all'interno del guest,
+mai sul computer ospitante) ed esegue
 `melania-native --experimental-seat` sulla TTY dedicata, prima di
 `--experimental-kms-test`. Il risultato obbligatorio comprende
-`MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true` e i report
-`MELANIA_NATIVE_INPUT_ENUMERATED` e
-`MELANIA_NATIVE_INPUT_WAYLAND_READY=false`; il job non può
-diventare verde soltanto per la riuscita del rendering GPU.
+`MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true` e il report
+`MELANIA_NATIVE_INPUT_ENUMERATED` con **almeno una tastiera
+e un puntatore reali enumerati da libinput**, oltre a
+`MELANIA_NATIVE_INPUT_WAYLAND_READY=false`. Il guest fallisce
+se mancano gli eventi di scoperta delle due periferiche,
+non soltanto se il test GPU fallisce.
 
 **Non è ancora un input stack funzionante di un desktop nativo**:
 il registro non inoltra eventi ai client Wayland, non gestisce
