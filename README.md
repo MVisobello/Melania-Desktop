@@ -41,11 +41,15 @@ libseat/logind completo.
   Ctrl+Maiusc+Z; ora la CI esegue anche i test reali del backend Melania Files.
   PR #91 aggiunge Anteprima testo/F3 per file locali e remoti via GIO/GVfs,
   in sola lettura e limitata a 64 KiB; provata anche via SFTP autenticato.
+  PR #92 aggiunge la stessa anteprima F3 per PNG/JPEG/WebP (6 MiB massimo,
+  dimensioni e pixel limitati, decodifica in worker Rust), collaudata anche
+  con lettura e verifica dei pixel su un vero server SFTP temporaneo.
   Build Rust/GTK, Wayland e integrazione desktop passati.
   Restano adapter PathBuf per viste locali avanzate e funzioni POSIX,
   test SMB/WebDAV, dialoghi di password reali e dispositivi fisici, oltre
-  a undo/redo completo per copie e spostamenti, anteprime immagini/PDF/video
-  e proprietà avanzate. La parità Nautilus **non è ancora completa**.
+  a undo/redo completo per copie e spostamenti, miniature di directory,
+  anteprime PDF/video, decoding immagini isolato e proprietà avanzate.
+  La parità Nautilus **non è ancora completa**.
   Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md),
   [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md),
   [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md),
@@ -54,7 +58,8 @@ libseat/logind completo.
   [ricerca ricorsiva](docs/FILES-GVFS-RECURSIVE-SEARCH.md) e
   [test SFTP autenticato](docs/FILES-GVFS-SFTP-LOOPBACK-TEST.md) e
   [Annulla/Ripeti rinomina](docs/FILES-GVFS-RENAME-UNDO.md) e
-  [Anteprima testo GIO/GVfs](docs/FILES-GVFS-TEXT-QUICKLOOK.md).
+  [Anteprima testo GIO/GVfs](docs/FILES-GVFS-TEXT-QUICKLOOK.md) e
+  [Anteprima immagini GIO/GVfs](docs/FILES-GVFS-IMAGE-QUICKLOOK.md).
 
 ## Avvio e sicurezza
 
