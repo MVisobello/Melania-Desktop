@@ -155,6 +155,101 @@ fn parse_power_profiles(output:&str)->Vec<&'static str> {
     result
 }
 
+/// Read a PipeWire node without changing the current mixer state.
+fn audio_mute_label(target: &str, muted: bool) -> &'static str {
+    if target=="@DEFAULT_AUDIO_SOURCE@" {
+        if muted {"Attiva microfono"} else {"Disattiva microfono"}
+    } else if muted {"Riattiva audio"} else {"Disattiva audio"}
+}
+fn audio_status(target: &str) -> Option<(f64,bool)> {
+    let response=read_command("wpctl", &["get-volume",target])?;
+    let volume=parse_volume(&response)?;
+    Some((volume,response.contains("[MUTED]")))
+}
+fn refresh_audio_status(target: &str, slider: &Scale, mute: &Button,
+                        reading: &Label) -> bool {
+    let Some((volume,muted))=audio_status(target) else {return false;};
+    slider.set_value(volume);
+    mute.set_label(audio_mute_label(target,muted));
+    reading.set_text(&format!("Volume attuale: {volume:.0}%{}",
+        if muted {" · disattivato"} else {""}));
+    true
+}
+fn audio_device_controls(page: &GtkBox, title: &str, target: &'static str) {
+    group(page,title);
+    let Some((volume,muted))=audio_status(target) else {
+        page.append(&info_row("dialog-information",title,
+            "Dispositivo PipeWire/WirePlumber non disponibile: nessun controllo fittizio."));
+        return;
+    };
+    let level=Scale::with_range(Orientation::Horizontal,0.0,100.0,1.0);
+    level.set_value(volume);
+    level.set_hexpand(true);
+    level.set_tooltip_text(Some("Volume del dispositivo in percentuale"));
+    let apply=Button::with_label("Applica volume");
+    apply.add_css_class("settings-save");
+    let mute=Button::with_label(audio_mute_label(target,muted));
+    mute.add_css_class("settings-save");
+    let refresh=Button::with_label("Aggiorna");
+    refresh.add_css_class("settings-save");
+    let reading=label(&format!("Volume attuale: {volume:.0}%{}",
+        if muted {" · disattivato"} else {""}),"settings-row-description");
+    let feedback=label("","settings-action-feedback");
+    let controls=GtkBox::new(Orientation::Horizontal,8);
+    controls.add_css_class("settings-action-row");
+    controls.append(&level);
+    controls.append(&apply);
+    controls.append(&mute);
+    controls.append(&refresh);
+    page.append(&reading);
+    page.append(&controls);
+    page.append(&feedback);
+
+    let slider=level.clone();
+    let mute_button=mute.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    apply.connect_clicked(move |_| {
+        // Only an explicit click changes a system PipeWire volume. The target
+        // is a compile-time selected sink/source, never a user command.
+        let requested=format!("{:.2}",slider.value().clamp(0.0,100.0)/100.0);
+        let result=Command::new("wpctl")
+            .args(["set-volume",target,requested.as_str()]).status();
+        if !result.is_ok_and(|status|status.success()) {
+            message.set_text("Impossibile applicare il volume. Verifica WirePlumber.");
+        } else if refresh_audio_status(target,&slider,&mute_button,&state) {
+            message.set_text("Volume applicato.");
+        } else {
+            message.set_text("Comando eseguito, ma non è possibile verificare il volume.");
+        }
+    });
+    let slider=level.clone();
+    let mute_button=mute.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    mute.connect_clicked(move |_| {
+        let result=Command::new("wpctl").args(["set-mute",target,"toggle"]).status();
+        if !result.is_ok_and(|status|status.success()) {
+            message.set_text("Impossibile modificare lo stato audio.");
+        } else if refresh_audio_status(target,&slider,&mute_button,&state) {
+            message.set_text("Stato audio aggiornato.");
+        } else {
+            message.set_text("Comando eseguito, ma il dispositivo non risponde.");
+        }
+    });
+    let slider=level.clone();
+    let mute_button=mute.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    refresh.connect_clicked(move |_| {
+        if refresh_audio_status(target,&slider,&mute_button,&state) {
+            message.set_text("");
+        } else {
+            message.set_text("Impossibile leggere il dispositivo audio.");
+        }
+    });
+}
+
 fn os_name() -> String {
     fs::read_to_string("/etc/os-release").ok()
         .and_then(|text| text.lines().find_map(|line| {
@@ -219,42 +314,10 @@ pub fn add_pages(stack: &Stack) {
     stack.add_titled(&display, Some("display"), "Schermo");
 
     let audio = page("Audio", "audio-card");
-    group(&audio, "Uscita audio");
-    let current_volume = read_command("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .and_then(|output| parse_volume(&output));
-    if let Some(volume) = current_volume {
-        audio.append(&info_row("audio-volume-high", "Volume attuale",
-            &format!("{volume:.0}% · dispositivo di uscita predefinito")));
-        let controls = GtkBox::new(Orientation::Horizontal, 12);
-        controls.add_css_class("settings-action-row");
-        let level = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
-        level.set_value(volume);
-        level.set_hexpand(true);
-        level.set_tooltip_text(Some("Volume audio in percentuale"));
-        let apply = Button::with_label("Applica volume");
-        apply.add_css_class("settings-save");
-        let feedback = label("", "settings-action-feedback");
-        let scale = level.clone();
-        let response = feedback.clone();
-        apply.connect_clicked(move |_| {
-            let requested = format!("{:.2}", scale.value().clamp(0.0, 100.0) / 100.0);
-            let status = Command::new("wpctl")
-                .args(["set-volume", "@DEFAULT_AUDIO_SINK@", requested.as_str()])
-                .status();
-            match status {
-                Ok(status) if status.success() =>
-                    response.set_text(&format!("Volume impostato: {:.0}%", scale.value())),
-                _ => response.set_text("Impossibile cambiare il volume. Controlla WirePlumber."),
-            }
-        });
-        controls.append(&level);
-        controls.append(&apply);
-        audio.append(&controls);
-        audio.append(&feedback);
-    } else {
-        audio.append(&info_row("dialog-information", "Audio non disponibile",
-            "Nessun dispositivo PipeWire/WirePlumber accessibile. Il controllo del volume non viene mostrato."));
-    }
+    // Input and output are separate PipeWire nodes. A missing device gets a
+    // clear unavailable state; no fake slider or host-wide mixer fallback.
+    audio_device_controls(&audio, "Uscita audio", "@DEFAULT_AUDIO_SINK@");
+    audio_device_controls(&audio, "Microfono", "@DEFAULT_AUDIO_SOURCE@");
     stack.add_titled(&audio, Some("audio"), "Audio");
 
     let power = page("Alimentazione", "battery");
@@ -324,7 +387,8 @@ pub fn add_pages(stack: &Stack) {
     stack.add_titled(&storage, Some("storage"), "Archiviazione");
 
     let bluetooth = page("Bluetooth", "bluetooth");
-    group(&bluetooth, "Stato");
+    crate::connectivity_controls::append_bluetooth(&bluetooth);
+    group(&bluetooth, "Stato del controller");
     bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
         &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
     stack.add_titled(&bluetooth, Some("bluetooth"), "Bluetooth");
@@ -420,6 +484,13 @@ mod tests {
         assert_eq!(parse_power_profiles(output),
             vec!["power-saver","balanced","performance"]);
         assert!(parse_power_profiles("No profiles found.").is_empty());
+    }
+    #[test]
+    fn labels_distinguish_microphone_from_output() {
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SINK@",false),"Disattiva audio");
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SINK@",true),"Riattiva audio");
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SOURCE@",false),"Disattiva microfono");
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SOURCE@",true),"Attiva microfono");
     }
     #[test]
     fn reads_pipewire_volume_without_exceeding_slider_range() {
