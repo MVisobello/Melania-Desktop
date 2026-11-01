@@ -131,6 +131,30 @@ Il codice non modifica il comportamento dell'ambiente Wayland annidato.
 La CI prova anche il caso in cui un abbinamento greedy ridurrebbe il numero
 di monitor gestibili.
 
+## Inizializzazione GBM/EGL/GLES — fase 5
+
+Il nuovo modulo Rust `melania-native/src/renderer.rs` usa il **vero**
+file descriptor DRM aperto mediante libseat (nelle prove controllate di
+`--experimental-drm`) per inizializzare `GbmDevice`, `EGLDisplay`,
+`EGLContext` e `GlesRenderer` attraverso Smithay 0.7. Rileva il nome del
+backend GBM e il numero di formati DMA-BUF renderizzabili. Questo dimostra la
+possibilità di creare un contesto grafico sulla GPU, non ancora il funzionamento
+di uno schermo.
+
+**Non crea** GBM scanout buffer, superfici DRM, framebuffer, render loop,
+VT switch, input libinput o sessione di login. Se il driver EGL non è
+disponibile, la diagnostica lo segnala senza cambiare modalità video.
+Anche con EGL funzionante, `native_scanout_is_implemented()` continua a
+restituire `false`.
+
+Il collaudo Linux CI compila e testa il percorso, ma non può inizializzarlo
+su un vero dispositivo DRM perché i runner non hanno una console VT
+dedicata. Il controllo GPU effettivo deve essere eseguito solo in una
+**macchina virtuale dedicata** con l'opt-in già previsto; non sul desktop
+principale. Prima del primo frame KMS devono ancora essere verificati:
+primary plane, formati compatibili GBM/scanout, gestione pause/resume,
+acquisizione/rilascio dello stato CRTCs e ripristino schermo/VT.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.

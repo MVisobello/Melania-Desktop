@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_drm", "backend_gbm", "backend_libinput",
-    "backend_udev", "backend_session_libseat"
+    "backend_udev", "backend_session_libseat", "backend_egl", "renderer_gl"
 ] }
 calloop = "0.14"
 
