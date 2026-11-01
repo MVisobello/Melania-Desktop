@@ -116,6 +116,21 @@ I test includono monitor scollegati, EDID non valido e selezione deterministica
 della modalità. Ogni test hardware richiede sempre una VM dedicata e l'opt-in
 già presente. Il desktop annidato non viene modificato.
 
+## Instradamento monitor su CRTC — fase 4
+
+La lettura DRM restituisce anche gli encoder associabili a ciascun connettore,
+e il filtro `possible_crtcs` è applicato alle risorse disponibili.
+Un pianificatore Rust **puramente in memoria** calcola un abbinamento
+uno-a-uno fra monitor e CRTC con cammini aumentanti: non assegna mai lo
+stesso controller a due display né inventa CRTC mancanti.
+
+La pianificazione è diagnostica e non attiva output, né richiede una
+superficie DRM o un renderer GBM/EGL. Essa non garantisce ancora la presenza
+di primary plane, memoria grafica o una modalità supportata e applicabile.
+Il codice non modifica il comportamento dell'ambiente Wayland annidato.
+La CI prova anche il caso in cui un abbinamento greedy ridurrebbe il numero
+di monitor gestibili.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
