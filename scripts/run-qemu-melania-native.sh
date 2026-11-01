@@ -11,6 +11,9 @@ done
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 native="$root/target/debug/melania-native"
 [[ -f "$native" && -x "$native" ]] || deny 'build actual cargo -p melania-native first'
+fb_probe="$root/target/debug/melania-qemu-fb2-probe"
+[[ -f "$fb_probe" && -x "$fb_probe" ]] ||
+  deny 'build QEMU-only framebuffer GEM audit probe first'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -31,7 +34,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -95,6 +98,21 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q 'rollback_blockers=4' "$serial" ||
    ! grep -q 'restore_ready=false visible=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_KMS_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_FB2_ROUNDTRIP=PASS' "$serial" ||
+   ! grep -Eq '^MELANIA_FB2_GEM_HANDLES_ACQUIRED=[1-9][0-9]*
+   ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial"; then
+  printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
+  tail -n 100 "$serial" || true
+  exit 1
+fi
+printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
+printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
+ "$serial" ||
+   ! grep -q '^MELANIA_FB2_ROLLBACK_READY=false' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_FB2_GEM_CLOSE_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true' "$serial" ||
