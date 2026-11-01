@@ -12,7 +12,7 @@ fn label(value: &str, class: &str) -> Label {
     label.add_css_class(class);
     label
 }
-fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
+fn page(title: &str, _subtitle: &str, icon: &str) -> GtkBox {
     let page = GtkBox::new(Orientation::Vertical, 7);
     page.add_css_class("settings-body");
     let heading = GtkBox::new(Orientation::Horizontal, 11);
@@ -22,7 +22,6 @@ fn page(title: &str, subtitle: &str, icon: &str) -> GtkBox {
     heading.append(&image);
     let words = GtkBox::new(Orientation::Vertical, 2);
     words.append(&label(title, "settings-heading"));
-    words.append(&label(subtitle, "settings-subtitle"));
     heading.append(&words);
     page.append(&heading);
     page
