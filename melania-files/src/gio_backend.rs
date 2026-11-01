@@ -172,9 +172,9 @@ pub fn query_details(uri:&str)->Result<FileDetails,String> {
         },
         is_directory:dir,
         symlink:info.file_type()==gio::FileType::SymbolicLink || info.is_symlink(),
-        can_read:info.attribute_boolean("access::can-read"),
-        can_write:info.attribute_boolean("access::can-write"),
-        can_execute:info.attribute_boolean("access::can-execute"),
+        can_read:info.boolean("access::can-read"),
+        can_write:info.boolean("access::can-write"),
+        can_execute:info.boolean("access::can-execute"),
     })
 }
 
