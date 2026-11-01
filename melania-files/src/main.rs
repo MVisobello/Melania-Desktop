@@ -317,6 +317,62 @@ fn show_properties(path: &Path) {
     win.present();
 }
 
+/// Installed system handlers for this file's MIME type; never construct
+/// shell commands from filenames or desktop entries.
+fn open_with_dialog(path: &Path) {
+    let file = gio::File::for_path(path);
+    let mime = file.query_info("standard::content-type",
+        gio::FileQueryInfoFlags::NONE,None::<&gio::Cancellable>)
+        .ok().and_then(|info|info.content_type());
+    let window = gtk::Window::builder().title("Apri con — Melania Files")
+        .default_width(420).default_height(400).build();
+    let outer = GtkBox::new(Orientation::Vertical, 8);
+    outer.set_margin_top(14);
+    outer.set_margin_bottom(14);
+    outer.set_margin_start(14);
+    outer.set_margin_end(14);
+    let description = Label::new(Some(&format!("Applicazioni disponibili per {}",
+        path.file_name().unwrap_or_default().to_string_lossy())));
+    description.set_wrap(true);
+    description.set_xalign(0.0);
+    outer.append(&description);
+    let scroll = ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    let apps_box = GtkBox::new(Orientation::Vertical, 4);
+    let mut listed = 0;
+    if let Some(mime) = mime {
+        for app in gio::AppInfo::all_for_type(mime.as_str()).into_iter()
+            .filter(|app|app.should_show()).take(40) {
+            let button = Button::with_label(&app.display_name());
+            button.set_halign(Align::Fill);
+            let selected_file = file.clone();
+            let selected_window = window.clone();
+            button.connect_clicked(move |_| {
+                match app.launch(&[selected_file.clone()],None::<&gio::AppLaunchContext>) {
+                    Ok(()) => selected_window.close(),
+                    Err(error) => {
+                        // Keep the picker visible so the user can try another app.
+                        eprintln!("Melania Files: apertura con applicazione non riuscita: {error}");
+                    }
+                }
+            });
+            apps_box.append(&button);
+            listed += 1;
+        }
+    }
+    if listed==0 {
+        apps_box.append(&Label::new(Some("Nessuna applicazione associata a questo tipo di file.")));
+    }
+    scroll.set_child(Some(&apps_box));
+    outer.append(&scroll);
+    let dismiss = Button::with_label("Chiudi");
+    let dismiss_window = window.clone();
+    dismiss.connect_clicked(move |_| dismiss_window.close());
+    outer.append(&dismiss);
+    window.set_child(Some(&outer));
+    window.present();
+}
+
 fn watch_directory(browser: &Browser) {
     // Drop the previous monitor when switching folders.
     *browser.monitor.borrow_mut() = None;
@@ -643,7 +699,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         let menu = GtkBox::new(Orientation::Vertical, 3);
         menu.add_css_class("files-context-menu");
         for (caption, command) in [
-            ("Apri", "open"), ("Copia", "copy"), ("Taglia", "cut"),
+            ("Apri", "open"), ("Apri con…", "openwith"), ("Copia", "copy"), ("Taglia", "cut"),
             ("Rinomina…", "rename"), ("Sposta nel Cestino", "trash"),
             ("Proprietà", "properties")
         ] {
@@ -670,6 +726,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
                             }
                         }
                     },
+                    "openwith" => open_with_dialog(&target),
                     "copy" => state.copy_action.emit_clicked(),
                     "cut" => state.cut_action.emit_clicked(),
                     "rename" => { state.rename_field.set_text(&target.file_name().unwrap_or_default().to_string_lossy()); state.rename_field.grab_focus(); },
@@ -1195,6 +1252,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     inspector.append(&properties_button);
     let open = Button::with_label("Apri con l'app predefinita");
     inspector.append(&open);
+    let open_with = Button::with_label("Apri con…");
+    inspector.append(&open_with);
     let rename_name = Entry::builder().placeholder_text("Nuovo nome del file").build();
     let rename_button = Button::with_label("Rinomina senza sovrascrivere");
     let rename_menu = gtk::MenuButton::new();
@@ -1609,6 +1668,12 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
                 state.status.set_text("Rinomina completata senza sovrascritture.");
             },
             Err(err)=>state.status.set_text(&format!("Rinomina annullata: {err}")),
+        }
+    });
+    let selected_for_open_with=browser.selected.clone();
+    open_with.connect_clicked(move |_| {
+        if let Some(path)=selected_for_open_with.borrow().as_ref() {
+            if path.is_file() { open_with_dialog(path); }
         }
     });
     let selected = browser.selected.clone();
