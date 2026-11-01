@@ -36,6 +36,8 @@ class TaskbarDesktopClock(unittest.TestCase):
     def test_custom_vector_not_dependent_on_icon_pack(self):
         self.assertIn('symbol.set_draw_func(move |_,cr,width,height|',PANEL)
         self.assertIn('symbol.set_content_width(21);',PANEL)
+        self.assertIn('rounded(1.2,6.0,10.0,8.5,1.6);',PANEL)
+        self.assertIn('rounded(12.8,6.0,10.0,8.5,1.6);',PANEL)
         self.assertIn('refresh_label.set_label(&active.to_string());',PANEL)
         self.assertIn(".melania-workspace-switcher-content",CSS)
         self.assertIn(".melania-workspace-menu button.melania-workspace-choice.melania-workspace-active",CSS)
