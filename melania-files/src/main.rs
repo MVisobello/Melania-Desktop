@@ -340,23 +340,40 @@ fn open_with_dialog(path: &Path) {
     scroll.set_vexpand(true);
     let apps_box = GtkBox::new(Orientation::Vertical, 4);
     let mut listed = 0;
+    let feedback = Label::new(None);
+    feedback.set_xalign(0.0);
+    feedback.set_wrap(true);
     if let Some(mime) = mime {
         for app in gio::AppInfo::all_for_type(mime.as_str()).into_iter()
             .filter(|app|app.should_show()).take(40) {
+            let row = GtkBox::new(Orientation::Horizontal, 5);
             let button = Button::with_label(&app.display_name());
-            button.set_halign(Align::Fill);
+            button.set_hexpand(true);
             let selected_file = file.clone();
             let selected_window = window.clone();
-            button.connect_clicked(move |_| {
-                match app.launch(&[selected_file.clone()],None::<&gio::AppLaunchContext>) {
-                    Ok(()) => selected_window.close(),
-                    Err(error) => {
-                        // Keep the picker visible so the user can try another app.
-                        eprintln!("Melania Files: apertura con applicazione non riuscita: {error}");
+            let on_error = feedback.clone();
+            button.connect_clicked({
+                let app = app.clone();
+                move |_| {
+                    match app.launch(&[selected_file.clone()],None::<&gio::AppLaunchContext>) {
+                        Ok(()) => selected_window.close(),
+                        Err(error) => on_error.set_text(&format!("Impossibile aprire: {error}")),
                     }
                 }
             });
-            apps_box.append(&button);
+            row.append(&button);
+            let make_default = Button::with_label("Predefinita");
+            make_default.set_tooltip_text(Some("Imposta questa applicazione come predefinita per il tipo di file (modifica le associazioni utente Linux)"));
+            let mime_for_default = mime.to_string();
+            let status_for_default = feedback.clone();
+            make_default.connect_clicked(move |_| {
+                match app.set_as_default_for_type(&mime_for_default) {
+                    Ok(()) => status_for_default.set_text("Applicazione predefinita aggiornata."),
+                    Err(error) => status_for_default.set_text(&format!("Associazione non modificata: {error}")),
+                }
+            });
+            row.append(&make_default);
+            apps_box.append(&row);
             listed += 1;
         }
     }
@@ -365,6 +382,7 @@ fn open_with_dialog(path: &Path) {
     }
     scroll.set_child(Some(&apps_box));
     outer.append(&scroll);
+    outer.append(&feedback);
     let dismiss = Button::with_label("Chiudi");
     let dismiss_window = window.clone();
     dismiss.connect_clicked(move |_| dismiss_window.close());
