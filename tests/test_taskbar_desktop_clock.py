@@ -85,6 +85,17 @@ class TaskbarDesktopClock(unittest.TestCase):
         self.assertIn('font-size: 12px;',CSS)
         self.assertIn('font-weight: 400;',CSS)
 
+    def test_clock_is_vertically_centered_with_slightly_larger_text(self):
+        taskbar=PANEL[PANEL.index('fn taskbar('):PANEL.index('fn install_start_hotkey_listener(')]
+        self.assertIn('trailing.set_valign(gtk::Align::Center);',taskbar)
+        self.assertIn('clock.set_valign(gtk::Align::Center);',taskbar)
+        self.assertIn('clock_row.set_valign(gtk::Align::Center);',taskbar)
+        self.assertIn('clock_row.set_vexpand(false);',taskbar)
+        self.assertIn('/* Keep both clock lines legible',CSS)
+        clock_rule=CSS.split('/* Keep both clock lines legible',1)[1]
+        self.assertIn('font-size: 13px;',clock_rule)
+        self.assertIn('font-weight: 400;',clock_rule)
+
     def test_clock_has_no_expandable_blank_area_between_tray_and_time(self):
         taskbar=PANEL[PANEL.index('fn taskbar('):PANEL.index('fn install_start_hotkey_listener(')]
         self.assertIn('trailing.set_hexpand(false);',taskbar)
