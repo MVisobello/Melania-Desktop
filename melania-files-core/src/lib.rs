@@ -32,6 +32,26 @@ pub fn is_picture(path: &Path) -> bool {
     path.extension().and_then(|s| s.to_str())
         .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "png"|"jpg"|"jpeg"|"webp"|"gif"|"bmp"|"tiff"|"svg"|"avif"))
 }
+/// Files can disappear between read_dir and symlink_metadata (watchers,
+/// concurrent renames and removable media). Skipping those entries prevents
+/// one vanished file from blanking the whole directory listing.
+fn entry_from_path(path:PathBuf,name:String)->io::Result<Option<Entry>> {
+    let meta=match fs::symlink_metadata(&path) {
+        Ok(metadata)=>metadata,
+        Err(error) if matches!(error.kind(),
+            io::ErrorKind::NotFound|io::ErrorKind::PermissionDenied)=>return Ok(None),
+        Err(error)=>return Err(error),
+    };
+    let is_directory=meta.is_dir();
+    Ok(Some(Entry {
+        is_picture: !is_directory && is_picture(&path),
+        is_symlink: meta.file_type().is_symlink(),
+        size: meta.len(),
+        modified: meta.modified().ok(),
+        path,name,is_directory,
+    }))
+}
+
 /// Returns only direct children; no unbounded recursive scan or symlink traversal.
 /// An upper bound is essential for UI responsiveness and hostile directories.
 pub fn list_directory(dir: &Path, query: &str, options: ListingOptions) -> io::Result<Vec<Entry>> {
@@ -39,17 +59,18 @@ pub fn list_directory(dir: &Path, query: &str, options: ListingOptions) -> io::R
     let mut out = Vec::new();
     let q = query.trim().to_lowercase();
     for item in fs::read_dir(dir)? {
-        let item = item?;
+        let item=match item {
+            Ok(entry)=>entry,
+            Err(error) if matches!(error.kind(),
+                io::ErrorKind::NotFound|io::ErrorKind::PermissionDenied)=>continue,
+            Err(error)=>return Err(error),
+        };
         let name = item.file_name().to_string_lossy().to_string();
         if !options.show_hidden && name.starts_with('.') { continue; }
         if !q.is_empty() && !name.to_lowercase().contains(&q) { continue; }
-        let path = item.path();
-        let meta = fs::symlink_metadata(&path)?;
-        let is_directory = meta.is_dir();
-        let is_picture = !is_directory && is_picture(&path);
-        if options.pictures_only && !is_directory && !is_picture { continue; }
-        out.push(Entry { path, name, is_directory, is_picture,
-            is_symlink: meta.file_type().is_symlink(), size: meta.len(), modified: meta.modified().ok() });
+        let Some(entry)=entry_from_path(item.path(),name)? else {continue;};
+        if options.pictures_only && !entry.is_directory && !entry.is_picture { continue; }
+        out.push(entry);
         if out.len() >= options.max_entries { break; }
     }
     out.sort_by(|a,b| {
@@ -171,5 +192,14 @@ mod tests {
     #[test] fn bookmarks_persist_and_deduplicate() {let t=Temp::new();let folder=t.0.join("la mia cartella");fs::create_dir(&folder).unwrap();let mut bm=Bookmarks::default();assert!(bm.add(&folder).unwrap());assert!(!bm.add(&folder).unwrap());let file=t.0.join("bookmarks");bm.write_to(&file).unwrap();let mut restored=Bookmarks::read_from(&file).unwrap();assert_eq!(restored.paths(),&[folder.clone()]);assert!(restored.remove(&folder));assert!(restored.paths().is_empty());}
     #[test] fn rejects_file_bookmark() {let t=Temp::new();let f=t.0.join("documento");fs::write(&f,b"x").unwrap();assert!(Bookmarks::default().add(&f).is_err());}
     #[test] fn corrupted_bookmarks_do_not_inject_paths() {let t=Temp::new();let f=t.0.join("bookmarks");fs::write(&f,"hex:xyz\nhttps://example.com\nhex:2f746d70\n").unwrap();let bm=Bookmarks::read_from(&f).unwrap();assert_eq!(bm.paths(),&[PathBuf::from("/tmp")]);}
+    #[test] fn vanished_entry_is_skipped_without_a_directory_error() {
+        let t=Temp::new();
+        let missing=t.0.join("vanished-document.txt");
+        assert!(entry_from_path(missing,"vanished-document.txt".into()).unwrap().is_none());
+        fs::write(t.0.join("still-here.txt"),b"content").unwrap();
+        let entries=list_directory(&t.0,"",ListingOptions::default()).unwrap();
+        assert_eq!(entries.len(),1);
+        assert_eq!(entries[0].name,"still-here.txt");
+    }
     #[test] fn symlink_not_followed() {#[cfg(unix)]{let t=Temp::new();std::os::unix::fs::symlink("/tmp",t.0.join("pointer")).unwrap();let l=list_directory(&t.0,"",ListingOptions::default()).unwrap();assert!(l[0].is_symlink);assert!(!l[0].is_directory);}}
 }
