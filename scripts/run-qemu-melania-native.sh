@@ -83,6 +83,9 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_NATIVE_DRM_PRESENT=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_SEATD_READY=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_CAPABILITIES=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_INPUT_ENUMERATED .* forwarded=false' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_INPUT_WAYLAND_READY=false' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true' "$serial" ||
    ! grep -q 'Melania QEMU atomic TEST_ONLY passed:' "$serial" ||
    ! grep -q 'baseline_unchanged=true' "$serial" ||
    ! grep -q 'resources_unchanged=true' "$serial" ||
