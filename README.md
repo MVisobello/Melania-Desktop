@@ -29,14 +29,17 @@ libseat/logind completo.
   PR #84 mostra byte reali ed elementi completati durante le copie GVfs.
   PR #85 aggiunge ordinamento Nome/Data/Dimensione/Tipo nelle schede di
   rete, file nascosti (Ctrl+H), proprietà GIO asincrone e monitoraggio
-  delle cartelle quando supportato dai provider.
+  delle cartelle quando supportato dai provider. PR #86 limita a una
+  per scheda le letture GVfs attive, scartando risultati obsoleti e
+  mantenendo soltanto l'ultima richiesta in coda.
   Build Rust/GTK, Wayland e integrazione desktop passati.
   Restano alcuni adapter PathBuf per le viste locali avanzate e le operazioni
   POSIX specializzate, e servono ancora test reali con SMB/SFTP/WebDAV,
   autenticazione e dispositivi rimovibili. Parità Nautilus **non completa**.
   Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md)
   [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md) e
-  [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md).
+  [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md) e
+  [worker GVfs e limiti](docs/FILES-GVFS-WORKER-LIMITS.md).
 
 ## Avvio e sicurezza
 
