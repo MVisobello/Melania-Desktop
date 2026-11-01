@@ -48,6 +48,7 @@ struct Browser {
     refresh_pending: Rc<Cell<bool>>,
     // Single coalescing filesystem worker per tab, with stale-result fencing.
     listing_generation: Rc<Cell<u64>>,
+    listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     listing_running: Rc<Cell<bool>>,
     listing_pending: Rc<RefCell<Option<ListingRequest>>>,
     mounts_box: GtkBox,
@@ -639,6 +640,7 @@ struct ListingRequest {
     directory: PathBuf,
     query: String,
     options: model::ListingOptions,
+    cancelled: Arc<AtomicBool>,
 }
 
 /// Run no more than one filesystem scan per browser tab. A later filter or
@@ -652,7 +654,8 @@ fn start_listing_worker(browser: &Browser) {
     std::thread::spawn(move || {
         // Only plain Rust filesystem data crosses the thread boundary.
         // GTK widgets must remain exclusively on the owning main thread.
-        let result=model::list_directory(&request.directory,&request.query,request.options);
+        let result=gio_backend::list_local_entries(&request.directory,&request.query,
+            request.options,&request.cancelled);
         let _=sender.send((request,result));
     });
     let tab=browser.clone();
@@ -690,6 +693,12 @@ fn start_listing_worker(browser: &Browser) {
 
 /// Directory I/O never runs on GTK's event loop.
 fn refresh(browser: &Browser) {
+    // Cancel obsolete GIO enumeration before scheduling a fresh request.
+    if let Some(previous)=browser.listing_cancel.borrow_mut().take() {
+        previous.store(true,Ordering::Release);
+    }
+    let cancelled=Arc::new(AtomicBool::new(false));
+    *browser.listing_cancel.borrow_mut()=Some(cancelled.clone());
     let generation=browser.listing_generation.get().wrapping_add(1);
     browser.listing_generation.set(generation);
     let directory=browser.current.borrow().clone();
@@ -723,7 +732,7 @@ fn refresh(browser: &Browser) {
     browser.preview_image.set_visible(false);
     browser.status.set_text("Caricamento…");
     *browser.listing_pending.borrow_mut()=Some(ListingRequest{
-        generation,directory,query,options,
+        generation,directory,query,options,cancelled,
     });
     start_listing_worker(browser);
 }
@@ -1627,6 +1636,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         monitor: Rc::new(RefCell::new(None)),
         refresh_pending: Rc::new(Cell::new(false)),
         listing_generation: Rc::new(Cell::new(0)),
+        listing_cancel: Rc::new(RefCell::new(None)),
         listing_running: Rc::new(Cell::new(false)),
         listing_pending: Rc::new(RefCell::new(None)),
         mounts_box: GtkBox::new(Orientation::Vertical, 6),
