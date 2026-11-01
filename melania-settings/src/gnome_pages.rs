@@ -401,8 +401,14 @@ pub fn add_pages(stack: &Stack) {
     group(&applications, "Applicazioni");
     applications.append(&info_row("applications-other", "Applicazioni installate",
         "Le applicazioni disponibili compaiono nel menu Start di Melania."));
-    applications.append(&info_row("dialog-information", "App predefinite",
-        "Le associazioni dei file sono gestite tramite XDG e le impostazioni delle singole applicazioni."));
+    // Put real controls one click away from their logical parent category,
+    // not only in a long left sidebar or the generic System overview.
+    applications.append(&linked_row(stack, "xfce-preferred", "applications-default",
+        "App predefinite", "Browser e posta elettronica"));
+    applications.append(&linked_row(stack, "xfce-mime", "text-x-generic",
+        "Associazioni file", "Scegli l'applicazione per ogni tipo di file"));
+    applications.append(&linked_row(stack, "xfce-session", "system-run",
+        "Avvio automatico", "Applicazioni all'avvio della sessione"));
     stack.add_titled(&applications, Some("applications"), "App");
 
     let account = page("Account", "avatar-default");
