@@ -21,6 +21,14 @@ pub struct SearchResult {
 /// Case-insensitive bounded recursive filename search. Searches names, not
 /// file contents. Does not follow symlinks or leave the requested root.
 pub fn search_tree(root: &Path, query: &str, limits: SearchLimits) -> io::Result<SearchResult> {
+    search_tree_cancellable(root, query, limits, || false)
+}
+
+/// Runs in a worker thread. The callback is checked before each directory
+/// and each entry so a closed search window can cancel large scans quickly.
+pub fn search_tree_cancellable<F: Fn() -> bool>(
+    root: &Path, query: &str, limits: SearchLimits, cancelled: F
+) -> io::Result<SearchResult> {
     // A symlink as root is not traversed either; don't silently escape the
     // user-selected search tree by resolving a linked starting directory.
     if !fs::symlink_metadata(root)?.is_dir() {
@@ -35,6 +43,7 @@ pub fn search_tree(root: &Path, query: &str, limits: SearchLimits) -> io::Result
     let mut visited = 0usize;
     let mut truncated = false;
     while let Some(dir) = queue.pop_front() {
+        if cancelled() { return Err(io::Error::new(io::ErrorKind::Interrupted,"Ricerca annullata")); }
         if visited >= limits.max_directories { truncated = true; break; }
         visited += 1;
         let iter = match fs::read_dir(&dir) {
@@ -43,6 +52,7 @@ pub fn search_tree(root: &Path, query: &str, limits: SearchLimits) -> io::Result
             Err(_) => continue, // unreadable nested directories are skipped
         };
         for child in iter {
+            if cancelled() { return Err(io::Error::new(io::ErrorKind::Interrupted,"Ricerca annullata")); }
             let child = match child { Ok(c) => c, Err(_) => continue };
             let name = child.file_name().to_string_lossy().into_owned();
             if !limits.show_hidden && name.starts_with('.') { continue; }
@@ -136,6 +146,12 @@ mod tests {
     struct Tmp(PathBuf);
     impl Tmp { fn new()->Self { let p=std::env::temp_dir().join(format!("melania-nautilus-{}-{}",std::process::id(),N.fetch_add(1,Ordering::Relaxed)));fs::create_dir(&p).unwrap();Self(p) } }
     impl Drop for Tmp { fn drop(&mut self){ let _=fs::remove_dir_all(&self.0); } }
+    #[test] fn cancelled_recursive_search_stops_immediately() {
+        let t=Tmp::new();
+        fs::create_dir(t.0.join("sub")).unwrap();
+        let error=search_tree_cancellable(&t.0,"anything",SearchLimits::default(),||true).unwrap_err();
+        assert_eq!(error.kind(),io::ErrorKind::Interrupted);
+    }
     #[test] fn search_nested_and_hidden() {
         let t=Tmp::new(); fs::create_dir(t.0.join("deep")).unwrap();
         fs::write(t.0.join("deep/Relazione.PDF"),b"x").unwrap();

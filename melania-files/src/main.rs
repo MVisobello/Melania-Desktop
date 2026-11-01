@@ -317,6 +317,80 @@ fn show_properties(path: &Path) {
     win.present();
 }
 
+/// Installed system handlers for this file's MIME type; never construct
+/// shell commands from filenames or desktop entries.
+fn open_with_dialog(path: &Path) {
+    let file = gio::File::for_path(path);
+    let mime = file.query_info("standard::content-type",
+        gio::FileQueryInfoFlags::NONE,None::<&gio::Cancellable>)
+        .ok().and_then(|info|info.content_type());
+    let window = gtk::Window::builder().title("Apri con — Melania Files")
+        .default_width(420).default_height(400).build();
+    let outer = GtkBox::new(Orientation::Vertical, 8);
+    outer.set_margin_top(14);
+    outer.set_margin_bottom(14);
+    outer.set_margin_start(14);
+    outer.set_margin_end(14);
+    let description = Label::new(Some(&format!("Applicazioni disponibili per {}",
+        path.file_name().unwrap_or_default().to_string_lossy())));
+    description.set_wrap(true);
+    description.set_xalign(0.0);
+    outer.append(&description);
+    let scroll = ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    let apps_box = GtkBox::new(Orientation::Vertical, 4);
+    let mut listed = 0;
+    let feedback = Label::new(None);
+    feedback.set_xalign(0.0);
+    feedback.set_wrap(true);
+    if let Some(mime) = mime {
+        for app in gio::AppInfo::all_for_type(mime.as_str()).into_iter()
+            .filter(|app|app.should_show()).take(40) {
+            let row = GtkBox::new(Orientation::Horizontal, 5);
+            let button = Button::with_label(&app.display_name());
+            button.set_hexpand(true);
+            let selected_file = file.clone();
+            let selected_window = window.clone();
+            let on_error = feedback.clone();
+            button.connect_clicked({
+                let app = app.clone();
+                move |_| {
+                    match app.launch(&[selected_file.clone()],None::<&gio::AppLaunchContext>) {
+                        Ok(()) => selected_window.close(),
+                        Err(error) => on_error.set_text(&format!("Impossibile aprire: {error}")),
+                    }
+                }
+            });
+            row.append(&button);
+            let make_default = Button::with_label("Predefinita");
+            make_default.set_tooltip_text(Some("Imposta questa applicazione come predefinita per il tipo di file (modifica le associazioni utente Linux)"));
+            let mime_for_default = mime.to_string();
+            let status_for_default = feedback.clone();
+            make_default.connect_clicked(move |_| {
+                match app.set_as_default_for_type(&mime_for_default) {
+                    Ok(()) => status_for_default.set_text("Applicazione predefinita aggiornata."),
+                    Err(error) => status_for_default.set_text(&format!("Associazione non modificata: {error}")),
+                }
+            });
+            row.append(&make_default);
+            apps_box.append(&row);
+            listed += 1;
+        }
+    }
+    if listed==0 {
+        apps_box.append(&Label::new(Some("Nessuna applicazione associata a questo tipo di file.")));
+    }
+    scroll.set_child(Some(&apps_box));
+    outer.append(&scroll);
+    outer.append(&feedback);
+    let dismiss = Button::with_label("Chiudi");
+    let dismiss_window = window.clone();
+    dismiss.connect_clicked(move |_| dismiss_window.close());
+    outer.append(&dismiss);
+    window.set_child(Some(&outer));
+    window.present();
+}
+
 fn watch_directory(browser: &Browser) {
     // Drop the previous monitor when switching folders.
     *browser.monitor.borrow_mut() = None;
@@ -643,7 +717,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         let menu = GtkBox::new(Orientation::Vertical, 3);
         menu.add_css_class("files-context-menu");
         for (caption, command) in [
-            ("Apri", "open"), ("Copia", "copy"), ("Taglia", "cut"),
+            ("Apri", "open"), ("Apri con…", "openwith"), ("Copia", "copy"), ("Taglia", "cut"),
             ("Rinomina…", "rename"), ("Sposta nel Cestino", "trash"),
             ("Proprietà", "properties")
         ] {
@@ -670,6 +744,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
                             }
                         }
                     },
+                    "openwith" => open_with_dialog(&target),
                     "copy" => state.copy_action.emit_clicked(),
                     "cut" => state.cut_action.emit_clicked(),
                     "rename" => { state.rename_field.set_text(&target.file_name().unwrap_or_default().to_string_lossy()); state.rename_field.grab_focus(); },
@@ -822,6 +897,181 @@ fn repaint_favorites(browser: &Browser) {
     }
 }
 
+/// Explicit, non-destructive import of local GTK/Nautilus folder bookmarks.
+/// Remote URIs are deliberately skipped until the browser becomes gio::File-based.
+fn import_nautilus_bookmarks(browser: &Browser) {
+    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|s|!s.is_empty())
+        .map(PathBuf::from).unwrap_or_else(||home().join(".config"));
+    let mut imported=0usize;
+    let mut skipped_remote=0usize;
+    let mut bookmarks=browser.bookmarks.borrow_mut();
+    for version in ["gtk-3.0","gtk-4.0"] {
+        let source=config.join(version).join("bookmarks");
+        let Ok(bytes)=fs::read(&source) else {continue;};
+        if bytes.len()>128*1024 {continue;}
+        let Ok(content)=String::from_utf8(bytes) else {continue;};
+        for line in content.lines().take(500) {
+            let Some(uri)=line.split_whitespace().next() else {continue;};
+            if uri.starts_with('#') {continue;}
+            if !uri.starts_with("file://") {skipped_remote+=1;continue;}
+            let Some(path)=gio::File::for_uri(uri).path() else {continue;};
+            if let Ok(true)=bookmarks.add(&path) {imported+=1;}
+        }
+    }
+    let result=if imported>0 {
+        model::bookmarks_path().and_then(|path|bookmarks.write_to(&path))
+    } else {Ok(())};
+    drop(bookmarks);
+    match result {
+        Ok(()) => {
+            repaint_favorites(browser);
+            browser.status.set_text(&format!(
+                "Importati {imported} preferiti locali da Nautilus/GTK. URI remoti saltati: {skipped_remote}."
+            ));
+        }
+        Err(error) => browser.status.set_text(&format!(
+            "Importazione non salvata: {error}; ricontrollare i preferiti prima di chiudere."
+        )),
+    }
+}
+
+/// Numbered batch rename keeps Melania's browser UI and delegates all
+/// filesystem mutations to the same Linux atomic no-replace primitive used by
+/// single-file rename. A preview is shown before any operation.
+fn open_batch_rename_dialog(browser: &Browser) {
+    let sources: Vec<PathBuf> = browser.selected_paths.borrow().iter().cloned().collect();
+    if sources.len() < 2 || sources.len() > 500 {
+        browser.status.set_text("Seleziona da 2 a 500 elementi (Ctrl o Maiusc) per la rinomina multipla.");
+        return;
+    }
+    let window = gtk::Window::builder()
+        .title("Rinomina multipla — Melania Files")
+        .default_width(560).default_height(440).build();
+    let outer = GtkBox::new(Orientation::Vertical, 10);
+    outer.set_margin_top(16);
+    outer.set_margin_bottom(16);
+    outer.set_margin_start(16);
+    outer.set_margin_end(16);
+    let caption = Label::new(Some(&format!("{} elementi selezionati · anteprima prima della conferma", sources.len())));
+    caption.set_xalign(0.0);
+    outer.append(&caption);
+    let prefix = Entry::builder().placeholder_text("Prefisso (es. Fattura)").build();
+    prefix.set_text("File");
+    outer.append(&prefix);
+    let start = gtk::SpinButton::with_range(1.0, 999_999.0, 1.0);
+    start.set_value(1.0);
+    start.set_tooltip_text(Some("Numero iniziale"));
+    outer.append(&start);
+    let listing = Label::new(None);
+    listing.set_xalign(0.0);
+    listing.set_yalign(0.0);
+    listing.set_wrap(true);
+    listing.set_selectable(true);
+    let scroll = ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&listing));
+    outer.append(&scroll);
+    let feedback = Label::new(Some("Le estensioni vengono preservate; nessun file sarà sovrascritto."));
+    feedback.set_wrap(true);
+    feedback.set_xalign(0.0);
+    outer.append(&feedback);
+    let buttons = GtkBox::new(Orientation::Horizontal, 8);
+    buttons.set_halign(Align::End);
+    let cancel = Button::with_label("Annulla");
+    let apply = Button::with_label("Rinomina");
+    apply.add_css_class("suggested-action");
+    buttons.append(&cancel);
+    buttons.append(&apply);
+    outer.append(&buttons);
+    window.set_child(Some(&outer));
+    let cancel_window = window.clone();
+    cancel.connect_clicked(move |_| cancel_window.close());
+    let update = {
+        let sources = sources.clone();
+        let prefix = prefix.clone();
+        let start = start.clone();
+        let listing = listing.clone();
+        let apply = apply.clone();
+        Rc::new(move || {
+            let name = prefix.text().to_string();
+            match nautilus::batch_rename_plan(&sources, &name, start.value_as_int() as u32) {
+                Ok(plan) => {
+                    let shown = plan.iter().take(25)
+                        .map(|(old,new)| format!("{}  →  {}",
+                            old.file_name().unwrap_or_default().to_string_lossy(),
+                            new.file_name().unwrap_or_default().to_string_lossy()))
+                        .collect::<Vec<_>>().join("\n");
+                    listing.set_text(&format!("{shown}{}", if plan.len()>25 { "\n… altri elementi" } else { "" }));
+                    apply.set_sensitive(true);
+                }
+                Err(error) => {
+                    listing.set_text(&format!("Impossibile applicare questa rinomina: {error}"));
+                    apply.set_sensitive(false);
+                }
+            }
+        })
+    };
+    update();
+    let on_prefix = update.clone();
+    prefix.connect_changed(move |_| on_prefix());
+    let on_start = update.clone();
+    start.connect_value_changed(move |_| on_start());
+    let done_window = window.clone();
+    let done_state = browser.clone();
+    apply.connect_clicked(move |button| {
+        let name = prefix.text().to_string();
+        let number = start.value_as_int() as u32;
+        // Re-plan after the confirmation to detect deleted sources or names
+        // that another process created while the preview window was open.
+        if let Err(error) = nautilus::batch_rename_plan(&sources, &name, number) {
+            feedback.set_text(&format!("Rinomina non avviata: {error}"));
+            return;
+        }
+        button.set_sensitive(false);
+        cancel.set_sensitive(false);
+        feedback.set_text("Rinomina in corso…");
+        let paths = sources.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = model::batch_rename::rename_numbered(&paths, &name, number,
+                |source, destination| {
+                    let filename = destination.file_name().and_then(|s| s.to_str())
+                        .ok_or_else(||std::io::Error::new(std::io::ErrorKind::InvalidInput,"Nome destinazione non valido"))?;
+                    transfer::rename_local(source, filename).map(|_| ())
+                });
+            let _ = tx.send(result);
+        });
+        let state = done_state.clone();
+        let dialog = done_window.clone();
+        let feedback = feedback.clone();
+        let apply = button.clone();
+        let cancel = cancel.clone();
+        glib::timeout_add_local(Duration::from_millis(40), move || match rx.try_recv() {
+            Ok(Ok(count)) => {
+                refresh(&state);
+                state.status.set_text(&format!("{count} elementi rinominati senza sovrascritture."));
+                dialog.close();
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                feedback.set_text(&format!("Rinomina interrotta: {error}"));
+                state.status.set_text(&format!("Controlla il risultato della rinomina multipla: {error}"));
+                apply.set_sensitive(true);
+                cancel.set_sensitive(true);
+                refresh(&state);
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                feedback.set_text("La procedura di rinomina è terminata senza risposta. Verifica i file.");
+                cancel.set_sensitive(true);
+                glib::ControlFlow::Break
+            }
+        });
+    });
+    window.present();
+}
+
 fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfer>>>, tab_title: Label) -> GtkBox {
     let root = GtkBox::new(Orientation::Vertical, 0);
     let toolbar = GtkBox::new(Orientation::Horizontal, 9);
@@ -872,6 +1122,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let mark = Button::with_label("☆ Preferito");
     mark.set_tooltip_text(Some("Aggiungi la cartella corrente ai preferiti"));
 
+    let import_bookmarks = Button::with_label("Importa preferiti Nautilus");
+    import_bookmarks.set_tooltip_text(Some("Importa soltanto cartelle locali dai preferiti GTK; non cambia i preferiti di Nautilus"));
     let unmark = Button::with_label("− Preferito");
     unmark.set_tooltip_text(Some("Rimuovi la cartella corrente dai preferiti"));
 
@@ -958,6 +1210,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     other_choices.append(&recursive_search_button);
     other_choices.append(&mark);
     other_choices.append(&unmark);
+    other_choices.append(&import_bookmarks);
     root.append(&actions_scroll);
     root.append(&toolbar);
     // A pair of native GTK Paned containers guarantee that the sidebar,
@@ -1058,6 +1311,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     inspector.append(&properties_button);
     let open = Button::with_label("Apri con l'app predefinita");
     inspector.append(&open);
+    let open_with = Button::with_label("Apri con…");
+    inspector.append(&open_with);
     let rename_name = Entry::builder().placeholder_text("Nuovo nome del file").build();
     let rename_button = Button::with_label("Rinomina senza sovrascrivere");
     let rename_menu = gtk::MenuButton::new();
@@ -1072,6 +1327,10 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     rename_choices.append(&Label::new(Some("Nuovo nome")));
     rename_choices.append(&rename_name);
     rename_choices.append(&rename_button);
+    rename_choices.append(&gtk::Separator::new(Orientation::Horizontal));
+    let rename_multiple = Button::with_label("Rinomina multipla…");
+    rename_multiple.set_tooltip_text(Some("Rinomina i file selezionati mostrando un'anteprima; ripristina i nomi precedenti in caso di errore"));
+    rename_choices.append(&rename_multiple);
     let rename_popover = gtk::Popover::new();
     rename_popover.set_child(Some(&rename_choices));
     rename_menu.set_popover(Some(&rename_popover));
@@ -1288,47 +1547,91 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     });
     let state=browser.clone();
     recursive_search_button.connect_clicked(move |_| {
-        let query = state.search.text().to_string();
-        let query = query.trim();
+        let query = state.search.text().trim().to_string();
         if query.is_empty() {
-            state.status.set_text("Scrivi prima il nome da cercare nella casella di ricerca."); return;
+            state.status.set_text("Scrivi prima il nome da cercare nella casella di ricerca.");
+            return;
         }
         let dir = state.current.borrow().clone();
         if dir == Path::new("/") {
-            state.status.set_text("Per la ricerca ricorsiva scegli una cartella più specifica."); return;
+            state.status.set_text("Per la ricerca ricorsiva scegli una cartella più specifica.");
+            return;
         }
-        // Intentionally bounded. A future revision must move this work into
-        // a cancellable background worker for large or remote directories.
-        let results = nautilus::search_tree(&dir, query, nautilus::SearchLimits {
-            max_results: 150, max_directories: 120, show_hidden: state.show_hidden.get()
+        let window = gtk::Window::builder()
+            .title("Ricerca in sottocartelle — Melania Files")
+            .default_width(560).default_height(480).build();
+        let outer = GtkBox::new(Orientation::Vertical, 8);
+        outer.set_margin_top(12);
+        outer.set_margin_start(12);
+        outer.set_margin_end(12);
+        outer.set_margin_bottom(12);
+        let summary = Label::new(Some("Ricerca in corso…"));
+        summary.set_xalign(0.0);
+        outer.append(&summary);
+        let scroll = ScrolledWindow::new();
+        scroll.set_vexpand(true);
+        let list = GtkBox::new(Orientation::Vertical, 3);
+        scroll.set_child(Some(&list));
+        outer.append(&scroll);
+        let cancel = Button::with_label("Annulla ricerca");
+        outer.append(&cancel);
+        window.set_child(Some(&outer));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let on_close=cancelled.clone();
+        window.connect_close_request(move |_| {
+            on_close.store(true,Ordering::Release);
+            glib::Propagation::Proceed
         });
-        match results {
-            Ok(result) => {
-                let window = gtk::Window::builder().title("Ricerca in sottocartelle — Melania Files")
-                    .default_width(560).default_height(480).build();
-                let outer = GtkBox::new(Orientation::Vertical, 8);
-                outer.set_margin_top(12); outer.set_margin_start(12);
-                outer.set_margin_end(12); outer.set_margin_bottom(12);
-                let summary = Label::new(Some(&format!("{} risultati ({} cartelle esaminate){}",
-                    result.paths.len(), result.directories_scanned,
-                    if result.truncated { " · Limite raggiunto" } else { "" })));
-                summary.set_xalign(0.0); outer.append(&summary);
-                let scroll = ScrolledWindow::new(); scroll.set_vexpand(true);
-                let list = GtkBox::new(Orientation::Vertical, 3);
-                for path in result.paths {
-                    let item = Button::with_label(&path.display().to_string());
-                    let state = state.clone(); let target = path.clone();
-                    item.connect_clicked(move |_| {
-                        if target.is_dir() { navigate(&state, target.clone(), true); }
-                        else if let Some(parent) = target.parent() { navigate(&state, parent.to_path_buf(), true); }
-                    });
-                    list.append(&item);
+        let close_window=window.clone();
+        cancel.connect_clicked(move |_| close_window.close());
+        let (sender,receiver)=std::sync::mpsc::sync_channel(1);
+        let worker_cancel=cancelled.clone();
+        let show_hidden=state.show_hidden.get();
+        std::thread::spawn(move || {
+            let result=nautilus::search_tree_cancellable(&dir,&query,nautilus::SearchLimits {
+                max_results: 150, max_directories: 120, show_hidden
+            },||worker_cancel.load(Ordering::Acquire));
+            let _=sender.send(result);
+        });
+        let result_state=state.clone();
+        let result_cancel=cancelled.clone();
+        glib::timeout_add_local(Duration::from_millis(40),move || {
+            if result_cancel.load(Ordering::Acquire) {return glib::ControlFlow::Break;}
+            match receiver.try_recv() {
+                Ok(Ok(result)) => {
+                    summary.set_text(&format!("{} risultati ({} cartelle esaminate){}",
+                        result.paths.len(),result.directories_scanned,
+                        if result.truncated {" · Limite raggiunto"} else {""}));
+                    cancel.set_label("Chiudi");
+                    for path in result.paths {
+                        let button=Button::with_label(&path.display().to_string());
+                        let target=path.clone();
+                        let state=result_state.clone();
+                        button.connect_clicked(move |_| {
+                            if target.is_dir() {navigate(&state,target.clone(),true);}
+                            else if let Some(parent)=target.parent() {
+                                navigate(&state,parent.to_path_buf(),true);
+                            }
+                        });
+                        list.append(&button);
+                    }
+                    glib::ControlFlow::Break
                 }
-                scroll.set_child(Some(&list)); outer.append(&scroll);
-                window.set_child(Some(&outer)); window.present();
-            },
-            Err(e) => state.status.set_text(&format!("Ricerca non riuscita: {e}")),
-        }
+                Ok(Err(error)) => {
+                    summary.set_text(&format!("Ricerca non riuscita: {error}"));
+                    result_state.status.set_text(&format!("Ricerca non riuscita: {error}"));
+                    cancel.set_label("Chiudi");
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                    summary.set_text("Ricerca interrotta.");
+                    cancel.set_label("Chiudi");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+        window.present();
     });
     let state=browser.clone();
     sort.connect_selected_notify(move |sort| {
@@ -1352,6 +1655,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
             Err(err)=>state.status.set_text(&format!("Impossibile salvare preferito: {err}")),
         }
     });
+    let state_for_import=browser.clone();
+    import_bookmarks.connect_clicked(move |_| import_nautilus_bookmarks(&state_for_import));
     let state=browser.clone();
     unmark.connect_clicked(move |_| {
         let folder=state.current.borrow().canonicalize();
@@ -1409,6 +1714,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         if let Some(path) = state.selected.borrow().as_ref() { show_properties(path); }
         else { state.status.set_text("Seleziona un elemento per visualizzarne le proprietà."); }
     });
+    let batch_state = browser.clone();
+    rename_multiple.connect_clicked(move |_| open_batch_rename_dialog(&batch_state));
     let state=browser.clone();
     let rename_name_for_click = rename_name.clone();
     rename_button.connect_clicked(move |_| {
@@ -1422,6 +1729,12 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
                 state.status.set_text("Rinomina completata senza sovrascritture.");
             },
             Err(err)=>state.status.set_text(&format!("Rinomina annullata: {err}")),
+        }
+    });
+    let selected_for_open_with=browser.selected.clone();
+    open_with.connect_clicked(move |_| {
+        if let Some(path)=selected_for_open_with.borrow().as_ref() {
+            if path.is_file() { open_with_dialog(path); }
         }
     });
     let selected = browser.selected.clone();
