@@ -28,9 +28,9 @@ class NativeKmsGuardStage13(unittest.TestCase):
 
     def test_real_qemu_preflight_uses_seat_and_deadline_checkpoints(self):
         self.assertIn("NativePreflightGuard::capture(",KMS)
-        self.assertGreaterEqual(KMS.count("guard.checkpoint(seat_active(),Instant::now())"),3)
-        self.assertIn("guard.verify_after(&after,&resources_after,seat_active(),Instant::now())",KMS)
-        self.assertIn("prepare_and_render_test_only(&mut device,||session.is_active())",MAIN)
+        self.assertGreaterEqual(KMS.count("guard.checkpoint(seat_active()?,Instant::now())"),3)
+        self.assertIn("guard.verify_after(&after,&resources_after,seat_active()?,Instant::now())",KMS)
+        self.assertIn("prepare_and_render_test_only(&mut device,|| {",MAIN)
         self.assertIn("assert_dedicated_console();",MAIN)
         self.assertIn("assert_qemu_test_guest();",MAIN)
         self.assertIn('timeout --signal=TERM --kill-after=3s 45s',SHELL)
