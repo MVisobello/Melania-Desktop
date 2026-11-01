@@ -894,6 +894,9 @@ mod tests {
         assert!(!file.directory);
         let details=query_details(&file.uri).unwrap();
         assert_eq!(details.size,Some(20));
+        let preview=text_quicklook(&file.uri,&stop).unwrap();
+        assert_eq!(preview.content,"melania-sftp-sample\n");
+        assert!(!preview.truncated);
         let target=gio::File::for_uri(&root).child("target").uri().to_string();
         let before=copy_uris(&[file.uri.clone()],&target,&stop).unwrap();
         assert_eq!(before,1);
