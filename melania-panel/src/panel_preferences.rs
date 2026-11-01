@@ -54,9 +54,13 @@ fn apply_preferences(
     panel.set_anchor(Edge::Top,top);
     panel.set_anchor(Edge::Bottom,!top);
     panel.set_default_size(0,i32::from(prefs.panel_height));
-    // Existing 52px defaults are unchanged; other sizes are a true min-height
-    // on the real GTK bar widget, rather than an inert Settings value.
-    bar.set_size_request(-1,i32::from(prefs.panel_height).saturating_sub(10));
+    // The top edge must not inherit the bottom bar's vertical padding/minimum:
+    // that combination made the 52px panel grow when it was moved upwards.
+    // Keep the chosen height identical at both edges, including custom sizes.
+    if top { bar.add_css_class("melania-bar-top"); }
+    else { bar.remove_css_class("melania-bar-top"); }
+    let vertical_padding=if top {4} else {10};
+    bar.set_size_request(-1,i32::from(prefs.panel_height).saturating_sub(vertical_padding));
     set_revealed(panel,prefs,revealed);
 
     // The compositor accounts for the layer's exclusive top zone itself.
