@@ -19,8 +19,8 @@ class NativeInputStage20(unittest.TestCase):
             "session.clone().into()", "input_context.udev_assign_seat(&seat_name)",
             "LibinputInputBackend::new(input_context.clone())",
             "insert_source(input_backend", "InputEvent::DeviceAdded",
-            "InputEvent::DeviceRemoved", "DeviceCapability::Keyboard",
-            "DeviceCapability::Pointer", "DeviceCapability::Touch",
+            "InputEvent::DeviceRemoved",
+            "register_input_device(state,device)",
             "input_context.suspend()", "input_context.resume()",
             "input_context.dispatch()?",
             "libinput::event::DeviceEvent::Added(added)",
@@ -31,6 +31,9 @@ class NativeInputStage20(unittest.TestCase):
         ):
             self.assertIn(token,stage)
         self.assertIn("assert_dedicated_console();",stage)
+        for capability in ("DeviceCapability::Keyboard", "DeviceCapability::Pointer",
+                           "DeviceCapability::Touch"):
+            self.assertIn(capability,MAIN)
         self.assertIn("pub mod input_registry;",LIB)
         self.assertIn("input_registry.set_seat_active(false)",LIB)
         self.assertIn("input_registry.set_seat_active(true)",LIB)
