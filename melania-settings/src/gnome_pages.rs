@@ -136,6 +136,26 @@ fn parse_volume(output: &str) -> Option<f64> {
     let volume = normalized.split_whitespace().next()?.parse::<f64>().ok()?;
     if volume.is_finite() { Some((volume * 100.0).clamp(0.0, 100.0)) } else { None }
 }
+/// Available power-profiles-daemon modes, whitelisted before any call to
+/// powerprofilesctl set. Models do not always provide performance mode.
+fn parse_power_profiles(output:&str)->Vec<&'static str> {
+    let mut result=Vec::new();
+    for line in output.lines() {
+        let trimmed=line.trim().trim_start_matches('*').trim();
+        let Some(mode)=trimmed.strip_suffix(':') else {continue;};
+        let value=match mode {
+            "power-saver"=>Some("power-saver"),
+            "balanced"=>Some("balanced"),
+            "performance"=>Some("performance"),
+            _=>None,
+        };
+        if let Some(value)=value {
+            if !result.contains(&value){result.push(value);}
+        }
+    }
+    result
+}
+
 fn os_name() -> String {
     fs::read_to_string("/etc/os-release").ok()
         .and_then(|text| text.lines().find_map(|line| {
@@ -244,8 +264,61 @@ pub fn add_pages(stack: &Stack) {
     group(&power, "Batteria");
     let charge = battery_status();
     power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
-    power.append(&info_row("dialog-information", "Risparmio energetico",
-        "I profili energetici sono gestiti dai servizi Linux; Melania non li modifica da questa pagina."));
+    group(&power,"Profili energetici");
+    // XFCE-style power profile choice backed by the real Linux service. No
+    // toggle is shown when power-profiles-daemon is absent or unsupported.
+    let profile_list=Command::new("powerprofilesctl").arg("list").output().ok()
+        .filter(|result|result.status.success())
+        .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
+        .unwrap_or_default();
+    if profile_list.is_empty() {
+        power.append(&info_row("dialog-information","Profili non disponibili",
+            "power-profiles-daemon non è disponibile o non espone profili supportati."));
+    } else {
+        let active_profile=read_command("powerprofilesctl",&["get"]).unwrap_or_default();
+        let labels=profile_list.iter().map(|name|match *name {
+            "power-saver"=>"Risparmio energetico",
+            "balanced"=>"Bilanciato",
+            "performance"=>"Prestazioni elevate",
+            _=>*name
+        }).collect::<Vec<_>>();
+        let selector=gtk::DropDown::from_strings(&labels);
+        let selected=profile_list.iter().position(|name|*name==active_profile)
+            .unwrap_or(0);
+        selector.set_selected(selected as u32);
+        selector.set_hexpand(true);
+        let controls=GtkBox::new(Orientation::Horizontal,10);
+        controls.add_css_class("settings-action-row");
+        controls.append(&selector);
+        let apply=Button::with_label("Applica profilo");
+        apply.add_css_class("settings-save");
+        controls.append(&apply);
+        let feedback=label("La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
+            "settings-row-description");
+        let response=feedback.clone();
+        apply.connect_clicked(move |_|{
+            let Some(&profile)=profile_list.get(selector.selected() as usize) else {return;};
+            let result=Command::new("powerprofilesctl").args(["set",profile]).status();
+            match result {
+                Ok(status) if status.success() =>response.set_text(
+                    &format!("Profilo energetico applicato: {profile}.")
+                ),
+                Ok(status)=>response.set_text(&format!(
+                    "Impossibile applicare il profilo {profile}: codice {status}."
+                )),
+                Err(error)=>response.set_text(&format!(
+                    "Servizio profili energetici non disponibile: {error}"
+                )),
+            }
+        });
+        power.append(&controls);
+        power.append(&feedback);
+    }
+    power.append(&info_row("dialog-information","Inattività e sospensione",
+        "I timer di inattività, le azioni del coperchio e la sospensione automatica "
+        ));
+    power.append(&label("richiedono ancora l'integrazione dei servizi di sessione Melania.",
+        "settings-row-description"));
     stack.add_titled(&power, Some("power"), "Alimentazione");
 
     let storage = page("Archiviazione", "Informazioni sulle unità locali.", "drive-harddisk");
@@ -345,8 +418,15 @@ pub fn add_pages(stack: &Stack) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_volume;
+    use super::{parse_volume,parse_power_profiles};
 
+    #[test]
+    fn only_whitelisted_power_profiles_are_parsed() {
+        let output="  power-saver:\n  * balanced:\n    Driver: platform_profile\n  performance:\n  malicious;command:\n";
+        assert_eq!(parse_power_profiles(output),
+            vec!["power-saver","balanced","performance"]);
+        assert!(parse_power_profiles("No profiles found.").is_empty());
+    }
     #[test]
     fn reads_pipewire_volume_without_exceeding_slider_range() {
         assert_eq!(parse_volume("Volume: 0.42"), Some(42.0));
