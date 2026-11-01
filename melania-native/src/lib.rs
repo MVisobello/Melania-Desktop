@@ -5,6 +5,7 @@
 //! libinput devices, switch VTs, or advertise a functioning native session.
 pub mod outputs;
 pub mod renderer;
+pub mod planes;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
