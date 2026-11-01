@@ -194,6 +194,78 @@ fn watch_current_directory(remote:&Remote) {
 
 /// Metadata is queried off the GTK thread; the window owns no file handles
 /// and never recursively scans directories or follows symlinks.
+/// Read-only plain text preview, explicitly opened by the user. The worker
+/// never holds a GTK object; bytes are capped by the GIO backend before they
+/// cross the channel. Closing the window cancels any pending provider read.
+fn open_text_quicklook(remote:&Remote,uri:String){
+    let window=gtk::Window::builder()
+        .title("Anteprima testo — Melania Files")
+        .default_width(690).default_height(490).build();
+    window.set_transient_for(remote.rows.root()
+        .and_then(|root|root.downcast::<gtk::Window>().ok()).as_ref());
+    let content=GtkBox::new(Orientation::Vertical,8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    let title=Label::new(Some("Caricamento anteprima di testo…"));
+    title.set_xalign(0.0);
+    title.set_wrap(true);
+    content.append(&title);
+    let scroller=ScrolledWindow::new();
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+    let view=gtk::TextView::new();
+    view.set_editable(false);
+    view.set_cursor_visible(false);
+    view.set_monospace(true);
+    view.set_wrap_mode(gtk::WrapMode::None);
+    scroller.set_child(Some(&view));
+    content.append(&scroller);
+    let close=Button::with_label("Chiudi");
+    let closing=window.clone();
+    close.connect_clicked(move |_|closing.close());
+    content.append(&close);
+    window.set_child(Some(&content));
+    let cancelled=Arc::new(AtomicBool::new(false));
+    let abort=cancelled.clone();
+    window.connect_close_request(move |_|{
+        abort.store(true,Ordering::Release);
+        glib::Propagation::Proceed
+    });
+    window.present();
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    let worker_cancel=cancelled.clone();
+    std::thread::spawn(move ||{
+        let result=gio_backend::text_quicklook(&uri,&worker_cancel);
+        let _=tx.send(result);
+    });
+    glib::timeout_add_local(Duration::from_millis(65),move ||{
+        if !window.is_visible(){
+            cancelled.store(true,Ordering::Release);
+            return glib::ControlFlow::Break;
+        }
+        match rx.try_recv(){
+            Ok(Ok(result))=>{
+                title.set_text(&format!("{} · {} byte letti{}",
+                    result.mime,result.bytes_read,
+                    if result.truncated{" · Anteprima limitata a 64 KiB"}else{""}));
+                view.buffer().set_text(&result.content);
+                glib::ControlFlow::Break
+            },
+            Ok(Err(error))=>{
+                title.set_text(&error);
+                glib::ControlFlow::Break
+            },
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                title.set_text("Anteprima non disponibile: lettura interrotta.");
+                glib::ControlFlow::Break
+            },
+        }
+    });
+}
+
 fn open_properties(remote:&Remote,uri:String) {
     let window=gtk::Window::builder().title("Proprietà — Melania Files")
         .default_width(460).default_height(370).build();
@@ -692,6 +764,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let deep_search=Button::with_label("Cerca nelle sottocartelle");
     deep_search.set_tooltip_text(Some("Ricerca ricorsiva GVfs con limiti di sicurezza; usa il filtro come testo di ricerca"));
     let properties=Button::with_label("Proprietà");
+    let quicklook=Button::with_label("Anteprima testo");
+    quicklook.set_tooltip_text(Some("F3: mostra fino a 64 KiB di testo in sola lettura, senza eseguirlo"));
     let add_bookmark=Button::with_label("☆ Preferito");
     let remove_bookmark=Button::with_label("− Preferito");
     let bookmarks=Button::with_label("Preferiti rete");
@@ -708,6 +782,7 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     actionbar.append(&trash);
     actionbar.append(&deep_search);
     actionbar.append(&properties);
+    actionbar.append(&quicklook);
     actionbar.append(&add_bookmark);
     actionbar.append(&remove_bookmark);
     actionbar.append(&bookmarks);
@@ -969,6 +1044,15 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let ui=state.clone();
     deep_search.connect_clicked(move |_|open_deep_search(&ui));
     let ui=state.clone();
+    quicklook.connect_clicked(move |_|{
+        let selected=ui.selected_paths.borrow();
+        if selected.len()!=1{
+            ui.status.set_text("Seleziona un solo file di testo per l'anteprima.");
+        }else if let Some(uri)=selected.iter().next(){
+            open_text_quicklook(&ui,uri.clone());
+        }
+    });
+    let ui=state.clone();
     properties.connect_clicked(move |_|{
         let selected=ui.selected_paths.borrow();
         if selected.len()!=1 {
@@ -1033,8 +1117,16 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let folder_entry=folder_field.clone();
     let hidden_button=show_hidden.clone();
     let properties_button=properties.clone();
+    let quicklook_button=quicklook.clone();
     keyboard.connect_key_pressed(move |_,key,_,modifiers|{
         if key==gdk::Key::F5 {refresh_button.emit_clicked();return glib::Propagation::Stop;}
+        if key==gdk::Key::F3
+            && !location_entry.has_focus() && !search_entry.has_focus()
+            && !rename_entry.has_focus() && !blank_entry.has_focus()
+            && !folder_entry.has_focus(){
+            quicklook_button.emit_clicked();
+            return glib::Propagation::Stop;
+        }
         if modifiers.contains(gdk::ModifierType::CONTROL_MASK){
             // Preserve ordinary GTK Entry editing shortcuts.
             let is_editing=location_entry.has_focus() || search_entry.has_focus()
