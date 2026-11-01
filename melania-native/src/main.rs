@@ -234,22 +234,78 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
 fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
     assert_dedicated_console();
     assert_qemu_test_guest();
-    let (mut session,_notifier)=LibSeatSession::new()?;
+    let (mut session,notifier)=LibSeatSession::new()?;
     let udev=UdevBackend::new(session.seat())?;
+    // Seed the same lifecycle state machine used by the stage1 experiment.
+    // Capture the initial card identities BEFORE moving udev into calloop.
+    let devices=udev.device_list().map(|(id,path)|
+        (id as u64,path.to_path_buf())).collect::<Vec<_>>();
+    let mut state=NativeLifecycle::default();
+    if session.is_active() {
+        state.on_session(SessionEvent::ActivateSession);
+    }
+    for (id,path) in &devices {
+        state.on_device(melania_native::DeviceChange::Added {
+            id:*id,path:path.clone(),
+        });
+    }
+    let mut event_loop=calloop::EventLoop::<NativeLifecycle>::try_new()?;
+    event_loop.handle().insert_source(notifier,|event,_,state| {
+        state.on_session(event);
+        eprintln!("Melania QEMU libseat event: active={}",state.seat_active());
+    })?;
+    event_loop.handle().insert_source(udev,|event,_,state| {
+        match &event {
+            UdevEvent::Added { path, .. } =>
+                eprintln!("Melania QEMU DRM hotplug: {}",path.display()),
+            UdevEvent::Removed { .. } =>
+                eprintln!("Melania QEMU DRM removal: invalidating preflight"),
+            UdevEvent::Changed { .. } =>
+                eprintln!("Melania QEMU DRM change: invalidating preflight"),
+        }
+        state.on_udev(event);
+    })?;
     let mut completed=false;
-    for (_,path) in udev.device_list() {
+    for (id,path) in devices {
+        // Process queued session/device events before opening the DRM card.
+        event_loop.dispatch(Some(Duration::ZERO),&mut state)?;
+        if !session.is_active() || !state.seat_active() {
+            return Err("QEMU preflight aborted: inactive libseat session".into());
+        }
+        let epoch=match melania_native::device_epoch::DeviceEpoch::capture(&state,id,&path) {
+            Ok(epoch)=>epoch,
+            Err(error)=>{
+                eprintln!("Melania QEMU card {} unavailable: {error:?}",path.display());
+                continue;
+            }
+        };
         let descriptor=match session.open(
-            path,OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+            &path,OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
         ) {
             Ok(fd)=>fd,
             Err(error)=>{eprintln!("Melania KMS VM device {}: {error}",path.display());continue;}
         };
         let fd=DrmDeviceFd::new(DeviceFd::from(descriptor));
-        let (mut device,_events)=match DrmDevice::new(fd,false) {
+        let (mut device,_drm_events)=match DrmDevice::new(fd,false) {
             Ok(result)=>result,
             Err(error)=>{eprintln!("Melania KMS VM init {}: {error}",path.display());continue;}
         };
-        match melania_native::kms_test::prepare_and_render_test_only(&mut device,||session.is_active()) {
+        let mut invalidated=false;
+        let result=melania_native::kms_test::prepare_and_render_test_only(&mut device,|| {
+            // Non-blocking drain of pending real libseat and udev events,
+            // before/after GPU work. An ioctl may itself still block; the
+            // separate QEMU script's watchdog remains mandatory.
+            if let Err(error)=event_loop.dispatch(Some(Duration::ZERO),&mut state) {
+                invalidated=true;
+                return Err(format!("QEMU session event dispatch failed: {error}"));
+            }
+            if !session.is_active() || epoch.verify(&state).is_err() {
+                invalidated=true;
+                return Err("QEMU preflight invalidated by seat pause or GPU hotplug".into());
+            }
+            Ok(true)
+        });
+        match result {
             Ok(report)=>{
                 println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} crtc_readable={} baseline_unchanged={} resource_blobs={} borrowed_fbs={} resources_unchanged={} restore_ready={} visible={}",
                     report.connector,report.width,report.height,
@@ -260,7 +316,12 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
                 completed=true;
                 break;
             }
-            Err(error)=>eprintln!("Melania KMS VM preflight {}: {error}",path.display()),
+            Err(error)=>{
+                if invalidated {
+                    return Err(format!("QEMU preflight aborted without scanout: {error}").into());
+                }
+                eprintln!("Melania KMS VM preflight {}: {error}",path.display());
+            }
         }
     }
     println!("NATIVE_SESSION_READY=false");
