@@ -20,7 +20,9 @@ class LiveSystemSettings(unittest.TestCase):
         self.assertIn('mute.connect_clicked(move |_|', PAGES)
         self.assertIn('apply.connect_clicked(move |_|', PAGES)
         self.assertIn('refresh.connect_clicked(move |_|', PAGES)
-        self.assertIn('if muted {"Riattiva audio"} else {"Disattiva audio"}', PAGES)
+        self.assertIn('fn audio_mute_label(target: &str, muted: bool)', PAGES)
+        self.assertIn('"Attiva microfono"', PAGES)
+        self.assertIn('"Disattiva microfono"', PAGES)
 
     def test_wifi_is_an_explicit_networkmanager_action(self):
         self.assertIn("mod connectivity_controls;", MAIN)
