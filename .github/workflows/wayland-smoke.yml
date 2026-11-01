@@ -67,7 +67,7 @@ jobs:
             libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev \
             libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev \
             libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev \
-            libgl1-mesa-dri mesa-utils scrot python3-pil procps dbus dbus-user-session dbus-x11
+            libgl1-mesa-dri mesa-utils scrot xdotool python3-pil procps dbus dbus-user-session dbus-x11
       - name: Build nested compositor, control CLI and GTK file manager
         run: |
           set -o pipefail
@@ -120,5 +120,6 @@ jobs:
             reports/wayland-smoke.log
             reports/wayland-full-*.log
             reports/nested-wayland-full-desktop.png
+            reports/nested-wayland-start-search.png
             reports/nested-wayland-file-preview.bmp
           if-no-files-found: warn

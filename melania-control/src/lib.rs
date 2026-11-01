@@ -5,6 +5,13 @@
 use std::{fmt, io::{self, BufRead, BufReader, Read, Write}, os::unix::net::UnixStream, path::Path, time::Duration};
 
 pub const SOCKET_ENV: &str = "MELANIA_CONTROL_SOCKET";
+/// Separate per-session, user-only datagram endpoint used exclusively for
+/// compositor-to-panel Start toggles. It shares the compositor's PID-qualified
+/// control-socket stem, so nested sessions never address the host panel.
+pub fn start_toggle_socket_path(control: &Path) -> std::path::PathBuf {
+    control.with_extension("start.sock")
+}
+
 pub const MAX_RESPONSE: usize = 128 * 1024;
 /// Maximum wire length for a single command, including its final LF.
 pub const MAX_COMMAND: usize = 64;
