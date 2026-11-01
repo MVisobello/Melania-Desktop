@@ -40,7 +40,7 @@ pub fn inspect_gbm_egl(fd: DrmDeviceFd) -> Result<GpuRenderCapabilities, String>
         .map_err(|error|format!("GLES renderer unavailable: {error}"))?;
     Ok(GpuRenderCapabilities {
         gbm_backend:backend,
-        dmabuf_render_formats:display.dmabuf_render_formats().len(),
+        dmabuf_render_formats:display.dmabuf_render_formats().iter().count(),
     })
 }
 
