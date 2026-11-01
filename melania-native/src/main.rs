@@ -91,7 +91,8 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     let mut input_context=Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
         session.clone().into()
     );
-    input_context.udev_assign_seat(&seat_name)?;
+    input_context.udev_assign_seat(&seat_name)
+        .map_err(|()| "Melania libinput could not assign the selected libseat/udev seat")?;
     let input_backend=LibinputInputBackend::new(input_context.clone());
     let mut state=NativeLifecycle::default();
     if session.is_active() {
@@ -105,6 +106,7 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     }
     println!("Melania native stage1: seat={seat_name}, known GPUs={}",
         state.devices().len());
+    let mut loop_events=calloop::EventLoop::<NativeLifecycle>::try_new()?;
     // Device enumeration only: input events are not yet routed to Wayland.
     // Record device classes but never store or print keys, text or pointer
     // coordinates. A seat pause invalidates every registered device.
@@ -131,7 +133,6 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     })?;
     // Register the actual Smithay libseat notifier and udev hotplug sources.
     // Nothing opens a DRM FD, creates a framebuffer, or takes over a VT.
-    let mut loop_events=calloop::EventLoop::<NativeLifecycle>::try_new()?;
     loop_events.handle().insert_source(notifier,
         move |event,_,state| {
             match event {
