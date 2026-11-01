@@ -18,7 +18,9 @@ class AsyncFilesystemListing(unittest.TestCase):
 
     def test_no_gtk_io_and_generation_guard(self):
         self.assertIn("std::thread::spawn(move || {",SOURCE)
-        self.assertIn("model::list_directory(&request.directory,&request.query,request.options)",SOURCE)
+        self.assertIn("gio_backend::list_local_entries(&request.directory,&request.query,",SOURCE)
+        self.assertIn("request.options,&request.cancelled)",SOURCE)
+        self.assertIn("previous.store(true,Ordering::Release)",SOURCE)
         self.assertIn("receiver.try_recv()",SOURCE)
         self.assertIn("tab.listing_generation.get()==request.generation",SOURCE)
         self.assertIn("render_listing(&tab,&request.directory,entries)",SOURCE)
