@@ -1745,9 +1745,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         if name.is_empty() || matches!(name.as_str(), "."|"..") || name.contains('/') || name.contains('\0') {
             state.status.set_text("Inserisci un nome valido per il nuovo file."); return;
         }
-        let target = state.current.borrow().join(&name);
-        match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
-            Ok(_)=> { refresh(&state); state.status.set_text(&format!("Documento creato: {name}")); },
+        let folder_uri=gio::File::for_path(state.current.borrow().clone()).uri();
+        match gio_backend::create_blank_file(&folder_uri,&name) {
+            Ok(())=> { refresh(&state); state.status.set_text(&format!("Documento creato: {name}")); },
             Err(e)=>state.status.set_text(&format!("File non creato: {e}")),
         }
     });
@@ -1759,8 +1759,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
             state.status.set_text("Inserisci un nome semplice, senza separatori di percorso.");
             return;
         }
-        let target=state.current.borrow().join(name);
-        match fs::create_dir(&target) {
+        let folder_uri=gio::File::for_path(state.current.borrow().clone()).uri();
+        match gio_backend::make_folder(&folder_uri,name) {
             Ok(())=>{ refresh(&state); state.status.set_text(&format!("Cartella creata: {name}")); },
             Err(err)=>state.status.set_text(&format!("Creazione annullata: {err}")),
         }
@@ -1942,11 +1942,12 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         let Some(old)=state.selected.borrow().clone() else {
             state.status.set_text("Seleziona un file prima di rinominarlo."); return;
         };
-        match transfer::rename_local(&old, &rename_name_for_click.text()) {
-            Ok(updated)=> {
-                *state.selected.borrow_mut()=Some(updated);
+        let source_uri=gio::File::for_path(&old).uri();
+        match gio_backend::rename_item(&source_uri,&rename_name_for_click.text()) {
+            Ok(updated_uri)=> {
+                *state.selected.borrow_mut()=gio::File::for_uri(&updated_uri).path();
                 refresh(&state);
-                state.status.set_text("Rinomina completata senza sovrascritture.");
+                state.status.set_text("Rinomina GIO completata senza sovrascritture.");
             },
             Err(err)=>state.status.set_text(&format!("Rinomina annullata: {err}")),
         }
@@ -2065,7 +2066,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         let mut moved=0;
         let mut failed=0;
         for path in paths {
-            match gio::File::for_path(&path).trash(None::<&gio::Cancellable>) {
+            let uri=gio::File::for_path(&path).uri();
+            match gio_backend::move_to_trash(&uri) {
                 Ok(()) => {state.selected_paths.borrow_mut().remove(&path); moved+=1;},
                 Err(_) => failed+=1,
             }
