@@ -275,7 +275,21 @@ pub fn image_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
         if info.file_type()!=gio::FileType::Regular{
             return Err(error("Anteprima immagini consentita solo per file regolari, non link o cartelle"));
         }
-        let mime=info.content_type().map(|m|m.to_string()).unwrap_or_default();
+        // Some GVfs backends omit standard::content-type entirely. Avoid
+        // GFileInfo::content_type() on absent data (a GLib critical). For
+        // unknown/octet-stream MIME, infer from the basename, then insist
+        // on a matching actual decoded format below.
+        let advertised=info.attribute_string("standard::content-type")
+            .map(|m|m.to_string()).unwrap_or_default();
+        let mime=if advertised.is_empty() || advertised=="application/octet-stream"{
+            let basename=file.basename().and_then(|n|n.to_str().map(str::to_owned))
+                .unwrap_or_default().to_lowercase();
+            if basename.ends_with(".png"){"image/png".to_owned()}
+            else if basename.ends_with(".jpg") || basename.ends_with(".jpeg"){
+                "image/jpeg".to_owned()
+            }else if basename.ends_with(".webp"){"image/webp".to_owned()}
+            else{return Err(error("Tipo immagine non riconosciuto dal provider"));}
+        }else{advertised};
         if !supported_image_mime(&mime){
             return Err(error("Sono supportate anteprime PNG, JPEG e WebP"));
         }
@@ -337,7 +351,13 @@ pub fn image_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
     if cancelled.load(Ordering::Acquire){
         return Err(error("Anteprima immagine annullata"));
     }
-    let scaled=decoded.thumbnail(IMAGE_PREVIEW_WIDTH,IMAGE_PREVIEW_HEIGHT).to_rgba8();
+    // thumbnail() can upscale tiny images in the image crate. Preserve
+    // native pixels when they already fit in the preview area.
+    let scaled=if width<=IMAGE_PREVIEW_WIDTH && height<=IMAGE_PREVIEW_HEIGHT{
+        decoded.to_rgba8()
+    }else{
+        decoded.thumbnail(IMAGE_PREVIEW_WIDTH,IMAGE_PREVIEW_HEIGHT).to_rgba8()
+    };
     let (preview_width,preview_height)=scaled.dimensions();
     Ok(ImageQuickLook {
         rgba:scaled.into_raw(),width:preview_width,height:preview_height,
