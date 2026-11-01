@@ -928,8 +928,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         });
     });
     let ui=state.clone();
+    let blank_input=blank_field.clone();
     blank.connect_clicked(move |_| {
-        let name=blank_field.text().to_string();
+        let name=blank_input.text().to_string();
         let dest=ui.current.borrow().clone();
         run_job(&ui,"Creazione file tramite GIO…",move |_|{
             gio_backend::create_blank_file(&dest,&name)?;
@@ -937,8 +938,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         });
     });
     let ui=state.clone();
+    let folder_input=folder_field.clone();
     folder.connect_clicked(move |_| {
-        let name=folder_field.text().to_string();
+        let name=folder_input.text().to_string();
         let dest=ui.current.borrow().clone();
         run_job(&ui,"Creazione cartella…",move |_|{
             gio_backend::make_folder(&dest,&name)?;
