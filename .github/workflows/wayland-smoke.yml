@@ -121,5 +121,6 @@ jobs:
             reports/wayland-full-*.log
             reports/nested-wayland-full-desktop.png
             reports/nested-wayland-start-search.png
+            reports/nested-wayland-panel-top.png
             reports/nested-wayland-file-preview.bmp
           if-no-files-found: warn
