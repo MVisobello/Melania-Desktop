@@ -51,7 +51,7 @@ fn refresh(remote:&Remote) {
     let uri=remote.current.borrow().clone();
     remote.location.set_text(&uri);
     let place=gio::File::for_uri(&uri).basename()
-        .and_then(|s|s.into_string().ok()).unwrap_or_else(||String::from("Rete"));
+        .map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||String::from("Rete"));
     remote.title.set_text(&place);
     remote.status.set_text("Connessione e lettura in corso…");
     let filter=remote.search.text().to_string();
