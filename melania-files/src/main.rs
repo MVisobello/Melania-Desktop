@@ -2347,7 +2347,11 @@ fn build_ui(app: &Application) {
         .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_string());
     append_browser_tab(&tabs, &tab_strip, &tab_headers, &window, starting,
         shared_pending.clone(), &initial_title, open_remote.clone());
-    if let Some(uri)=requested_uri {open_remote(uri);}
+    if let Some(uri)=requested_uri {open_remote(uri); }
+    // Real GUI/Wayland smoke: use an isolated file:/// GVfs backend.
+    if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
+        if uri.starts_with("file:///") {open_remote(uri);}
+    }
     let notebook = tabs.clone();
     let pending_for_add = shared_pending.clone();
     let header_for_add = tab_headers.clone();
