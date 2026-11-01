@@ -118,6 +118,17 @@ colors=len(set(image.resize((64,40)).getdata()))
 assert colors>4, f'thumbnail is blank or unpainted: {colors} colors'
 print(f'PASS: private window-only GPU thumbnail {image.size}, {colors} sampled colors')
 PYTHUMB
+# Client startup is asynchronous: whichever toplevel mapped last may have
+# focus. Explicitly raise Settings to show BOTH window chrome controls in
+# the same genuine screenshot, rather than trusting window mapping order.
+SETTINGS_ID="$(awk -F '\t' 'tolower($3) ~ /org.melaniadesktop.settings/ || tolower($4) ~ /impostazioni|settings/ {print $1;exit}' "$TEMP/windows.log")"
+[[ "$SETTINGS_ID" =~ ^[0-9]+$ ]] || {
+  echo 'FAIL: no Settings window id available for chrome comparison' >&2; exit 1;
+}
+target/debug/melania-winctl activate "$SETTINGS_ID" >/dev/null || {
+  echo 'FAIL: cannot activate Settings window for chrome QA' >&2; exit 1;
+}
+sleep .5
 # Synthetic CI desktop only: preserve one sample for visual QA.
 cp "$THUMBNAIL" reports/nested-wayland-file-preview.bmp
 if command -v scrot >/dev/null; then
