@@ -52,6 +52,7 @@ struct Browser {
     listing_running: Rc<Cell<bool>>,
     listing_pending: Rc<RefCell<Option<ListingRequest>>>,
     mounts_box: GtkBox,
+    open_remote: Rc<dyn Fn(String)>,
     copy_action: Button,
     cut_action: Button,
     trash_action: Button,
@@ -625,12 +626,21 @@ fn repaint_volumes(browser: &Browser) {
     heading.add_css_class("files-sidebar-heading");
     heading.set_xalign(0.0);
     browser.mounts_box.append(&heading);
-    // Only local mount roots are navigable in this PathBuf-based version.
-    // Remote GIO URIs require the planned backend migration to gio::File.
+    // VolumeMonitor exposes local and remote mounts as GIO Files. Remote
+    // roots must not be hidden merely because they lack a POSIX PathBuf.
     for mount in gio::VolumeMonitor::get().mounts() {
-        let Some(root) = mount.root().path() else { continue; };
-        if !root.is_dir() { continue; }
-        browser.mounts_box.append(&navigation_button_with_icon(&mount.name(), root, browser, Some("drive-harddisk-symbolic")));
+        let root=mount.root();
+        if let Some(path)=root.path().filter(|p|p.is_dir()){
+            browser.mounts_box.append(&navigation_button_with_icon(
+                &mount.name(),path,browser,Some("drive-harddisk-symbolic")));
+        } else {
+            let button=Button::with_label(&mount.name());
+            button.set_tooltip_text(Some(&root.uri()));
+            let uri=root.uri().to_string();
+            let open=browser.open_remote.clone();
+            button.connect_clicked(move |_|open(uri.clone()));
+            browser.mounts_box.append(&button);
+        }
     }
 }
 
@@ -1640,6 +1650,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         listing_running: Rc::new(Cell::new(false)),
         listing_pending: Rc::new(RefCell::new(None)),
         mounts_box: GtkBox::new(Orientation::Vertical, 6),
+        open_remote: open_remote.clone(),
         copy_action: copy_button.clone(), cut_action: cut_button.clone(),
         trash_action: trash_button.clone(), rename_field: rename_name.clone(),
         transfer_progress, transfer_cancel, active_job,
@@ -1730,7 +1741,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         let typed = entry.text().to_string();
         let typed = typed.trim();
         if typed.contains("://") {
-            open_remote(typed.to_string());
+            (state.open_remote)(typed.to_string());
             return;
         }
         let target = if let Some(tail) = typed.strip_prefix("~/") { home().join(tail) }
