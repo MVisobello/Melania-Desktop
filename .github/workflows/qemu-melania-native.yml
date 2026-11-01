@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# QEMU TCG boots are expensive. Replacing a pull-request commit cancels only
+# its superseded test run, never unrelated branches or the main push check.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-kms:
     name: Rust melania-native KMS TEST_ONLY in isolated VirtIO GPU guest

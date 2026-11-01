@@ -620,6 +620,48 @@ principale è previsto. Solo dopo un vero rollback verificabile e
 un test distruttivo confinato alla VM sarà possibile considerare
 il primo frame nativo visibile.
 
+## Fase 20 — libinput reale e registro dei dispositivi collegato a libseat
+
+Il percorso sperimentale `melania-native --experimental-seat`,
+già protetto da consenso esplicito, assenza di sessione grafica host,
+`/dev/ttyN` reale e `XDG_RUNTIME_DIR`, inizializza adesso
+**il vero `LibinputInputBackend` di Smithay 0.7**. La sua istanza
+`Libinput::new_with_udev` accede ai dispositivi mediante la stessa
+sessione `LibSeatSession` che gestisce le GPU, assegna il seat udev
+e riceve gli eventi DeviceAdded/DeviceRemoved in `calloop`.
+I callback registrano solo **identificativi dei dispositivi e
+capacità tastiera/puntatore/touch**, senza stampare tasti,
+testo, posizioni del mouse o altri dati.
+
+Un modulo Rust separato, `melania-native/src/input_registry.rs`,
+gestisce l'insieme dei dispositivi e una generazione. **PauseSession**
+sospende libinput, invalida tutte le identità note e impedisce
+l'elaborazione di eventi; **ActivateSession** prova il resume ed
+esige una nuova enumerazione prima di considerare validi gli eventi.
+Se resume fallisce il seat rimane inattivo per il codice Melania.
+Il registro ha test unitari per hot-unplug, periferiche multi-capacità,
+pause/resume, eventi da device non registrati e contatori saturanti.
+
+La VM QEMU già usata dal test KMS emula **una tastiera USB e
+un puntatore USB** con controller XHCI (sempre all'interno del guest,
+mai sul computer ospitante) ed esegue
+`melania-native --experimental-seat` sulla TTY dedicata, prima di
+`--experimental-kms-test`. Il risultato obbligatorio comprende
+`MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true` e il report
+`MELANIA_NATIVE_INPUT_ENUMERATED` con **almeno una tastiera
+e un puntatore reali enumerati da libinput**, oltre a
+`MELANIA_NATIVE_INPUT_WAYLAND_READY=false`. Il guest fallisce
+se mancano gli eventi di scoperta delle due periferiche,
+non soltanto se il test GPU fallisce.
+
+**Non è ancora un input stack funzionante di un desktop nativo**:
+il registro non inoltra eventi ai client Wayland, non gestisce
+seriali/focus del protocollo, non crea un `wl_seat` hardware e
+non esegue alcuna iniezione su altre sessioni grafiche.
+L'intero compositore con finestre/focus continua a funzionare
+soltanto con il backend annidato Winit. Anche il recupero KMS
+da un frame visibile resta incompleto e lo scanout è bloccato.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.

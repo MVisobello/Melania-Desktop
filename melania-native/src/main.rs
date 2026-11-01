@@ -6,9 +6,11 @@ use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
+        libinput::{LibinputInputBackend, LibinputSessionInterface},
+        input::{Device as InputDevice, InputEvent},
         udev::{UdevBackend, UdevEvent},
     },
-    reexports::rustix::fs::OFlags,
+    reexports::{rustix::fs::OFlags, input::{self as libinput, DeviceCapability, Libinput}},
     utils::DeviceFd,
 };
 use melania_native::NativeLifecycle;
@@ -78,16 +80,51 @@ fn print_capabilities() {
     println!("NATIVE_SESSION_READY=false");
 }
 
+/// Register a device discovered by libinput. Only category and stable sysname
+/// are tracked; keycodes, typed text and pointer positions are never stored.
+fn register_input_device(
+    state:&mut NativeLifecycle,
+    device:libinput::Device,
+) {
+    let id=InputDevice::id(&device);
+    let caps=melania_native::input_registry::InputCapabilities {
+        keyboard:device.has_capability(DeviceCapability::Keyboard),
+        pointer:device.has_capability(DeviceCapability::Pointer),
+        touch:device.has_capability(DeviceCapability::Touch),
+    };
+    if caps.any() {
+        let _=state.input_registry_mut().device_added(id,caps);
+    }
+}
+
 fn experiment() -> Result<(),Box<dyn Error>> {
     assert_dedicated_console();
 
     let (session,notifier)=LibSeatSession::new()?;
     let seat_name=session.seat();
     let udev=UdevBackend::new(&seat_name)?;
+    // Input can be opened ONLY through the same libseat session; no
+    // direct host /dev/input access or global keyboard hooks are used.
+    let mut input_context=Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
+        session.clone().into()
+    );
+    input_context.udev_assign_seat(&seat_name)
+        .map_err(|()| "Melania libinput could not assign the selected libseat/udev seat")?;
     let mut state=NativeLifecycle::default();
     if session.is_active() {
         state.on_session(SessionEvent::ActivateSession);
     }
+    // libinput has already enumerated devices during udev_assign_seat.
+    // Drain these queued DeviceAdded events before polling its fd; otherwise
+    // a quiet keyboard/tablet may never trigger a new readiness callback.
+    input_context.dispatch()?;
+    for event in &mut input_context {
+        if let libinput::Event::Device(libinput::event::DeviceEvent::Added(added))=event {
+            let device=libinput::event::EventTrait::device(&added);
+            register_input_device(&mut state,device);
+        }
+    }
+    let input_backend=LibinputInputBackend::new(input_context.clone());
     for (device_id,path) in udev.device_list() {
         state.on_device(melania_native::DeviceChange::Added {
             id: device_id as u64,
@@ -96,11 +133,37 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     }
     println!("Melania native stage1: seat={seat_name}, known GPUs={}",
         state.devices().len());
+    let mut loop_events=calloop::EventLoop::<NativeLifecycle>::try_new()?;
+    // Device enumeration only: input events are not yet routed to Wayland.
+    // Record device classes but never store or print keys, text or pointer
+    // coordinates. A seat pause invalidates every registered device.
+    loop_events.handle().insert_source(input_backend,|event,_,state| {
+        match event {
+            InputEvent::DeviceAdded { device } => {
+                register_input_device(state,device);
+            }
+            InputEvent::DeviceRemoved { device } => {
+                state.input_registry_mut().device_removed(&InputDevice::id(&device));
+            }
+            // Keyboard/mouse/touch payloads are deliberately not forwarded
+            // in this experiment; native Wayland seat routing is not ready.
+            _ => {}
+        }
+    })?;
     // Register the actual Smithay libseat notifier and udev hotplug sources.
     // Nothing opens a DRM FD, creates a framebuffer, or takes over a VT.
-    let mut loop_events=calloop::EventLoop::<NativeLifecycle>::try_new()?;
     loop_events.handle().insert_source(notifier,
-        |event,_,state| {
+        move |event,_,state| {
+            match event {
+                SessionEvent::PauseSession => input_context.suspend(),
+                SessionEvent::ActivateSession => {
+                    if let Err(error)=input_context.resume() {
+                        eprintln!("Melania libinput resume refused: {error:?}");
+                        state.on_session(SessionEvent::PauseSession);
+                        return;
+                    }
+                }
+            }
             state.on_session(event);
             eprintln!("Melania libseat state: active={}",state.seat_active());
         })?;
@@ -121,6 +184,9 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     }
     println!("Melania native stage1 closed; seen={} GPU events={}",
         state.devices().len(),state.event_count());
+    let (keyboards,pointers,touch)=state.input_registry().counts();
+    println!("MELANIA_NATIVE_INPUT_ENUMERATED keyboards={keyboards} pointers={pointers} touch={touch} forwarded=false");
+    println!("MELANIA_NATIVE_INPUT_WAYLAND_READY=false");
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }
