@@ -31,7 +31,7 @@ class NativeKmsResourcesStage12(unittest.TestCase):
 
     def test_framebuffer_observations_are_never_claimed_as_owned(self):
         self.assertIn('original_id: property.value',RESOURCES)
-        self.assertIn('Borrowed',RESOURCES) if False else None
+        self.assertIn('NEVER resource ownership',RESOURCES)
         self.assertIn('pub fn restoration_implemented(&self) -> bool { false }',RESOURCES)
         self.assertIn('pub fn borrowed_framebuffer_count(&self)',RESOURCES)
         self.assertIn('detects_changes_in_payload_even_if_blob_ids_are_unchanged',RESOURCES)
