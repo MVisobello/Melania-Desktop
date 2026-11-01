@@ -8,7 +8,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, os::unix::{fs::{FileTypeExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, time::Duration};
+use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, time::Duration};
 use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -692,35 +692,167 @@ fn pins_path()->Option<PathBuf> {
         .or_else(||std::env::var_os("HOME").map(|h|PathBuf::from(h).join(".config")))?;
     Some(dir.join("melania").join("pinned-apps"))
 }
+
+/// Pin IDs must resolve to an installed desktop application or one of our
+/// two internal launchers. Never interpret a saved value as a command.
+fn installed_pin_app(id:&str)->Option<gio::AppInfo> {
+    if id.len()>240 || id.chars().any(char::is_control){return None;}
+    gio::AppInfo::all().into_iter().find(|app| {
+        app.should_show() && app.id().as_deref()==Some(id)
+    })
+}
+fn valid_pin(id:&str)->bool {
+    matches!(id,"melania-files"|"melania-settings") || installed_pin_app(id).is_some()
+}
 fn load_pins()->Vec<String> {
     const DEFAULT:[&str;2]=["melania-files","melania-settings"];
     let Some(path)=pins_path() else{return DEFAULT.iter().map(|s|s.to_string()).collect();};
-    let text=fs::read_to_string(path).unwrap_or_default();
-    let mut ids:Vec<String>=text.lines().filter(|s|DEFAULT.contains(s))
-        .map(str::to_string).collect();
-    ids.dedup();
-    for id in DEFAULT {if !ids.iter().any(|s|s==id){ids.push(id.to_string());}}
+    if !path.exists(){return DEFAULT.iter().map(|s|s.to_string()).collect();}
+    let Ok(text)=fs::read_to_string(path) else{return DEFAULT.iter().map(|s|s.to_string()).collect();};
+    let mut ids=Vec::new();
+    for id in text.lines().take(48) {
+        if valid_pin(id) && !ids.iter().any(|x|x==id){ids.push(id.to_string());}
+    }
     ids
 }
 fn save_pins(ids:&[String])->std::io::Result<()> {
-    let Some(path)=pins_path() else{return Ok(());};
+    let Some(path)=pins_path() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound,"XDG config unavailable"));
+    };
     if let Some(parent)=path.parent(){fs::create_dir_all(parent)?;}
-    fs::write(path,ids.join("\n"))
+    let temp=path.with_extension(format!("tmp-{}",std::process::id()));
+    let mut file=fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp)?;
+    let write_result=(|| {
+        for id in ids.iter().take(48) {
+            if valid_pin(id){writeln!(file,"{id}")?;}
+        }
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp,&path)
+    })();
+    if write_result.is_err(){let _=fs::remove_file(&temp);}
+    write_result
 }
-fn app_button(label:&str,command:&'static str)->Button {
-    let b=Button::new();b.add_css_class("melania-pin");
-    let row=GtkBox::new(Orientation::Horizontal,6);
-    let icon=Image::from_icon_name(match command {
-        "melania-files"=>"org.melaniadesktop.Files",
-        "melania-settings"=>"org.melaniadesktop.Settings",
-        _=>"applications-system"
+fn toggle_pin(id:&str) {
+    if !valid_pin(id){return;}
+    let mut pins=load_pins();
+    if let Some(n)=pins.iter().position(|s|s==id) {
+        pins.remove(n);
+    } else if pins.len()<48 {
+        pins.push(id.to_string());
+    }
+    if let Err(error)=save_pins(&pins){eprintln!("Melania pin: {error}");}
+}
+/// A right-click popover in Start and on the taskbar for validated launchers.
+fn attach_pin_context(widget:&Button,id:String) {
+    if !valid_pin(&id){return;}
+    let popup=gtk::Popover::new();
+    popup.add_css_class("melania-pin-popover");
+    popup.set_parent(widget);
+    let action=Button::with_label("Aggiungi alla barra");
+    action.add_css_class("melania-pin-choice");
+    let options=GtkBox::new(Orientation::Vertical,3);
+    options.add_css_class("melania-pin-menu");
+    options.append(&action);
+    popup.set_child(Some(&options));
+    let action_id=id.clone();
+    let close=popup.clone();
+    action.connect_clicked(move |_|{toggle_pin(&action_id);close.popdown();});
+    let click=gtk::GestureClick::new();
+    click.set_button(3);
+    click.connect_pressed(move |_,_,_,_| {
+        action.set_label(if load_pins().iter().any(|s|s==&id) {
+            "Rimuovi dalla barra"
+        } else {"Aggiungi alla barra"});
+        popup.popup();
     });
+    widget.add_controller(click);
+}
+fn app_button(id:&str)->Option<Button> {
+    let info=if matches!(id,"melania-files"|"melania-settings"){None}
+        else {Some(installed_pin_app(id)?)};
+    let b=Button::new();
+    b.add_css_class("melania-pin");
+    let row=GtkBox::new(Orientation::Horizontal,6);
+    let (name,icon)=match id {
+        "melania-files"=>("File".to_owned(),Image::from_icon_name("org.melaniadesktop.Files")),
+        "melania-settings"=>("Impostazioni".to_owned(),Image::from_icon_name("org.melaniadesktop.Settings")),
+        _=>{
+            let app=info.as_ref()?;
+            (app.name().to_string(),app.icon().map(|icon|Image::from_gicon(&icon))
+                .unwrap_or_else(||Image::from_icon_name("application-x-executable")))
+        }
+    };
     icon.set_pixel_size(28);
     row.append(&icon);
     b.set_child(Some(&row));
     b.add_css_class("melania-icon-only");
-    b.set_tooltip_text(Some(label));
-    b.connect_clicked(move |_|run(command));b
+    b.set_tooltip_text(Some(&name));
+    let launch_id=id.to_string();
+    b.connect_clicked(move |_|{
+        match launch_id.as_str() {
+            "melania-files"=>run("melania-files"),
+            "melania-settings"=>run("melania-settings"),
+            _=>if let Some(app)=installed_pin_app(&launch_id) {
+                if let Err(error)=app.launch(&[],None::<&gio::AppLaunchContext>) {
+                    eprintln!("Melania pinned app: {error}");
+                }
+            }
+        }
+    });
+    attach_pin_context(&b,id.to_string());
+    Some(b)
+}
+fn populate_pins(area:&GtkBox,buttons:&Rc<RefCell<Vec<(String,Button)>>>,
+                 order:&Rc<RefCell<Vec<String>>>) {
+    let ids=load_pins();
+    *order.borrow_mut()=ids.clone();
+    buttons.borrow_mut().clear();
+    while let Some(widget)=area.first_child(){area.remove(&widget);}
+    for id in ids {
+        let Some(b)=app_button(&id) else {continue};
+        let drag=gtk::DragSource::new();
+        drag.set_actions(gdk::DragAction::MOVE);
+        let drag_id=id.clone();
+        drag.connect_prepare(move |_,_,_|Some(gdk::ContentProvider::for_value(&drag_id.to_value())));
+        b.add_controller(drag);
+        let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
+        let current=order.clone();
+        let target=area.clone();
+        let destination=b.clone();
+        let destination_id=id.clone();
+        drop.connect_drop(move |_,value,_,_| {
+            let Ok(source)=value.get::<String>() else{return false;};
+            if source==destination_id{return false;}
+            let updated={
+                let mut items=current.borrow_mut();
+                let Some(from)=items.iter().position(|s|s==&source) else{return false;};
+                let Some(to)=items.iter().position(|s|s==&destination_id) else{return false;};
+                let item=items.remove(from);
+                items.insert(to,item);
+                items.clone()
+            };
+            if let Err(error)=save_pins(&updated){
+                eprintln!("Melania pin reorder: {error}");
+                return false;
+            }
+            let mut children=Vec::new();
+            let mut child=target.first_child();
+            while let Some(widget)=child {child=widget.next_sibling();children.push(widget);}
+            let mut previous:Option<gtk::Widget>=None;
+            for key in updated {
+                if let Some(widget)=children.iter().find(|widget|widget.widget_name().as_str()==key) {
+                    target.reorder_child_after(widget,previous.as_ref());
+                    previous=Some(widget.clone());
+                }
+            }
+            destination.grab_focus();true
+        });
+        b.add_controller(drop);
+        b.set_widget_name(&id);
+        buttons.borrow_mut().push((id,b.clone()));
+        area.append(&b);
+    }
 }
 
 /// The running-window strip is driven exclusively by compositor state.
