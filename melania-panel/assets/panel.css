@@ -1216,9 +1216,11 @@ window.melania-theme-light .melania-pin-menu button.melania-pin-choice:hover {ba
   padding: 0 4px;
 }
 .melania-bar .melania-trailing .melania-clock-row { border-spacing: 1px; }
+/* Keep both clock lines legible while preserving the compact Windows-style
+ * two-row layout. Centering belongs to GTK alignment, not asymmetric padding. */
 .melania-bar .melania-trailing .melania-clock-time,
 .melania-bar .melania-trailing .melania-clock-date {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
