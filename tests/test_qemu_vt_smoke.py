@@ -74,6 +74,34 @@ class QemuVtSmokeTests(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_VGA_ENUMERATED=true", RUNNER.read_text())
         self.assertIn("MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false", RUNNER.read_text())
 
+    def test_virtio_drm_mode_requires_a_real_card_without_vm_kms_writes(self):
+        script = RUNNER.read_text()
+        guest_script = GUEST.read_text()
+        self.assertIn("YES_VIRTIO_GPU", script)
+        self.assertIn('vga_device="virtio"', script)
+        self.assertIn('guest_require_drm="1"', script)
+        self.assertIn('MELANIA_QEMU_DRM_ENUMERATED=true', script)
+        self.assertIn('MELANIA_QEMU_GUEST_REQUIRE_DRM', guest_script)
+        self.assertIn('["modprobe", "virtio_gpu"]', guest_script)
+        self.assertIn("VirtIO GPU kernel DRM driver did not expose", guest_script)
+        self.assertIn("MELANIA_QEMU_DRM_KMS_TESTED=false", guest_script)
+        self.assertIn("MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false", script)
+
+    def test_virtio_drm_missing_card_must_fail_before_console_ioctl(self):
+        with mock.patch.object(guest, "dmi_is_qemu", return_value=True), \
+             mock.patch.object(guest, "virtual_vga_present", return_value=True), \
+             mock.patch.object(guest, "drm_card_present", return_value=False), \
+             mock.patch.object(guest.subprocess, "run") as probe, \
+             mock.patch.object(guest.time, "sleep"), \
+             mock.patch.object(guest.os, "open") as opened, \
+             mock.patch.dict(guest.os.environ, {"MELANIA_QEMU_GUEST_REQUIRE_DRM": "1"}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            probe.return_value.returncode = 1
+            probe.return_value.stderr = "missing"
+            with self.assertRaisesRegex(RuntimeError, "did not expose"):
+                guest.main()
+            opened.assert_not_called()
+
     def test_guest_refuses_non_qemu_before_touching_console(self):
         with mock.patch.object(guest, "dmi_is_qemu", return_value=False), \
              mock.patch.object(guest.os, "open") as opened:
@@ -93,7 +121,7 @@ class QemuVtSmokeTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         for term in ("MELANIA_QEMU_TTY_SMOKE", "YES_DISPOSABLE_QEMU",
                      "qemu-system-x86_64", "accel=tcg", "-display none",
-                     "-vga std", "sha256sum -c verify.sha256",
+                     '-vga "$vga_device"', "sha256sum -c verify.sha256",
                      "timeout --signal=TERM", "MELANIA_QEMU_TTY_RESULT=PASS",
                      "MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false"):
             self.assertIn(term, script)
