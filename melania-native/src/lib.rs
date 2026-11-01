@@ -6,6 +6,7 @@
 pub mod outputs;
 pub mod renderer;
 pub mod planes;
+pub mod frame_gate;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
@@ -26,12 +27,14 @@ pub struct NativeLifecycle {
     seat_active: bool,
     devices: BTreeMap<u64, PathBuf>,
     events: u64,
+    frame_gate: frame_gate::NativeFrameGate,
 }
 
 impl NativeLifecycle {
     pub fn seat_active(&self) -> bool { self.seat_active }
     pub fn devices(&self) -> &BTreeMap<u64, PathBuf> { &self.devices }
     pub fn event_count(&self) -> u64 { self.events }
+    pub fn frame_gate(&self)->&frame_gate::NativeFrameGate {&self.frame_gate}
 
     pub fn on_session(&mut self, event: SessionEvent) {
         self.events = self.events.saturating_add(1);
@@ -40,16 +43,20 @@ impl NativeLifecycle {
                 // When the native renderer is implemented, this transition
                 // must suspend libinput and disable all KMS output managers.
                 self.seat_active = false;
+                self.frame_gate.set_seat_active(false);
             }
             SessionEvent::ActivateSession => {
                 // Resume must restore all devices before any rendering.
                 self.seat_active = true;
+                self.frame_gate.set_seat_active(true);
             }
         }
     }
 
     pub fn on_device(&mut self, event: DeviceChange) {
         self.events = self.events.saturating_add(1);
+        // Any GPU hotplug/change invalidates the pending render candidate.
+        self.frame_gate.invalidate();
         match event {
             DeviceChange::Added { id, path } => {self.devices.insert(id, path);}
             DeviceChange::Changed { .. } => {
@@ -119,6 +126,18 @@ mod tests {
         assert_eq!(state.devices().len(),1);
         assert_eq!(state.event_count(),5);
         assert!(!state.can_present_kms());
+    }
+    #[test]
+    fn lifecycle_discards_gpu_candidates_on_seat_pause_and_hotplug() {
+        let mut state=NativeLifecycle::default();
+        state.on_session(SessionEvent::ActivateSession);
+        assert!(state.frame_gate().seat_active());
+        let initial_generation=state.frame_gate().generation();
+        state.on_device(DeviceChange::Changed{id:3});
+        assert!(state.frame_gate().generation()>initial_generation);
+        state.on_session(SessionEvent::PauseSession);
+        assert!(!state.frame_gate().seat_active());
+        assert!(!state.frame_gate().actual_kms_submission_enabled());
     }
     #[test]
     fn removed_gpu_does_not_reappear_on_resume() {
