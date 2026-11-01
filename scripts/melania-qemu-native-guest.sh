@@ -70,6 +70,18 @@ report "MELANIA_QEMU_NATIVE_KMS_EXIT=$code"
 [[ "$code" -eq 0 ]] || fatal 'native_KMS_TEST_ONLY_failed'
 report 'MELANIA_QEMU_NATIVE_KMS_PASS=true'
 
+# Verify live old framebuffer metadata and acquired GEM handle lifecycle.
+# This audit opens DRM only INSIDE the disposable QEMU guest and calls
+# drmModeGetFB2 then GEM_CLOSE for each distinct returned GEM handle.
+# No plane/mode/atomic setter is issued. It is not a rollback implementation.
+fb2_probe=/mnt/melania-native/melania-fb2-probe
+[[ -f "$fb2_probe" && -x "$fb2_probe" ]] ||
+  fatal 'GEM_lease_probe_missing_from_payload'
+MELANIA_FB2_QEMU_ONLY=YES_DISPOSABLE_VM \
+  timeout --signal=TERM --kill-after=3s 20s "$fb2_probe" < /dev/tty1 ||
+  fatal 'framebuffer_GEM_lifecycle_unverified'
+report 'MELANIA_QEMU_NATIVE_FB2_GEM_CLOSE_PASS=true'
+
 # Only AFTER the native process returns, confirm the console can still be
 # changed and restored via Linux VT ioctl in the SAME disposable guest.
 # This is a real VT test but NOT a rollback after visible scanout.
