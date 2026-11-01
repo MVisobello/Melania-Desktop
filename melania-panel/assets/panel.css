@@ -1171,3 +1171,26 @@ window.melania-theme-light .melania-bar separator.melania-clock-separator {
 }
 window.melania-theme-light .melania-bar .melania-clock-time { color: #24394f; }
 window.melania-theme-light .melania-bar .melania-clock-date { color: #536a80; }
+
+/* Universal freedesktop app pinning: discreet native right-click menu. */
+popover.melania-pin-popover > contents {
+  background: #203b58;
+  border: 1px solid rgba(189,221,251,.50);
+  border-radius: 9px;
+}
+.melania-pin-menu { padding: 6px; min-width: 172px; }
+.melania-pin-menu button.melania-pin-choice {
+  min-height: 30px;
+  padding: 4px 10px;
+  color: #f3f7ff;
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+}
+.melania-pin-menu button.melania-pin-choice:hover { background: #33668e; }
+window.melania-theme-light popover.melania-pin-popover > contents {
+  background: #f8fbfe;
+  border-color: #bcd2e5;
+}
+window.melania-theme-light .melania-pin-menu button.melania-pin-choice {color: #20384d;}
+window.melania-theme-light .melania-pin-menu button.melania-pin-choice:hover {background: #d5e7f6;}
