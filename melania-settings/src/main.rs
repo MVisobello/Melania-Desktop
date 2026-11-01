@@ -61,7 +61,7 @@ fn saved_option(
     row
 }
 
-fn page(title: &str, _description: &str) -> GtkBox {
+fn page(title: &str) -> GtkBox {
     let body = GtkBox::new(Orientation::Vertical, 12);
     body.add_css_class("settings-body");
     let introduction = GtkBox::new(Orientation::Vertical, 5);
@@ -195,7 +195,7 @@ fn build_ui(
     let apply_style: Rc<dyn Fn(&Preferences)> = Rc::new(move |p| {
         refresh_theme(&themed_root, &themed_header, p);
     });
-    let appearance = page("Aspetto", "Personalizza colori, interfaccia e icone di Melania Desktop.");
+    let appearance = page("Aspetto");
     let appearance_row = GtkBox::new(Orientation::Horizontal, 14);
     appearance_row.add_css_class("settings-card");
     let appearance_summary = GtkBox::new(Orientation::Vertical, 3);
@@ -296,14 +296,14 @@ fn build_ui(
     });
     appearance.append(&save_blur);
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
-    let desktop = page("Desktop e finestre", "Gestisci il comportamento delle finestre nella sessione Melania.");
+    let desktop = page("Desktop e finestre");
     desktop.append(&saved_option("Snap finestre", "Aggancio ai bordi gestito dal compositore dal prossimo avvio della sessione.", prefs.borrow().snap_windows, prefs.clone(), |p,v| p.snap_windows = v, None));
     desktop.append(&saved_option("Anteprime sulla barra", "Catture GPU delle sole finestre della sessione Melania nel selettore al passaggio del mouse. Riavvia il pannello.", prefs.borrow().preview_windows, prefs.clone(), |p,v| p.preview_windows = v, None));
     desktop.append(&saved_option("Raggruppa finestre nella barra", "Un pulsante per applicazione con menu delle sue finestre. Richiede il riavvio del pannello Melania.", prefs.borrow().group_windows, prefs.clone(), |p,v| p.group_windows = v, None));
     stack.add_titled(&desktop, Some("desktop"), "Desktop");
     // Saved workspace count is applied on compositor/panel startup.
     // Changing mappings while windows are open would risk losing them.
-    let workspaces = page("Spazi di lavoro", "Organizza finestre e applicazioni su desktop separati.");
+    let workspaces = page("Spazi di lavoro");
     workspaces.append(&text("Numero di spazi di lavoro fissi (da 1 a 8)", "settings-hero"));
     let workspace_picker = SpinButton::with_range(1.0, 8.0, 1.0);
     workspace_picker.set_value(prefs.borrow().workspace_count as f64);
@@ -332,7 +332,7 @@ fn build_ui(
     workspaces.append(&apply_workspaces);
     workspaces.append(&workspace_feedback);
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
-    let network = page("Rete e Bluetooth", "Consulta le informazioni sulle connessioni.");
+    let network = page("Rete e Bluetooth");
     let live_network = text(&gnome_pages::network_status(), "settings-row-description");
     live_network.add_css_class("settings-card");
     network.append(&live_network);
@@ -346,7 +346,7 @@ fn build_ui(
     });
     network.append(&refresh_network);
     stack.add_titled(&network, Some("network"), "Rete");
-    let accessibility = page("Accessibilità", "Regola la leggibilità e il movimento dell'interfaccia.");
+    let accessibility = page("Accessibilità");
     accessibility.append(&saved_option(
         "Riduci movimento",
         "Disattiva le animazioni GTK di Melania; non cambia quelle delle altre applicazioni Linux.",
@@ -360,7 +360,7 @@ fn build_ui(
         |p,v| p.high_contrast = v, Some(apply_style.clone())
     ));
     stack.add_titled(&accessibility, Some("accessibility"), "Accessibilità");
-    let keyboard = page("Scorciatoie", "Navigazione rapida nella sessione Wayland di Melania.");
+    let keyboard = page("Scorciatoie");
     keyboard.append(&text("Alt + Tab  ·  Finestra successiva", "settings-hero"));
     keyboard.append(&text("Alt + Maiusc + Tab  ·  Finestra precedente", "settings-subtitle"));
     keyboard.append(&text("Ctrl + Alt + Freccia sinistra/destra  ·  Cambia spazio di lavoro", "settings-hero"));
@@ -371,7 +371,7 @@ fn build_ui(
     xfce_pages::add_pages(&stack);
     let system = gnome_pages::overview(&stack);
     stack.add_titled(&system, Some("system"), "Sistema");
-    let notifications = page("Notifiche", "Gestisci il comportamento delle notifiche di Melania.");
+    let notifications = page("Notifiche");
     notifications.append(&saved_option("Non disturbare",
         "Silenzia gli avvisi di Melania finché non disattivi l'opzione.",
         prefs.borrow().do_not_disturb, prefs.clone(), |p,v| p.do_not_disturb=v, None));
