@@ -64,7 +64,7 @@ qemu_code=$?
 set -e
 printf 'qemu_exit=%s\n' "$qemu_code" > "$report_dir/result.txt"
 if [[ "$qemu_code" -ne 0 ]] ||
-   ! grep -q '^MELANIA_QEMU_DRM_ENUMERATED=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_VGA_ENUMERATED=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_EXIT=0' "$serial"; then
