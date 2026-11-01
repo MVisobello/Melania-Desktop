@@ -3,6 +3,7 @@
 mod window_controls;
 mod gio_backend;
 mod gio_remote;
+mod gio_mount;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use melania_transfer as transfer;
