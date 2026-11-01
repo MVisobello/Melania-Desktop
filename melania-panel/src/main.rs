@@ -1382,6 +1382,8 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     // region between the notification hairline and the right-aligned time.
     trailing.set_hexpand(false);
     trailing.set_halign(gtk::Align::End);
+    // Center the entire system cluster vertically at both panel positions.
+    trailing.set_valign(gtk::Align::Center);
     bar.append(&trailing);
     // Keep the desktop switcher beside the tray instead of centered on the bar.
     trailing.append(&workspace_switcher());
@@ -1459,12 +1461,16 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     // natural two-line text width plus minimal horizontal hit-target padding.
     clock.set_hexpand(false);
     clock.set_halign(gtk::Align::Start);
+    // GTK must not stretch or top-align the two-line clock within a tall bar.
+    clock.set_valign(gtk::Align::Center);
     let clock_row=GtkBox::new(Orientation::Vertical,0);
     clock_row.add_css_class("melania-clock-row");
     // A shared width and fill alignment make both strings end at the exact
     // same x coordinate, as in the user's Windows clock reference.
     clock_row.set_size_request(84,-1);
     clock_row.set_halign(gtk::Align::End);
+    clock_row.set_valign(gtk::Align::Center);
+    clock_row.set_vexpand(false);
     let date_label=Label::new(None);
     date_label.add_css_class("melania-clock-date");
     date_label.set_halign(gtk::Align::Fill);
