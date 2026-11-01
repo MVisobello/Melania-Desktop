@@ -29,6 +29,8 @@ struct Remote {
     generation: Rc<Cell<u64>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     job_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    copy_progress: Rc<RefCell<Option<Arc<gio_backend::CopyProgress>>>>,
+    transfer_bar: gtk::ProgressBar,
     mount_cancel: Rc<RefCell<Option<gio::Cancellable>>>,
 }
 
@@ -209,19 +211,33 @@ where F:FnOnce(Arc<AtomicBool>)->Result<String,String> + Send + 'static {
     glib::timeout_add_local(Duration::from_millis(70),move || match rx.try_recv() {
         Ok(Ok(message))=>{
             state.job_cancel.borrow_mut().take();
+            state.copy_progress.borrow_mut().take();
+            state.transfer_bar.set_visible(false);
             refresh(&state);
             state.status.set_text(&message);
             glib::ControlFlow::Break
         },
         Ok(Err(error))=>{
             state.job_cancel.borrow_mut().take();
+            state.copy_progress.borrow_mut().take();
+            state.transfer_bar.set_visible(false);
             refresh(&state);
             state.status.set_text(&error);
             glib::ControlFlow::Break
         },
-        Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Empty)=>{
+            if let Some(counter)=state.copy_progress.borrow().as_ref(){
+                let (bytes,items)=counter.snapshot();
+                state.transfer_bar.pulse();
+                state.status.set_text(&format!(
+                    "Copia GVfs: {items} elementi terminati · {bytes} byte trasferiti"));
+            }
+            glib::ControlFlow::Continue
+        },
         Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
             state.job_cancel.borrow_mut().take();
+            state.copy_progress.borrow_mut().take();
+            state.transfer_bar.set_visible(false);
             state.status.set_text("Operazione interrotta; controlla la destinazione.");
             glib::ControlFlow::Break
         },
@@ -229,9 +245,18 @@ where F:FnOnce(Arc<AtomicBool>)->Result<String,String> + Send + 'static {
 }
 
 fn copy_sources(remote:&Remote,uris:Vec<String>) {
+    if remote.job_cancel.borrow().is_some(){
+        remote.status.set_text("Un trasferimento è già in corso.");
+        return;
+    }
     let dest=remote.current.borrow().clone();
+    let progress=Arc::new(gio_backend::CopyProgress::default());
+    *remote.copy_progress.borrow_mut()=Some(progress.clone());
+    remote.transfer_bar.set_visible(true);
+    remote.transfer_bar.pulse();
     run_job(remote,"Copia tramite GIO/GVfs in corso…",move |cancel| {
-        let copied=gio_backend::copy_uris(&uris,&dest,&cancel)?;
+        let copied=gio_backend::copy_uris_with_progress(&uris,&dest,&cancel,
+            Some(progress.as_ref()))?;
         Ok(format!("{copied} elementi copiati senza sovrascrivere."))
     });
 }
@@ -347,6 +372,11 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     rows.add_css_class("files-list-view");
     scroll.set_child(Some(&rows));
     root.append(&scroll);
+    let transfer_bar=gtk::ProgressBar::new();
+    transfer_bar.set_visible(false);
+    transfer_bar.set_hexpand(true);
+    transfer_bar.set_tooltip_text(Some("Avanzamento delle copie GVfs (dimensione totale non sempre disponibile)"));
+    root.append(&transfer_bar);
     let status=Label::new(Some("Percorsi GIO/GVfs: copie e modifiche non sovrascriventi"));
     status.set_xalign(0.0);
     status.set_wrap(true);
@@ -367,6 +397,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         generation:Rc::new(Cell::new(0)),
         listing_cancel:Rc::new(RefCell::new(None)),
         job_cancel:Rc::new(RefCell::new(None)),
+        copy_progress:Rc::new(RefCell::new(None)),
+        transfer_bar,
         mount_cancel:Rc::new(RefCell::new(None)),
     };
     // Explicit authentication only: never prompt or mount from a background
