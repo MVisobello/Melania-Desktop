@@ -10,15 +10,15 @@ CSS=(ROOT/"melania-panel/assets/panel.css").read_text(encoding="utf-8")
 class TaskbarDesktopClock(unittest.TestCase):
     def test_one_workspace_icon_near_tray_not_center_strip(self):
         self.assertIn("fn workspace_switcher() -> gtk::MenuButton",PANEL)
-        self.assertIn("bar.append(&workspace_switcher());",PANEL)
+        self.assertIn("trailing.append(&workspace_switcher());",PANEL)
         self.assertNotIn("bar.append(&workspace_strip());",PANEL)
         self.assertNotIn("fn workspace_strip()",PANEL)
         self.assertLess(PANEL.index("bar.append(&running_scroll);"),
-                        PANEL.index("bar.append(&workspace_switcher());"))
+                        PANEL.index("trailing.append(&workspace_switcher());"))
         self.assertLess(PANEL.index("let space=GtkBox::new",PANEL.index("bar.append(&running_scroll);")),
-                        PANEL.index("bar.append(&workspace_switcher());"))
-        self.assertLess(PANEL.index("bar.append(&workspace_switcher());"),
-                        PANEL.index("bar.append(&status);"))
+                        PANEL.index("trailing.append(&workspace_switcher());"))
+        self.assertLess(PANEL.index("trailing.append(&workspace_switcher());"),
+                        PANEL.index("trailing.append(&status);"))
 
     def test_all_desktops_reachable_and_real_ipc_is_used(self):
         self.assertIn("for n in 1..=count {",PANEL)
@@ -47,7 +47,7 @@ class TaskbarDesktopClock(unittest.TestCase):
         self.assertIn('GtkBox::new(Orientation::Vertical,0);',PANEL)
         self.assertIn('clock_row.set_halign(gtk::Align::End);',PANEL)
         self.assertIn('clock_separator=gtk::Separator::new(Orientation::Vertical);',PANEL)
-        self.assertIn('bar.append(&clock_separator);',PANEL)
+        self.assertIn('trailing.append(&clock_separator);',PANEL)
         self.assertIn('badge.set_visible(false);',PANEL)
         self.assertIn('badge.set_visible(unread>0);',PANEL)
         self.assertIn('separator.melania-clock-separator',CSS)
@@ -68,10 +68,21 @@ class TaskbarDesktopClock(unittest.TestCase):
         clock_start=PANEL.index('fn taskbar(')
         clock_end=PANEL.index('fn install_start_hotkey_listener(',clock_start)
         taskbar=PANEL[clock_start:clock_end]
-        self.assertLess(taskbar.index('bar.append(&notification_button);'),taskbar.index('bar.append(&clock);'))
-        self.assertLess(taskbar.index('bar.append(&clock);'),taskbar.index('w.set_child(Some(&bar));w'))
+        self.assertLess(taskbar.index('trailing.append(&notification_button);'),taskbar.index('trailing.append(&clock);'))
+        self.assertLess(taskbar.index('trailing.append(&clock);'),taskbar.index('w.set_child(Some(&bar));w'))
         self.assertIn(".melania-bar .melania-clock-date",CSS)
         self.assertIn(".melania-bar .melania-clock-time",CSS)
+
+    def test_tray_is_compact_and_clock_lines_have_equal_size(self):
+        self.assertIn('trailing.add_css_class("melania-trailing");',PANEL)
+        self.assertIn('bar.append(&trailing);',PANEL)
+        self.assertIn('let status_row=GtkBox::new(Orientation::Horizontal,6);',PANEL)
+        self.assertIn('.melania-bar .melania-trailing { border-spacing: 3px; }',CSS)
+        self.assertIn('.melania-bar .melania-trailing .melania-status-icons { border-spacing: 6px; }',CSS)
+        self.assertIn('.melania-bar .melania-trailing .melania-clock-time,',CSS)
+        self.assertIn('.melania-bar .melania-trailing .melania-clock-date {',CSS)
+        self.assertIn('font-size: 12px;',CSS)
+        self.assertIn('font-weight: 400;',CSS)
 
 if __name__=="__main__":
     unittest.main(verbosity=2)

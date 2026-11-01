@@ -43,13 +43,21 @@ class PanelFunctionalSettings(unittest.TestCase):
         self.assertIn('relocate(start,top,6);',LIVE)
         self.assertIn('relocate(quick,top,if top {12}else{65});',LIVE)
         self.assertNotIn('let popup_offset=i32::from(prefs.panel_height)+13;',LIVE)
+        self.assertIn('if top { bar.add_css_class("melania-bar-top"); }',LIVE)
+        self.assertIn('else { bar.remove_css_class("melania-bar-top"); }',LIVE)
+        self.assertIn('let vertical_padding=if top {4} else {10};',LIVE)
+        self.assertIn('saturating_sub(vertical_padding)',LIVE)
+        css=(ROOT/"melania-panel/assets/panel.css").read_text()
+        self.assertIn('window .melania-bar.melania-bar-top {',css)
+        self.assertIn('min-height: 0;',css)
+        self.assertIn('padding: 2px 8px;',css)
 
     def test_existing_start_clock_remain_unmodified(self):
         self.assertIn('clock_row.append(&time_label);',PANEL)
         self.assertIn('clock_row.append(&date_label);',PANEL)
         self.assertIn('clock_row.set_size_request(84,-1);',PANEL)
         self.assertIn('menu.set_size_request(43,43);',PANEL)
-        self.assertIn('bar.append(&clock_separator);',PANEL)
+        self.assertIn('trailing.append(&clock_separator);',PANEL)
 
 if __name__=="__main__":
     unittest.main()

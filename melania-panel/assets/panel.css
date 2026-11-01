@@ -1194,3 +1194,50 @@ window.melania-theme-light popover.melania-pin-popover > contents {
 }
 window.melania-theme-light .melania-pin-menu button.melania-pin-choice {color: #20384d;}
 window.melania-theme-light .melania-pin-menu button.melania-pin-choice:hover {background: #d5e7f6;}
+
+
+/* Fixed-proportion top panel and Windows 11-inspired compact right cluster.
+ * A stacked clock is not a reason to stretch the upper taskbar vertically. */
+.melania-bar .melania-trailing { border-spacing: 3px; }
+.melania-bar .melania-trailing .melania-status-icons { border-spacing: 6px; }
+.melania-bar .melania-trailing .melania-tray-button {
+  padding: 2px 4px;
+  min-height: 31px;
+}
+.melania-bar .melania-trailing separator.melania-clock-separator {
+  min-width: 1px;
+  min-height: 21px;
+  margin: 8px 0;
+  padding: 0;
+}
+.melania-bar .melania-trailing button.melania-clock {
+  min-width: 84px;
+  min-height: 35px;
+  padding: 0 4px;
+}
+.melania-bar .melania-trailing .melania-clock-row { border-spacing: 1px; }
+.melania-bar .melania-trailing .melania-clock-time,
+.melania-bar .melania-trailing .melania-clock-date {
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+window .melania-bar.melania-bar-top {
+  min-height: 0;
+  padding: 2px 8px;
+  border-top: none;
+  border-bottom: 1px solid rgba(227,242,255,.33);
+  box-shadow: 0 6px 24px rgba(1,13,31,.40);
+}
+window.melania-theme-dark .melania-bar.melania-bar-top { border-bottom-color: #4a505a; }
+window.melania-theme-light .melania-bar.melania-bar-top { border-bottom-color: #c5cdd6; }
+/* Compact the tallest minimums; honor the configured 52–96px bar height. */
+.melania-bar.melania-bar-top button.melania-start { min-height: 40px; padding: 2px; }
+.melania-bar.melania-bar-top .melania-window { min-height: 35px; padding: 1px 5px; }
+.melania-bar.melania-bar-top .melania-running-scroll { min-height: 35px; }
+.melania-bar.melania-bar-top .melania-tray-button { min-height: 31px; padding: 1px 4px; }
+.melania-bar.melania-bar-top menubutton.melania-workspace-switcher > button {
+  min-height: 31px;
+  padding: 1px 5px;
+}
+.melania-bar.melania-bar-top .melania-trailing button.melania-clock { min-height: 33px; }
