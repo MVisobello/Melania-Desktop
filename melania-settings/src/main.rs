@@ -25,6 +25,20 @@ fn text(label: &str, style: &str) -> Label {
     widget
 }
 
+// Rebase every edit on the latest disk state. Pages such as Pannello and
+// Scrivania keep their own controls, so writing an old in-memory snapshot from
+// Aspetto/Workspace would silently undo their unrelated changes.
+fn save_edit(
+    shared: &Rc<RefCell<Preferences>>,
+    edit: impl FnOnce(&mut Preferences),
+) -> Result<Preferences, String> {
+    let mut latest = melania_config::load().map_err(|e| format!("lettura: {e}"))?;
+    edit(&mut latest);
+    melania_config::save(&latest).map_err(|e| format!("salvataggio: {e}"))?;
+    *shared.borrow_mut() = latest.clone();
+    Ok(latest)
+}
+
 fn saved_option(
     title: &str,
     description: &str,
@@ -50,13 +64,13 @@ fn saved_option(
     toggle.set_size_request(54, 30);
     toggle.set_tooltip_text(Some(title));
     toggle.connect_active_notify(move |sw| {
-        let mut preferences = prefs.borrow_mut();
-        change(&mut preferences, sw.is_active());
-        if let Err(e) = melania_config::save(&preferences) {
-            eprintln!("Melania Settings: impossibile salvare preferenze: {e}");
-        }
-        if let Some(ref update) = after_change {
-            update(&preferences);
+        match save_edit(&prefs, |latest| change(latest, sw.is_active())) {
+            Ok(preferences) => {
+                if let Some(ref update) = after_change {
+                    update(&preferences);
+                }
+            }
+            Err(e) => eprintln!("Melania Settings: impossibile salvare preferenze: {e}"),
         }
     });
     row.append(&toggle);
@@ -213,15 +227,15 @@ fn build_ui(
     let apply_theme = apply_style.clone();
     appearance_picker.connect_selected_notify(move |picker| {
         let mode = match picker.selected() { 0 => "light", 1 => "dark", 2 => "aero", _ => return };
-        let mut p = prefs_for_theme.borrow_mut();
-        p.set_appearance_theme(mode);
-        if p.icon_theme.starts_with("Melania-Fluent-") {
-            p.icon_theme = if mode == "dark" { "Melania-Fluent-Dark" } else { "Melania-Fluent-Light" }.into();
-        }
-        if let Err(e) = melania_config::save(&p) {
-            eprintln!("Melania Settings: tema non salvato: {e}");
-            return;
-        }
+        let p = match save_edit(&prefs_for_theme, |latest| {
+            latest.set_appearance_theme(mode);
+            if latest.icon_theme.starts_with("Melania-Fluent-") {
+                latest.icon_theme = if mode == "dark" { "Melania-Fluent-Dark" } else { "Melania-Fluent-Light" }.into();
+            }
+        }) {
+            Ok(preferences) => preferences,
+            Err(e) => { eprintln!("Melania Settings: tema non salvato: {e}"); return; }
+        };
         apply_theme(&p);
     });
     appearance_row.append(&appearance_picker);
@@ -244,12 +258,12 @@ fn build_ui(
     icon_variants.connect_selected_notify(move |dropdown| {
         let index=dropdown.selected() as usize;
         let Some(&variant)=melania_config::ICON_THEMES.get(index) else{return;};
-        let mut preferences = prefs_for_icons.borrow_mut();
-        preferences.icon_theme=variant.to_string();
-        if let Err(e)=melania_config::save(&preferences) {
-            eprintln!("Impossibile salvare il tema icone: {e}");
-            return;
-        }
+        let preferences=match save_edit(&prefs_for_icons, |latest| {
+            latest.icon_theme=variant.to_string();
+        }) {
+            Ok(preferences)=>preferences,
+            Err(e)=>{ eprintln!("Impossibile salvare il tema icone: {e}"); return; }
+        };
         if let Some(settings)=gtk::Settings::default() {
             settings.set_property("gtk-icon-theme-name",
                 melania_config::resolved_icon_theme(&preferences));
@@ -291,10 +305,12 @@ fn build_ui(
     let update_blur_style = apply_style.clone();
     save_blur.add_css_class("settings-save");
     save_blur.connect_clicked(move |_| {
-        let mut p = preferences.borrow_mut();
-        p.blur_strength = slider.value().round().clamp(0.0,100.0) as u8;
-        if let Err(e) = melania_config::save(&p) { eprintln!("Melania Settings: {e}"); }
-        update_blur_style(&p);
+        match save_edit(&preferences, |latest| {
+            latest.blur_strength = slider.value().round().clamp(0.0,100.0) as u8;
+        }) {
+            Ok(p) => update_blur_style(&p),
+            Err(e) => eprintln!("Melania Settings: {e}"),
+        }
     });
     appearance.append(&save_blur);
     stack.add_titled(&appearance, Some("appearance"), "Aspetto");
@@ -322,10 +338,8 @@ fn build_ui(
     let feedback = workspace_feedback.clone();
     apply_workspaces.connect_clicked(move |_| {
         let count = count_control.value_as_int().clamp(1, 8) as u8;
-        let mut preferences = workspace_preferences.borrow_mut();
-        preferences.workspace_count = count;
-        match melania_config::save(&preferences) {
-            Ok(()) => feedback.set_text(&format!(
+        match save_edit(&workspace_preferences, |latest| latest.workspace_count = count) {
+            Ok(_) => feedback.set_text(&format!(
                 "{count} spazi di lavoro salvati. Riavvia la sessione Melania per applicarli."
             )),
             Err(e) => feedback.set_text(&format!("Impossibile salvare: {e}")),
@@ -379,6 +393,20 @@ fn build_ui(
         "Silenzia gli avvisi di Melania finché non disattivi l'opzione.",
         prefs.borrow().do_not_disturb, prefs.clone(), |p,v| p.do_not_disturb=v, None));
     stack.add_titled(&notifications, Some("notifications"), "Notifiche");
+    // Optional real-GTK audit: verify that every sidebar destination exists,
+    // and that there are no registered pages hidden from the navigation.
+    // Never make ordinary sessions depend on diagnostic assertions.
+    let audit_settings = std::env::var_os("MELANIA_SETTINGS_AUDIT").is_some();
+    if audit_settings {
+        let pages = stack.pages().n_items();
+        assert_eq!(pages as usize, SETTINGS_NAVIGATION.len(),
+            "Settings pages and navigation entries are out of sync");
+        for &(title, target, _) in SETTINGS_NAVIGATION.iter() {
+            assert!(stack.child_by_name(target).is_some(),
+                "Settings category {title} has no page: {target}");
+        }
+        eprintln!("MELANIA_SETTINGS_PAGES_OK={pages}");
+    }
     // Expose this live stack only to our own application's command handler,
     // so a second invocation can navigate the existing Settings window.
     *shared_stack.borrow_mut() = Some(stack.clone());
@@ -430,6 +458,11 @@ fn build_ui(
     let buttons = navigation.clone();
     stack.connect_visible_child_name_notify(move |stack| {
         let current = stack.visible_child_name();
+        if audit_settings {
+            if let Some(ref page) = current {
+                eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={page}");
+            }
+        }
         for (button, target) in buttons.borrow().iter() {
             if current.as_deref() == Some(*target) {
                 button.add_css_class("active-section");
@@ -486,6 +519,11 @@ fn build_ui(
     root.append(&main_panel);
     window.set_child(Some(&root));
     window.present();
+    if audit_settings {
+        // The initial page may be selected before the signal handler is wired.
+        eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",
+            stack.visible_child_name().as_deref().unwrap_or("none"));
+    }
 }
 
 

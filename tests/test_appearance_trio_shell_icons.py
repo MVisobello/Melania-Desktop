@@ -21,7 +21,7 @@ class MelaniaAppearanceAndIconContracts(unittest.TestCase):
         self.assertIn("fn appearance_theme(&self)", cfg)
         self.assertIn("set_appearance_theme(&mut self", cfg)
         self.assertIn("appearance_picker.connect_selected_notify", settings)
-        self.assertIn("melania_config::save(&p)", settings)
+        self.assertIn("save_edit(&prefs_for_theme,", settings)
         self.assertNotIn('saved_option("Tema scuro"', settings)
         self.assertNotIn('saved_option("Aero Glass"', settings)
 

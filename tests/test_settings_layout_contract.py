@@ -21,6 +21,41 @@ class SettingsUIContract(unittest.TestCase):
             self.assertIn(f'"{name}"', main)
         self.assertIn('RefCell::new("system".into())', main)
 
+    def test_live_navigation_audit_covers_every_registered_settings_page(self):
+        main=(ROOT / "melania-settings/src/main.rs").read_text()
+        pages=(ROOT / "melania-settings/src/gnome_pages.rs").read_text()
+        audit=(ROOT / "scripts/audit-settings-nav-gtk.sh").read_text()
+        workflow=(ROOT / ".github/workflows/settings-visual.yml").read_text()
+        for marker in (
+            'stack.pages().n_items()',
+            'stack.child_by_name(target).is_some()',
+            'MELANIA_SETTINGS_PAGES_OK={pages}',
+            'MELANIA_SETTINGS_ACTIVE_PAGE={page}',
+            'MELANIA_SETTINGS_AUDIT',
+        ):
+            self.assertIn(marker, main)
+        for target in ("xfce-preferred", "xfce-mime", "xfce-session"):
+            self.assertIn(f'linked_row(stack, "{target}"', pages)
+        self.assertIn('target/debug/melania-settings "$page"', audit)
+        self.assertIn('settings-audit-$page.png', audit)
+        self.assertIn("bash scripts/audit-settings-nav-gtk.sh", workflow)
+
+    def test_independent_settings_pages_do_not_overwrite_each_other(self):
+        source=(ROOT / "melania-settings/src/main.rs").read_text()
+        self.assertIn("fn save_edit(", source)
+        self.assertIn("let mut latest = melania_config::load()", source)
+        self.assertIn("edit(&mut latest);", source)
+        self.assertIn("*shared.borrow_mut() = latest.clone();", source)
+        # All edits from the main Settings window must rebase on disk,
+        # because Panel and Desktop edit that same file independently.
+        self.assertEqual(source.count("melania_config::save("), 1)
+        for callback in ("prefs", "prefs_for_theme", "prefs_for_icons",
+                         "preferences", "workspace_preferences"):
+            self.assertIn(f"save_edit(&{callback},", source)
+        for path in ("xfce_panel.rs","xfce_desktop.rs"):
+            other=(ROOT / "melania-settings/src" / path).read_text()
+            self.assertIn("melania_config::load()",other)
+
     def test_real_windows_operations(self):
         settings = (ROOT / "melania-settings/src/main.rs").read_text()
         files = (ROOT / "melania-files/src/main.rs").read_text()
