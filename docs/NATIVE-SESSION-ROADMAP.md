@@ -374,6 +374,37 @@ mentre il test GPU è in esecuzione, la conservazione dei vecchi oggetti
 framebuffer e blob DRM nel kernel, rollback atomico verificabile e
 prove reali del passaggio di VT nella sola macchina virtuale isolata.
 
+## Fase 14 — eventi libseat/udev effettivi tra checkpoint GPU
+
+Nel percorso QEMU/TTY volontario `--experimental-kms-test`, Melania
+registra ora **i notifier reali di Smithay libseat e udev** nel loop
+`calloop`, anziché leggere soltanto `session.is_active()` senza
+smaltire gli eventi. Dopo aver registrato GPU e seat, prima dell'apertura
+del DRM e a ogni checkpoint del test GPU, esegue un dispatch
+**non bloccante** degli eventi in attesa.
+
+Una nuova struttura `DeviceEpoch` conserva identificativo, percorso e
+generazione della GPU. `PauseSession`, `ActivateSession`, rimozione,
+sostituzione o modifica del dispositivo incrementano la generazione
+tramite `NativeLifecycle`: uno snapshot relativo alla generazione
+precedente viene definitivamente respinto. Gli errori del loop eventi
+sono propagati; non si continua con un'altra GPU se il checkpoint
+è stato invalidato durante l'esperimento. I test Rust simulano
+ripresa, cambio/rimozione di GPU e riuso di un ID.
+
+**Limite tecnico importante:** il dispatch avviene **tra** le chiamate
+GPU, non durante un ioctl EGL/GBM che rimane bloccante. La sessione
+nativa ancora non implementa un ciclo DRM/vblank, la sospensione
+libinput, il rilascio/restauro delle vecchie risorse framebuffer
+né il rollback della VT. Lo script QEMU della fase 12 mantiene
+il timeout esterno e tutti i controlli di console dedicata.
+Non sono stati attivati commit atomici, page flip o scanout.
+
+**Accettazione di questa fase:** compilatione e unit test nel CI,
+compresa la verifica che il percorso sperimentale non possa partire
+nei runner condivisi. Un vero test di cambio VT sotto carico
+rimane da effettuare in una VM QEMU isolata, non sul PC principale.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
