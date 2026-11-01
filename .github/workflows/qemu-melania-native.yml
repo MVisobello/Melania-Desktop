@@ -47,7 +47,8 @@ jobs:
       - name: Validate fail-closed native VM harness
         run: |
           set -euo pipefail
-          bash -n scripts/melania-qemu-native-guest.sh scripts/run-qemu-melania-native.sh
+          bash -n scripts/melania-qemu-native-guest.sh
+          bash -n scripts/run-qemu-melania-native.sh
           python3 -m unittest discover -s tests -p 'test_qemu_native_stage17.py' -v
           python3 -m unittest discover -s tests -p 'test_native_rollback_stage19.py' -v
           python3 -m unittest discover -s tests -p 'test_native_fb2_stage21.py' -v
