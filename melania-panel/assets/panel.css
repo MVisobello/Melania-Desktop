@@ -841,13 +841,13 @@ window.melania-theme-light popover.melania-session-popup button.melania-session-
 }
 .melania-start-panel .melania-start-footer {
   margin-top: 0;
-  padding: 9px 3px 4px;
+  padding: 6px 3px 4px;
   border-top: 1px solid #64798f;
   border-spacing: 8px;
 }
 .melania-start-panel .melania-start-footer .melania-entry {
-  min-height: 32px;
-  padding: 4px 9px;
+  min-height: 28px;
+  padding: 2px 9px;
   border-radius: 5px;
   font-size: 12px;
 }
@@ -1013,9 +1013,9 @@ window.melania-theme-dark .melania-start-panel .melania-start-app-divider {
 }
 /* MenuButton is not a Button: style its internal GTK button explicitly. */
 .melania-start-panel menubutton.melania-power-icon-button > button {
-  min-width: 38px;
-  min-height: 38px;
-  padding: 5px;
+  min-width: 34px;
+  min-height: 28px;
+  padding: 2px;
   border-radius: 8px;
   background: #3e4c5d;
   border: 1px solid #536579;
