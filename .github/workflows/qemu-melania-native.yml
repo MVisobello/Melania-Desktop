@@ -7,6 +7,8 @@ on:
       - scripts/run-qemu-melania-native.sh
       - tests/test_qemu_native_stage17.py
       - tests/test_native_rollback_stage19.py
+      - tests/test_native_fb2_stage21.py
+      - scripts/melania-qemu-fb2-probe.c
       - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
@@ -17,6 +19,8 @@ on:
       - scripts/run-qemu-melania-native.sh
       - tests/test_qemu_native_stage17.py
       - tests/test_native_rollback_stage19.py
+      - tests/test_native_fb2_stage21.py
+      - scripts/melania-qemu-fb2-probe.c
       - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
@@ -43,9 +47,11 @@ jobs:
       - name: Validate fail-closed native VM harness
         run: |
           set -euo pipefail
-          bash -n scripts/melania-qemu-native-guest.sh scripts/run-qemu-melania-native.sh
+          bash -n scripts/melania-qemu-native-guest.sh
+          bash -n scripts/run-qemu-melania-native.sh
           python3 -m unittest discover -s tests -p 'test_qemu_native_stage17.py' -v
           python3 -m unittest discover -s tests -p 'test_native_rollback_stage19.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_fb2_stage21.py' -v
       - name: Build actual Rust backend on same Ubuntu release as guest
         run: |
           set -euo pipefail
@@ -57,6 +63,12 @@ jobs:
             qemu-utils cloud-image-utils genisoimage curl
           cargo test -p melania-native --all-targets
           cargo build -p melania-native
+          # GETFB2 may return new GEM handles. Prove every handle is closed
+          # on the same fd, inside the sacrificial VM (never on the runner).
+          cc -O2 -Wall -Wextra -Werror -std=c11 \
+            -I/usr/include/libdrm scripts/melania-qemu-fb2-probe.c \
+            -o target/debug/melania-qemu-fb2-probe -ldrm
+          test -x target/debug/melania-qemu-fb2-probe
           ldd target/debug/melania-native | tee native-runtime-libs.txt
           test -x target/debug/melania-native
       - name: Boot QEMU guest and execute REAL binary against virtual DRM card

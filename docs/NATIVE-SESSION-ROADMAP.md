@@ -662,6 +662,50 @@ L'intero compositore con finestre/focus continua a funzionare
 soltanto con il backend annidato Winit. Anche il recupero KMS
 da un frame visibile resta incompleto e lo scanout è bloccato.
 
+## Fase 21 — acquisizione e rilascio reali di handle GEM di framebuffer in QEMU
+
+I precedenti snapshot DRM raccolgono soltanto ID numerici dei framebuffer
+e copie dei blob, non una risorsa kernel posseduta. Secondo la
+documentazione DRM del kernel Linux, `DRM_IOCTL_MODE_GETFB2` può creare
+**nuovi riferimenti GEM sul file descriptor del chiamante**. L'applicazione
+deve rilasciarli con `DRM_IOCTL_GEM_CLOSE`, una sola volta per handle
+distinto; l'ID di un framebuffer, invece, non è una garanzia di proprietà.
+
+Il nuovo `scripts/melania-qemu-fb2-probe.c` verifica questo comportamento
+**dentro il guest QEMU**: richiede DMI QEMU, consenso esplicito,
+una vera TTY, assenza di variabili del display host e una GPU DRM
+virtuale. Enumera i piani KMS con libdrm, cerca riferimenti ai
+framebuffer preesistenti, interroga `drmModeGetFB2` per ottenere
+dimensioni e formato e richiede almeno un GEM handle reale. Gli
+handle restituiti vengono deduplicati per singolo framebuffer e
+chiusi individualmente con `DRM_IOCTL_GEM_CLOSE` sullo stesso FD.
+Il test fallisce se non può leggere o rilasciare le risorse, se non
+ci sono framebuffer già visibili o se la quantità di handle
+acquisiti non coincide con quella degli handle chiusi.
+
+La CI compila il probe sul runner con libdrm, lo trasporta
+in una ISO read-only e lo esegue **soltanto nella VM usa-e-getta**
+dopo `melania-native --experimental-kms-test` e prima della prova
+del ritorno della VT. Il log deve riportare:
+
+```text
+MELANIA_FB2_GEM_HANDLES_ACQUIRED=<numero positivo>
+MELANIA_FB2_GEM_HANDLES_CLOSED=<stesso numero>
+MELANIA_FB2_ROUNDTRIP=PASS
+MELANIA_FB2_ROLLBACK_READY=false
+MELANIA_QEMU_NATIVE_FB2_GEM_CLOSE_PASS=true
+```
+
+Questo passaggio può dimostrare che il driver virtuale consente di
+**acquisire e rilasciare correttamente i riferimenti GEM**. Non li
+mantiene ancora vivi attraverso un vero modeset: non è un gestore di
+ripristino DRM, né un framebuffer lease persistente, e non abilita
+alcun atomic commit o scanout. I quattro ostacoli della fase 19
+rimangono attivi. Occorrono un proprietario di lunga durata nel
+backend Rust, un piano atomico reversibile, gestione perdita DRM master
+e la prova di recupero dopo un **vero** frame visibile in VM prima
+di installare una sessione autonoma.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
