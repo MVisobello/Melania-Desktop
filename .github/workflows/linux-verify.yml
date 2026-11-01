@@ -160,6 +160,12 @@ jobs:
             exit 1
           fi
           grep -q 'NATIVE_STAGE1_BLOCKED' native-stage6-denied.log
+          # Even a caller-supplied opt-in MUST NOT grant DRM access in CI.
+          if MELANIA_EXPERIMENTAL_SEAT=1 MELANIA_KMS_TEST_ONLY=YES_QEMU_VM cargo run -p melania-native -- --experimental-kms-test > native-stage9-denied.log 2>&1; then
+            echo 'ERROR: VM-only KMS test ran without a dedicated TTY' >&2
+            exit 1
+          fi
+          grep -q 'NATIVE_STAGE1_BLOCKED' native-stage9-denied.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -183,3 +189,4 @@ jobs:
             native-stage1-denied.log
             native-stage2-denied.log
             native-stage6-denied.log
+            native-stage9-denied.log
