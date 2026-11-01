@@ -13,7 +13,10 @@ mkdir -p reports
 mkdir -p "$HOME/Desktop"
 TEMP="$(mktemp -d -t melania-full-wayland-XXXXXX)"
 mkdir -m 700 "$TEMP/runtime"
+mkdir -m 700 "$TEMP/config"
 export XDG_RUNTIME_DIR="$TEMP/runtime"
+# No CI settings test may mutate developer or runner personal config files.
+export XDG_CONFIG_HOME="$TEMP/config"
 PID=''
 cleanup(){
   if [[ -n "$PID" ]]; then
@@ -184,6 +187,39 @@ if command -v xdotool >/dev/null; then
     scrot -z -o reports/nested-wayland-start-search.png
   fi
   echo 'PASS: lone Super toggles Start closed/open, text reaches search without mouse click'
+fi
+# Verify a REAL running Melania taskbar accepts a changed user config and
+# moves from the bottom to the top edge without a restart or compositor exit.
+# The setting is isolated under the temporary CI XDG_CONFIG_HOME.
+mkdir -p "$XDG_CONFIG_HOME/melania"
+cat > "$XDG_CONFIG_HOME/melania/settings.conf" <<'EOPANEL'
+panel_height=72
+panel_position=top
+panel_auto_hide=false
+panel_opacity=100
+EOPANEL
+sleep 2
+kill -0 "$PID" 2>/dev/null || {
+  echo 'FAIL: compositor exited after live panel configuration change' >&2; exit 1;
+}
+pgrep -P "$PID" -f 'target/debug/melania-panel' >/dev/null || {
+  echo 'FAIL: panel exited after live configuration change' >&2; exit 1;
+}
+if command -v scrot >/dev/null; then
+  scrot -z -o reports/nested-wayland-panel-top.png
+  python3 - <<'PYPANEL'
+from pathlib import Path
+from PIL import Image
+before=Image.open("reports/nested-wayland-full-desktop.png").convert("RGB")
+after=Image.open("reports/nested-wayland-panel-top.png").convert("RGB")
+assert before.size==after.size
+# The top 8px used to be wallpaper. Now an opaque panel spans the upper
+# edge, while the UI's host window and nested compositor remain alive.
+xs=(before.width//2, before.width*2//3, before.width*5//6)
+diffs=[sum(abs(a-b) for a,b in zip(before.getpixel((x,8)),after.getpixel((x,8)))) for x in xs]
+assert max(diffs)>20, f"panel did not visually move to the upper edge: {diffs}"
+print("PASS: actual running panel reanchored to top edge with persisted preferences",diffs)
+PYPANEL
 fi
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null

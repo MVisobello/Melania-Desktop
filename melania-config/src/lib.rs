@@ -21,6 +21,12 @@ pub struct Preferences {
     pub high_contrast: bool,
     /// Icon family used by every Melania GTK process (never changes host GTK).
     pub icon_theme: String,
+    /// Panel geometry; these preferences affect only the Melania layer shell.
+    pub panel_height: u16,
+    pub panel_position: String,
+    pub panel_auto_hide: bool,
+    /// Percentage of panel surface opacity, 40–100; 94 matches Aero default.
+    pub panel_opacity: u8,
 }
 impl Default for Preferences {
     fn default() -> Self { Self {
@@ -29,6 +35,8 @@ impl Default for Preferences {
         do_not_disturb: false, blur_strength: 70, workspace_count: 4,
         group_windows: false, reduce_motion: false, high_contrast: false,
         icon_theme: "Melania-Fluent-Light".into(),
+        panel_height: 52, panel_position: "bottom".into(),
+        panel_auto_hide: false, panel_opacity: 94,
     } }
 }
 /// Per-user recent Start launches shared between Panel and Settings.
@@ -107,16 +115,26 @@ impl Preferences {
                 "reduce_motion" => if let Some(b) = as_bool() { prefs.reduce_motion = b },
                 "high_contrast" => if let Some(b) = as_bool() { prefs.high_contrast = b },
                 "icon_theme" if ICON_THEMES.contains(&v) => prefs.icon_theme = v.to_string(),
+                "panel_height" => if let Ok(n)=v.parse::<u16>() {
+                    if (52..=96).contains(&n){prefs.panel_height=n;}
+                },
+                "panel_position" if matches!(v,"bottom"|"top") =>
+                    prefs.panel_position=v.to_owned(),
+                "panel_auto_hide" => if let Some(b)=as_bool(){prefs.panel_auto_hide=b;},
+                "panel_opacity" => if let Ok(n)=v.parse::<u8>() {
+                    if (40..=100).contains(&n){prefs.panel_opacity=n;}
+                },
                 _ => {}, // future versions can read older/newer files
             }
         }
         prefs
     }
     pub fn to_text(&self) -> String { format!(
-        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\nicon_theme={}\n",
+        "# Melania Desktop preferences v1\ndark_mode={}\naero_glass={}\nanimations={}\nsnap_windows={}\npreview_windows={}\ndo_not_disturb={}\nblur_strength={}\nworkspace_count={}\ngroup_windows={}\nreduce_motion={}\nhigh_contrast={}\nicon_theme={}\npanel_height={}\npanel_position={}\npanel_auto_hide={}\npanel_opacity={}\n",
         self.dark_mode, self.aero_glass, self.animations, self.snap_windows,
         self.preview_windows, self.do_not_disturb, self.blur_strength, self.workspace_count,
-        self.group_windows, self.reduce_motion, self.high_contrast, self.icon_theme)
+        self.group_windows, self.reduce_motion, self.high_contrast, self.icon_theme,
+        self.panel_height, self.panel_position, self.panel_auto_hide, self.panel_opacity)
     }
     pub fn read_from(path: &Path) -> io::Result<Self> {
         match fs::read_to_string(path) {
@@ -183,6 +201,24 @@ mod tests {
         let mut p = Preferences::default();
         p.dark_mode = false; p.do_not_disturb = true;
         assert_eq!(Preferences::from_text(&p.to_text()), p);
+    }
+    #[test] fn panel_controls_validate_and_keep_approved_defaults() {
+        let default=Preferences::default();
+        assert_eq!(default.panel_height,52);
+        assert_eq!(default.panel_position,"bottom");
+        assert!(!default.panel_auto_hide);
+        assert_eq!(default.panel_opacity,94);
+        let edited=Preferences::from_text("panel_height=72\npanel_position=top\npanel_auto_hide=true\npanel_opacity=70");
+        assert_eq!(edited.panel_height,72);
+        assert_eq!(edited.panel_position,"top");
+        assert!(edited.panel_auto_hide);
+        assert_eq!(edited.panel_opacity,70);
+        assert_eq!(edited,Preferences::from_text(&edited.to_text()));
+        let invalid=Preferences::from_text("panel_height=200\npanel_position=else\npanel_auto_hide=maybe\npanel_opacity=0");
+        assert_eq!(invalid,default);
+        let old=Preferences::from_text("snap_windows=false");
+        assert_eq!(old.panel_height,52);
+        assert_eq!(old.panel_position,"bottom");
     }
     #[test] fn workspace_count_is_validated_and_old_configs_keep_default() {
         assert_eq!(Preferences::from_text("workspace_count=1").workspace_count, 1);

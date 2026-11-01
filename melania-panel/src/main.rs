@@ -4,6 +4,7 @@
 mod window_groups;
 mod session_actions;
 mod start_history;
+mod panel_preferences;
 use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -1565,7 +1566,12 @@ fn build(app:&Application){
     let calendar=calendar_window(app);
     install_start_hotkey_listener(app,&start,&quick,&notifications);
     // Do not present popup windows until the user clicks.
-    let bar=taskbar(app,&start,&quick,&notifications,&calendar);bar.present();
+    let bar=taskbar(app,&start,&quick,&notifications,&calendar);
+    if let Some(content)=bar.child().and_then(|child|child.downcast::<GtkBox>().ok()) {
+        panel_preferences::attach_live_preferences(
+            &bar,&content,&start,&quick,&notifications,&calendar);
+    }
+    bar.present();
     // CI-only: show the *real* launcher in the nested compositor screenshot.
     // Never open Start automatically in a normal user session.
     if std::env::var_os("MELANIA_SMOKE_OPEN_START").as_deref() == Some(std::ffi::OsStr::new("1")) {
