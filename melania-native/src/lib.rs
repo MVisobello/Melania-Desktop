@@ -10,6 +10,7 @@ pub mod frame_gate;
 pub mod kms_test;
 pub mod kms_restore;
 pub mod kms_resources;
+pub mod preflight_guard;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
