@@ -243,6 +243,108 @@ pub fn text_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
     })
 }
 
+const MAX_IMAGE_TRANSFER_BYTES:usize=6*1024*1024;
+const MAX_IMAGE_DIMENSION:u32=2048;
+const MAX_IMAGE_PIXELS:u64=4_000_000;
+const IMAGE_PREVIEW_WIDTH:u32=1024;
+const IMAGE_PREVIEW_HEIGHT:u32=720;
+#[derive(Debug)]
+pub struct ImageQuickLook {
+    pub rgba:Vec<u8>,
+    pub width:u32,
+    pub height:u32,
+    pub original_width:u32,
+    pub original_height:u32,
+    pub transferred_bytes:usize,
+    pub mime:String,
+}
+fn supported_image_mime(mime:&str)->bool {
+    matches!(mime,"image/png"|"image/jpeg"|"image/webp")
+}
+/// Read at most 6 MiB+1 over GVfs, then decode off the GTK thread with
+/// strict dimension and pixel limits. Only scaled RGBA reaches the UI.
+/// This does not execute external decoders, scripts or plugins.
+pub fn image_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
+    ->Result<ImageQuickLook,String>{
+    validate_uri(uri)?;
+    let (bytes,mime)=with_gio_cancel(cancelled,|provider|{
+        let file=gio::File::for_uri(uri);
+        let info=file.query_info("standard::type,standard::content-type,standard::size",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,Some(provider))
+            .map_err(|e|format!("Impossibile leggere le proprietà immagine: {e}"))?;
+        if info.file_type()!=gio::FileType::Regular{
+            return Err(error("Anteprima immagini consentita solo per file regolari, non link o cartelle"));
+        }
+        let mime=info.content_type().map(|m|m.to_string()).unwrap_or_default();
+        if !supported_image_mime(&mime){
+            return Err(error("Sono supportate anteprime PNG, JPEG e WebP"));
+        }
+        if info.size()>MAX_IMAGE_TRANSFER_BYTES as i64{
+            return Err(error("Immagine troppo grande per l'anteprima (limite 6 MiB)"));
+        }
+        let stream=file.read(Some(provider))
+            .map_err(|e|format!("Impossibile leggere il file immagine: {e}"))?;
+        let mut bytes=Vec::new();
+        let mut chunk=[0u8;8192];
+        loop {
+            if cancelled.load(Ordering::Acquire) || provider.is_cancelled(){
+                return Err(error("Anteprima immagine annullata"));
+            }
+            let remaining=MAX_IMAGE_TRANSFER_BYTES+1-bytes.len();
+            if remaining==0{break;}
+            let read=stream.read(&mut chunk[..remaining.min(chunk.len())],Some(provider))
+                .map_err(|e|format!("Lettura immagine fallita: {e}"))?;
+            if read==0{break;}
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        stream.close(Some(provider))
+            .map_err(|e|format!("Chiusura anteprima fallita: {e}"))?;
+        if bytes.len()>MAX_IMAGE_TRANSFER_BYTES{
+            return Err(error("Il file supera 6 MiB; anteprima non caricata per sicurezza"));
+        }
+        Ok((bytes,mime))
+    })?;
+    if cancelled.load(Ordering::Acquire){
+        return Err(error("Anteprima immagine annullata"));
+    }
+    let header=image::ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
+        .with_guessed_format()
+        .map_err(|e|format!("Formato immagine sconosciuto: {e}"))?;
+    let format=header.format().ok_or_else(||error("Formato immagine non riconosciuto"))?;
+    let matching=matches!((mime.as_str(),format),
+        ("image/png",image::ImageFormat::Png) |
+        ("image/jpeg",image::ImageFormat::Jpeg) |
+        ("image/webp",image::ImageFormat::WebP));
+    if !matching{
+        return Err(error("Formato dei dati diverso dal MIME: anteprima rifiutata"));
+    }
+    let (width,height)=header.into_dimensions()
+        .map_err(|e|format!("Dimensioni immagine non leggibili: {e}"))?;
+    if width==0 || height==0 ||
+        width>MAX_IMAGE_DIMENSION || height>MAX_IMAGE_DIMENSION ||
+        u64::from(width)*u64::from(height)>MAX_IMAGE_PIXELS {
+        return Err(error("Dimensioni immagine non consentite per anteprima"));
+    }
+    let mut reader=image::ImageReader::with_format(std::io::Cursor::new(&bytes),format);
+    let mut limits=image::Limits::default();
+    limits.max_image_width=Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height=Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc=Some(40*1024*1024);
+    reader.limits(limits);
+    let decoded=reader.decode()
+        .map_err(|e|format!("Decodifica immagine non riuscita: {e}"))?;
+    if cancelled.load(Ordering::Acquire){
+        return Err(error("Anteprima immagine annullata"));
+    }
+    let scaled=decoded.thumbnail(IMAGE_PREVIEW_WIDTH,IMAGE_PREVIEW_HEIGHT).to_rgba8();
+    let (preview_width,preview_height)=scaled.dimensions();
+    Ok(ImageQuickLook {
+        rgba:scaled.into_raw(),width:preview_width,height:preview_height,
+        original_width:width,original_height:height,
+        transferred_bytes:bytes.len(),mime,
+    })
+}
+
 #[derive(Clone,Debug)]
 pub struct FileDetails {
     pub name:String,
@@ -907,6 +1009,33 @@ mod tests {
         assert!(copy_uris(&[file.uri.clone()],&target,&stop).is_err(),
             "A second SFTP copy must refuse overwrite");
         assert_eq!(query_details(&file.uri).unwrap().size,Some(20));
+    }
+    #[test] fn image_preview_scales_png_and_refuses_non_images_and_large_dimensions(){
+        let dir=std::env::temp_dir().join(format!(
+            "melania-image-preview-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let tiny=image::RgbaImage::from_pixel(4,3,image::Rgba([20,80,160,255]));
+        tiny.save_with_format(dir.join("small.png"),image::ImageFormat::Png).unwrap();
+        let stop=Arc::new(AtomicBool::new(false));
+        let uri=gio::File::for_path(dir.join("small.png")).uri().to_string();
+        let result=image_quicklook(&uri,&stop).unwrap();
+        assert_eq!((result.width,result.height),(4,3));
+        assert_eq!((result.original_width,result.original_height),(4,3));
+        assert_eq!(result.rgba.len(),4*3*4);
+        assert_eq!(&result.rgba[..4],&[20,80,160,255]);
+        fs::write(dir.join("not-image.png"),b"not a valid png").unwrap();
+        assert!(image_quicklook(&gio::File::for_path(dir.join("not-image.png")).uri(),&stop).is_err());
+        let oversized=image::RgbaImage::from_pixel(
+            MAX_IMAGE_DIMENSION+1,2,image::Rgba([9,8,7,255]));
+        oversized.save_with_format(dir.join("oversized.png"),image::ImageFormat::Png).unwrap();
+        assert!(image_quicklook(&gio::File::for_path(dir.join("oversized.png")).uri(),&stop).is_err());
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn image_preview_cancels_before_contacting_remote_provider(){
+        let stop=Arc::new(AtomicBool::new(true));
+        assert!(image_quicklook("sftp://offline.invalid/a.png",&stop)
+            .unwrap_err().contains("annullata"));
     }
     #[test] fn text_quicklook_reads_only_bounded_utf8_and_refuses_binary(){
         let root=std::env::temp_dir().join(format!(
