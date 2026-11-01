@@ -1095,10 +1095,11 @@ window.melania-theme-light .melania-bar .melania-clock-date { color: #526d83; }
 window.melania-theme-light .melania-bar .melania-clock-time { color: #233b51; }
 
 
-/* Final Start footer alignment: symmetrical breathing room above and below
- * the compact search field and the power button. No horizontal changes. */
+/* In the fixed-height GTK popup the footer gets extra free space below its
+ * content. Compensate visually: search and power have equal visible clearance
+ * from the divider above and the lower launcher border. */
 .melania-start-panel .melania-start-footer {
-  padding: 10px 3px 10px;
+  padding: 21px 3px 0;
 }
 
 /* Clean, compact Task View symbol: two rounded windows and active desktop. */
