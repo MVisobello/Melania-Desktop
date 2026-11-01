@@ -10,7 +10,7 @@ case "$#" in
 esac
 case "$1" in
   --nested)
-    if [[ -z "$DISPLAY" && -z "$WAYLAND_DISPLAY" ]]; then
+    if ! env | grep -Eq "^(DISPLAY|WAYLAND_DISPLAY)=.+"; then
       echo 'BLOCKED: the current Melania compositor needs a running Linux graphical session.' >&2
       echo 'Use the nested preview from an existing desktop, not from a login manager.' >&2
       exit 78
