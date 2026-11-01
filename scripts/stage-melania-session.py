@@ -18,16 +18,16 @@ PREVIEW = ROOT / "scripts/melania-session"
 MARKERS = (
     "NATIVE_SESSION_READY=false",
     "visible_kms_commit_allowed(&self) -> bool {false}",
-    "can_activate_native_session(&self) -> bool {false}",
+    "actual_kms_submission_enabled(&self)->bool {false}",
 )
 
 
 def readiness() -> dict:
     main = (ROOT / "melania-native/src/main.rs").read_text()
     rollback = (ROOT / "melania-native/src/rollback_audit.rs").read_text()
-    inputs = (ROOT / "melania-native/src/input_registry.rs").read_text()
+    frame_gate = (ROOT / "melania-native/src/frame_gate.rs").read_text()
     native_blocked = (
-        MARKERS[0] in main and MARKERS[1] in rollback and MARKERS[2] in inputs
+        MARKERS[0] in main and MARKERS[1] in rollback and MARKERS[2] in frame_gate
     )
     return {
         "schema_version": 1,
@@ -60,8 +60,8 @@ def preview_desktop_entry() -> str:
         "Name=Melania Desktop (Nested Preview)\n"
         "GenericName=Experimental nested Wayland desktop\n"
         "Comment=Starts only inside an existing graphical session; not a login session\n"
-        f"Exec={path} --nested\n"
-        f"TryExec={path}\n"
+        f"Exec=/usr/bin/env bash {path} --nested\n"
+        "TryExec=/usr/bin/env\n"
         "Icon=melania\n"
         "Terminal=false\n"
         "Categories=System;\n"
