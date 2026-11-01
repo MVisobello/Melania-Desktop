@@ -41,6 +41,11 @@ jobs:
         run: |
           set -o pipefail
           cargo test -p melania-core -p melania-shell-model -p melania-dnd -p melania-transfer -p melania-control -p melania-config -p melania-services -p melania-filectl -p melania-files-core -p melania-notify-core -p melania-desktop-core -p melania-workspaces 2>&1 | tee core-tests.log
+      - name: Real file transfer smoke (temporary sandbox)
+        run: |
+          set -o pipefail
+          cargo build -p melania-filectl
+          bash scripts/smoke-file-transfers.sh 2>&1 | tee core-file-smoke.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
