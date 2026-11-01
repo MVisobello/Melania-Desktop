@@ -74,7 +74,14 @@ pub fn list_directory(dir: &Path, query: &str, options: ListingOptions) -> io::R
         out.push(entry);
         if out.len() >= options.max_entries { break; }
     }
-    out.sort_by(|a,b| {
+    sort_entries(&mut out, options);
+    Ok(out)
+}
+
+/// One sort implementation for local POSIX listings and GIO/GVfs metadata.
+/// Folder-first ordering is preserved for all views.
+pub fn sort_entries(entries: &mut [Entry], options: ListingOptions) {
+    entries.sort_by(|a,b| {
         if a.is_directory != b.is_directory { return b.is_directory.cmp(&a.is_directory); }
         let normal = a.name.to_lowercase().cmp(&b.name.to_lowercase());
         let order = match options.sort_by {
@@ -92,7 +99,6 @@ pub fn list_directory(dir: &Path, query: &str, options: ListingOptions) -> io::R
         };
         if options.descending { order.reverse() } else { order }
     });
-    Ok(out)
 }
 
 #[derive(Clone, Debug, Default)]
