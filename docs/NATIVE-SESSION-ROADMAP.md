@@ -52,6 +52,35 @@ Le prove automatiche usano una struttura `/dev` e `/sys` sintetica, mai i
 dispositivi reali dell'host CI. Per un confronto riproducibile si può usare
 `python3 scripts/probe-native-session.py --root /percorso/fixture --json`.
 
+## Smithay backend nativo — fase 1 (libseat/udev)
+
+Il nuovo crate Rust `melania-native` compila le feature Smithay
+`backend_session_libseat`, `backend_udev`, `backend_drm`,
+`backend_gbm` e `backend_libinput`. In particolare implementa un registro
+delle GPU con hotplug e un ciclo di vita della sessione per gli eventi
+`PauseSession` e `ActivateSession`, con test unitari. In questa fase
+**non** configura un renderer KMS e non sostituisce il compositor Winit.
+
+Per verificare la compilazione e l'elenco delle capacità senza accedere
+all'hardware:
+
+```sh
+cargo test -p melania-native
+cargo run -p melania-native -- --capabilities
+```
+
+Solo per un esperimento consapevole in **VM dedicata**, è disponibile il
+monitor Smithay/libseat/udev di durata limitata: richiede una vera console
+`/dev/ttyN`, nessuna sessione grafica ospitante e la variabile
+`MELANIA_EXPERIMENTAL_SEAT=1`. Questo componente fa solo il monitoraggio
+degli eventi: **non** può presentare finestre né aprire un desktop.
+
+Non eseguirlo nel desktop di produzione. Se libseat/udev è indisponibile,
+deve terminare con errore, senza usare un backend alternativo nascosto.
+Il prossimo passo consiste in opening dei DRM FD **attraverso la sessione**,
+creazione GBM/EGL, mapping CRTC/output, pause/resume degli output, input
+libinput e avvio dei client Wayland.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.

@@ -1,0 +1,14 @@
+[package]
+name = "melania-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Stage 1 is intentionally NOT a Wayland compositor or login session.
+# Smithay native feature flags compile alongside (not instead of) winit.
+[dependencies]
+smithay = { version = "0.7.0", default-features = false, features = [
+    "backend_drm", "backend_gbm", "backend_libinput",
+    "backend_udev", "backend_session_libseat"
+] }
+calloop = "0.14"
