@@ -4,6 +4,7 @@
 //! the existing winit compositor. It does not acquire DRM framebuffers, open
 //! libinput devices, switch VTs, or advertise a functioning native session.
 pub mod outputs;
+pub mod renderer;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
