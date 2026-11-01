@@ -75,8 +75,8 @@ class FramebufferGemStage21(unittest.TestCase):
         # incorrectly marks a successful GEM acquisition as failed.
         expression = r'^MELANIA_FB2_GEM_HANDLES_ACQUIRED=[1-9][0-9]*[[:space:]]*$'
         self.assertIn(expression, HOST)
-        for value, expected in (("1\\r\\n", 0), ("13\\n", 0),
-                                ("0\\r\\n", 1), ("bogus\\r\\n", 1)):
+        for value, expected in (("1\r\n", 0), ("13\n", 0),
+                                ("0\r\n", 1), ("bogus\r\n", 1)):
             run = subprocess.run(["grep", "-E", expression],
                                  input="MELANIA_FB2_GEM_HANDLES_ACQUIRED="+value,
                                  capture_output=True, text=True, timeout=5)
