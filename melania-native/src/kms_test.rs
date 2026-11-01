@@ -39,6 +39,8 @@ pub struct KmsTestReport {
     pub resources_unchanged: bool,
     /// Nothing can be restored from these numbers without owned blobs and FBs.
     pub restoration_implemented: bool,
+    /// Counts explicit, unresolved physical rollback prerequisites.
+    pub rollback_blockers: usize,
     pub visible_frame_submitted: bool,
 }
 
@@ -88,6 +90,12 @@ where F: FnMut() -> Result<bool,String>
         .map_err(|e|format!("KMS pre-test baseline incomplete: {e}"))?;
     let resource_copies=crate::kms_resources::capture_read_only(&fd,&baseline)
         .map_err(|e|format!("KMS resource payload preflight incomplete: {e}"))?;
+    let audit=crate::rollback_audit::RollbackAudit::inspect(&baseline,&resource_copies)
+        .map_err(|e|format!("KMS rollback readiness audit incomplete: {e}"))?;
+    if audit.visible_kms_commit_allowed() || audit.rollback_implemented() ||
+        audit.blocker_count() != 4 {
+        return Err("KMS rollback readiness unexpectedly enabled; refuse TEST_ONLY".into());
+    }
     // Own both observations together. Each GPU stage must recheck seat state
     // and the bounded cooperative deadline; the external watchdog is still
     // needed for a driver ioctl that itself never returns.
@@ -206,6 +214,7 @@ where F: FnMut() -> Result<bool,String>
                     borrowed_framebuffer_count:guard.observed_framebuffers(),
                     resources_unchanged:true,
                     restoration_implemented:guard.restoration_implemented(),
+                    rollback_blockers:audit.blocker_count(),
                     visible_frame_submitted:false,
                 });
             }
@@ -242,7 +251,8 @@ mod tests {
             test_only_passed:true,buffer_rendered:true,
             crtc_state_readable:true,baseline_unchanged:true,
             copied_blob_count:2,borrowed_framebuffer_count:1,resources_unchanged:true,
-            restoration_implemented:false,visible_frame_submitted:false,
+            restoration_implemented:false,rollback_blockers:4,
+            visible_frame_submitted:false,
         };
         assert!(result.test_only_passed);
         assert!(result.crtc_state_readable);
