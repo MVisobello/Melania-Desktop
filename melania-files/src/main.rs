@@ -715,6 +715,10 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         ));
     }
     browser.status.set_text(&format!("{count} elementi visibili · Melania Files"));
+    // CI-only proof that a real worker result reached the GTK renderer.
+    if std::env::var_os("MELANIA_SMOKE_FILES_LISTING").is_some() {
+        eprintln!("MELANIA_FILES_LISTING_READY count={count}");
+    }
 }
 
 // Keep a bounded navigation history, independent of the directory renderer.
