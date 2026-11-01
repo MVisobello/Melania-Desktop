@@ -2,6 +2,7 @@
 //! filtering/sorting, and durable bookmarks. No GTK and no compositor required.
 //! Never follow symlinks during directory classification or metadata inspection.
 pub mod nautilus_features;
+pub mod batch_rename;
 use std::{collections::HashSet, fs, io, path::{Path, PathBuf}, time::SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
