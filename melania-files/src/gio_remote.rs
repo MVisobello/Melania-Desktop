@@ -7,6 +7,7 @@ use gtk::{Box as GtkBox, Button, Entry, Label, Orientation, ScrolledWindow};
 use std::{cell::{Cell,RefCell},collections::BTreeSet,rc::Rc,sync::{Arc,atomic::{AtomicBool,Ordering}},
           time::Duration};
 use super::gio_backend::{self,Item};
+use super::gio_mount;
 
 #[derive(Clone)]
 struct Remote {
@@ -28,6 +29,7 @@ struct Remote {
     generation: Rc<Cell<u64>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     job_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    mount_cancel: Rc<RefCell<Option<gio::Cancellable>>>,
 }
 
 fn navigation(remote:&Remote,uri:String,remember:bool) {
@@ -287,6 +289,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let reload=Button::from_icon_name("view-refresh-symbolic");
     reload.set_tooltip_text(Some("Aggiorna"));
     for b in [&back,&next,&up,&reload] {toolbar.append(b);}
+    let connect=Button::from_icon_name("network-server-symbolic");
+    connect.set_tooltip_text(Some("Connetti al server con autenticazione GVfs (SMB/SFTP/WebDAV)"));
+    toolbar.append(&connect);
     let location=Entry::new();
     location.set_placeholder_text(Some("smb://server/condivisione, sftp://server/cartella…"));
     location.set_hexpand(true);
@@ -362,7 +367,38 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         generation:Rc::new(Cell::new(0)),
         listing_cancel:Rc::new(RefCell::new(None)),
         job_cancel:Rc::new(RefCell::new(None)),
+        mount_cancel:Rc::new(RefCell::new(None)),
     };
+    // Explicit authentication only: never prompt or mount from a background
+    // directory listing, keyboard focus or an untrusted URI.
+    let ui=state.clone();
+    let connect_root=root.clone();
+    connect.connect_clicked(move |_| {
+        if ui.mount_cancel.borrow().is_some(){
+            ui.status.set_text("Connessione già in corso. Puoi annullarla.");
+            return;
+        }
+        let uri=ui.current.borrow().clone();
+        let window=connect_root.root()
+            .and_then(|root|root.downcast::<gtk::Window>().ok());
+        let finished=ui.clone();
+        match gio_mount::connect_uri(&uri,window.as_ref(),move |result|{
+            finished.mount_cancel.borrow_mut().take();
+            match result {
+                Ok(())=>{
+                    finished.status.set_text("Server connesso: caricamento dei file.");
+                    refresh(&finished);
+                }
+                Err(error)=>finished.status.set_text(&error),
+            }
+        }){
+            Ok(cancellable)=>{
+                *ui.mount_cancel.borrow_mut()=Some(cancellable);
+                ui.status.set_text("Connessione GVfs avviata: inserisci le credenziali nella finestra di sistema.");
+            }
+            Err(error)=>ui.status.set_text(&error),
+        }
+    });
     let ui=state.clone();
     state.location.connect_activate(move |input| {
         let typed=input.text().to_string();
@@ -511,6 +547,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         if let Some(flag)=ui.job_cancel.borrow().as_ref(){
             flag.store(true,Ordering::Release);
             ui.status.set_text("Annullamento richiesto; nessun originale viene cancellato.");
+        } else if let Some(cancellable)=ui.mount_cancel.borrow().as_ref(){
+            cancellable.cancel();
+            ui.status.set_text("Annullamento della connessione richiesto.");
         } else if let Some(flag)=ui.listing_cancel.borrow().as_ref(){
             flag.store(true,Ordering::Release);
             ui.status.set_text("Lettura interrotta.");
