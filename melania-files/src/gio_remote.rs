@@ -95,15 +95,7 @@ fn refresh(remote:&Remote) {
                 ui.status.set_text(&message);
                 glib::ControlFlow::Break
             },
-            Err(std::sync::mpsc::TryRecvError::Empty)=>{
-            if let Some(counter)=state.copy_progress.borrow().as_ref(){
-                let (bytes,items)=counter.snapshot();
-                state.transfer_bar.pulse();
-                state.status.set_text(&format!(
-                    "Copia GVfs: {items} elementi terminati · {bytes} byte trasferiti"));
-            }
-            glib::ControlFlow::Continue
-        },
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
             Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
                 ui.status.set_text("Connessione interrotta");
                 glib::ControlFlow::Break
@@ -233,7 +225,15 @@ where F:FnOnce(Arc<AtomicBool>)->Result<String,String> + Send + 'static {
             state.status.set_text(&error);
             glib::ControlFlow::Break
         },
-        Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Empty)=>{
+            if let Some(counter)=state.copy_progress.borrow().as_ref(){
+                let (bytes,items)=counter.snapshot();
+                state.transfer_bar.pulse();
+                state.status.set_text(&format!(
+                    "Copia GVfs: {items} elementi terminati · {bytes} byte trasferiti"));
+            }
+            glib::ControlFlow::Continue
+        },
         Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
             state.job_cancel.borrow_mut().take();
             state.copy_progress.borrow_mut().take();
