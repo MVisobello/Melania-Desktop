@@ -176,6 +176,23 @@ La sessione autonoma non è ancora pronta: prima dello scanout servono
 primary plane, formato compatibile render/scanout, DRM framebuffer, gestione
 VT pause/resume, ripristino delle impostazioni precedenti e test reali in VM.
 
+## Piano KMS — fase 7: verifica dei primary plane (sola lettura)
+
+Dopo aver identificato i CRTC ed eseguito il frame offscreen da 64×64,
+Melania ora controlla i **primary plane** disponibili per ogni CRTC tramite
+`DrmDevice::planes`. Confronta i formati e i modificatori realmente
+pubblicizzati dal kernel con quelli del buffer di prova
+(`ABGR8888 + LINEAR`). Un CRTC senza primary plane o senza corrispondenza
+esatta viene escluso dai candidati per un futuro scanout.
+
+Si tratta di una **verifica preliminare, non di un'abilitazione**:
+la corrispondenza dei formati non dimostra che il kernel accetterà la
+composizione, non verifica le property KMS richieste, non preserva ancora
+lo stato del display e non gestisce il ciclo di page-flip. Nessuna
+`DrmSurface`, `set_crtc`, framebuffer, atomic commit o page flip viene
+creata da questa fase. Nessun test GPU viene effettuato sul computer
+dell'utente.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
