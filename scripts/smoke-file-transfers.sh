@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FILECTL="$ROOT/target/debug/melania-filectl"
-if [[ -n "$MELANIA_FILECTL" ]]; then FILECTL="$MELANIA_FILECTL"; fi
+if [[ -v MELANIA_FILECTL && -n "$MELANIA_FILECTL" ]]; then FILECTL="$MELANIA_FILECTL"; fi
 [[ -x "$FILECTL" ]] || { echo 'BLOCKED: build melania-filectl first' >&2; exit 3; }
 TEMP="$(mktemp -d -t melania-safe-files-XXXXXXXX)"
 trap 'rm -rf -- "$TEMP"' EXIT
