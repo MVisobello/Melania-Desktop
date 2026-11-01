@@ -54,6 +54,22 @@ fn assert_dedicated_console() {
     }
 }
 
+/// Only a QEMU virtual machine may exercise the atomic KMS TEST_ONLY path.
+/// DMI is checked before any libseat or DRM device is opened. A caller-set
+/// environment variable by itself cannot bypass this hardware gate.
+fn assert_qemu_test_guest() {
+    if env::var("MELANIA_KMS_TEST_ONLY").as_deref()!=Ok("YES_QEMU_VM") {
+        blocked("MELANIA_KMS_TEST_ONLY=YES_QEMU_VM required");
+    }
+    let vendor=fs::read_to_string("/sys/class/dmi/id/sys_vendor").unwrap_or_default();
+    let model=fs::read_to_string("/sys/class/dmi/id/product_name").unwrap_or_default();
+    let qemu=["QEMU","Bochs","KVM"].iter().any(|name|
+        vendor.contains(name) || model.contains(name));
+    if !qemu {
+        blocked("Atomic KMS test is restricted to a QEMU/KVM virtual machine");
+    }
+}
+
 fn print_capabilities() {
     println!("Melania native stage1 backend (Smithay 0.7)");
     println!("Compiled: libseat session, udev hotplug, DRM/GBM and libinput libraries");
@@ -213,6 +229,44 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
     Ok(())
 }
 
+/// One short-lived atomic TEST_ONLY and offscreen GLES frame on QEMU/vkms.
+/// No frame is submitted to a scanout plane, even if all checks pass.
+fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
+    assert_dedicated_console();
+    assert_qemu_test_guest();
+    let (mut session,_notifier)=LibSeatSession::new()?;
+    let udev=UdevBackend::new(session.seat())?;
+    let mut completed=false;
+    for (_,path) in udev.device_list() {
+        let descriptor=match session.open(
+            path,OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        ) {
+            Ok(fd)=>fd,
+            Err(error)=>{eprintln!("Melania KMS VM device {}: {error}",path.display());continue;}
+        };
+        let fd=DrmDeviceFd::new(DeviceFd::from(descriptor));
+        let (mut device,_events)=match DrmDevice::new(fd,false) {
+            Ok(result)=>result,
+            Err(error)=>{eprintln!("Melania KMS VM init {}: {error}",path.display());continue;}
+        };
+        match melania_native::kms_test::prepare_and_render_test_only(&mut device) {
+            Ok(report)=>{
+                println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} visible={}",
+                    report.connector,report.width,report.height,
+                    report.buffer_rendered,report.visible_frame_submitted);
+                completed=true;
+                break;
+            }
+            Err(error)=>eprintln!("Melania KMS VM preflight {}: {error}",path.display()),
+        }
+    }
+    println!("NATIVE_SESSION_READY=false");
+    if !completed {
+        return Err("No QEMU DRM device passed atomic TEST_ONLY plus offscreen frame".into());
+    }
+    Ok(())
+}
+
 fn main() {
     match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [flag] if flag=="--capabilities" =>print_capabilities(),
@@ -234,8 +288,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        [flag] if flag=="--experimental-kms-test" =>{
+            if let Err(error)=experimental_kms_test(){
+                eprintln!("Melania native stage9 QEMU KMS TEST_ONLY: {error}");
+                std::process::exit(1);
+            }
+        }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-kms-test");
             std::process::exit(2);
         }
     }
