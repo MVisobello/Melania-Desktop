@@ -72,6 +72,9 @@ fn refresh(remote:&Remote) {
                 for item in listing.items {render_row(&ui,item);}
                 ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
                     if listing.truncated {" (limite visualizzazione raggiunto)"} else {""}));
+                if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some() {
+                    eprintln!("MELANIA_GIO_LISTING_READY count={count}");
+                }
                 glib::ControlFlow::Break
             },
             Ok(Err(message)) => {
