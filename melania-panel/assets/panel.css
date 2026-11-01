@@ -994,3 +994,102 @@ window.melania-theme-light .melania-start-panel menubutton.melania-power-icon-bu
   min-height: 28px;
   padding: 2px;
 }
+
+
+/* Windows 7-style compact desktop picker: one icon and active desktop number.
+ * Its popover contains all configured desktop choices (1–8). */
+.melania-bar menubutton.melania-workspace-switcher > button {
+  min-width: 43px;
+  min-height: 32px;
+  padding: 2px 5px;
+  border-radius: 7px;
+  color: #f2f8ff;
+  background: rgba(125,175,226,.14);
+  border: 1px solid rgba(173,216,255,.23);
+  box-shadow: none;
+}
+.melania-bar menubutton.melania-workspace-switcher > button:hover {
+  background: rgba(105,173,239,.29);
+}
+.melania-workspace-switcher-content { border-spacing: 3px; }
+.melania-workspace-current {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+popover.melania-workspace-popover > contents {
+  background: #223b57;
+  border: 1px solid #577894;
+  border-radius: 10px;
+  color: #eff8ff;
+}
+.melania-workspace-menu { padding: 8px; min-width: 168px; }
+.melania-workspace-heading {
+  font-size: 10px;
+  font-weight: 700;
+  color: #c7dbed;
+  margin: 2px 5px 6px;
+}
+.melania-workspace-menu button.melania-workspace-choice {
+  min-height: 30px;
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: transparent;
+  color: #f0f7ff;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.melania-workspace-menu button.melania-workspace-choice:hover {
+  background: #395f86;
+}
+.melania-workspace-menu button.melania-workspace-choice.melania-workspace-active {
+  background: #276bad;
+  border-color: #6baeea;
+  color: #fff;
+}
+window.melania-theme-light .melania-bar menubutton.melania-workspace-switcher > button {
+  background: #e6edf5;
+  border-color: #c4d3e3;
+  color: #2b4358;
+}
+window.melania-theme-light .melania-bar menubutton.melania-workspace-switcher > button:hover {
+  background: #d2e5f6;
+}
+window.melania-theme-light popover.melania-workspace-popover > contents {
+  background: #f7f9fc;
+  color: #23394f;
+  border-color: #cad8e7;
+}
+window.melania-theme-light .melania-workspace-heading { color: #4d6782; }
+window.melania-theme-light .melania-workspace-menu button.melania-workspace-choice {
+  color: #294258;
+}
+window.melania-theme-light .melania-workspace-menu button.melania-workspace-choice:hover {
+  background: #d9e8f7;
+}
+window.melania-theme-light .melania-workspace-menu button.melania-workspace-choice.melania-workspace-active {
+  color: #17436d;
+  background: #c2ddf6;
+  border-color: #86b7e4;
+}
+
+/* Rightmost clock: left date and larger right time, never stacked. */
+.melania-bar .melania-clock {
+  min-width: 140px;
+  padding: 0 8px;
+}
+.melania-bar .melania-clock-row { border-spacing: 8px; }
+.melania-bar .melania-clock-date {
+  font-size: 11px;
+  font-weight: 500;
+  color: #c3d7e9;
+  font-variant-numeric: tabular-nums;
+}
+.melania-bar .melania-clock-time {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f3f8ff;
+  font-variant-numeric: tabular-nums;
+}
+window.melania-theme-light .melania-bar .melania-clock-date { color: #526d83; }
+window.melania-theme-light .melania-bar .melania-clock-time { color: #233b51; }

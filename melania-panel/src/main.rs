@@ -951,70 +951,88 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
     box_running
 }
 
-/// User-configured workspaces, displayed in the taskbar. State is queried
-/// from the compositor rather than guessed from button clicks.
-fn workspace_strip() -> GtkBox {
-    let row=GtkBox::new(Orientation::Horizontal,2);
-    row.add_css_class("melania-workspace-strip");
-    let path=std::env::var_os(SOCKET_ENV).map(PathBuf::from);
-    let mut buttons=Vec::new();
-    let count = melania_config::load().unwrap_or_default().workspace_count;
-    let extras = GtkBox::new(Orientation::Vertical, 3);
-    extras.add_css_class("melania-workspace-extras");
+/// A single taskbar icon opens all configured virtual desktops.
+/// The compositor owns the active-workspace state, not button-click guesses.
+fn workspace_switcher() -> gtk::MenuButton {
+    let toggle=gtk::MenuButton::new();
+    toggle.add_css_class("melania-workspace-switcher");
+    toggle.set_tooltip_text(Some("Desktop virtuali"));
+    let socket=std::env::var_os(SOCKET_ENV).map(PathBuf::from);
+    toggle.set_sensitive(socket.is_some());
+    let light=melania_config::load().unwrap_or_default().appearance_theme()=="light";
+
+    // Original two-overlapping-desktops glyph; no dependence on an icon theme.
+    let symbol=gtk::DrawingArea::new();
+    symbol.set_content_width(20);
+    symbol.set_content_height(20);
+    symbol.set_draw_func(move |_,cr,width,height| {
+        if width<=0 || height<=0 {return;}
+        cr.scale(width as f64/20.0,height as f64/20.0);
+        if light {cr.set_source_rgb(0.20,0.31,0.44);}
+        else {cr.set_source_rgb(0.92,0.96,1.0);}
+        cr.set_line_width(1.6);
+        cr.rectangle(2.5,6.0,12.0,10.0);
+        let _=cr.stroke();
+        cr.rectangle(5.5,3.0,12.0,10.0);
+        let _=cr.stroke();
+    });
+    let active_label=Label::new(Some("–"));
+    active_label.add_css_class("melania-workspace-current");
+    let content=GtkBox::new(Orientation::Horizontal,3);
+    content.add_css_class("melania-workspace-switcher-content");
+    content.append(&symbol);
+    content.append(&active_label);
+    toggle.set_child(Some(&content));
+
+    let popover=gtk::Popover::new();
+    // The switcher sits in the bottom bar: the selector must open upwards.
+    popover.set_position(gtk::PositionType::Top);
+    popover.add_css_class("melania-workspace-popover");
+    let list=GtkBox::new(Orientation::Vertical,3);
+    list.add_css_class("melania-workspace-menu");
+    list.append(&label("DESKTOP VIRTUALI","melania-workspace-heading"));
+    let mut choices=Vec::new();
+    let count=melania_config::load().unwrap_or_default().workspace_count;
     for n in 1..=count {
-        let b=Button::with_label(&n.to_string());
-        b.add_css_class("melania-workspace-button");
-        b.set_tooltip_text(Some(&format!("Spazio di lavoro {n}")));
-        b.set_sensitive(path.is_some());
-        let socket=path.clone();
-        b.connect_clicked(move |_| {
-            if let Some(socket)=socket.as_ref() {
-                if let Err(error)=control_request(socket,WindowCommand::Workspace(n)) {
+        let choice=Button::with_label(&format!("Desktop {n}"));
+        choice.add_css_class("melania-workspace-choice");
+        choice.set_sensitive(socket.is_some());
+        let path=socket.clone();
+        let popup=popover.clone();
+        choice.connect_clicked(move |_| {
+            if let Some(path)=path.as_ref() {
+                if let Err(error)=control_request(path,WindowCommand::Workspace(n)) {
                     eprintln!("Melania workspace {n}: {error}");
                 }
             }
+            popup.popdown();
         });
-        if n <= 4 { row.append(&b); } else { extras.append(&b); }
-        buttons.push(b);
+        list.append(&choice);
+        choices.push(choice);
     }
-    // At most four workspace buttons occupy the bar. Remaining desktops
-    // live in a popover, keeping the 1024px Aero layout usable.
-    let overflow = if count > 4 {
-        let more = gtk::MenuButton::new();
-        more.set_label("Altri ▾");
-        more.add_css_class("melania-workspace-overflow");
-        more.set_tooltip_text(Some("Altri spazi di lavoro"));
-        let popover = gtk::Popover::new();
-        popover.add_css_class("melania-group-popover");
-        popover.set_child(Some(&extras));
-        more.set_popover(Some(&popover));
-        row.append(&more);
-        Some(more)
-    } else { None };
+    popover.set_child(Some(&list));
+    toggle.set_popover(Some(&popover));
+    let refresh_toggle=toggle.clone();
+    let refresh_label=active_label.clone();
     let refresh=move || {
-        if let Some(path)=path.as_ref() {
-            if let Ok(active)=current_workspace(path) {
-                if let Some(ref more) = overflow {
-                    if active > 4 {
-                        more.set_label(&format!("{active} ▾"));
-                        more.add_css_class("melania-workspace-active");
-                    } else {
-                        more.set_label("Altri ▾");
-                        more.remove_css_class("melania-workspace-active");
-                    }
-                }
-                for (index,button) in buttons.iter().enumerate() {
-                    if (index+1) as u8==active {button.add_css_class("melania-workspace-active");}
-                    else {button.remove_css_class("melania-workspace-active");}
+        let Some(path)=socket.as_ref() else{return};
+        if let Ok(active)=current_workspace(path) {
+            refresh_label.set_label(&active.to_string());
+            refresh_toggle.set_tooltip_text(Some(&format!("Desktop {active} · Cambia desktop")));
+            for (index,choice) in choices.iter().enumerate() {
+                if (index+1) as u8==active {
+                    choice.add_css_class("melania-workspace-active");
+                } else {
+                    choice.remove_css_class("melania-workspace-active");
                 }
             }
         }
     };
     refresh();
-    glib::timeout_add_local(Duration::from_millis(900),move || {
+    glib::timeout_add_local(Duration::from_millis(900),move ||{
         refresh();glib::ControlFlow::Continue
     });
-    row
+    toggle
 }
 
 /// Freedesktop notifications are received by melania-notifyd over D-Bus.
@@ -1231,8 +1249,9 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     running_scroll.set_hexpand(true);
     running_scroll.set_child(Some(&running));
     bar.append(&running_scroll);
-    bar.append(&workspace_strip());
     let space=GtkBox::new(Orientation::Horizontal,1);space.set_hexpand(true);bar.append(&space);
+    // Keep the desktop switcher beside the tray instead of centered on the bar.
+    bar.append(&workspace_switcher());
     // Exact Melania compact symbolic glyphs: no glossy 96px app icon tiles.
     let status=Button::new();status.add_css_class("melania-system");
     status.add_css_class("melania-tray-button");
@@ -1291,17 +1310,36 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         if notify.is_visible(){notify.set_visible(false);}else{notify.present();}
     });
     bar.append(&notification_button);
-    let clock=Button::with_label("--:--");clock.add_css_class("melania-system");
+    // Date on the left, time on the right: both in the far-right taskbar control.
+    let clock=Button::new();
+    clock.add_css_class("melania-system");
     clock.add_css_class("melania-clock");
-    let refresh=clock.clone();
-    let update=move || {let time=glib::DateTime::now_local().ok().and_then(|t|t.format("%H:%M\n%d/%m/%Y").ok());
-        refresh.set_label(time.as_deref().unwrap_or("--:--"));};
-    update();glib::timeout_add_seconds_local(20,move ||{update();glib::ControlFlow::Continue});
+    let clock_row=GtkBox::new(Orientation::Horizontal,8);
+    clock_row.add_css_class("melania-clock-row");
+    let date_label=Label::new(None);
+    date_label.add_css_class("melania-clock-date");
+    date_label.set_xalign(1.0);
+    let time_label=Label::new(None);
+    time_label.add_css_class("melania-clock-time");
+    time_label.set_xalign(1.0);
+    clock_row.append(&date_label);
+    clock_row.append(&time_label);
+    clock.set_child(Some(&clock_row));
+    let update=move || {
+        let now=glib::DateTime::now_local().ok();
+        let date=now.as_ref().and_then(|t|t.format("%d/%m/%Y").ok());
+        let hour=now.as_ref().and_then(|t|t.format("%H:%M").ok());
+        date_label.set_text(date.as_deref().unwrap_or("--/--/----"));
+        time_label.set_text(hour.as_deref().unwrap_or("--:--"));
+    };
+    update();
+    glib::timeout_add_seconds_local(20,move ||{update();glib::ControlFlow::Continue});
     let cal=calendar.clone();let qs=quick.clone();let sm=start.clone();let nt=notifications.clone();
     clock.connect_clicked(move |_|{
         qs.set_visible(false);hide_start_surface(&sm);nt.set_visible(false);
         if cal.is_visible(){cal.set_visible(false);}else{cal.present();}
-    });bar.append(&clock);
+    });
+    bar.append(&clock);
     w.set_child(Some(&bar));w
 }
 /// Local private datagram channel: the compositor alone owns the Super key,
