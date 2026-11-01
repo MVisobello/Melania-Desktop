@@ -249,7 +249,7 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
             Ok(result)=>result,
             Err(error)=>{eprintln!("Melania KMS VM init {}: {error}",path.display());continue;}
         };
-        match melania_native::kms_test::prepare_and_render_test_only(&mut device) {
+        match melania_native::kms_test::prepare_and_render_test_only(&mut device,||session.is_active()) {
             Ok(report)=>{
                 println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} crtc_readable={} baseline_unchanged={} resource_blobs={} borrowed_fbs={} resources_unchanged={} restore_ready={} visible={}",
                     report.connector,report.width,report.height,
