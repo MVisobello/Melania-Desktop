@@ -1,5 +1,6 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
+mod connectivity_controls;
 mod xfce_catalog;
 mod xfce_defaults;
 mod xfce_autostart;
@@ -333,6 +334,7 @@ fn build_ui(
     workspaces.append(&workspace_feedback);
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
     let network = page("Rete");
+    connectivity_controls::append_wifi(&network);
     let live_network = text(&gnome_pages::network_status(), "settings-row-description");
     live_network.add_css_class("settings-card");
     network.append(&live_network);
