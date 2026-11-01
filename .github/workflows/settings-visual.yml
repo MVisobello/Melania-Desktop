@@ -73,10 +73,19 @@ jobs:
             sleep 2
             kill -0 $pid
             capture_ready reports/settings-appearance-gtk.png
+            # Inspect the new XFCE coverage overview in the REAL GTK app.
+            target/debug/melania-settings xfce
+            sleep 2
+            kill -0 $pid
+            capture_ready reports/settings-xfce-gtk.png
+            target/debug/melania-settings xfce-preferred
+            sleep 2
+            kill -0 $pid
+            capture_ready reports/settings-xfce-preferred-gtk.png
           '
           python3 - <<'PY'
           from PIL import Image, ImageStat
-          for name in ("system", "appearance"):
+          for name in ("system", "appearance", "xfce", "xfce-preferred"):
               path=f"reports/settings-{name}-gtk.png"
               with Image.open(path) as im:
                   assert im.size == (1280, 800), (path, im.size)
