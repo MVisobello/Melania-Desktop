@@ -985,6 +985,8 @@ fn workspace_switcher() -> gtk::MenuButton {
     toggle.set_child(Some(&content));
 
     let popover=gtk::Popover::new();
+    // The switcher sits in the bottom bar: the selector must open upwards.
+    popover.set_position(gtk::PositionType::Top);
     popover.add_css_class("melania-workspace-popover");
     let list=GtkBox::new(Orientation::Vertical,3);
     list.add_css_class("melania-workspace-menu");
