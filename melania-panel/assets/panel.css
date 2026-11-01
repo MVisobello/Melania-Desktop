@@ -1093,3 +1093,80 @@ window.melania-theme-light .melania-workspace-menu button.melania-workspace-choi
 }
 window.melania-theme-light .melania-bar .melania-clock-date { color: #526d83; }
 window.melania-theme-light .melania-bar .melania-clock-time { color: #233b51; }
+
+
+/* Final Start footer alignment: symmetrical breathing room above and below
+ * the compact search field and the power button. No horizontal changes. */
+.melania-start-panel .melania-start-footer {
+  padding: 10px 3px 10px;
+}
+
+/* Clean, compact Task View symbol: two rounded windows and active desktop. */
+.melania-bar menubutton.melania-workspace-switcher > button {
+  min-width: 43px;
+  min-height: 33px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  box-shadow: none;
+}
+.melania-bar menubutton.melania-workspace-switcher > button:hover {
+  background: rgba(156,204,250,.18);
+  border-color: rgba(182,221,255,.20);
+}
+.melania-workspace-switcher-content { border-spacing: 1px; }
+.melania-workspace-current {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: .88;
+}
+window.melania-theme-light .melania-bar menubutton.melania-workspace-switcher > button {
+  background: transparent;
+  border-color: transparent;
+}
+window.melania-theme-light .melania-bar menubutton.melania-workspace-switcher > button:hover {
+  background: #e0ebf6;
+  border-color: #c5d7e9;
+}
+
+/* Notifications without an unread count have no colored badge at all.
+ * A genuine, subtle single-pixel clock separator replaces that old stripe. */
+.melania-bar separator.melania-clock-separator {
+  min-width: 1px;
+  min-height: 23px;
+  margin: 11px 1px;
+  padding: 0;
+  background: rgba(237,244,253,.63);
+  border: none;
+  box-shadow: none;
+}
+window.melania-theme-light .melania-bar separator.melania-clock-separator {
+  background: rgba(73,94,117,.44);
+}
+
+/* Windows 11-like clock: time ABOVE date, both right-aligned in two rows. */
+.melania-bar button.melania-clock {
+  min-width: 78px;
+  min-height: 36px;
+  padding: 1px 5px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.melania-bar button.melania-clock:hover {
+  background: rgba(159,198,239,.16);
+}
+.melania-bar .melania-clock-row { border-spacing: 0; }
+.melania-bar .melania-clock-time {
+  color: #f3f8ff;
+  font-size: 12px;
+  font-weight: 650;
+}
+.melania-bar .melania-clock-date {
+  color: #d7e3f0;
+  font-size: 11px;
+  font-weight: 500;
+}
+window.melania-theme-light .melania-bar .melania-clock-time { color: #24394f; }
+window.melania-theme-light .melania-bar .melania-clock-date { color: #536a80; }
