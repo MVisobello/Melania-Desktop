@@ -75,7 +75,30 @@ pub fn validate_uri(uri: &str) -> Result<(), String> {
 
 pub fn list_uri(uri: &str, text_filter: &str, show_hidden: bool,
                 cancelled: &Arc<AtomicBool>) -> Result<Listing,String> {
-    list_uri_bounded(uri,text_filter,show_hidden,MAX_ITEMS,cancelled)
+    list_uri_sorted(uri,text_filter,show_hidden,model::SortBy::Name,false,cancelled)
+}
+
+/// Same GIO metadata, sort semantics and folder-first ordering on any provider.
+/// No extra network queries are made when the user changes the sort mode.
+pub fn sort_items(items: &mut [Item], by:model::SortBy, descending:bool) {
+    items.sort_by(|a,b|{
+        if a.directory!=b.directory{return b.directory.cmp(&a.directory);}
+        let normal=a.name.to_lowercase().cmp(&b.name.to_lowercase());
+        let order=match by {
+            model::SortBy::Name=>normal,
+            model::SortBy::Size=>a.size.cmp(&b.size).then(normal),
+            model::SortBy::Modified=>a.modified.cmp(&b.modified).then(normal),
+            model::SortBy::Type=>a.content_type.cmp(&b.content_type).then(normal),
+        };
+        if descending{order.reverse()}else{order}
+    });
+}
+
+pub fn list_uri_sorted(uri:&str,text_filter:&str,show_hidden:bool,
+    sort:model::SortBy,descending:bool,cancelled:&Arc<AtomicBool>)->Result<Listing,String>{
+    let mut listing=list_uri_bounded(uri,text_filter,show_hidden,MAX_ITEMS,cancelled)?;
+    sort_items(&mut listing.items,sort,descending);
+    Ok(listing)
 }
 fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
                     cancelled:&Arc<AtomicBool>)->Result<Listing,String> {
@@ -94,7 +117,7 @@ fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
         let info = enumerator.next_file(None::<&gio::Cancellable>)
             .map_err(|e|format!("Errore durante la lettura dei file: {e}"))?;
         let Some(info) = info else {break};
-        if !show_hidden && info.is_hidden() {continue;}
+        if !show_hidden && (info.is_hidden() || info.name().to_string_lossy().starts_with('.')) {continue;}
         let name = info.display_name().to_string();
         if !filter.is_empty() && !name.to_lowercase().contains(&filter) {continue;}
         if items.len() >= max_items {truncated=true;break;}
@@ -112,9 +135,47 @@ fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
             symlink: info.file_type()==gio::FileType::SymbolicLink,
         });
     }
-    items.sort_by(|a,b|b.directory.cmp(&a.directory)
-        .then_with(||a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    sort_items(&mut items,model::SortBy::Name,false);
     Ok(Listing{items,truncated})
+}
+
+#[derive(Clone,Debug)]
+pub struct FileDetails {
+    pub name:String,
+    pub content_type:String,
+    pub size:Option<u64>,
+    pub modified:Option<SystemTime>,
+    pub is_directory:bool,
+    pub symlink:bool,
+    pub can_read:bool,
+    pub can_write:bool,
+    pub can_execute:bool,
+}
+
+/// Metadata-only properties for both local and remote Gio::File resources.
+/// No file contents or recursive directory enumeration are needed.
+pub fn query_details(uri:&str)->Result<FileDetails,String> {
+    validate_uri(uri)?;
+    let file=gio::File::for_uri(uri);
+    let info=file.query_info(
+        "standard::display-name,standard::type,standard::size,standard::content-type,standard::is-symlink,time::modified,access::can-read,access::can-write,access::can-execute",
+        gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,None::<&gio::Cancellable>)
+        .map_err(|e|format!("Impossibile leggere le proprietà: {e}"))?;
+    let dir=info.file_type()==gio::FileType::Directory;
+    Ok(FileDetails {
+        name:info.display_name().to_string(),
+        content_type:info.content_type().map(|s|s.to_string())
+            .unwrap_or_else(||"Sconosciuto".to_owned()),
+        size:if dir{None}else{Some(info.size().max(0) as u64)},
+        modified:match info.attribute_uint64("time::modified"){
+            0=>None,secs=>UNIX_EPOCH.checked_add(Duration::from_secs(secs))
+        },
+        is_directory:dir,
+        symlink:info.file_type()==gio::FileType::SymbolicLink || info.is_symlink(),
+        can_read:info.attribute_boolean("access::can-read"),
+        can_write:info.attribute_boolean("access::can-write"),
+        can_execute:info.attribute_boolean("access::can-execute"),
+    })
 }
 
 /// Local files and remote files now enter through exactly the same GIO
@@ -451,6 +512,44 @@ mod tests {
                     "sftp://user:secret@example.org/", "smb:///nohost", "file:///hi\nthere"] {
             assert!(validate_uri(uri).is_err(),"{uri}");
         }
+    }
+    #[test] fn remote_sort_folders_first_and_all_sort_variants() {
+        let mut rows=vec![
+            Item{uri:"file:///b".into(),name:"B".into(),directory:false,size:2,
+                content_type:"text/plain".into(),modified:None,symlink:false},
+            Item{uri:"file:///d".into(),name:"Directory".into(),directory:true,size:0,
+                content_type:"inode/directory".into(),modified:None,symlink:false},
+            Item{uri:"file:///a".into(),name:"A".into(),directory:false,size:20,
+                content_type:"application/zip".into(),modified:None,symlink:false}
+        ];
+        sort_items(&mut rows,model::SortBy::Size,true);
+        assert_eq!(rows.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),
+            vec!["Directory","A","B"]);
+        sort_items(&mut rows,model::SortBy::Type,false);
+        assert_eq!(rows.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),
+            vec!["Directory","A","B"]);
+        sort_items(&mut rows,model::SortBy::Name,false);
+        assert_eq!(rows.iter().map(|e|e.name.as_str()).collect::<Vec<_>>(),
+            vec!["Directory","A","B"]);
+    }
+    #[test] fn details_are_non_recursive_and_file_symlink_safe() {
+        let dir=std::env::temp_dir().join(format!("melania-gio-details-{}",
+            std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("file.txt"),b"hello world").unwrap();
+        let details=query_details(&gio::File::for_path(dir.join("file.txt")).uri()).unwrap();
+        assert_eq!(details.size,Some(11));
+        assert!(!details.is_directory);
+        #[cfg(unix)]{
+            std::os::unix::fs::symlink("missing",dir.join("dangling")).unwrap();
+            let link=query_details(&gio::File::for_path(dir.join("dangling")).uri()).unwrap();
+            assert!(link.symlink);
+        }
+        let folder=query_details(&gio::File::for_path(&dir).uri()).unwrap();
+        assert!(folder.is_directory);
+        assert_eq!(folder.size,None);
+        let _=fs::remove_dir_all(dir);
     }
     #[test] fn can_enumerate_local_through_same_gio_backend() {
         let dir=std::env::temp_dir().join(format!("melania-gio-{}",std::process::id()));
