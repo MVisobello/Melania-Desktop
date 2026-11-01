@@ -21,6 +21,25 @@ class SettingsUIContract(unittest.TestCase):
             self.assertIn(f'"{name}"', main)
         self.assertIn('RefCell::new("system".into())', main)
 
+    def test_live_navigation_audit_covers_every_registered_settings_page(self):
+        main=(ROOT / "melania-settings/src/main.rs").read_text()
+        pages=(ROOT / "melania-settings/src/gnome_pages.rs").read_text()
+        audit=(ROOT / "scripts/audit-settings-nav-gtk.sh").read_text()
+        workflow=(ROOT / ".github/workflows/settings-visual.yml").read_text()
+        for marker in (
+            'stack.pages().n_items()',
+            'stack.child_by_name(target).is_some()',
+            'MELANIA_SETTINGS_PAGES_OK={pages}',
+            'MELANIA_SETTINGS_ACTIVE_PAGE={page}',
+            'MELANIA_SETTINGS_AUDIT',
+        ):
+            self.assertIn(marker, main)
+        for target in ("xfce-preferred", "xfce-mime", "xfce-session"):
+            self.assertIn(f'linked_row(stack, "{target}"', pages)
+        self.assertIn('target/debug/melania-settings "$page"', audit)
+        self.assertIn('settings-audit-$page.png', audit)
+        self.assertIn("bash scripts/audit-settings-nav-gtk.sh", workflow)
+
     def test_real_windows_operations(self):
         settings = (ROOT / "melania-settings/src/main.rs").read_text()
         files = (ROOT / "melania-files/src/main.rs").read_text()
