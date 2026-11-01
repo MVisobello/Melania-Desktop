@@ -979,3 +979,18 @@ window.melania-theme-light .melania-start-panel menubutton.melania-power-icon-bu
 .melania-start-panel .melania-start-shortcuts .melania-classic-link-text {
   font-size: 11px;
 }
+
+/* Compact Windows 7 Start footer: retain approved positions and palette.
+ * This selector also overrides the older .melania-session-more 38px minimum. */
+.melania-start-panel .melania-start-footer {
+  padding-top: 6px;
+}
+.melania-start-panel .melania-start-footer .melania-entry {
+  min-height: 28px;
+  padding: 2px 9px;
+}
+.melania-start-panel .melania-start-footer menubutton.melania-power-icon-button > button {
+  min-width: 34px;
+  min-height: 28px;
+  padding: 2px;
+}

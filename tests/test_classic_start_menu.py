@@ -86,6 +86,12 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('button.melania-account-orb',CSS)
         self.assertIn('menubutton.melania-power-icon-button > button',CSS)
 
+    def test_compact_footer_height_and_alignment(self):
+        self.assertIn('query.set_valign(gtk::Align::Center);',PANEL)
+        self.assertIn('more.set_valign(gtk::Align::Center);',PANEL)
+        self.assertRegex(CSS,r'(?s)\.melania-start-panel \.melania-start-footer \.melania-entry \{\s*min-height: 28px;\s*padding: 2px 9px;')
+        self.assertRegex(CSS,r'(?s)\.melania-start-panel \.melania-start-footer menubutton\.melania-power-icon-button > button \{\s*min-width: 34px;\s*min-height: 28px;\s*padding: 2px;')
+
     def test_keyboard_toggle_and_instant_search_are_wired_to_compositor(self):
         COMPOSITOR=(ROOT/"melania-compositor/src/main.rs").read_text(encoding="utf-8")
         CONTROL=(ROOT/"melania-control/src/lib.rs").read_text(encoding="utf-8")

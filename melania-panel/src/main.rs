@@ -572,6 +572,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Keep the search field under the application column and the power
     // controls on the right, in the same places as Windows 7.
     query.set_hexpand(false);
+    query.set_valign(gtk::Align::Center);
     query.set_size_request(250,-1);
     footer.append(&query);
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
@@ -581,6 +582,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // host directly from the Start footer; each action retains its own
     // availability guard and explicit confirmation dialog.
     let more=gtk::MenuButton::new();
+    more.set_valign(gtk::Align::Center);
     more.set_child(Some(&classic_control_glyph("power",light_controls)));
     more.add_css_class("melania-session-more");
     more.add_css_class("melania-power-icon-button");
