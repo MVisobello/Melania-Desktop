@@ -68,6 +68,9 @@ timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \
+  -device qemu-xhci,id=melania-usb \
+  -device usb-kbd,bus=melania-usb.0 \
+  -device usb-tablet,bus=melania-usb.0 \
   -device virtio-scsi-pci,id=scsi \
   -drive if=none,file=overlay.qcow2,id=rootdisk,format=qcow2 \
   -device scsi-hd,drive=rootdisk \
@@ -83,7 +86,7 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_NATIVE_DRM_PRESENT=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_SEATD_READY=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_CAPABILITIES=true' "$serial" ||
-   ! grep -q '^MELANIA_NATIVE_INPUT_ENUMERATED .* forwarded=false' "$serial" ||
+   ! grep -Eq '^MELANIA_NATIVE_INPUT_ENUMERATED keyboards=[1-9][0-9]* pointers=[1-9][0-9]* touch=[0-9]+ forwarded=false' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_INPUT_WAYLAND_READY=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true' "$serial" ||
    ! grep -q 'Melania QEMU atomic TEST_ONLY passed:' "$serial" ||
