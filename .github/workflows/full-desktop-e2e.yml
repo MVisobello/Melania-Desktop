@@ -1,0 +1,90 @@
+name: Melania full nested desktop integration
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/full-desktop-e2e.yml
+      - scripts/smoke-full-desktop-wayland.sh
+      - melania-compositor/**
+      - melania-desktop-surface/**
+      - melania-panel/**
+      - melania-files/**
+      - melania-settings/**
+      - melania-control/**
+      - tools/check_shared_window_chrome.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/full-desktop-e2e.yml
+      - scripts/smoke-full-desktop-wayland.sh
+      - melania-compositor/**
+      - melania-desktop-surface/**
+      - melania-panel/**
+      - melania-files/**
+      - melania-settings/**
+      - melania-control/**
+      - tools/check_shared_window_chrome.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nested-desktop:
+    name: Real Wayland shell + GTK windows under isolated Xvfb
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install real X11/Wayland desktop testing libraries
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libgtk4-layer-shell-dev \
+            libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libx11-dev libudev-dev libdbus-1-dev libinput-dev \
+            mesa-utils libgl1-mesa-dri xvfb xauth xdotool scrot \
+            python3-pil dbus-user-session
+          python3 -c 'from PIL import Image; print("Pillow available")'
+      - name: Compile real compositor and all four desktop client binaries
+        run: |
+          set -euo pipefail
+          cargo build -p melania-compositor -p melania-desktop-surface \
+            -p melania-panel -p melania-files -p melania-settings \
+            -p melania-control
+          for exe in melania-compositor melania-desktop-surface melania-panel \
+                     melania-files melania-settings melania-winctl; do
+            test -x "target/debug/$exe"
+          done
+          bash -n scripts/smoke-full-desktop-wayland.sh
+      - name: Full real nested desktop, actual window pixels, input and clean quit
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          GDK_BACKEND: wayland
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          xvfb-run -a -s '-screen 0 1280x800x24' \
+            bash scripts/smoke-full-desktop-wayland.sh \
+            2>&1 | tee reports/full-desktop-e2e.log
+          grep -q 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit' \
+            reports/full-desktop-e2e.log
+      - name: Upload real rendered screenshots and debug logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melania-real-full-desktop-screens
+          path: |
+            reports/nested-wayland-*.png
+            reports/nested-wayland-*.bmp
+            reports/wayland-full-*.log
+            reports/full-desktop-e2e.log
+          if-no-files-found: warn
