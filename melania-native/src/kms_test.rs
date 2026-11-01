@@ -27,6 +27,10 @@ pub struct KmsTestReport {
     pub buffer_rendered: bool,
     /// Read-only CRTC inspection is NOT a complete atomic rollback snapshot.
     pub crtc_state_readable: bool,
+    /// All pre/post atomic KMS properties read and compared without mutations.
+    pub baseline_unchanged: bool,
+    /// Nothing can be restored from these numbers without owned blobs and FBs.
+    pub restoration_implemented: bool,
     pub visible_frame_submitted: bool,
 }
 
@@ -62,6 +66,10 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
         return Err("Atomic DRM required; legacy mode cannot guarantee TEST_ONLY".into());
     }
     let fd=device.device_fd().clone();
+    // A complete read-only inventory is a necessary but not sufficient
+    // prerequisite for future rollback. Refuse incomplete property trees.
+    let baseline=crate::kms_restore::capture_read_only(&fd)
+        .map_err(|e|format!("KMS pre-test baseline incomplete: {e}"))?;
     let resources=fd.resource_handles()
         .map_err(|e|format!("KMS connector discovery failed: {e}"))?;
     let mut diagnostics=Vec::new();
@@ -138,13 +146,23 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                     .map_err(|e|format!("KMS candidate finish failed: {e}"))?
                     .wait().map_err(|e|format!("KMS candidate GPU sync failed: {e}"))?;
 
-                // No queue_buffer, commit or page_flip: the temporary
-                // GPU buffer is destroyed without reaching a monitor.
+                // Verify that TEST_ONLY and the temporary GLES rendering did
+                // not mutate any observable atomic KMS properties. A mismatch
+                // may indicate a hotplug or another KMS client: fail closed.
+                let after=crate::kms_restore::capture_read_only(&fd)
+                    .map_err(|e|format!("KMS post-test baseline incomplete: {e}"))?;
+                if !after.unchanged_since(&baseline) {
+                    return Err("KMS baseline changed during TEST_ONLY preflight".into());
+                }
+                // This still cannot restore mode blobs, scanout buffers or VT.
+                // No queue_buffer, commit or page_flip occurs here.
                 return Ok(KmsTestReport {
                     connector:name,width:u32::from(width),height:u32::from(height),
                     test_only_passed:true,
                     buffer_rendered:true,
                     crtc_state_readable:true,
+                    baseline_unchanged:true,
+                    restoration_implemented:baseline.restoration_implemented(),
                     visible_frame_submitted:false,
                 });
             }
@@ -179,10 +197,13 @@ mod tests {
         let result=KmsTestReport {
             connector:"Virtual-1".into(),width:1280,height:720,
             test_only_passed:true,buffer_rendered:true,
-            crtc_state_readable:true,visible_frame_submitted:false,
+            crtc_state_readable:true,baseline_unchanged:true,
+            restoration_implemented:false,visible_frame_submitted:false,
         };
         assert!(result.test_only_passed);
         assert!(result.crtc_state_readable);
+        assert!(result.baseline_unchanged);
+        assert!(!result.restoration_implemented);
         assert!(!result.visible_frame_submitted);
         assert!(!crate::renderer::native_scanout_is_implemented());
     }

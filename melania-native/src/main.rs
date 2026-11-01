@@ -251,9 +251,10 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
         };
         match melania_native::kms_test::prepare_and_render_test_only(&mut device) {
             Ok(report)=>{
-                println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} crtc_readable={} visible={}",
+                println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} crtc_readable={} baseline_unchanged={} restore_ready={} visible={}",
                     report.connector,report.width,report.height,
                     report.buffer_rendered,report.crtc_state_readable,
+                    report.baseline_unchanged,report.restoration_implemented,
                     report.visible_frame_submitted);
                 completed=true;
                 break;

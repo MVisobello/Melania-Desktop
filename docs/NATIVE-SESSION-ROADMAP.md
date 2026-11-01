@@ -264,6 +264,37 @@ dello stato KMS, un event loop vblank/page-flip e un rollback sperimentato
 in una macchina virtuale isolata **prima** di abilitare la presentazione.
 Non usare l'esperimento per prendere il controllo del PC principale.
 
+## Fase 11 — inventario atomico KMS e confronto prima/dopo (nessun ripristino)
+
+Il percorso **QEMU/TTY opt-in** `--experimental-kms-test` esegue una lettura
+completa, con limiti sul numero di oggetti/proprietà, delle proprietà atomiche
+di **tutti** i CRTC, connettori e plane pubblicati dal driver. Memorizza in
+memoria del solo processo gli identificativi e i valori grezzi; rifiuta
+proprietà critiche mancanti o duplicate, inclusi `ACTIVE`/`MODE_ID`
+dei CRTC, `CRTC_ID` dei connettori e i riferimenti `FB_ID`, `SRC_*`
+e `CRTC_*` dei plane. Se la lettura fallisce, la prova termina senza
+preparare buffer o superfici.
+
+Dopo il test atomico `TEST_ONLY` e il disegno GLES *non visualizzato*,
+Melania ripete la lettura e confronta **identità, numero e valori**
+di tutti gli oggetti. Qualsiasi differenza, per esempio hotplug o intervento
+di un altro client, produce errore. Il log espone
+`baseline_unchanged=true` soltanto quando il confronto riesce e
+`restore_ready=false` **sempre**.
+
+Questo è un **inventario in sola lettura**, non un backup ripristinabile:
+gli ID delle proprietà non preservano automaticamente gli oggetti framebuffer,
+i blob `MODE_ID`, la configurazione VT, lo stato del seat e gli eventi DRM.
+Non è presente alcuna funzione che applica uno snapshot: niente atomic
+commit, page flip, modeset o ripristino delle risoluzioni. La prova non
+può partire nel desktop ospitante e nessuna GPU reale viene usata nei runner
+GitHub.
+
+**Passo successivo necessario:** un protocollo di acquisizione dei
+framebuffer/blob e delle risorse con ownership esplicita, gestione pausa/ripresa,
+test di ripristino dell'output in una VM QEMU dedicata e watchdog che garantisca
+la restituzione della console. Solo dopo potrà esistere un primo frame nativo.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
