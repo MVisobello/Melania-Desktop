@@ -564,7 +564,7 @@ pub fn replay_rename(receipt:&RenameReceipt,undo:bool)->Result<(),String>{
     if dest.query_exists(None::<&gio::Cancellable>){
         return Err(error("Operazione interrotta: il nome di destinazione è già occupato"));
     }
-    let name=dest.basename().and_then(|os|os.into_string().ok())
+    let name=dest.basename().and_then(|os|os.to_str().map(str::to_owned))
         .ok_or_else(||error("Nome di destinazione non valido"))?;
     let actual=rename_item(source,&name)?;
     if !gio::File::for_uri(&actual).equal(&dest) {
