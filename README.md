@@ -1,3 +1,56 @@
+# Melania Desktop — stato verificato al 1° novembre 2026
+
+Melania Desktop è un ambiente desktop sperimentale per Linux, basato su
+**Rust, GTK 4 e Smithay/Wayland**. Il repository contiene componenti reali
+(compilati in Linux CI) e un compositore che funziona in **modalità annidata**
+dentro un sistema grafico già avviato. **Non è ancora un desktop nativo
+installabile come sessione di login**: non è presente un backend DRM/KMS e
+libseat/logind completo.
+
+## Verifiche e interfaccia attuale
+
+- GitHub Actions compila i componenti GTK e Smithay, esegue test Python/Rust,
+  prova D-Bus e una sessione Wayland annidata con vere finestre e screenshot.
+- Menu Start ispirato a Windows 7, ricerca pronta alla digitazione, tasto Super,
+  ricerca e alimentazione allineati nel footer, tre temi Light/Dark/Aero.
+- Taskbar con pin di applicazioni freedesktop installate (clic destro nel menu
+  Start o sulla barra), riordino e persistenza locale degli ID validati.
+- Desktop virtuali selezionabili da un unico pulsante; orologio stile Windows
+  con **ora sopra la data**, entrambe allineate al medesimo margine destro.
+- Melania Files: trasferimenti locali sicuri con copia e spostamento non
+  sovrascrivente. Il test automatico della CLI esercita byte reali in cartelle
+  temporanee, inclusi collisioni e symlink. Integrazione completa
+  GVfs/SMB/Qt/XWayland e parità con Nautilus restano da fare.
+
+## Avvio e sicurezza
+
+La prova annidata può essere avviata da un Linux grafico esistente:
+
+```sh
+bash scripts/melania-session --nested
+```
+
+Per aggiungerla facoltativamente al menu applicazioni **dell'utente**:
+
+```sh
+bash scripts/install-melania-preview-launcher.sh
+```
+
+Questo **non** installa una sessione in `wayland-sessions`, non modifica il
+display manager e non richiede privilegi di amministratore. I controlli per
+un avvio nativo rispondono esplicitamente che il backend manca:
+`bash scripts/melania-session --check-native`.
+
+Roadmap tecnica: [Sessione nativa](docs/NATIVE-SESSION-ROADMAP.md);
+problemi aperti: [#24 sessione autonoma](https://github.com/MVisobello/Melania-Desktop/issues/24),
+[#26 pin taskbar](https://github.com/MVisobello/Melania-Desktop/issues/26) e
+[#27 ricerca file Start](https://github.com/MVisobello/Melania-Desktop/issues/27).
+
+*Le note storiche qui sotto riportano lo stato delle versioni precedenti e
+possono contenere avvertenze ormai superate dai test CI più recenti.*
+
+---
+
 # Melania Desktop 0.36 — aggiornamento Files
 
 **Pre-alpha, Rust/GTK 4 non ancora compilato in questa sessione.** Il progetto continua dalla v0.35, senza modifiche all’identità Aero o alle icone ufficiali.
