@@ -40,6 +40,9 @@ class PanelFunctionalSettings(unittest.TestCase):
         self.assertIn('Duration::from_millis(500)',LIVE)
         self.assertIn('Duration::from_millis(650)',LIVE)
         self.assertIn('melania-start-concealed',LIVE)
+        self.assertIn('relocate(start,top,6);',LIVE)
+        self.assertIn('relocate(quick,top,if top {12}else{65});',LIVE)
+        self.assertNotIn('let popup_offset=i32::from(prefs.panel_height)+13;',LIVE)
 
     def test_existing_start_clock_remain_unmodified(self):
         self.assertIn('clock_row.append(&time_label);',PANEL)
