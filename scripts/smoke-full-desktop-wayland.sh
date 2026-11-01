@@ -27,7 +27,7 @@ cleanup(){
 trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
-MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
+MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
@@ -81,6 +81,18 @@ if [[ "$READY_RENDER" != 1 ]]; then
   grep 'MELANIA_RENDER' "$TEMP/compositor.log" | tail -10 >&2 || true
   exit 1
 fi
+# A mapped Files window alone does not prove that its asynchronous filesystem
+# worker returned and populated the GTK model. Wait for the real completion.
+FILES_LISTED=0
+for i in $(seq 1 100); do
+  if grep -q 'MELANIA_FILES_LISTING_READY count=' "$TEMP/compositor.log"; then
+    FILES_LISTED=1; break
+  fi
+  kill -0 "$PID" 2>/dev/null || { echo 'FAIL: compositor exited before Files list finished' >&2;exit 1; }
+  sleep .1
+done
+[[ "$FILES_LISTED" == 1 ]] || { echo 'FAIL: no async Melania Files list completion';exit 1; }
+echo 'PASS: asynchronous filesystem listing reached real GTK Files window'
 sleep .8
 # Request a real compositor-owned window-only thumbnail through the same
 # 0600 control socket used by the taskbar. Validate the actual BMP pixels.
