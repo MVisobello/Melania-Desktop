@@ -11,6 +11,10 @@ TEMP="$(mktemp -d)"
 OLD_HOME="$HOME"
 SSHD_PID=''
 AGENT_PID=''
+# The SSH config is isolated under a temporary HOME, but Rustup/Cargo must
+# retain the toolchain installed by dtolnay/rust-toolchain on the CI runner.
+export RUSTUP_HOME="$OLD_HOME/.rustup"
+export CARGO_HOME="$OLD_HOME/.cargo"
 cleanup() {
   set +e
   if [[ -n "$SSHD_PID" ]]; then sudo kill "$SSHD_PID" 2>/dev/null || true; fi
