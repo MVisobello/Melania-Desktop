@@ -40,6 +40,22 @@ class SettingsUIContract(unittest.TestCase):
         self.assertIn('settings-audit-$page.png', audit)
         self.assertIn("bash scripts/audit-settings-nav-gtk.sh", workflow)
 
+    def test_independent_settings_pages_do_not_overwrite_each_other(self):
+        source=(ROOT / "melania-settings/src/main.rs").read_text()
+        self.assertIn("fn save_edit(", source)
+        self.assertIn("let mut latest = melania_config::load()", source)
+        self.assertIn("edit(&mut latest);", source)
+        self.assertIn("*shared.borrow_mut() = latest.clone();", source)
+        # All edits from the main Settings window must rebase on disk,
+        # because Panel and Desktop edit that same file independently.
+        self.assertEqual(source.count("melania_config::save("), 1)
+        for callback in ("prefs", "prefs_for_theme", "prefs_for_icons",
+                         "preferences", "workspace_preferences"):
+            self.assertIn(f"save_edit(&{callback},", source)
+        for path in ("xfce_panel.rs","xfce_desktop.rs"):
+            other=(ROOT / "melania-settings/src" / path).read_text()
+            self.assertIn("melania_config::load()",other)
+
     def test_real_windows_operations(self):
         settings = (ROOT / "melania-settings/src/main.rs").read_text()
         files = (ROOT / "melania-files/src/main.rs").read_text()
