@@ -27,6 +27,10 @@ pub struct KmsTestReport {
     pub buffer_rendered: bool,
     /// Read-only CRTC inspection is NOT a complete atomic rollback snapshot.
     pub crtc_state_readable: bool,
+    /// All pre/post atomic KMS properties read and compared without mutations.
+    pub baseline_unchanged: bool,
+    /// Nothing can be restored from these numbers without owned blobs and FBs.
+    pub restoration_implemented: bool,
     pub visible_frame_submitted: bool,
 }
 
