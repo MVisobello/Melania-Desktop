@@ -295,6 +295,56 @@ framebuffer/blob e delle risorse con ownership esplicita, gestione pausa/ripresa
 test di ripristino dell'output in una VM QEMU dedicata e watchdog che garantisca
 la restituzione della console. Solo dopo potrà esistere un primo frame nativo.
 
+## Fase 12 — conservazione temporanea dei payload KMS (senza ripristino)
+
+Il test opt-in `--experimental-kms-test`, esclusivamente su **QEMU con una
+console TTY dedicata**, conserva ora in memoria del processo una copia dei
+payload *già esistenti* associati a `MODE_ID`, `GAMMA_LUT`,
+`DEGAMMA_LUT`, `CTM` e `HDR_OUTPUT_METADATA`. Memorizza inoltre le
+associazioni `FB_ID` dei plane, ma queste sono **soltanto identificativi
+osservati**, non handle o storage grafico posseduti e garantiti vivi.
+
+L'inventario è limitato a 128 blob da massimo 256 KiB ciascuno,
+**2 MiB totali** e 128 riferimenti framebuffer. Rifiuta CRTC attivi
+senza `MODE_ID`, letture non riuscite, payload vuoti o troppo grandi.
+Dopo il test atomico `TEST_ONLY` e il rendering non visibile, confronta
+non soltanto gli ID/proprietà della fase 11, ma anche i **byte dei payload**
+e i riferimenti FB. Se anche uno solo è diverso, il test fallisce.
+
+Questo avanzamento **non** prende possesso dei vecchi framebuffer/GEM,
+non trattiene in vita i blob del kernel e non ricrea un valore `MODE_ID`
+in DRM: `restore_ready=false` e `visible=false` restano invariati.
+Senza conservazione degli oggetti kernel e transazioni atomiche reversibili,
+la copia dei byte NON permette un ripristino sicuro dello schermo.
+
+### Procedura di collaudo opzionale, solo in VM QEMU isolata
+
+È disponibile `scripts/smoke-qemu-kms-resources.sh`, con timeout
+di 45 secondi. Lo script **non crea né avvia la VM**. L'operatore deve
+prima predisporre una VM Linux QEMU/KVM completamente dedicata, avviata
+su una console testuale `/dev/ttyN` locale (non SSH/PTY), senza
+`DISPLAY` o `WAYLAND_DISPLAY`. Compilare il progetto **dentro la VM**
+con `cargo build -p melania-native`, verificare il dispositivo virtuale
+DRM, quindi eseguire **dentro la VM**:
+
+```sh
+MELANIA_QEMU_RESOURCE_AUDIT=I_AM_IN_AN_ISOLATED_QEMU_VM \\
+MELANIA_EXPERIMENTAL_SEAT=1 \\
+MELANIA_KMS_TEST_ONLY=YES_QEMU_VM \\
+bash scripts/smoke-qemu-kms-resources.sh
+```
+
+Il programma ripete i controlli DMI QEMU, seat e TTY; gli opt-in da soli
+non sono sufficienti. La CI GitHub **non esegue questa prova GPU**, ma
+testa l'algoritmo Rust e verifica che lo script rifiuti un runner condiviso,
+anche se vengono impostate le variabili di opt-in.
+
+**Prima di qualsiasi primo frame nativo** restano indispensabili
+l'ownership dei vecchi framebuffer, dei blob DRM e dello stato VT,
+una transazione atomica di ripristino, un watchdog di recovery verificato
+e prove distruttive **solo** in una VM con ritorno certo alla console.
+Non eseguire la procedura sul computer principale.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.

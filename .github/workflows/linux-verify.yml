@@ -166,6 +166,14 @@ jobs:
             exit 1
           fi
           grep -q 'NATIVE_STAGE1_BLOCKED' native-stage9-denied.log
+          # The QEMU resource helper must fail closed on shared CI hosts,
+          # even when a caller supplies all opt-in environment variables.
+          if MELANIA_QEMU_RESOURCE_AUDIT=I_AM_IN_AN_ISOLATED_QEMU_VM MELANIA_EXPERIMENTAL_SEAT=1 MELANIA_KMS_TEST_ONLY=YES_QEMU_VM \
+            bash scripts/smoke-qemu-kms-resources.sh > native-stage12-denied.log 2>&1; then
+            echo 'ERROR: KMS resource preflight was allowed without a dedicated QEMU VT' >&2
+            exit 1
+          fi
+          grep -q 'NATIVE_STAGE12_BLOCKED' native-stage12-denied.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -190,3 +198,4 @@ jobs:
             native-stage2-denied.log
             native-stage6-denied.log
             native-stage9-denied.log
+            native-stage12-denied.log
