@@ -822,6 +822,143 @@ fn repaint_favorites(browser: &Browser) {
     }
 }
 
+/// Numbered batch rename keeps Melania's browser UI and delegates all
+/// filesystem mutations to the same Linux atomic no-replace primitive used by
+/// single-file rename. A preview is shown before any operation.
+fn open_batch_rename_dialog(browser: &Browser) {
+    let sources: Vec<PathBuf> = browser.selected_paths.borrow().iter().cloned().collect();
+    if sources.len() < 2 || sources.len() > 500 {
+        browser.status.set_text("Seleziona da 2 a 500 elementi (Ctrl o Maiusc) per la rinomina multipla.");
+        return;
+    }
+    let window = gtk::Window::builder()
+        .title("Rinomina multipla — Melania Files")
+        .default_width(560).default_height(440).build();
+    let outer = GtkBox::new(Orientation::Vertical, 10);
+    outer.set_margin_top(16);
+    outer.set_margin_bottom(16);
+    outer.set_margin_start(16);
+    outer.set_margin_end(16);
+    let caption = Label::new(Some(&format!("{} elementi selezionati · anteprima prima della conferma", sources.len())));
+    caption.set_xalign(0.0);
+    outer.append(&caption);
+    let prefix = Entry::builder().placeholder_text("Prefisso (es. Fattura)").build();
+    prefix.set_text("File");
+    outer.append(&prefix);
+    let start = gtk::SpinButton::with_range(1.0, 999_999.0, 1.0);
+    start.set_value(1.0);
+    start.set_tooltip_text(Some("Numero iniziale"));
+    outer.append(&start);
+    let listing = Label::new(None);
+    listing.set_xalign(0.0);
+    listing.set_yalign(0.0);
+    listing.set_wrap(true);
+    listing.set_selectable(true);
+    let scroll = ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&listing));
+    outer.append(&scroll);
+    let feedback = Label::new(Some("Le estensioni vengono preservate; nessun file sarà sovrascritto."));
+    feedback.set_wrap(true);
+    feedback.set_xalign(0.0);
+    outer.append(&feedback);
+    let buttons = GtkBox::new(Orientation::Horizontal, 8);
+    buttons.set_halign(Align::End);
+    let cancel = Button::with_label("Annulla");
+    let apply = Button::with_label("Rinomina");
+    apply.add_css_class("suggested-action");
+    buttons.append(&cancel);
+    buttons.append(&apply);
+    outer.append(&buttons);
+    window.set_child(Some(&outer));
+    let cancel_window = window.clone();
+    cancel.connect_clicked(move |_| cancel_window.close());
+    let update = {
+        let sources = sources.clone();
+        let prefix = prefix.clone();
+        let start = start.clone();
+        let listing = listing.clone();
+        let apply = apply.clone();
+        Rc::new(move || {
+            let name = prefix.text().to_string();
+            match nautilus::batch_rename_plan(&sources, &name, start.value_as_int() as u32) {
+                Ok(plan) => {
+                    let shown = plan.iter().take(25)
+                        .map(|(old,new)| format!("{}  →  {}",
+                            old.file_name().unwrap_or_default().to_string_lossy(),
+                            new.file_name().unwrap_or_default().to_string_lossy()))
+                        .collect::<Vec<_>>().join("\n");
+                    listing.set_text(&format!("{shown}{}", if plan.len()>25 { "\n… altri elementi" } else { "" }));
+                    apply.set_sensitive(true);
+                }
+                Err(error) => {
+                    listing.set_text(&format!("Impossibile applicare questa rinomina: {error}"));
+                    apply.set_sensitive(false);
+                }
+            }
+        })
+    };
+    update();
+    let on_prefix = update.clone();
+    prefix.connect_changed(move |_| on_prefix());
+    let on_start = update.clone();
+    start.connect_value_changed(move |_| on_start());
+    let done_window = window.clone();
+    let done_state = browser.clone();
+    apply.connect_clicked(move |button| {
+        let name = prefix.text().to_string();
+        let number = start.value_as_int() as u32;
+        // Re-plan after the confirmation to detect deleted sources or names
+        // that another process created while the preview window was open.
+        if let Err(error) = nautilus::batch_rename_plan(&sources, &name, number) {
+            feedback.set_text(&format!("Rinomina non avviata: {error}"));
+            return;
+        }
+        button.set_sensitive(false);
+        cancel.set_sensitive(false);
+        feedback.set_text("Rinomina in corso…");
+        let paths = sources.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = model::batch_rename::rename_numbered(&paths, &name, number,
+                |source, destination| {
+                    let filename = destination.file_name().and_then(|s| s.to_str())
+                        .ok_or_else(||std::io::Error::new(std::io::ErrorKind::InvalidInput,"Nome destinazione non valido"))?;
+                    transfer::rename_local(source, filename).map(|_| ())
+                });
+            let _ = tx.send(result);
+        });
+        let state = done_state.clone();
+        let dialog = done_window.clone();
+        let feedback = feedback.clone();
+        let apply = button.clone();
+        let cancel = cancel.clone();
+        glib::timeout_add_local(Duration::from_millis(40), move || match rx.try_recv() {
+            Ok(Ok(count)) => {
+                refresh(&state);
+                state.status.set_text(&format!("{count} elementi rinominati senza sovrascritture."));
+                dialog.close();
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                feedback.set_text(&format!("Rinomina interrotta: {error}"));
+                state.status.set_text(&format!("Controlla il risultato della rinomina multipla: {error}"));
+                apply.set_sensitive(true);
+                cancel.set_sensitive(true);
+                refresh(&state);
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                feedback.set_text("La procedura di rinomina è terminata senza risposta. Verifica i file.");
+                cancel.set_sensitive(true);
+                glib::ControlFlow::Break
+            }
+        });
+    });
+    window.present();
+}
+
 fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfer>>>, tab_title: Label) -> GtkBox {
     let root = GtkBox::new(Orientation::Vertical, 0);
     let toolbar = GtkBox::new(Orientation::Horizontal, 9);
@@ -1072,6 +1209,10 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     rename_choices.append(&Label::new(Some("Nuovo nome")));
     rename_choices.append(&rename_name);
     rename_choices.append(&rename_button);
+    rename_choices.append(&gtk::Separator::new(Orientation::Horizontal));
+    let rename_multiple = Button::with_label("Rinomina multipla…");
+    rename_multiple.set_tooltip_text(Some("Rinomina i file selezionati mostrando un'anteprima; ripristina i nomi precedenti in caso di errore"));
+    rename_choices.append(&rename_multiple);
     let rename_popover = gtk::Popover::new();
     rename_popover.set_child(Some(&rename_choices));
     rename_menu.set_popover(Some(&rename_popover));
@@ -1409,6 +1550,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         if let Some(path) = state.selected.borrow().as_ref() { show_properties(path); }
         else { state.status.set_text("Seleziona un elemento per visualizzarne le proprietà."); }
     });
+    let batch_state = browser.clone();
+    rename_multiple.connect_clicked(move |_| open_batch_rename_dialog(&batch_state));
     let state=browser.clone();
     let rename_name_for_click = rename_name.clone();
     rename_button.connect_clicked(move |_| {
