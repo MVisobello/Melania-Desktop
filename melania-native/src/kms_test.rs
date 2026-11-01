@@ -25,7 +25,34 @@ pub struct KmsTestReport {
     pub height: u32,
     pub test_only_passed: bool,
     pub buffer_rendered: bool,
+    /// Read-only CRTC inspection is NOT a complete atomic rollback snapshot.
+    pub crtc_state_readable: bool,
     pub visible_frame_submitted: bool,
+}
+
+// Restrict experimental QEMU GBM swapchain allocations to a small, bounded
+// surface. The driver's advertised first mode is not necessarily safe to use
+// for a deliberately short-lived preflight.
+const MIN_WIDTH: u16 = 640;
+const MIN_HEIGHT: u16 = 480;
+const MAX_WIDTH: u16 = 1920;
+const MAX_HEIGHT: u16 = 1080;
+const MAX_TEST_PIXELS: u32 = 1920 * 1080;
+
+pub fn acceptable_test_mode(width: u16, height: u16) -> bool {
+    width >= MIN_WIDTH && height >= MIN_HEIGHT &&
+    width <= MAX_WIDTH && height <= MAX_HEIGHT &&
+    u32::from(width).checked_mul(u32::from(height))
+        .is_some_and(|pixels| pixels <= MAX_TEST_PIXELS)
+}
+
+/// Choose the smallest usable advertised mode, not an arbitrary first mode.
+/// This bounds the CPU/GPU memory used while preserving the actual KMS mode.
+pub fn safest_test_mode_index(sizes: &[(u16, u16)]) -> Option<usize> {
+    sizes.iter().enumerate()
+        .filter(|(_, &(w,h))| acceptable_test_mode(w,h))
+        .min_by_key(|&(idx, &(w,h))| (u32::from(w)*u32::from(h), idx))
+        .map(|(index, _)| index)
 }
 
 /// Read-only atomic test plus an unqueued GBM render candidate.
@@ -46,9 +73,13 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
             Err(error)=>{diagnostics.push(format!("connector: {error}"));continue;}
         };
         if info.state()!=connector::State::Connected {continue;}
-        let Some(mode)=info.modes().first().cloned() else {continue;};
+        let sizes=info.modes().iter().map(|m| m.size()).collect::<Vec<_>>();
+        let Some(mode_index)=safest_test_mode_index(&sizes) else {
+            diagnostics.push("No safe bounded KMS test mode (640x480–1920x1080)".into());
+            continue;
+        };
+        let mode=info.modes()[mode_index].clone();
         let (width,height)=mode.size();
-        if width==0 || height==0 {continue;}
         let name=format!("{}-{}",info.interface().as_str(),info.interface_id());
 
         for encoder_handle in info.encoders() {
@@ -59,6 +90,14 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
             for crtc in resources.filter_crtcs(encoder.possible_crtcs()) {
                 if !device.planes(&crtc)
                     .is_ok_and(|planes|!planes.primary.is_empty()) {continue;}
+                // A real CRTC read MUST succeed before constructing an atomic
+                // test surface. This read is NOT a complete rollback snapshot:
+                // plane properties, connector bindings and VT ownership still
+                // require a separate restore implementation before scanout.
+                if let Err(error)=fd.get_crtc(crtc) {
+                    diagnostics.push(format!("CRTC state unavailable: {error}"));
+                    continue;
+                }
                 // Surface creation builds pending state but does not commit.
                 let surface=match device.create_surface(crtc,mode.clone(),&[*connector_handle]) {
                     Ok(surface)=>surface,
@@ -105,6 +144,7 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                     connector:name,width:u32::from(width),height:u32::from(height),
                     test_only_passed:true,
                     buffer_rendered:true,
+                    crtc_state_readable:true,
                     visible_frame_submitted:false,
                 });
             }
@@ -118,13 +158,31 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
 mod tests {
     use super::*;
     #[test]
+    fn bounded_mode_rejects_tiny_huge_and_invalid_dimensions() {
+        for (w,h) in [(0,0),(320,240),(1920,1200),(3840,2160),(800,0)] {
+            assert!(!acceptable_test_mode(w,h));
+        }
+        assert!(acceptable_test_mode(640,480));
+        assert!(acceptable_test_mode(1920,1080));
+    }
+
+    #[test]
+    fn smallest_acceptable_mode_wins_over_first_advertised() {
+        let modes=[(3840,2160),(1920,1080),(1024,768),(640,480)];
+        assert_eq!(safest_test_mode_index(&modes),Some(3));
+        assert_eq!(safest_test_mode_index(&[(4000,3000),(320,200)]),None);
+        assert_eq!(safest_test_mode_index(&[]),None);
+    }
+
+    #[test]
     fn a_test_only_pass_never_claims_a_visible_frame() {
         let result=KmsTestReport {
             connector:"Virtual-1".into(),width:1280,height:720,
             test_only_passed:true,buffer_rendered:true,
-            visible_frame_submitted:false,
+            crtc_state_readable:true,visible_frame_submitted:false,
         };
         assert!(result.test_only_passed);
+        assert!(result.crtc_state_readable);
         assert!(!result.visible_frame_submitted);
         assert!(!crate::renderer::native_scanout_is_implemented());
     }

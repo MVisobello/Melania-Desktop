@@ -241,6 +241,29 @@ ripristino della console. Prima di abilitare un primo frame visibile sono
 necessari un event loop DRM/vblank, gestione corretta di pausa/ripresa
 libseat, un rollback della configurazione KMS e collaudo manuale su VM.
 
+## Fase 10 — preflight KMS a memoria limitata e CRTC in sola lettura
+
+La prova atomica QEMU `--experimental-kms-test` non assume più che la prima
+modalità pubblicizzata sia quella più sicura. Fra le modalità reali supportate
+seleziona quella con area minore entro **640×480–1920×1080**; se nessuna è
+ammissibile, non viene allocato alcuno swapchain GBM. Prima di costruire la
+superficie DRM, interroga inoltre lo stato del CRTC tramite `get_crtc` in
+**sola lettura**; se la lettura non riesce, quella combinazione non è provata.
+
+La risposta della prova espone `crtc_readable` separatamente da
+`visible=false`: **leggere il CRTC non significa averne salvato l'intero
+stato ripristinabile**, comprese le proprietà atomiche di plane/connettori.
+Né questa prova né il suo risultato consentono commit, page flip, modeset,
+ripristino della console o apertura di una sessione nativa. Restano attivi
+tutti i blocchi precedenti: QEMU/KVM, TTY dedicata, due opt-in, nessuna
+sessione grafica ospitante. In CI vengono eseguiti i test Rust del selettore
+delle modalità e il controllo che non si usino dispositivi grafici reali.
+
+Il prossimo vero traguardo richiede uno snapshot *completo e ripristinabile*
+dello stato KMS, un event loop vblank/page-flip e un rollback sperimentato
+in una macchina virtuale isolata **prima** di abilitare la presentazione.
+Non usare l'esperimento per prendere il controllo del PC principale.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
