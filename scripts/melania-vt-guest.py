@@ -46,12 +46,25 @@ def drm_card_present():
                for path in pathlib.Path("/dev/dri").glob("card[0-9]*"))
 
 
+def virtual_vga_present():
+    # QEMU's std VGA PCI controller can provide Linux VTs even when the
+    # guest kernel has no bochs/virtio DRM driver loaded.
+    for device_class in pathlib.Path("/sys/bus/pci/devices").glob("*/class"):
+        try:
+            if device_class.read_text().strip().lower().startswith(("0x0300", "0x0302")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def main():
     if not dmi_is_qemu():
         raise RuntimeError("QEMU DMI hardware gate failed")
-    if not drm_card_present():
-        raise RuntimeError("QEMU virtual DRM card unavailable")
-    print("MELANIA_QEMU_DRM_ENUMERATED=true", flush=True)
+    if not virtual_vga_present():
+        raise RuntimeError("QEMU virtual PCI VGA controller unavailable")
+    print("MELANIA_QEMU_VGA_ENUMERATED=true", flush=True)
+    print(f"MELANIA_QEMU_DRM_ENUMERATED={str(drm_card_present()).lower()}", flush=True)
     fd = os.open("/dev/tty0", os.O_RDONLY | os.O_CLOEXEC)
     try:
         original = active_vt(fd)
