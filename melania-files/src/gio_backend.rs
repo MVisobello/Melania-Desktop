@@ -501,6 +501,83 @@ pub fn rename_item(uri:&str,new_name:&str)->Result<String,String> {
     Ok(dst.uri().to_string())
 }
 
+/// A single reversible rename only, in memory. The token comes from the
+/// provider's id::file and id::filesystem attributes, and must survive the
+/// original rename. Never infer identity from names, sizes or timestamps.
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct RenameReceipt {
+    pub from_uri:String,
+    pub to_uri:String,
+    file_id:String,
+    filesystem_id:String,
+}
+fn rename_identity(uri:&str)->Option<(String,String)> {
+    let file=gio::File::for_uri(uri);
+    let info=file.query_info("id::file,id::filesystem",
+        gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+        None::<&gio::Cancellable>).ok()?;
+    let id=info.attribute_string("id::file")?.to_string();
+    let fs=info.attribute_string("id::filesystem")?.to_string();
+    if id.is_empty() || fs.is_empty(){return None;}
+    Some((id,fs))
+}
+
+/// Rename always remains available. Undo is offered only if this GVfs
+/// provider reports a stable identity before AND after the operation.
+pub fn rename_with_receipt(uri:&str,name:&str)
+    ->Result<(String,Option<RenameReceipt>),String>{
+    validate_uri(uri)?;
+    let before=rename_identity(uri);
+    let updated=rename_item(uri,name)?;
+    let receipt=before.and_then(|(file_id,filesystem_id)|{
+        let (new_id,new_fs)=rename_identity(&updated)?;
+        if new_id!=file_id || new_fs!=filesystem_id || updated==uri {
+            return None;
+        }
+        Some(RenameReceipt{
+            from_uri:uri.to_string(),to_uri:updated.clone(),
+            file_id,filesystem_id,
+        })
+    });
+    Ok((updated,receipt))
+}
+
+/// No overwrite is requested. Refuse replay when the source disappeared or
+/// now points at another object. On Linux local paths use the existing
+/// atomic RENAME_NOREPLACE implementation; GVfs providers are best-effort
+/// and should be tested on their actual server implementations.
+pub fn replay_rename(receipt:&RenameReceipt,undo:bool)->Result<(),String>{
+    validate_uri(&receipt.from_uri)?;
+    validate_uri(&receipt.to_uri)?;
+    let (source,target)=if undo{
+        (&receipt.to_uri,&receipt.from_uri)
+    }else{
+        (&receipt.from_uri,&receipt.to_uri)
+    };
+    let identity=rename_identity(source).ok_or_else(||error(
+        "Annulla/Ripeti non disponibile: il provider non fornisce un'identità verificabile"))?;
+    if identity.0!=receipt.file_id || identity.1!=receipt.filesystem_id{
+        return Err(error("Operazione interrotta: il file è cambiato dopo la rinomina"));
+    }
+    let src=gio::File::for_uri(source);
+    let dest=gio::File::for_uri(target);
+    if dest.query_exists(None::<&gio::Cancellable>){
+        return Err(error("Operazione interrotta: il nome di destinazione è già occupato"));
+    }
+    let name=dest.basename().and_then(|os|os.into_string().ok())
+        .ok_or_else(||error("Nome di destinazione non valido"))?;
+    let actual=rename_item(source,&name)?;
+    if !gio::File::for_uri(&actual).equal(&dest) {
+        return Err(error("Operazione completata dal provider in un percorso inatteso"));
+    }
+    // If the provider changed its object ID across this rename, the caller
+    // discards history rather than blindly enabling another replay.
+    if rename_identity(&actual).as_ref()!=Some(&identity){
+        return Err(error("Rinomina eseguita ma identità cambiata: ripetizione disabilitata"));
+    }
+    Ok(())
+}
+
 pub fn move_to_trash(uri:&str)->Result<(),String> {
     validate_uri(uri)?;
     gio::File::for_uri(uri).trash(None::<&gio::Cancellable>)
@@ -757,6 +834,53 @@ mod tests {
         assert!(copy_uris(&[file.uri.clone()],&target,&stop).is_err(),
             "A second SFTP copy must refuse overwrite");
         assert_eq!(query_details(&file.uri).unwrap().size,Some(20));
+    }
+    #[test] fn local_recorded_rename_can_undo_and_redo_without_overwrite(){
+        let root=std::env::temp_dir().join(format!(
+            "melania-undo-rename-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("before.txt"),b"original").unwrap();
+        let before=gio::File::for_path(root.join("before.txt")).uri().to_string();
+        let (_,receipt)=rename_with_receipt(&before,"after.txt").unwrap();
+        let receipt=receipt.expect("Local POSIX identity must be stable");
+        assert!(root.join("after.txt").exists());
+        replay_rename(&receipt,true).unwrap();
+        assert_eq!(fs::read(root.join("before.txt")).unwrap(),b"original");
+        replay_rename(&receipt,false).unwrap();
+        assert_eq!(fs::read(root.join("after.txt")).unwrap(),b"original");
+        let _=fs::remove_dir_all(root);
+    }
+    #[test] fn undo_rename_never_overwrites_a_new_destination(){
+        let root=std::env::temp_dir().join(format!(
+            "melania-undo-collision-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("before.txt"),b"original").unwrap();
+        let uri=gio::File::for_path(root.join("before.txt")).uri().to_string();
+        let (_,receipt)=rename_with_receipt(&uri,"after.txt").unwrap();
+        let receipt=receipt.expect("Local POSIX identity must be stable");
+        fs::write(root.join("before.txt"),b"new content").unwrap();
+        assert!(replay_rename(&receipt,true).is_err());
+        assert_eq!(fs::read(root.join("before.txt")).unwrap(),b"new content");
+        assert_eq!(fs::read(root.join("after.txt")).unwrap(),b"original");
+        let _=fs::remove_dir_all(root);
+    }
+    #[test] fn undo_refuses_changed_identity_at_renamed_path(){
+        let root=std::env::temp_dir().join(format!(
+            "melania-undo-stale-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("before.txt"),b"original").unwrap();
+        let uri=gio::File::for_path(root.join("before.txt")).uri().to_string();
+        let (_,receipt)=rename_with_receipt(&uri,"after.txt").unwrap();
+        let receipt=receipt.expect("Local POSIX identity must be stable");
+        fs::rename(root.join("after.txt"),root.join("elsewhere.txt")).unwrap();
+        fs::write(root.join("after.txt"),b"new unrelated file").unwrap();
+        assert!(replay_rename(&receipt,true).is_err());
+        assert!(!root.join("before.txt").exists());
+        assert_eq!(fs::read(root.join("after.txt")).unwrap(),b"new unrelated file");
+        let _=fs::remove_dir_all(root);
     }
     #[test] fn native_gio_cancellable_interrupts_a_provider_operation() {
         use std::sync::mpsc;
