@@ -367,6 +367,35 @@ pub fn image_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
     })
 }
 
+
+const LOCAL_THUMBNAIL_WIDTH:u32=112;
+const LOCAL_THUMBNAIL_HEIGHT:u32=84;
+/// Small, read-only folder thumbnail. Reuses the validated, cancellable GIO
+/// image decoder and returns at most 112x84 RGBA pixels to the GTK thread.
+/// Never read images directly in the GTK row renderer.
+pub fn image_thumbnail(uri:&str,cancelled:&Arc<AtomicBool>)
+    ->Result<ImageQuickLook,String>{
+    let preview=image_quicklook(uri,cancelled)?;
+    if cancelled.load(Ordering::Acquire){
+        return Err(error("Miniatura annullata"));
+    }
+    let raw=image::RgbaImage::from_raw(preview.width,preview.height,preview.rgba)
+        .ok_or_else(||error("Buffer immagine non valido"))?;
+    let scaled=if preview.width<=LOCAL_THUMBNAIL_WIDTH &&
+        preview.height<=LOCAL_THUMBNAIL_HEIGHT{
+        raw
+    }else{
+        image::imageops::thumbnail(&raw,LOCAL_THUMBNAIL_WIDTH,LOCAL_THUMBNAIL_HEIGHT)
+    };
+    let (width,height)=scaled.dimensions();
+    Ok(ImageQuickLook{
+        rgba:scaled.into_raw(),width,height,
+        original_width:preview.original_width,
+        original_height:preview.original_height,
+        transferred_bytes:preview.transferred_bytes,mime:preview.mime,
+    })
+}
+
 #[derive(Clone,Debug)]
 pub struct FileDetails {
     pub name:String,
@@ -1058,6 +1087,30 @@ mod tests {
         oversized.save_with_format(dir.join("oversized.png"),image::ImageFormat::Png).unwrap();
         assert!(image_quicklook(&gio::File::for_path(dir.join("oversized.png")).uri(),&stop).is_err());
         let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn local_thumbnail_uses_bounded_rgba_and_preserves_small_images(){
+        let root=std::env::temp_dir().join(format!(
+            "melania-local-thumbnail-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let pixels=image::RgbaImage::from_pixel(320,240,
+            image::Rgba([7,37,87,255]));
+        pixels.save_with_format(root.join("large.png"),image::ImageFormat::Png).unwrap();
+        let small=image::RgbaImage::from_pixel(4,3,
+            image::Rgba([12,34,56,255]));
+        small.save_with_format(root.join("small.png"),image::ImageFormat::Png).unwrap();
+        let stop=Arc::new(AtomicBool::new(false));
+        let big=image_thumbnail(&gio::File::for_path(root.join("large.png")).uri(),&stop).unwrap();
+        assert_eq!((big.width,big.height),(112,84));
+        assert_eq!((big.original_width,big.original_height),(320,240));
+        assert_eq!(big.rgba.len(),112*84*4);
+        assert_eq!(&big.rgba[..4],&[7,37,87,255]);
+        let tiny=image_thumbnail(&gio::File::for_path(root.join("small.png")).uri(),&stop).unwrap();
+        assert_eq!((tiny.width,tiny.height),(4,3));
+        assert_eq!(&tiny.rgba[..4],&[12,34,56,255]);
+        let abort=Arc::new(AtomicBool::new(true));
+        assert!(image_thumbnail("sftp://offline.invalid/image.png",&abort).is_err());
+        let _=fs::remove_dir_all(root);
     }
     #[test] fn image_preview_cancels_before_contacting_remote_provider(){
         let stop=Arc::new(AtomicBool::new(true));
