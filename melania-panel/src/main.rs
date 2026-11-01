@@ -961,19 +961,37 @@ fn workspace_switcher() -> gtk::MenuButton {
     toggle.set_sensitive(socket.is_some());
     let light=melania_config::load().unwrap_or_default().appearance_theme()=="light";
 
-    // Original two-overlapping-desktops glyph; no dependence on an icon theme.
+    // Refined Task View glyph: two rounded miniature desktops rather than
+    // offset squared frames. Drawn locally, consistent across icon themes.
     let symbol=gtk::DrawingArea::new();
-    symbol.set_content_width(20);
-    symbol.set_content_height(20);
+    symbol.set_content_width(21);
+    symbol.set_content_height(21);
     symbol.set_draw_func(move |_,cr,width,height| {
         if width<=0 || height<=0 {return;}
-        cr.scale(width as f64/20.0,height as f64/20.0);
-        if light {cr.set_source_rgb(0.20,0.31,0.44);}
-        else {cr.set_source_rgb(0.92,0.96,1.0);}
-        cr.set_line_width(1.6);
-        cr.rectangle(2.5,6.0,12.0,10.0);
+        cr.scale(width as f64/24.0,height as f64/24.0);
+        let rounded = |x:f64,y:f64,w:f64,h:f64,r:f64| {
+            cr.new_sub_path();
+            cr.arc(x+w-r,y+r,r,-std::f64::consts::FRAC_PI_2,0.0);
+            cr.arc(x+w-r,y+h-r,r,0.0,std::f64::consts::FRAC_PI_2);
+            cr.arc(x+r,y+h-r,r,std::f64::consts::FRAC_PI_2,std::f64::consts::PI);
+            cr.arc(x+r,y+r,r,std::f64::consts::PI,3.0*std::f64::consts::FRAC_PI_2);
+            cr.close_path();
+        };
+        cr.set_line_width(1.65);
+        // Two landscape desktop thumbnails with understated monitor feet.
+        rounded(1.2,6.0,10.0,8.5,1.6);
+        cr.set_source_rgba(0.33,0.68,0.96,if light {0.28} else {0.46});
+        let _=cr.fill_preserve();
+        if light {cr.set_source_rgb(0.19,0.33,0.47);}
+        else {cr.set_source_rgb(0.94,0.97,1.0);}
         let _=cr.stroke();
-        cr.rectangle(5.5,3.0,12.0,10.0);
+        rounded(12.8,6.0,10.0,8.5,1.6);
+        let _=cr.stroke();
+        cr.set_line_width(1.5);
+        cr.move_to(4.0,17.5);
+        cr.line_to(8.5,17.5);
+        cr.move_to(15.6,17.5);
+        cr.line_to(20.1,17.5);
         let _=cr.stroke();
     });
     let active_label=Label::new(Some("–"));
@@ -1287,6 +1305,8 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notice_icon.add_css_class("melania-tray-symbol");
     notification_row.append(&notice_icon);
     let badge=Label::new(None);badge.add_css_class("melania-notice-count");
+    // An empty badge previously rendered as a thick blue vertical stripe.
+    badge.set_visible(false);
     notification_row.append(&badge);
     notification_button.set_child(Some(&notification_row));
     let mut previous_unread=u32::MAX;
@@ -1297,6 +1317,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
                 if unread!=previous_unread {
                     if unread == 0 { badge.set_label(""); }
                     else { badge.set_label(&unread.to_string()); }
+                    badge.set_visible(unread>0);
                     previous_unread=unread;
                 }
             }
@@ -1310,20 +1331,26 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         if notify.is_visible(){notify.set_visible(false);}else{notify.present();}
     });
     bar.append(&notification_button);
-    // Date on the left, time on the right: both in the far-right taskbar control.
+    // Replace the accidental double-blue notification stripe with one
+    // intentional hairline before the Windows 11-style vertical clock.
+    let clock_separator=gtk::Separator::new(Orientation::Vertical);
+    clock_separator.add_css_class("melania-clock-separator");
+    bar.append(&clock_separator);
+    // Time above date, right-aligned, in the far-right taskbar control.
     let clock=Button::new();
     clock.add_css_class("melania-system");
     clock.add_css_class("melania-clock");
-    let clock_row=GtkBox::new(Orientation::Horizontal,8);
+    let clock_row=GtkBox::new(Orientation::Vertical,0);
     clock_row.add_css_class("melania-clock-row");
+    clock_row.set_halign(gtk::Align::End);
     let date_label=Label::new(None);
     date_label.add_css_class("melania-clock-date");
     date_label.set_xalign(1.0);
     let time_label=Label::new(None);
     time_label.add_css_class("melania-clock-time");
     time_label.set_xalign(1.0);
-    clock_row.append(&date_label);
     clock_row.append(&time_label);
+    clock_row.append(&date_label);
     clock.set_child(Some(&clock_row));
     let update=move || {
         let now=glib::DateTime::now_local().ok();

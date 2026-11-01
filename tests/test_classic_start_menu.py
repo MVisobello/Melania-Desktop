@@ -92,6 +92,12 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertRegex(CSS,r'(?s)\.melania-start-panel \.melania-start-footer \.melania-entry \{\s*min-height: 28px;\s*padding: 2px 9px;')
         self.assertRegex(CSS,r'(?s)\.melania-start-panel \.melania-start-footer menubutton\.melania-power-icon-button > button \{\s*min-width: 34px;\s*min-height: 28px;\s*padding: 2px;')
 
+    def test_start_footer_is_visually_centered_in_fixed_popup(self):
+        # GTK reserves extra space below the controls; shift them into visual center.
+        self.assertRegex(CSS, r'(?s)\.melania-start-panel \.melania-start-footer \{\s*padding: 21px 3px 0;')
+        self.assertIn('query.set_valign(gtk::Align::Center);', PANEL)
+        self.assertIn('more.set_valign(gtk::Align::Center);', PANEL)
+
     def test_keyboard_toggle_and_instant_search_are_wired_to_compositor(self):
         COMPOSITOR=(ROOT/"melania-compositor/src/main.rs").read_text(encoding="utf-8")
         CONTROL=(ROOT/"melania-control/src/lib.rs").read_text(encoding="utf-8")

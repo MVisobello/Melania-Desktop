@@ -35,20 +35,31 @@ class TaskbarDesktopClock(unittest.TestCase):
 
     def test_custom_vector_not_dependent_on_icon_pack(self):
         self.assertIn('symbol.set_draw_func(move |_,cr,width,height|',PANEL)
-        self.assertIn('symbol.set_content_width(20);',PANEL)
+        self.assertIn('symbol.set_content_width(21);',PANEL)
+        self.assertIn('rounded(1.2,6.0,10.0,8.5,1.6);',PANEL)
+        self.assertIn('rounded(12.8,6.0,10.0,8.5,1.6);',PANEL)
         self.assertIn('refresh_label.set_label(&active.to_string());',PANEL)
         self.assertIn(".melania-workspace-switcher-content",CSS)
         self.assertIn(".melania-workspace-menu button.melania-workspace-choice.melania-workspace-active",CSS)
         self.assertIn("window.melania-theme-light .melania-workspace-menu",CSS)
 
-    def test_date_then_time_last_in_bar(self):
+    def test_time_above_date_at_right_and_single_separator(self):
+        self.assertIn('GtkBox::new(Orientation::Vertical,0);',PANEL)
+        self.assertIn('clock_row.set_halign(gtk::Align::End);',PANEL)
+        self.assertIn('clock_separator=gtk::Separator::new(Orientation::Vertical);',PANEL)
+        self.assertIn('bar.append(&clock_separator);',PANEL)
+        self.assertIn('badge.set_visible(false);',PANEL)
+        self.assertIn('badge.set_visible(unread>0);',PANEL)
+        self.assertIn('separator.melania-clock-separator',CSS)
+        self.assertIn('min-width: 1px;',CSS)
+
         self.assertIn('clock_row.append(&date_label);',PANEL)
         self.assertIn('clock_row.append(&time_label);',PANEL)
         self.assertIn('date_label.set_xalign(1.0);',PANEL)
         self.assertIn('time_label.set_xalign(1.0);',PANEL)
         self.assertIn('t.format("%d/%m/%Y")',PANEL)
         self.assertIn('t.format("%H:%M")',PANEL)
-        self.assertLess(PANEL.index('clock_row.append(&date_label);'),PANEL.index('clock_row.append(&time_label);'))
+        self.assertLess(PANEL.index('clock_row.append(&time_label);'),PANEL.index('clock_row.append(&date_label);'))
         clock_start=PANEL.index('fn taskbar(')
         clock_end=PANEL.index('fn install_start_hotkey_listener(',clock_start)
         taskbar=PANEL[clock_start:clock_end]
