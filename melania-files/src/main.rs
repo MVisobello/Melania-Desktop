@@ -1429,47 +1429,91 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     });
     let state=browser.clone();
     recursive_search_button.connect_clicked(move |_| {
-        let query = state.search.text().to_string();
-        let query = query.trim();
+        let query = state.search.text().trim().to_string();
         if query.is_empty() {
-            state.status.set_text("Scrivi prima il nome da cercare nella casella di ricerca."); return;
+            state.status.set_text("Scrivi prima il nome da cercare nella casella di ricerca.");
+            return;
         }
         let dir = state.current.borrow().clone();
         if dir == Path::new("/") {
-            state.status.set_text("Per la ricerca ricorsiva scegli una cartella più specifica."); return;
+            state.status.set_text("Per la ricerca ricorsiva scegli una cartella più specifica.");
+            return;
         }
-        // Intentionally bounded. A future revision must move this work into
-        // a cancellable background worker for large or remote directories.
-        let results = nautilus::search_tree(&dir, query, nautilus::SearchLimits {
-            max_results: 150, max_directories: 120, show_hidden: state.show_hidden.get()
+        let window = gtk::Window::builder()
+            .title("Ricerca in sottocartelle — Melania Files")
+            .default_width(560).default_height(480).build();
+        let outer = GtkBox::new(Orientation::Vertical, 8);
+        outer.set_margin_top(12);
+        outer.set_margin_start(12);
+        outer.set_margin_end(12);
+        outer.set_margin_bottom(12);
+        let summary = Label::new(Some("Ricerca in corso…"));
+        summary.set_xalign(0.0);
+        outer.append(&summary);
+        let scroll = ScrolledWindow::new();
+        scroll.set_vexpand(true);
+        let list = GtkBox::new(Orientation::Vertical, 3);
+        scroll.set_child(Some(&list));
+        outer.append(&scroll);
+        let cancel = Button::with_label("Annulla ricerca");
+        outer.append(&cancel);
+        window.set_child(Some(&outer));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let on_close=cancelled.clone();
+        window.connect_close_request(move |_| {
+            on_close.store(true,Ordering::Release);
+            glib::Propagation::Proceed
         });
-        match results {
-            Ok(result) => {
-                let window = gtk::Window::builder().title("Ricerca in sottocartelle — Melania Files")
-                    .default_width(560).default_height(480).build();
-                let outer = GtkBox::new(Orientation::Vertical, 8);
-                outer.set_margin_top(12); outer.set_margin_start(12);
-                outer.set_margin_end(12); outer.set_margin_bottom(12);
-                let summary = Label::new(Some(&format!("{} risultati ({} cartelle esaminate){}",
-                    result.paths.len(), result.directories_scanned,
-                    if result.truncated { " · Limite raggiunto" } else { "" })));
-                summary.set_xalign(0.0); outer.append(&summary);
-                let scroll = ScrolledWindow::new(); scroll.set_vexpand(true);
-                let list = GtkBox::new(Orientation::Vertical, 3);
-                for path in result.paths {
-                    let item = Button::with_label(&path.display().to_string());
-                    let state = state.clone(); let target = path.clone();
-                    item.connect_clicked(move |_| {
-                        if target.is_dir() { navigate(&state, target.clone(), true); }
-                        else if let Some(parent) = target.parent() { navigate(&state, parent.to_path_buf(), true); }
-                    });
-                    list.append(&item);
+        let close_window=window.clone();
+        cancel.connect_clicked(move |_| close_window.close());
+        let (sender,receiver)=std::sync::mpsc::sync_channel(1);
+        let worker_cancel=cancelled.clone();
+        let show_hidden=state.show_hidden.get();
+        std::thread::spawn(move || {
+            let result=nautilus::search_tree_cancellable(&dir,&query,nautilus::SearchLimits {
+                max_results: 150, max_directories: 120, show_hidden
+            },||worker_cancel.load(Ordering::Acquire));
+            let _=sender.send(result);
+        });
+        let result_state=state.clone();
+        let result_cancel=cancelled.clone();
+        glib::timeout_add_local(Duration::from_millis(40),move || {
+            if result_cancel.load(Ordering::Acquire) {return glib::ControlFlow::Break;}
+            match receiver.try_recv() {
+                Ok(Ok(result)) => {
+                    summary.set_text(&format!("{} risultati ({} cartelle esaminate){}",
+                        result.paths.len(),result.directories_scanned,
+                        if result.truncated {" · Limite raggiunto"} else {""}));
+                    cancel.set_label("Chiudi");
+                    for path in result.paths {
+                        let button=Button::with_label(&path.display().to_string());
+                        let target=path.clone();
+                        let state=result_state.clone();
+                        button.connect_clicked(move |_| {
+                            if target.is_dir() {navigate(&state,target.clone(),true);}
+                            else if let Some(parent)=target.parent() {
+                                navigate(&state,parent.to_path_buf(),true);
+                            }
+                        });
+                        list.append(&button);
+                    }
+                    glib::ControlFlow::Break
                 }
-                scroll.set_child(Some(&list)); outer.append(&scroll);
-                window.set_child(Some(&outer)); window.present();
-            },
-            Err(e) => state.status.set_text(&format!("Ricerca non riuscita: {e}")),
-        }
+                Ok(Err(error)) => {
+                    summary.set_text(&format!("Ricerca non riuscita: {error}"));
+                    result_state.status.set_text(&format!("Ricerca non riuscita: {error}"));
+                    cancel.set_label("Chiudi");
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                    summary.set_text("Ricerca interrotta.");
+                    cancel.set_label("Chiudi");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+        window.present();
     });
     let state=browser.clone();
     sort.connect_selected_notify(move |sort| {
