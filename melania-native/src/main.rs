@@ -166,6 +166,14 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
                     }
                     Err(error)=>eprintln!("Melania DRM routes {}: {error}",path.display()),
                 }
+                // Stage 7: a CRTC route is useful only if a primary plane
+                // advertises the same FourCC + modifier as the offscreen test.
+                // This inspection makes no KMS changes or plane claims.
+                for plane in melania_native::planes::inspect_primary_planes(&device) {
+                    println!("Melania KMS primary {}: planes={} formats={} ABGR8888+LINEAR={} (NO scanout)",
+                        plane.crtc,plane.primary_plane_count,plane.supported_format_count,
+                        plane.offscreen_abgr_linear_compatible);
+                }
                 // Stage 5: initialize a real GBM/EGL/GLES context from the
                 // same libseat-managed DRM descriptor, then drop it. This is
                 // capability detection only: no KMS surface or modesetting.
