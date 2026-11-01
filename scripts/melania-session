@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Safe entry point for the current Melania compositor.
+# This build uses Smithay's winit backend: a host display is mandatory.
+set -euo pipefail
+SCRIPT="$(readlink -f "$0")"
+ROOT="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+case "$#" in
+  1) ;;
+  *) echo 'Usage: melania-session --nested | --check-native' >&2; exit 2 ;;
+esac
+case "$1" in
+  --nested)
+    if ! env | grep -Eq "^(DISPLAY|WAYLAND_DISPLAY)=.+"; then
+      echo 'BLOCKED: the current Melania compositor needs a running Linux graphical session.' >&2
+      echo 'Use the nested preview from an existing desktop, not from a login manager.' >&2
+      exit 78
+    fi
+    exec /usr/bin/env bash "$ROOT/scripts/run-melania-v018-nested.sh"
+    ;;
+  --check-native)
+    echo 'NATIVE_BACKEND_UNAVAILABLE: current compositor initializes smithay::backend::winit.' >&2
+    echo 'No DRM/KMS + libseat/logind backend, VT/input lifecycle or tested native session yet.' >&2
+    exit 78
+    ;;
+  *)
+    echo 'Usage: melania-session --nested | --check-native' >&2
+    exit 2
+    ;;
+esac
