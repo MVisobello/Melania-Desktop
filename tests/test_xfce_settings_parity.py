@@ -91,7 +91,7 @@ class XfceSettingsParity(unittest.TestCase):
         self.assertIn("save.connect_clicked(move |_|",MIME)
         self.assertIn("fn is_valid_type(mime:&str)->bool",MIME)
         self.assertNotIn("Command::new(",MIME)
-        self.assertIn("condivise",MIME)
+        self.assertIn("gio::AppInfo::all_for_type(mime)", MIME)
 
 if __name__=="__main__":
     unittest.main(verbosity=2)
