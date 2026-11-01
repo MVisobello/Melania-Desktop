@@ -26,10 +26,11 @@ fn with_gio_cancel<T>(
     let cancellable=gio::Cancellable::new();
     std::thread::scope(|scope|{
         let (done_tx,done_rx)=std::sync::mpsc::sync_channel::<()>(1);
-        scope.spawn(||{
+        let watcher=&cancellable;
+        scope.spawn(move ||{
             loop {
                 if cancelled.load(Ordering::Acquire){
-                    cancellable.cancel();
+                    watcher.cancel();
                     break;
                 }
                 match done_rx.recv_timeout(Duration::from_millis(25)){
