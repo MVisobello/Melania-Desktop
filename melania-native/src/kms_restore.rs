@@ -65,7 +65,7 @@ pub struct AtomicBaseline {
 }
 
 impl AtomicBaseline {
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.objects.is_empty() ||
             !self.objects.iter().any(|o| o.kind == "crtc") ||
             !self.objects.iter().any(|o| o.kind == "connector") ||
