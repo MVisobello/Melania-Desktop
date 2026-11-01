@@ -28,6 +28,7 @@ class TaskbarDesktopClock(unittest.TestCase):
         self.assertIn("choice.add_css_class(\"melania-workspace-active\");",PANEL)
         self.assertIn("choice.remove_css_class(\"melania-workspace-active\");",PANEL)
         self.assertIn("toggle.set_popover(Some(&popover));",PANEL)
+        self.assertIn("popover.set_position(gtk::PositionType::Top);",PANEL)
         self.assertIn("popup.popdown();",PANEL)
         self.assertIn('format!("Desktop {active} · Cambia desktop")',PANEL)
         self.assertIn("Duration::from_millis(900)",PANEL)
