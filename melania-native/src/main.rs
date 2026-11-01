@@ -307,12 +307,13 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
         });
         match result {
             Ok(report)=>{
-                println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} crtc_readable={} baseline_unchanged={} resource_blobs={} borrowed_fbs={} resources_unchanged={} restore_ready={} visible={}",
+                println!("Melania QEMU atomic TEST_ONLY passed: {} {}x{}, offscreen={} crtc_readable={} baseline_unchanged={} resource_blobs={} borrowed_fbs={} resources_unchanged={} restore_ready={} visible={} rollback_blockers={}",
                     report.connector,report.width,report.height,
                     report.buffer_rendered,report.crtc_state_readable,
                     report.baseline_unchanged,report.copied_blob_count,
                     report.borrowed_framebuffer_count,report.resources_unchanged,
-                    report.restoration_implemented,report.visible_frame_submitted);
+                    report.restoration_implemented,report.visible_frame_submitted,
+                    report.rollback_blockers);
                 completed=true;
                 break;
             }

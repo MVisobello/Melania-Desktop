@@ -31,7 +31,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -86,8 +86,12 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q 'Melania QEMU atomic TEST_ONLY passed:' "$serial" ||
    ! grep -q 'baseline_unchanged=true' "$serial" ||
    ! grep -q 'resources_unchanged=true' "$serial" ||
+   ! grep -q 'rollback_blockers=4' "$serial" ||
    ! grep -q 'restore_ready=false visible=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_KMS_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial"; then
   printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
   tail -n 100 "$serial" || true

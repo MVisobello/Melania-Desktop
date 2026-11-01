@@ -12,6 +12,7 @@ pub mod kms_restore;
 pub mod kms_resources;
 pub mod preflight_guard;
 pub mod device_epoch;
+pub mod rollback_audit;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
