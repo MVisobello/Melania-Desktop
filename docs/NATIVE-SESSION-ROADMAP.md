@@ -579,6 +579,47 @@ del kernel, commit grafico con ripristino verificato in VM,
 gestione input libinput e avvio di una sessione di login.
 Non provare sul computer principale.
 
+## Fase 19 — gate esplicito di rollback e ritorno VT dopo TEST_ONLY
+
+Il modulo Rust `melania-native/src/rollback_audit.rs` ispeziona il
+baseline KMS e i payload copiati prima di `TEST_ONLY`, verificando
+gli eventuali CRTC attivi, i MODE_ID e i riferimenti framebuffer.
+Rifiuta inventari contraddittori e registra **quattro ostacoli
+insuperati**: mancanza di possesso dei vecchi framebuffer, mancata
+conservazione dei blob nel kernel, assenza del rollback atomico
+effettivo e mancanza di prove di recupero VT con scanout visibile.
+`visible_kms_commit_allowed()=false` e
+`rollback_implemented()=false` rimangono sempre veri come divieti
+(la verifica non usa alcuna funzione DRM mutante).
+
+Il report QEMU Rust mostra `rollback_blockers=4` dopo il consueto
+`restore_ready=false visible=false`. **Non è uno sblocco
+dello scanout.** La CI include test per modo attivo senza payload,
+incoerenze degli FB e stato KMS malformato.
+
+Inoltre, nella *stessa* VM QEMU VirtIO della fase 18, soltanto
+**dopo** che il vero `melania-native --experimental-kms-test`
+termina con codice 0, viene eseguito
+`scripts/melania-vt-guest.py` (script già usato nel collaudo
+Linux VT). Esso richiede QEMU, console reali, legge la VT attiva,
+passa a una VT diversa e tenta il ritorno alla VT originale
+in `finally`, con lettura di verifica. Il job fallisce se mancano
+`MELANIA_QEMU_VT_PASS=true`,
+`MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true` e il resto dei
+marcatori del test Rust. Tutti i log sono acquisiti su seriale
+della VM. L'host resta inalterato: niente passthrough, TCG
+e guest su overlay usa-e-getta.
+
+Questa prova dà evidenza che un processo Rust che ha eseguito
+TEST_ONLY si è concluso e che la console Linux guest continua
+a poter fare il roundtrip VT dopo la sua uscita. **Non dimostra**
+un ripristino da un vero modeset/pageflip, non conserva i vecchi
+framebuffer del kernel, non misura un KMS commit o la liberazione
+della VT in caso di kernel/driver bloccato. Nessun test sul computer
+principale è previsto. Solo dopo un vero rollback verificabile e
+un test distruttivo confinato alla VM sarà possibile considerare
+il primo frame nativo visibile.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
