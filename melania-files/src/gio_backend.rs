@@ -11,6 +11,41 @@ const MAX_ITEMS: usize = 2_000;
 const MAX_COPY_ENTRIES: usize = 10_000;
 const MAX_COPY_DEPTH: u32 = 24;
 
+/// GIO's cancellable is explicitly designed for cross-thread cancellation.
+/// The existing UI owns an Arc<AtomicBool>; a single scoped watcher bridges
+/// that flag to the provider's native cancellable *while* I/O is blocked.
+/// A single observer serves a whole listing/recursive copy, never per entry.
+/// Always join the observer; it cannot leak after the provider returns.
+fn with_gio_cancel<T>(
+    cancelled:&Arc<AtomicBool>,
+    work:impl FnOnce(&gio::Cancellable)->Result<T,String>,
+)->Result<T,String>{
+    if cancelled.load(Ordering::Acquire){
+        return Err(error("Operazione annullata prima dell'accesso al provider"));
+    }
+    let cancellable=gio::Cancellable::new();
+    std::thread::scope(|scope|{
+        let (done_tx,done_rx)=std::sync::mpsc::sync_channel::<()>(1);
+        let watcher=&cancellable;
+        scope.spawn(move ||{
+            loop {
+                if cancelled.load(Ordering::Acquire){
+                    watcher.cancel();
+                    break;
+                }
+                match done_rx.recv_timeout(Duration::from_millis(25)){
+                    Ok(())|Err(std::sync::mpsc::RecvTimeoutError::Disconnected)=>break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)=>{},
+                }
+            }
+        });
+        let result=work(&cancellable);
+        let _=done_tx.send(());
+        result
+    })
+}
+
+
 /// Progress shared with the GTK main thread without sending a GTK/GIO object
 /// across threads. A byte count is honest even for GVfs streams that cannot
 /// determine the total size in advance: no fabricated percentage or ETA.
@@ -107,18 +142,19 @@ fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
     if cancelled.load(Ordering::Acquire){
         return Err(error("Lettura annullata"));
     }
+    with_gio_cancel(cancelled, |provider| {
     let location = gio::File::for_uri(uri);
     let enumerator = location.enumerate_children(
         "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,standard::content-type,time::modified",
         gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
-        None::<&gio::Cancellable>
+        Some(provider)
     ).map_err(|e|format!("Impossibile aprire la posizione: {e}. Controlla GVfs, rete e credenziali."))?;
     let filter = text_filter.trim().to_lowercase();
     let mut items = Vec::new();
     let mut truncated = false;
     loop {
         if cancelled.load(Ordering::Acquire) {return Err(error("Lettura annullata"));}
-        let info = enumerator.next_file(None::<&gio::Cancellable>)
+        let info = enumerator.next_file(Some(provider))
             .map_err(|e|format!("Errore durante la lettura dei file: {e}"))?;
         let Some(info) = info else {break};
         if !show_hidden && (info.is_hidden() || info.name().to_string_lossy().starts_with('.')) {continue;}
@@ -141,6 +177,7 @@ fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
     }
     sort_items(&mut items,model::SortBy::Name,false);
     Ok(Listing{items,truncated})
+    })
 }
 
 #[derive(Clone,Debug)]
@@ -216,26 +253,27 @@ pub fn list_local_entries(dir:&Path,query:&str,options:model::ListingOptions,
 }
 
 fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
-             count:&mut usize, depth:u32, tracked:Option<&CopyProgress>) -> Result<(),String> {
+             provider:&gio::Cancellable,count:&mut usize, depth:u32,
+             tracked:Option<&CopyProgress>) -> Result<(),String> {
     if cancelled.load(Ordering::Acquire) {return Err(error("Copia annullata; potrebbero rimanere elementi parziali alla destinazione"));}
     if depth > MAX_COPY_DEPTH || *count >= MAX_COPY_ENTRIES {
         return Err(error("Limiti di copia raggiunti; verifica la destinazione prima di riprovare"));
     }
     *count += 1;
-    let kind = src.query_file_type(gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,None::<&gio::Cancellable>);
+    let kind = src.query_file_type(gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,Some(provider));
     if kind == gio::FileType::SymbolicLink {
         return Err(error("Copia di collegamenti simbolici non abilitata: nessuna dereferenziazione implicita"));
     }
-    if dst.query_exists(None::<&gio::Cancellable>) {
+    if dst.query_exists(Some(provider)) {
         return Err(format!("Destinazione già presente: {}",dst.uri()));
     }
     if kind == gio::FileType::Directory {
-        dst.make_directory(None::<&gio::Cancellable>)
+        dst.make_directory(Some(provider))
             .map_err(|e|format!("Creazione cartella fallita {}: {e}",dst.uri()))?;
         let children=src.enumerate_children("standard::name,standard::type",
-            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,None::<&gio::Cancellable>)
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,Some(provider))
             .map_err(|e|format!("Impossibile leggere la sottocartella {}: {e}",src.uri()))?;
-        while let Some(info)=children.next_file(None::<&gio::Cancellable>)
+        while let Some(info)=children.next_file(Some(provider))
             .map_err(|e|format!("Lettura incompleta: {e}"))? {
             let name=info.name();
             let Some(name)=name.to_str() else {
@@ -243,13 +281,11 @@ fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
             };
             let from=children.child(&info);
             let to=dst.child(name);
-            copy_tree(&from,&to,cancelled,count,depth+1,tracked)?;
+            copy_tree(&from,&to,cancelled,provider,count,depth+1,tracked)?;
         }
     } else if kind == gio::FileType::Regular {
-        let cancel=gio::Cancellable::new();
         let mut last_bytes=0u64;
         let mut progress=|current:i64,_total:i64| {
-            if cancelled.load(Ordering::Acquire) {cancel.cancel();}
             let done=current.max(0) as u64;
             let delta=done.saturating_sub(last_bytes);
             last_bytes=last_bytes.max(done);
@@ -258,7 +294,7 @@ fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
             }
         };
         src.copy(dst,gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
-            Some(&cancel),Some(&mut progress))
+            Some(provider),Some(&mut progress))
             .map_err(|e|format!("Copia di {} non riuscita: {e}",src.uri()))?;
     } else {
         return Err(error("Tipo di file speciale non supportato dalla copia remota"));
@@ -285,6 +321,7 @@ pub fn copy_uris_with_progress(sources:&[String],destination_uri:&str,
     if sources.is_empty() || sources.len()>100 {
         return Err(error("Seleziona da 1 a 100 elementi per trasferimento"));
     }
+    with_gio_cancel(cancelled, |provider|{
     let target=gio::File::for_uri(destination_uri);
     let mut count=0;
     for uri in sources {
@@ -296,9 +333,10 @@ pub fn copy_uris_with_progress(sources:&[String],destination_uri:&str,
         if dst.equal(&src) || src.has_prefix(&dst) || target.has_prefix(&src) {
             return Err(error("Non è possibile copiare una cartella dentro se stessa"));
         }
-        copy_tree(&src,&dst,cancelled,&mut count,0,tracked)?;
+        copy_tree(&src,&dst,cancelled,provider,&mut count,0,tracked)?;
     }
     Ok(count)
+    })
 }
 
 /// Exclusive creation on both POSIX and GVfs backends: never truncate or
@@ -553,6 +591,41 @@ mod tests {
         let folder=query_details(&gio::File::for_path(&dir).uri()).unwrap();
         assert!(folder.is_directory);
         assert_eq!(folder.size,None);
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn native_gio_cancellable_interrupts_a_provider_operation() {
+        use std::sync::mpsc;
+        let cancelled=Arc::new(AtomicBool::new(false));
+        let stop=cancelled.clone();
+        let (ready,started)=mpsc::sync_channel(1);
+        let worker=std::thread::spawn(move||{
+            with_gio_cancel(&stop, |provider|{
+                ready.send(()).unwrap();
+                let start=std::time::Instant::now();
+                while !provider.is_cancelled() &&
+                    start.elapsed()<Duration::from_secs(2){
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if provider.is_cancelled(){Ok(())}
+                else{Err("Provider non interrotto".into())}
+            })
+        });
+        started.recv_timeout(Duration::from_secs(1)).unwrap();
+        cancelled.store(true,Ordering::Release);
+        worker.join().unwrap().unwrap();
+    }
+    #[test] fn cancellation_before_recursive_copy_writes_nothing() {
+        let dir=std::env::temp_dir().join(format!("melania-cancel-copy-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("source")).unwrap();
+        fs::create_dir_all(dir.join("target")).unwrap();
+        fs::write(dir.join("source").join("a.txt"),b"original").unwrap();
+        let sources=vec![gio::File::for_path(dir.join("source").join("a.txt")).uri().to_string()];
+        let dest=gio::File::for_path(dir.join("target")).uri().to_string();
+        let flag=Arc::new(AtomicBool::new(true));
+        assert!(copy_uris(&sources,&dest,&flag).is_err());
+        assert!(!dir.join("target").join("a.txt").exists());
+        assert_eq!(fs::read(dir.join("source").join("a.txt")).unwrap(),b"original");
         let _=fs::remove_dir_all(dir);
     }
     #[test] fn superseded_request_never_starts_remote_enumeration() {
