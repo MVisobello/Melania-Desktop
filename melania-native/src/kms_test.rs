@@ -71,10 +71,13 @@ pub fn safest_test_mode_index(sizes: &[(u16, u16)]) -> Option<usize> {
 /// Only called in a QEMU virtual GPU by the opted-in libseat experiment.
 pub fn prepare_and_render_test_only<F>(
     device:&mut DrmDevice,
-    seat_active:F,
+    mut seat_active:F,
 )->Result<KmsTestReport,String>
-where F: Fn() -> bool
+where F: FnMut() -> Result<bool,String>
 {
+    if !seat_active()? {
+        return Err("KMS preflight stopped: seat or GPU epoch inactive".into());
+    }
     if !device.is_atomic() {
         return Err("Atomic DRM required; legacy mode cannot guarantee TEST_ONLY".into());
     }
@@ -91,7 +94,7 @@ where F: Fn() -> bool
     let mut guard=NativePreflightGuard::capture(
         baseline,resource_copies,Instant::now(),Duration::from_secs(36)
     ).map_err(|e|format!("KMS guard initialization failed: {e:?}"))?;
-    guard.checkpoint(seat_active(),Instant::now())
+    guard.checkpoint(seat_active()?,Instant::now())
         .map_err(|e|format!("KMS preflight stopped: {e:?}"))?;
     let resources=fd.resource_handles()
         .map_err(|e|format!("KMS connector discovery failed: {e}"))?;
@@ -131,7 +134,7 @@ where F: Fn() -> bool
                 }
                 // Refuse to begin a new candidate if the seat is no longer
                 // active or earlier work exceeded the safety deadline.
-                guard.checkpoint(seat_active(),Instant::now())
+                guard.checkpoint(seat_active()?,Instant::now())
                     .map_err(|e|format!("KMS preflight stopped: {e:?}"))?;
                 // Surface creation builds pending state but does not commit.
                 let surface=match device.create_surface(crtc,mode.clone(),&[*connector_handle]) {
@@ -175,13 +178,13 @@ where F: Fn() -> bool
 
                 // Check seat/deadline before and after read-only snapshot
                 // revalidation, rejecting races with resume or GPU changes.
-                guard.checkpoint(seat_active(),Instant::now())
+                guard.checkpoint(seat_active()?,Instant::now())
                     .map_err(|e|format!("KMS GPU stage stopped: {e:?}"))?;
                 let after=crate::kms_restore::capture_read_only(&fd)
                     .map_err(|e|format!("KMS post-test baseline incomplete: {e}"))?;
                 let resources_after=crate::kms_resources::capture_read_only(&fd,&after)
                     .map_err(|e|format!("KMS post-test resource inspection failed: {e}"))?;
-                guard.verify_after(&after,&resources_after,seat_active(),Instant::now())
+                guard.verify_after(&after,&resources_after,seat_active()?,Instant::now())
                     .map_err(|e|match e {
                         crate::preflight_guard::PreflightError::BaselineChanged =>
                             "KMS baseline changed during TEST_ONLY preflight".to_string(),
