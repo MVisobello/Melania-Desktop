@@ -99,18 +99,7 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q 'restore_ready=false visible=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_KMS_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_FB2_ROUNDTRIP=PASS' "$serial" ||
-   ! grep -Eq '^MELANIA_FB2_GEM_HANDLES_ACQUIRED=[1-9][0-9]*
-   ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
-   ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
-   ! grep -q '^MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true' "$serial" ||
-   ! grep -q '^MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial"; then
-  printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
-  tail -n 100 "$serial" || true
-  exit 1
-fi
-printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
-printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
- "$serial" ||
+   ! grep -Eq '^MELANIA_FB2_GEM_HANDLES_ACQUIRED=[1-9][0-9]*$' "$serial" ||
    ! grep -q '^MELANIA_FB2_ROLLBACK_READY=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_FB2_GEM_CLOSE_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
