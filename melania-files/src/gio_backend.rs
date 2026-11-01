@@ -4,12 +4,28 @@
 //! All COPY/MOVE operations refuse overwrites; failures are surfaced.
 use gtk::gio;
 use gtk::gio::prelude::*;
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}},path::Path,time::{Duration,SystemTime,UNIX_EPOCH},io};
+use std::{sync::{Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}},path::Path,time::{Duration,SystemTime,UNIX_EPOCH},io};
 use melania_files_core as model;
 
 const MAX_ITEMS: usize = 2_000;
 const MAX_COPY_ENTRIES: usize = 10_000;
 const MAX_COPY_DEPTH: u32 = 24;
+
+/// Progress shared with the GTK main thread without sending a GTK/GIO object
+/// across threads. A byte count is honest even for GVfs streams that cannot
+/// determine the total size in advance: no fabricated percentage or ETA.
+#[derive(Default,Debug)]
+pub struct CopyProgress {
+    bytes: AtomicU64,
+    finished_items: AtomicUsize,
+}
+impl CopyProgress {
+    pub fn snapshot(&self)->(u64,usize){
+        (self.bytes.load(Ordering::Relaxed),
+         self.finished_items.load(Ordering::Relaxed))
+    }
+}
+
 
 #[derive(Clone, Debug)]
 pub struct Item {
@@ -135,7 +151,7 @@ pub fn list_local_entries(dir:&Path,query:&str,options:model::ListingOptions,
 }
 
 fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
-             count:&mut usize, depth:u32) -> Result<(),String> {
+             count:&mut usize, depth:u32, tracked:Option<&CopyProgress>) -> Result<(),String> {
     if cancelled.load(Ordering::Acquire) {return Err(error("Copia annullata; potrebbero rimanere elementi parziali alla destinazione"));}
     if depth > MAX_COPY_DEPTH || *count >= MAX_COPY_ENTRIES {
         return Err(error("Limiti di copia raggiunti; verifica la destinazione prima di riprovare"));
@@ -162,18 +178,28 @@ fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
             };
             let from=children.child(&info);
             let to=dst.child(name);
-            copy_tree(&from,&to,cancelled,count,depth+1)?;
+            copy_tree(&from,&to,cancelled,count,depth+1,tracked)?;
         }
     } else if kind == gio::FileType::Regular {
         let cancel=gio::Cancellable::new();
-        let mut progress=|_current:i64,_total:i64| {
+        let mut last_bytes=0u64;
+        let mut progress=|current:i64,_total:i64| {
             if cancelled.load(Ordering::Acquire) {cancel.cancel();}
+            let done=current.max(0) as u64;
+            let delta=done.saturating_sub(last_bytes);
+            last_bytes=last_bytes.max(done);
+            if let Some(counter)=tracked {
+                counter.bytes.fetch_add(delta,Ordering::Relaxed);
+            }
         };
         src.copy(dst,gio::FileCopyFlags::NOFOLLOW_SYMLINKS,
             Some(&cancel),Some(&mut progress))
             .map_err(|e|format!("Copia di {} non riuscita: {e}",src.uri()))?;
     } else {
         return Err(error("Tipo di file speciale non supportato dalla copia remota"));
+    }
+    if let Some(counter)=tracked {
+        counter.finished_items.fetch_add(1,Ordering::Relaxed);
     }
     Ok(())
 }
@@ -183,6 +209,13 @@ fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
 /// deliberately retained for inspection rather than pretending to roll back.
 pub fn copy_uris(sources:&[String],destination_uri:&str,
                  cancelled:&Arc<AtomicBool>) -> Result<usize,String> {
+    copy_uris_with_progress(sources,destination_uri,cancelled,None)
+}
+
+/// Optional live progress is used by the remote GTK copy surface. Existing
+/// call sites keep their previous interface and safety semantics.
+pub fn copy_uris_with_progress(sources:&[String],destination_uri:&str,
+                 cancelled:&Arc<AtomicBool>,tracked:Option<&CopyProgress>) -> Result<usize,String> {
     validate_uri(destination_uri)?;
     if sources.is_empty() || sources.len()>100 {
         return Err(error("Seleziona da 1 a 100 elementi per trasferimento"));
@@ -198,7 +231,7 @@ pub fn copy_uris(sources:&[String],destination_uri:&str,
         if dst.equal(&src) || src.has_prefix(&dst) || target.has_prefix(&src) {
             return Err(error("Non è possibile copiare una cartella dentro se stessa"));
         }
-        copy_tree(&src,&dst,cancelled,&mut count,0)?;
+        copy_tree(&src,&dst,cancelled,&mut count,0,tracked)?;
     }
     Ok(count)
 }
@@ -429,6 +462,22 @@ mod tests {
         assert_eq!(result.items.len(),1);
         assert_eq!(result.items[0].name,"example.txt");
         let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn gio_copy_reports_real_bytes_and_finished_items() {
+        let root=std::env::temp_dir().join(format!("melania-gio-progress-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("from")).unwrap();
+        fs::create_dir_all(root.join("to")).unwrap();
+        let payload=vec![42u8;1024*128];
+        fs::write(root.join("from").join("sample.bin"),&payload).unwrap();
+        let src=gio::File::for_path(root.join("from").join("sample.bin")).uri().to_string();
+        let dst=gio::File::for_path(root.join("to")).uri().to_string();
+        let progress=CopyProgress::default();
+        assert_eq!(copy_uris_with_progress(&[src],&dst,
+            &Arc::new(AtomicBool::new(false)),Some(&progress)).unwrap(),1);
+        assert_eq!(progress.snapshot(),(payload.len() as u64,1));
+        assert_eq!(fs::read(root.join("to").join("sample.bin")).unwrap(),payload);
+        let _=fs::remove_dir_all(root);
     }
     #[test] fn gio_copy_never_overwrites_existing_local_file() {
         let root:PathBuf=std::env::temp_dir().join(format!("melania-gio-copy-{}",std::process::id()));
