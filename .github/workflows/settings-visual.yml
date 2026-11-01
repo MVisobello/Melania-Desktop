@@ -1,6 +1,12 @@
 name: Melania Settings GNOME UI visual check
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'melania-settings/**'
+      - 'scripts/audit-settings-nav-gtk.sh'
+      - '.github/workflows/settings-visual.yml'
   pull_request:
     paths:
       - 'melania-settings/**'
@@ -11,6 +17,7 @@ on:
       - 'tools/melania_fluent_office.py'
       - 'tools/build_melania_fluent_themes.py'
       - '.github/workflows/settings-visual.yml'
+      - 'scripts/audit-settings-nav-gtk.sh'
   workflow_dispatch:
 
 permissions:
@@ -147,9 +154,21 @@ jobs:
           assert brightness(images['dark'])+35 < brightness(images['light']), 'Dark theme still paints light content'
           print('PASS: real Light, Dark, Aero Settings renders', {k:brightness(v) for k,v in images.items()})
           PY
+      - name: Audit all 25 sidebar destinations in running GTK
+        env:
+          GDK_BACKEND: x11
+          XDG_DATA_HOME: ${{ runner.temp }}/melania-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/melania-config-audit
+          GSK_RENDERER: cairo
+          NO_AT_BRIDGE: '1'
+        run: |
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
+            bash scripts/audit-settings-nav-gtk.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: melania-gnome-settings-live-gtk
-          path: reports/settings-*.png
+          path: |
+            reports/settings-*.png
+            reports/settings-nav-gtk-audit.log
           if-no-files-found: warn
