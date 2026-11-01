@@ -155,6 +155,27 @@ principale. Prima del primo frame KMS devono ancora essere verificati:
 primary plane, formati compatibili GBM/scanout, gestione pause/resume,
 acquisizione/rilascio dello stato CRTCs e ripristino schermo/VT.
 
+## Primo frame in memoria GPU — fase 6 (nessuno scanout)
+
+Un percorso esplicito `melania-native --experimental-offscreen` riutilizza
+tutti i controlli su TTY dedicata, libseat e file descriptor DRM delle fasi
+precedenti. Inizializza GBM/EGL/GLES, alloca un singolo DMA-BUF **64×64**
+con flag di rendering (non scanout), disegna un riquadro di prova con
+`GlesRenderer` e attende la sincronizzazione GPU prima di distruggerlo.
+È una prova di rendering reale in memoria grafica, distinta dalla sola
+rilevazione delle capacità EGL.
+
+**Non** crea superfici KMS, non modifica i CRTC, non cambia frequenza o
+risoluzione, non presenta frame su un monitor e non sostituisce la sessione
+Wayland annidata. La CI verifica la compilazione e il blocco su TTY non
+dedicate; **non** possiede una GPU virtuale da cui ottenere screenshot del
+frame. La prova hardware resta da effettuare esclusivamente in una VM
+dedicata, consapevoli che libseat/DRM possono interagire con la console.
+
+La sessione autonoma non è ancora pronta: prima dello scanout servono
+primary plane, formato compatibile render/scanout, DRM framebuffer, gestione
+VT pause/resume, ripristino delle impostazioni precedenti e test reali in VM.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
