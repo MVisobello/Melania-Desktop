@@ -43,6 +43,14 @@ timeout --signal=TERM --kill-after=3s 25s \
   fatal 'native_capabilities_failed'
 report 'MELANIA_QEMU_NATIVE_CAPABILITIES=true'
 
+# Exercise the real libseat/udev/libinput event sources on the VM TTY.
+# This stage enumerates device classes, but cannot inject any event into
+# Wayland clients. It must exit cleanly before the KMS experiment starts.
+timeout --signal=TERM --kill-after=3s 18s \
+  "$binary" --experimental-seat < /dev/tty1 ||
+  fatal 'native_libinput_session_smoke_failed'
+report 'MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true'
+
 # Try the genuine Rust/Smithay KMS preflight, not a C substitute or mock.
 # It is TEST_ONLY and never issues an atomic commit/page flip/scanout.
 set +e
