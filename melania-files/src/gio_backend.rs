@@ -223,7 +223,8 @@ pub fn text_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
             if bytes.len()>=MAX_QUICKLOOK_BYTES+1{break;}
             let remaining=MAX_QUICKLOOK_BYTES+1-bytes.len();
             let mut block=[0u8;8192];
-            let count=stream.read(&mut block[..remaining.min(block.len())],Some(provider))
+            let available=remaining.min(block.len());
+            let count=stream.read(&mut block[..available],Some(provider))
                 .map_err(|e|format!("Anteprima interrotta: {e}"))?;
             if count==0{break;}
             bytes.extend_from_slice(&block[..count]);
@@ -920,7 +921,7 @@ mod tests {
             .uri(),&cancel).unwrap();
         assert_eq!(large.bytes_read,MAX_QUICKLOOK_BYTES);
         assert!(large.truncated);
-        fs::write(root.join("binary.txt"),b"AB\\0CD").unwrap();
+        fs::write(root.join("binary.txt"),b"AB\0CD").unwrap();
         assert!(text_quicklook(&gio::File::for_path(root.join("binary.txt"))
             .uri(),&cancel).is_err());
         let _=fs::remove_dir_all(root);
