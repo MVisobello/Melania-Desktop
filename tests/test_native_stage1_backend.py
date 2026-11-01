@@ -13,6 +13,12 @@ class NativeStage1Contracts(unittest.TestCase):
         for flag in ("backend_drm","backend_gbm","backend_libinput","backend_udev","backend_session_libseat"):
             self.assertIn(flag,CARGO)
         self.assertIn("LibSeatSession::new()?",NATIVE)
+        self.assertIn('session.open(',NATIVE)
+        self.assertIn('OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK',NATIVE)
+        self.assertIn('DrmDeviceFd::new(DeviceFd::from(descriptor))',NATIVE)
+        self.assertIn('DrmDevice::new(fd,false)',NATIVE)
+        self.assertIn('device.crtcs().len()',NATIVE)
+
         self.assertIn("UdevBackend::new(&seat_name)?",NATIVE)
         self.assertIn("loop_events.handle().insert_source(notifier",NATIVE)
         self.assertIn("loop_events.handle().insert_source(udev",NATIVE)
