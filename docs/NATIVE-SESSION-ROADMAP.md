@@ -193,6 +193,24 @@ lo stato del display e non gestisce il ciclo di page-flip. Nessuna
 creata da questa fase. Nessun test GPU viene effettuato sul computer
 dell'utente.
 
+## Preparazione pause/resume e sincronizzazione frame — fase 8
+
+Il nuovo `NativeFrameGate` collega la gestione reale degli eventi Smithay
+`PauseSession` e `ActivateSession` e gli eventi di hotplug udev a un
+contatore di generazione. Ogni pausa, ripresa o cambio di dispositivo
+**invalida i frame preparati prima della transizione**. Il modello rifiuta
+candidati quando la sessione è inattiva, il piano primario non è stato
+verificato o un altro candidato è ancora in attesa, e non accetta la
+conclusione di un frame appartenente a una generazione precedente.
+
+Questa fase non esegue ancora `DrmSurface::page_flip`, atomic commit o
+ripristino del display: si tratta di **un modello di sicurezza integrato
+nel ciclo di vita, non di un driver KMS operativo**. I test Rust verificano
+concorrenza, sospensione, ripresa, ripetizione di eventi e rimozione GPU.
+Per il rendering reale serviranno inoltre sospensione libinput, rilascio
+dei buffer pendenti, un backup del vecchio stato KMS e una prova di
+recupero della VT in VM con timeout e procedura di rollback.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
