@@ -4,7 +4,8 @@
 //! All COPY/MOVE operations refuse overwrites; failures are surfaced.
 use gtk::gio;
 use gtk::gio::prelude::*;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}},path::Path,time::{Duration,SystemTime,UNIX_EPOCH},io};
+use melania_files_core as model;
 
 const MAX_ITEMS: usize = 2_000;
 const MAX_COPY_ENTRIES: usize = 10_000;
@@ -17,6 +18,8 @@ pub struct Item {
     pub directory: bool,
     pub size: u64,
     pub content_type: String,
+    pub modified: Option<SystemTime>,
+    pub symlink: bool,
 }
 
 #[derive(Debug)]
@@ -56,10 +59,14 @@ pub fn validate_uri(uri: &str) -> Result<(), String> {
 
 pub fn list_uri(uri: &str, text_filter: &str, show_hidden: bool,
                 cancelled: &Arc<AtomicBool>) -> Result<Listing,String> {
+    list_uri_bounded(uri,text_filter,show_hidden,MAX_ITEMS,cancelled)
+}
+fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
+                    cancelled:&Arc<AtomicBool>)->Result<Listing,String> {
     validate_uri(uri)?;
     let location = gio::File::for_uri(uri);
     let enumerator = location.enumerate_children(
-        "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,standard::content-type",
+        "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,standard::content-type,time::modified",
         gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
         None::<&gio::Cancellable>
     ).map_err(|e|format!("Impossibile aprire la posizione: {e}. Controlla GVfs, rete e credenziali."))?;
@@ -74,7 +81,7 @@ pub fn list_uri(uri: &str, text_filter: &str, show_hidden: bool,
         if !show_hidden && info.is_hidden() {continue;}
         let name = info.display_name().to_string();
         if !filter.is_empty() && !name.to_lowercase().contains(&filter) {continue;}
-        if items.len() >= MAX_ITEMS {truncated=true;break;}
+        if items.len() >= max_items {truncated=true;break;}
         let child = enumerator.child(&info);
         items.push(Item {
             uri: child.uri().to_string(),
@@ -82,11 +89,49 @@ pub fn list_uri(uri: &str, text_filter: &str, show_hidden: bool,
             directory: info.file_type()==gio::FileType::Directory,
             size: info.size().max(0) as u64,
             content_type: info.content_type().map(|s|s.to_string()).unwrap_or_default(),
+            modified: match info.attribute_uint64("time::modified") {
+                0 => None,
+                seconds => UNIX_EPOCH.checked_add(Duration::from_secs(seconds)),
+            },
+            symlink: info.file_type()==gio::FileType::SymbolicLink,
         });
     }
     items.sort_by(|a,b|b.directory.cmp(&a.directory)
         .then_with(||a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     Ok(Listing{items,truncated})
+}
+
+/// Local files and remote files now enter through exactly the same GIO
+/// enumeration/metadata model. This adapter only retains a PathBuf for the
+/// existing rich local GTK widgets and legacy optimized POSIX file actions.
+/// All sorting uses the shared core comparator, so switching backend never
+/// silently changes the user's selected sort order.
+pub fn list_local_entries(dir:&Path,query:&str,options:model::ListingOptions,
+                          cancel:&Arc<AtomicBool>)->io::Result<Vec<model::Entry>> {
+    let uri=gio::File::for_path(dir).uri().to_string();
+    let result=list_uri_bounded(&uri,query,options.show_hidden,options.max_entries,cancel)
+        .map_err(|e|io::Error::new(io::ErrorKind::Other,e))?;
+    let mut entries=Vec::with_capacity(result.items.len());
+    for item in result.items {
+        if cancel.load(Ordering::Acquire) {
+            return Err(io::Error::new(io::ErrorKind::Interrupted,"Lettura annullata"));
+        }
+        let file=gio::File::for_uri(&item.uri);
+        let Some(path)=file.path() else {continue;};
+        let picture=!item.directory && model::is_picture(&path);
+        if options.pictures_only && !item.directory && !picture {continue;}
+        entries.push(model::Entry {
+            path,
+            name:item.name,
+            is_directory:item.directory,
+            is_picture:picture,
+            is_symlink:item.symlink,
+            size:item.size,
+            modified:item.modified,
+        });
+    }
+    model::sort_entries(&mut entries,options);
+    Ok(entries)
 }
 
 fn copy_tree(src:&gio::File, dst:&gio::File, cancelled:&Arc<AtomicBool>,
@@ -273,6 +318,44 @@ mod tests {
         let list=read_bookmarks(&path).unwrap();
         assert_eq!(list.len(),2);
         let _=fs::remove_file(&path);
+    }
+    #[test] fn local_gui_list_uses_gio_metadata_and_shared_sorting() {
+        let dir=std::env::temp_dir().join(format!("melania-gio-local-{}",
+            std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        fs::create_dir(dir.join("folder")).unwrap();
+        fs::write(dir.join("a.txt"),b"1").unwrap();
+        fs::write(dir.join("z.txt"),b"12345").unwrap();
+        let stop=Arc::new(AtomicBool::new(false));
+        let options=model::ListingOptions {
+            sort_by:model::SortBy::Size,descending:true,..Default::default()
+        };
+        let entries=list_local_entries(&dir,"",options,&stop).unwrap();
+        let names:Vec<_>=entries.iter().map(|e|e.name.as_str()).collect();
+        assert_eq!(names,vec!["folder","z.txt","a.txt"]);
+        #[cfg(unix)]{
+            std::os::unix::fs::symlink("missing",dir.join("broken")).unwrap();
+            let entries=list_local_entries(&dir,"",options,&stop).unwrap();
+            assert!(entries.iter().any(|e|e.name=="broken" && e.is_symlink
+                && !e.is_directory));
+        }
+        let pics=list_local_entries(&dir,"",model::ListingOptions {
+            pictures_only:true,..Default::default()
+        },&stop).unwrap();
+        assert_eq!(pics.len(),1);
+        assert_eq!(pics[0].name,"folder");
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn cancelled_local_gio_enumeration_is_interruptible() {
+        let dir=std::env::temp_dir().join(format!("melania-gio-cancel-{}",
+            std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        let stop=Arc::new(AtomicBool::new(true));
+        assert_eq!(list_local_entries(&dir,"",model::ListingOptions::default(),&stop)
+            .unwrap_err().kind(),io::ErrorKind::Interrupted);
+        let _=fs::remove_dir_all(dir);
     }
     #[test] fn accepted_network_protocols_and_credentials_safety() {
         for uri in ["network:///","smb://server/Share","sftp://user@host/home",
