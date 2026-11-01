@@ -7,6 +7,7 @@ The surrounding disposable VM test captures serial output as evidence.
 import fcntl
 import os
 import pathlib
+import subprocess
 import stat
 import struct
 import sys
@@ -64,7 +65,34 @@ def main():
     if not virtual_vga_present():
         raise RuntimeError("QEMU virtual PCI VGA controller unavailable")
     print("MELANIA_QEMU_VGA_ENUMERATED=true", flush=True)
-    print(f"MELANIA_QEMU_DRM_ENUMERATED={str(drm_card_present()).lower()}", flush=True)
+    require_drm = os.environ.get("MELANIA_QEMU_GUEST_REQUIRE_DRM") == "1"
+    if require_drm:
+        # A cloud image may ship the driver as a module rather than loading
+        # it automatically. Probe only the disposable guest, never the host.
+        try:
+            modprobe = subprocess.run(
+                ["modprobe", "virtio_gpu"], capture_output=True, text=True,
+                timeout=12, check=False,
+            )
+            print(f"MELANIA_QEMU_VIRTIO_MODPROBE_RC={modprobe.returncode}", flush=True)
+            if modprobe.returncode:
+                print(f"MELANIA_QEMU_VIRTIO_MODPROBE_ERROR={modprobe.stderr.strip()[:220]}", flush=True)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"MELANIA_QEMU_VIRTIO_MODPROBE_ERROR={exc}", flush=True)
+        for _ in range(12):
+            if drm_card_present():
+                break
+            time.sleep(0.25)
+    drm = drm_card_present()
+    print(f"MELANIA_QEMU_DRM_ENUMERATED={str(drm).lower()}", flush=True)
+    if require_drm and not drm:
+        raise RuntimeError("VirtIO GPU kernel DRM driver did not expose /dev/dri/card*")
+    # Device inventory is read-only. A card node alone is not proof that
+    # atomic KMS, EGL, GBM or scanout actually works.
+    if require_drm:
+        cards = list(pathlib.Path("/sys/class/drm").glob("card[0-9]"))
+        print(f"MELANIA_QEMU_DRM_CARD_COUNT={len(cards)}", flush=True)
+        print("MELANIA_QEMU_DRM_KMS_TESTED=false", flush=True)
     fd = os.open("/dev/tty0", os.O_RDONLY | os.O_CLOEXEC)
     try:
         original = active_vt(fd)
