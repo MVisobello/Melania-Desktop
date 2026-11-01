@@ -1373,13 +1373,18 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     running_scroll.set_child(Some(&running));
     bar.append(&running_scroll);
     let space=GtkBox::new(Orientation::Horizontal,1);space.set_hexpand(true);bar.append(&space);
+    // One compact trailing cluster keeps tray, notifications and clock close together
+    // regardless of panel width, position or the number of running windows.
+    let trailing=GtkBox::new(Orientation::Horizontal,3);
+    trailing.add_css_class("melania-trailing");
+    bar.append(&trailing);
     // Keep the desktop switcher beside the tray instead of centered on the bar.
-    bar.append(&workspace_switcher());
+    trailing.append(&workspace_switcher());
     // Exact Melania compact symbolic glyphs: no glossy 96px app icon tiles.
     let status=Button::new();status.add_css_class("melania-system");
     status.add_css_class("melania-tray-button");
     status.set_tooltip_text(Some("Rete, Bluetooth, audio e alimentazione"));
-    let status_row=GtkBox::new(Orientation::Horizontal,9);
+    let status_row=GtkBox::new(Orientation::Horizontal,6);
     status_row.add_css_class("melania-status-icons");
     let light_tray=melania_config::load().unwrap_or_default().appearance_theme()=="light";
     for (icon_name, icon_class) in [
@@ -1399,7 +1404,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     }
     status.set_child(Some(&status_row));
     let qs=quick.clone();let sm=start.clone();let nt=notifications.clone();
-    status.connect_clicked(move |_|{nt.set_visible(false);toggle_surface(&qs,&sm);});bar.append(&status);
+    status.connect_clicked(move |_|{nt.set_visible(false);toggle_surface(&qs,&sm);});trailing.append(&status);
     let notification_button=Button::new();
     notification_button.set_tooltip_text(Some("Centro notifiche"));
     notification_button.add_css_class("melania-tray-button");
@@ -1435,12 +1440,12 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         hide_start_surface(&sm);qs.set_visible(false);
         if notify.is_visible(){notify.set_visible(false);}else{notify.present();}
     });
-    bar.append(&notification_button);
+    trailing.append(&notification_button);
     // Replace the accidental double-blue notification stripe with one
     // intentional hairline before the Windows 11-style vertical clock.
     let clock_separator=gtk::Separator::new(Orientation::Vertical);
     clock_separator.add_css_class("melania-clock-separator");
-    bar.append(&clock_separator);
+    trailing.append(&clock_separator);
     // Time above date, right-aligned, in the far-right taskbar control.
     let clock=Button::new();
     clock.add_css_class("melania-system");
@@ -1478,7 +1483,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         qs.set_visible(false);hide_start_surface(&sm);nt.set_visible(false);
         if cal.is_visible(){cal.set_visible(false);}else{cal.present();}
     });
-    bar.append(&clock);
+    trailing.append(&clock);
     w.set_child(Some(&bar));w
 }
 /// Local private datagram channel: the compositor alone owns the Super key,
