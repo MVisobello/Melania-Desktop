@@ -6,7 +6,7 @@ SCRIPT="$(readlink -f "$0")"
 ROOT="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 case "$#" in
   1) ;;
-  *) echo 'Usage: melania-session --nested | --check-native' >&2; exit 2 ;;
+  *) echo 'Usage: melania-session --nested | --check-native | --probe-native' >&2; exit 2 ;;
 esac
 case "$1" in
   --nested)
@@ -22,8 +22,11 @@ case "$1" in
     echo 'No DRM/KMS + libseat/logind backend, VT/input lifecycle or tested native session yet.' >&2
     exit 78
     ;;
+  --probe-native)
+    exec python3 "$ROOT/scripts/probe-native-session.py" --json
+    ;;
   *)
-    echo 'Usage: melania-session --nested | --check-native' >&2
+    echo 'Usage: melania-session --nested | --check-native | --probe-native' >&2
     exit 2
     ;;
 esac

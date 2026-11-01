@@ -33,6 +33,25 @@ La risposta è intenzionalmente `NATIVE_BACKEND_UNAVAILABLE` (exit code 78)
 finché non vengono completate le dipendenze sottostanti; non si tentano
 operazioni su KMS, VT, logind o arresto del computer host.
 
+## Diagnostica hardware preliminare, senza privilegi
+
+La nuova verifica legge soltanto informazioni pubbliche del sistema
+(dispositivi DRM da `/dev/dri`, stato dei connettori da `/sys/class/drm`,
+nodi input e proprietà della directory di sessione). Non prende il controllo
+di VT, schede video o dispositivi d'ingresso:
+
+```sh
+bash scripts/melania-session --probe-native
+```
+
+L'output è JSON per agevolare una successiva pipeline di test hardware, e il
+comando termina **sempre con codice 78** finché Melania usa Smithay/Winit.
+L'esistenza di un `card0`, di un monitor collegato o di un
+`XDG_RUNTIME_DIR` valido non dimostra che libseat e DRM/KMS siano operativi.
+Le prove automatiche usano una struttura `/dev` e `/sys` sintetica, mai i
+dispositivi reali dell'host CI. Per un confronto riproducibile si può usare
+`python3 scripts/probe-native-session.py --root /percorso/fixture --json`.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
