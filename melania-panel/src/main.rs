@@ -1342,12 +1342,19 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     clock.add_css_class("melania-clock");
     let clock_row=GtkBox::new(Orientation::Vertical,0);
     clock_row.add_css_class("melania-clock-row");
+    // A shared width and fill alignment make both strings end at the exact
+    // same x coordinate, as in the user's Windows clock reference.
+    clock_row.set_size_request(84,-1);
     clock_row.set_halign(gtk::Align::End);
     let date_label=Label::new(None);
     date_label.add_css_class("melania-clock-date");
+    date_label.set_halign(gtk::Align::Fill);
+    date_label.set_hexpand(true);
     date_label.set_xalign(1.0);
     let time_label=Label::new(None);
     time_label.add_css_class("melania-clock-time");
+    time_label.set_halign(gtk::Align::Fill);
+    time_label.set_hexpand(true);
     time_label.set_xalign(1.0);
     clock_row.append(&time_label);
     clock_row.append(&date_label);
