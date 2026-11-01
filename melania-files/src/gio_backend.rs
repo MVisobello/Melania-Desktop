@@ -193,10 +193,87 @@ pub fn move_to_trash(uri:&str)->Result<(),String> {
         .map_err(|e|format!("Cestino non disponibile per questa posizione: {e}; file non eliminato"))
 }
 
+/// GVfs URIs are stored separately from the existing legacy PathBuf
+/// bookmarks. Changes never overwrite GNOME/Nautilus GTK bookmarks.
+pub fn remote_bookmarks_path() -> Result<std::path::PathBuf,String> {
+    let home=std::env::var_os("HOME").ok_or_else(||error("HOME non disponibile"))?;
+    let cfg=std::env::var_os("XDG_CONFIG_HOME").filter(|p|!p.is_empty())
+        .map(std::path::PathBuf::from).unwrap_or_else(||std::path::PathBuf::from(home).join(".config"));
+    Ok(cfg.join("melania").join("gvfs-bookmarks"))
+}
+pub fn read_bookmarks(path:&std::path::Path)->Result<Vec<String>,String> {
+    use std::fs;
+    let data=match fs::read(path){
+        Ok(data)=>data,
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(Vec::new()),
+        Err(e)=>return Err(format!("Impossibile leggere i preferiti di rete: {e}")),
+    };
+    if data.len()>128*1024{return Err(error("File preferiti troppo grande"));}
+    let text=std::str::from_utf8(&data).map_err(|_|error("File preferiti non UTF-8"))?;
+    let mut saved=Vec::new();
+    for entry in text.lines().take(300) {
+        if validate_uri(entry).is_ok() && !saved.iter().any(|v|v==entry) && saved.len()<200 {
+            saved.push(entry.to_owned());
+        }
+    }
+    Ok(saved)
+}
+pub fn write_bookmarks(path:&std::path::Path,items:&[String])->Result<(),String> {
+    use std::{fs,io::Write};
+    if items.len()>200{return Err(error("Troppi preferiti"));}
+    for item in items {validate_uri(item)?;}
+    let parent=path.parent().ok_or_else(||error("Percorso preferiti non valido"))?;
+    fs::create_dir_all(parent).map_err(|e|format!("Cartella preferiti non creata: {e}"))?;
+    let tmp=path.with_extension(format!("tmp.{}",std::process::id()));
+    let result=(||->Result<(),String>{
+        let mut out=fs::OpenOptions::new().write(true).create_new(true)
+            .open(&tmp).map_err(|e|format!("Preferiti non salvati: {e}"))?;
+        #[cfg(unix)]{
+            use std::os::unix::fs::PermissionsExt;
+            out.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|e|format!("Protezione preferiti fallita: {e}"))?;
+        }
+        for uri in items {
+            out.write_all(uri.as_bytes()).and_then(|_|out.write_all(b"\n"))
+                .map_err(|e|format!("Scrittura preferiti fallita: {e}"))?;
+        }
+        out.sync_all().map_err(|e|format!("Salvataggio preferiti fallito: {e}"))?;
+        fs::rename(&tmp,path).map_err(|e|format!("Preferiti non aggiornati: {e}"))
+    })();
+    if result.is_err(){let _=fs::remove_file(&tmp);}
+    result
+}
+pub fn add_bookmark(uri:&str)->Result<Vec<String>,String>{
+    validate_uri(uri)?;
+    let path=remote_bookmarks_path()?;
+    let mut list=read_bookmarks(&path)?;
+    if !list.iter().any(|v|v==uri){
+        list.push(uri.to_owned());
+        write_bookmarks(&path,&list)?;
+    }
+    Ok(list)
+}
+pub fn remove_bookmark(uri:&str)->Result<Vec<String>,String>{
+    validate_uri(uri)?;
+    let path=remote_bookmarks_path()?;
+    let mut list=read_bookmarks(&path)?;
+    list.retain(|v|v!=uri);
+    write_bookmarks(&path,&list)?;
+    Ok(list)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{fs,path::PathBuf};
+    #[test] fn remote_bookmarks_are_deduplicated_and_skip_invalid_entries() {
+        let path=std::env::temp_dir().join(format!("melania-gvfs-bookmarks-{}",std::process::id()));
+        let _=fs::remove_file(&path);
+        write_bookmarks(&path,&["sftp://server/home".into(),"network:///".into()]).unwrap();
+        let list=read_bookmarks(&path).unwrap();
+        assert_eq!(list.len(),2);
+        let _=fs::remove_file(&path);
+    }
     #[test] fn accepted_network_protocols_and_credentials_safety() {
         for uri in ["network:///","smb://server/Share","sftp://user@host/home",
                     "davs://example.org/my-folder","file:///tmp","mtp://device/"] {
