@@ -417,7 +417,8 @@ Il workflow installa QEMU, scarica l'immagine cloud ufficiale Ubuntu 24.04
 e la verifica con `SHA256SUMS`, prepara un disco overlay temporaneo,
 e avvia una VM con VGA emulata, TCG (senza accesso a GPU o KVM dell'host),
 cloud-init e seriale su file. Nel guest, `scripts/melania-vt-guest.py`:
-verifica DMI QEMU e la presenza di una scheda DRM virtuale; legge la VT
+verifica DMI QEMU e la presenza di una scheda video PCI virtuale
+(la disponibilità del driver DRM è riportata a parte); legge la VT
 attiva con `VT_GETSTATE`; usa `VT_ACTIVATE`/`VT_WAITACTIVE` per passare
 a un'altra VT e prova **sempre** il ripristino di quella originaria tramite
 `finally`. Solo dopo una rilettura della VT originale stampa il
@@ -432,6 +433,16 @@ I verbali sono archiviati come artifact `qemu-vt-evidence`
 (`serial.log` e `result.txt`). I test Python simulano il fallimento di
 un passaggio VT e controllano che la restituzione della console venga
 comunque tentata.
+
+**Primo collaudo del 1° novembre 2026:** la VM Ubuntu è stata
+effettivamente avviata fino a cloud-init, ma il primo script si è fermato
+perché mancava un nodo `/dev/dri/card*` nella VM con VGA standard.
+Questa condizione non impedisce necessariamente la presenza delle console
+virtuali e non deve essere confusa con la capacità KMS. Il criterio
+della prova VT è stato quindi corretto: è obbligatoria una periferica
+VGA PCI emulata, mentre la presenza del driver DRM viene riportata
+separatamente come `MELANIA_QEMU_DRM_ENUMERATED=true/false`.
+**Un PASS VT non vale come prova DRM**, anche quando il driver è disponibile.
 
 **Interpretazione corretta:** un PASS dimostra soltanto che *questa*
 VM Linux ha cambiato VT ed è tornata alla precedente. Non esegue
