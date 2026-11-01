@@ -379,6 +379,20 @@ fn build_ui(
         "Silenzia gli avvisi di Melania finché non disattivi l'opzione.",
         prefs.borrow().do_not_disturb, prefs.clone(), |p,v| p.do_not_disturb=v, None));
     stack.add_titled(&notifications, Some("notifications"), "Notifiche");
+    // Optional real-GTK audit: verify that every sidebar destination exists,
+    // and that there are no registered pages hidden from the navigation.
+    // Never make ordinary sessions depend on diagnostic assertions.
+    let audit_settings = std::env::var_os("MELANIA_SETTINGS_AUDIT").is_some();
+    if audit_settings {
+        let pages = stack.pages().n_items();
+        assert_eq!(pages as usize, SETTINGS_NAVIGATION.len(),
+            "Settings pages and navigation entries are out of sync");
+        for &(title, target, _) in SETTINGS_NAVIGATION.iter() {
+            assert!(stack.child_by_name(target).is_some(),
+                "Settings category {title} has no page: {target}");
+        }
+        eprintln!("MELANIA_SETTINGS_PAGES_OK={pages}");
+    }
     // Expose this live stack only to our own application's command handler,
     // so a second invocation can navigate the existing Settings window.
     *shared_stack.borrow_mut() = Some(stack.clone());
@@ -430,6 +444,11 @@ fn build_ui(
     let buttons = navigation.clone();
     stack.connect_visible_child_name_notify(move |stack| {
         let current = stack.visible_child_name();
+        if audit_settings {
+            if let Some(ref page) = current {
+                eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={page}");
+            }
+        }
         for (button, target) in buttons.borrow().iter() {
             if current.as_deref() == Some(*target) {
                 button.add_css_class("active-section");
@@ -486,6 +505,11 @@ fn build_ui(
     root.append(&main_panel);
     window.set_child(Some(&root));
     window.present();
+    if audit_settings {
+        // The initial page may be selected before the signal handler is wired.
+        eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",
+            stack.visible_child_name().as_deref().unwrap_or("none"));
+    }
 }
 
 
