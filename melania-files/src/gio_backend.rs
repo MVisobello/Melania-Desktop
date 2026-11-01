@@ -180,6 +180,68 @@ fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
     })
 }
 
+const MAX_QUICKLOOK_BYTES:usize=64*1024;
+#[derive(Debug)]
+pub struct TextQuickLook {
+    pub content:String,
+    pub mime:String,
+    pub bytes_read:usize,
+    pub truncated:bool,
+}
+fn supported_text_mime(mime:&str)->bool{
+    mime.starts_with("text/") ||
+    matches!(mime,"application/json"|"application/xml"|
+        "application/javascript"|"application/x-yaml"|"application/yaml"|
+        "application/x-shellscript"|"application/x-javascript")
+}
+/// Read-only, explicitly requested Quick Look. Never follow symlinks, load
+/// arbitrary binary files or fetch more than 64 KiB + 1 byte over GVfs.
+/// All provider calls accept the same cancellation used by the remote UI.
+pub fn text_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
+    ->Result<TextQuickLook,String>{
+    validate_uri(uri)?;
+    with_gio_cancel(cancelled,|provider|{
+        let file=gio::File::for_uri(uri);
+        let info=file.query_info("standard::type,standard::content-type",
+            gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,Some(provider))
+            .map_err(|e|format!("Anteprima non disponibile: {e}"))?;
+        if info.file_type()!=gio::FileType::Regular{
+            return Err(error("L'anteprima supporta solo file di testo regolari, non cartelle o collegamenti."));
+        }
+        let mime=info.content_type().map(|value|value.to_string())
+            .unwrap_or_default();
+        if !supported_text_mime(&mime){
+            return Err(error("Anteprima non disponibile per questo tipo di file: aprilo con l'app appropriata."));
+        }
+        let stream=file.read(Some(provider))
+            .map_err(|e|format!("Impossibile leggere l'anteprima: {e}"))?;
+        let mut bytes=Vec::with_capacity(MAX_QUICKLOOK_BYTES+1);
+        loop {
+            if cancelled.load(Ordering::Acquire) || provider.is_cancelled(){
+                return Err(error("Anteprima annullata"));
+            }
+            if bytes.len()>=MAX_QUICKLOOK_BYTES+1{break;}
+            let remaining=MAX_QUICKLOOK_BYTES+1-bytes.len();
+            let mut block=[0u8;8192];
+            let count=stream.read(&mut block[..remaining.min(block.len())],Some(provider))
+                .map_err(|e|format!("Anteprima interrotta: {e}"))?;
+            if count==0{break;}
+            bytes.extend_from_slice(&block[..count]);
+        }
+        stream.close(Some(provider))
+            .map_err(|e|format!("Impossibile chiudere il flusso di anteprima: {e}"))?;
+        if bytes.contains(&0u8){
+            return Err(error("Il file contiene dati binari: anteprima testuale rifiutata"));
+        }
+        let truncated=bytes.len()>MAX_QUICKLOOK_BYTES;
+        let length=bytes.len().min(MAX_QUICKLOOK_BYTES);
+        // A 64 KiB boundary can land mid-codepoint; lossiness is confined to
+        // displayed text. The original file is never modified.
+        let content=String::from_utf8_lossy(&bytes[..length]).into_owned();
+        Ok(TextQuickLook{content,mime,bytes_read:length,truncated})
+    })
+}
+
 #[derive(Clone,Debug)]
 pub struct FileDetails {
     pub name:String,
@@ -841,6 +903,32 @@ mod tests {
         assert!(copy_uris(&[file.uri.clone()],&target,&stop).is_err(),
             "A second SFTP copy must refuse overwrite");
         assert_eq!(query_details(&file.uri).unwrap().size,Some(20));
+    }
+    #[test] fn text_quicklook_reads_only_bounded_utf8_and_refuses_binary(){
+        let root=std::env::temp_dir().join(format!(
+            "melania-quicklook-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("hello.txt"),"Ciao, Procida!\n").unwrap();
+        let cancel=Arc::new(AtomicBool::new(false));
+        let uri=gio::File::for_path(root.join("hello.txt")).uri().to_string();
+        let p=text_quicklook(&uri,&cancel).unwrap();
+        assert_eq!(p.content,"Ciao, Procida!\n");
+        assert!(!p.truncated);
+        fs::write(root.join("large.txt"),vec![b'a';MAX_QUICKLOOK_BYTES+1234]).unwrap();
+        let large=text_quicklook(&gio::File::for_path(root.join("large.txt"))
+            .uri(),&cancel).unwrap();
+        assert_eq!(large.bytes_read,MAX_QUICKLOOK_BYTES);
+        assert!(large.truncated);
+        fs::write(root.join("binary.txt"),b"AB\\0CD").unwrap();
+        assert!(text_quicklook(&gio::File::for_path(root.join("binary.txt"))
+            .uri(),&cancel).is_err());
+        let _=fs::remove_dir_all(root);
+    }
+    #[test] fn quicklook_is_cancelled_without_remote_provider_access(){
+        let cancelled=Arc::new(AtomicBool::new(true));
+        let result=text_quicklook("sftp://unreachable.invalid/example.txt",&cancelled);
+        assert!(result.unwrap_err().contains("annullata"));
     }
     #[test] fn local_recorded_rename_can_undo_and_redo_without_overwrite(){
         let root=std::env::temp_dir().join(format!(
