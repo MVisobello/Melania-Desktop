@@ -117,6 +117,7 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
     let udev=UdevBackend::new(session.seat())?;
     let mut scanned=0usize;
     let mut initialized=0usize;
+    let mut rendered_offscreen=0usize;
     for (_,path) in udev.device_list() {
         scanned+=1;
         let descriptor=match session.open(
@@ -179,7 +180,10 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
                     // Explicitly isolated 64x64 GPU render test: no output
                     // modeset, page flip, KMS surface or monitor interaction.
                     match melania_native::renderer::smoke_render_gbm_offscreen(device.device_fd().clone()) {
-                        Ok(())=>println!("Melania native offscreen GLES frame: OK (NOT displayed)"),
+                        Ok(())=>{
+                            rendered_offscreen+=1;
+                            println!("Melania native offscreen GLES frame: OK (NOT displayed)");
+                        },
                         Err(error)=>eprintln!("Melania native offscreen GLES frame: {error}"),
                     }
                 }
@@ -193,6 +197,11 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
     drop(notifier);
     println!("Melania native stage2: scanned={scanned}, initialized={initialized}");
     println!("NATIVE_SESSION_READY=false");
+    // Offscreen is an explicit rendering test: never return success unless
+    // at least one GPU actually rendered and synchronized a frame.
+    if render_offscreen && rendered_offscreen==0 {
+        return Err("No GPU produced an offscreen frame".into());
+    }
     Ok(())
 }
 
