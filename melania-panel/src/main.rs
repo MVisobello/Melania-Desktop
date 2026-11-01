@@ -522,6 +522,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // Keep the search field under the application column and the power
     // controls on the right, in the same places as Windows 7.
     query.set_hexpand(false);
+    query.set_valign(gtk::Align::Center);
     query.set_size_request(300,-1);
     footer.append(&query);
     let footer_spacer=GtkBox::new(Orientation::Horizontal,0);
@@ -530,6 +531,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     // One power menu button, not a split dropdown. Opening it never changes
     // the host's power state; each available choice still requires confirmation.
     let power=gtk::MenuButton::new();
+    power.set_valign(gtk::Align::Center);
     power.set_child(Some(&classic_control_glyph("power",light_controls)));
     power.add_css_class("melania-power-icon-button");
     power.set_tooltip_text(Some("Opzioni di alimentazione e sessione"));
