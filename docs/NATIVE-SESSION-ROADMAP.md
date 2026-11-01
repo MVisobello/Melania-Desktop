@@ -81,6 +81,24 @@ Il prossimo passo consiste in opening dei DRM FD **attraverso la sessione**,
 creazione GBM/EGL, mapping CRTC/output, pause/resume degli output, input
 libinput e avvio dei client Wayland.
 
+## Acquisizione dispositivi DRM — fase 2 sperimentale
+
+Il percorso Rust opt-in --experimental-drm inizializza libseat, rileva i
+dispositivi primari con Smithay/UdevBackend, apre i loro file descriptor
+attraverso Session::open con i flag RDWR/CLOEXEC/NOCTTY/NONBLOCK, costruisce
+DrmDeviceFd e interroga i CRTC disponibili con DrmDevice. Imposta
+disable_connectors=false per non azzerare intenzionalmente i connettori
+esistenti. Rilascia il dispositivo al termine dell'ispezione, senza creare
+buffer, surface KMS, mode setting, renderer o client Wayland.
+
+La modalità è riservata esclusivamente a una VM/TTY Linux dedicata con opt-in
+MELANIA_EXPERIMENTAL_SEAT=1; non si avvia da Start, dal login o dalla CI.
+Nessun hardware DRM reale viene aperto nei runner GitHub.
+
+L'acquisizione DRM master può temporaneamente interagire con le risorse
+grafiche della console: **non usare la prova sulla macchina di lavoro**.
+Anche qui NATIVE_SESSION_READY=false: non è una sessione desktop.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
