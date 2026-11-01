@@ -26,6 +26,7 @@ class RealNestedUI(unittest.TestCase):
         for term in ("scrot -z -o reports/nested-wayland-full-desktop.png",
                      "from PIL import Image",
                      "tools/check_shared_window_chrome.py",
+                     'target/debug/melania-winctl activate "$SETTINGS_ID"',
                      "MELANIA_RENDER .*xdg=[1-9]",
                      "MELANIA_FILES_LISTING_READY",
                      "MELANIA_START_SEARCH_RECEIVED",
