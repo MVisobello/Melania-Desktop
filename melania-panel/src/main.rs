@@ -297,6 +297,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                 Err(error) => eprintln!("Melania app launch: {error}"),
             }
         });
+        attach_pin_context(&button,program.to_string());
         apps_box.append(&button);
         searchable.push((button,name.to_lowercase(),false));
     }
@@ -322,6 +323,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         button.set_child(Some(&row));
         let menu=w.clone();
         let history_id=app_info.id().map(|id| id.to_string());
+        let pin_id=history_id.clone();
         button.connect_clicked(move |_| {
             match app_info.launch(&[],None::<&gio::AppLaunchContext>) {
                 Ok(())=>{
@@ -331,6 +333,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                 Err(e)=>eprintln!("Melania app launch: {e}")
             }
         });
+        if let Some(id)=pin_id {attach_pin_context(&button,id);}
         apps_box.append(&button);
         searchable.push((button,name.to_lowercase(),false));
     }
@@ -879,19 +882,18 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                 }
                 return;
             };
-            if last.borrow().as_ref() == Some(&windows) {return;}
-            // A running Melania application replaces its launcher, rather
-            // than showing a duplicate icon elsewhere on the taskbar.
-            for (command, button) in pinned_buttons.borrow().iter() {
-                let running = windows.iter().any(|w| {
-                    if command == "melania-files" {
-                        w.app_id.eq_ignore_ascii_case("org.melaniadesktop.Files")
-                    } else {
-                        w.app_id.eq_ignore_ascii_case("org.melaniadesktop.Settings")
-                    }
-                });
+            // New pins may be added without any change to running windows.
+            for (id,button) in pinned_buttons.borrow().iter() {
+                let app_id=match id.as_str() {
+                    "melania-files"=>"org.melaniadesktop.Files",
+                    "melania-settings"=>"org.melaniadesktop.Settings",
+                    _=>id.trim_end_matches(".desktop")
+                };
+                let running=windows.iter().any(|w|
+                    w.app_id.trim_end_matches(".desktop").eq_ignore_ascii_case(app_id));
                 button.set_visible(!running);
             }
+            if last.borrow().as_ref() == Some(&windows) {return;}
             while let Some(child) = target.first_child() {target.remove(&child);}
             for group in window_groups::group_windows(&windows, group_enabled) {
                 // Grouped applications use a native, keyboard-accessible GTK
@@ -1342,51 +1344,21 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         else{start_button.remove_css_class("melania-start-open");}
     });
     bar.append(&menu);
-    // App pins are genuine GTK drop targets. Dragging reorders the buttons.
-    // A dropped file is NOT silently moved/deleted, and cannot execute arbitrary .desktop files.
+    // All installed .desktop applications are pinnable. Changes from Start
+    // appear automatically in the taskbar without restarting the session.
     let pinned=GtkBox::new(Orientation::Horizontal,6);
-    let pinned_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
-    let pins=load_pins();
-    let pinned_order=Rc::new(RefCell::new(pins.clone()));
-    for id in pins {
-        let (label_name,program):(&str,&'static str)=match id.as_str() {
-            "melania-settings"=>("Impostazioni","melania-settings"),
-            _=>("File","melania-files"),
-        };
-        let b=app_button(label_name,program);
-        let drag=gtk::DragSource::new();drag.set_actions(gdk::DragAction::MOVE);
-        drag.connect_prepare(move |_,_,_|Some(gdk::ContentProvider::for_value(&program.to_value())));
-        b.add_controller(drag);
-        let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
-        let order=pinned_order.clone();let area=pinned.clone();let destination=b.clone();
-        drop.connect_drop(move |_,value,_,_| {
-            let Ok(src)=value.get::<String>() else{return false;};
-            if !["melania-files","melania-settings"].contains(&src.as_str()) {return false;}
-            let ids_new = {
-                let mut ids=order.borrow_mut();
-                let Some(from)=ids.iter().position(|v|v==&src) else{return false;};
-                let Some(to)=ids.iter().position(|v|v==program) else{return false;};
-                let id=ids.remove(from); ids.insert(to,id);
-                ids.clone()
-            };
-            if let Err(e)=save_pins(&ids_new){eprintln!("Melania: cannot save pins: {e}");}
-            // Update the GTK widget order to match the new model order.
-            let mut widgets=Vec::new();let mut current=area.first_child();
-            while let Some(child)=current {current=child.next_sibling();widgets.push(child);}
-            let mut previous:Option<gtk::Widget>=None;
-            for id in ids_new {
-                if let Some(widget)=widgets.iter().find(|w|w.widget_name().as_str()==id) {
-                    area.reorder_child_after(widget,previous.as_ref());
-                    previous=Some(widget.clone());
-                }
-            }
-            destination.grab_focus();true
-        });
-        b.add_controller(drop);
-        b.set_widget_name(program);
-        pinned_buttons.borrow_mut().push((program.to_string(), b.clone()));
-        pinned.append(&b);
-    }
+    let pinned_buttons:Rc<RefCell<Vec<(String,Button)>>>=Rc::new(RefCell::new(Vec::new()));
+    let pinned_order:Rc<RefCell<Vec<String>>>=Rc::new(RefCell::new(Vec::new()));
+    populate_pins(&pinned,&pinned_buttons,&pinned_order);
+    let pinned_area=pinned.clone();
+    let pinned_widgets=pinned_buttons.clone();
+    let pinned_ids=pinned_order.clone();
+    glib::timeout_add_local(Duration::from_millis(800),move ||{
+        if load_pins()!=*pinned_ids.borrow(){
+            populate_pins(&pinned_area,&pinned_widgets,&pinned_ids);
+        }
+        glib::ControlFlow::Continue
+    });
     bar.append(&pinned);
     // XFCE-like horizontal overflow rather than squeezing or hiding windows.
     // The original running-window buttons remain untouched inside the viewport.
