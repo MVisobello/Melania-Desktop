@@ -137,6 +137,21 @@ fn experimental_drm() -> Result<(),Box<dyn Error>> {
                 initialized+=1;
                 println!("Melania DRM {}: atomic={} CRTCs={}",
                     path.display(),device.is_atomic(),device.crtcs().len());
+                // Inspect only: never call set_crtc, reset_state or surface
+                // creation. No mode is applied by this probe.
+                match melania_native::outputs::inspect_connectors(device.device_fd()) {
+                    Ok(connectors) => {
+                        println!("Melania DRM connectors on {}: {}",path.display(),connectors.len());
+                        for conn in connectors {
+                            let suggested=conn.recommendation.as_ref()
+                                .map(|m|format!("{}x{}@{}Hz",m.width,m.height,m.refresh_hz))
+                                .unwrap_or_else(||"none".into());
+                            println!("Melania connector {}: connected={} modes={} candidate={} (NOT applied)",
+                                conn.name,conn.connected,conn.advertised_modes.len(),suggested);
+                        }
+                    }
+                    Err(error)=>eprintln!("Melania DRM inventory {}: {error}",path.display()),
+                }
                 // Device ownership and DRM master return to libseat on drop.
             }
             Err(error)=>{

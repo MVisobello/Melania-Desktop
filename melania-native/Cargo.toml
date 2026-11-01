@@ -12,3 +12,6 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "backend_udev", "backend_session_libseat"
 ] }
 calloop = "0.14"
+
+# Read-only KMS connector/mode inventory; same drm-rs version as Smithay 0.7.
+drm = "0.14"
