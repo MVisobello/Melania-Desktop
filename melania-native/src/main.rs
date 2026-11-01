@@ -152,6 +152,19 @@ fn experimental_drm() -> Result<(),Box<dyn Error>> {
                     }
                     Err(error)=>eprintln!("Melania DRM inventory {}: {error}",path.display()),
                 }
+                // Determine whether a one-to-one connector/CRTC assignment is
+                // even possible before considering any GBM or KMS output.
+                // This only reads drm-rs encoder compatibility bitmasks.
+                match melania_native::outputs::inspect_output_routes(device.device_fd()) {
+                    Ok(routes)=>{
+                        let plan=melania_native::outputs::plan_crtc_routes(&routes);
+                        println!("Melania DRM viable CRTC routes: {}/{} (NOT activated)",plan.len(),routes.len());
+                        for (connector,crtc) in plan {
+                            println!("Melania route {connector} => CRTC {crtc} (NOT applied)");
+                        }
+                    }
+                    Err(error)=>eprintln!("Melania DRM routes {}: {error}",path.display()),
+                }
                 // Device ownership and DRM master return to libseat on drop.
             }
             Err(error)=>{
