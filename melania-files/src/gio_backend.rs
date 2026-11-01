@@ -337,7 +337,14 @@ pub fn list_local_entries(dir:&Path,query:&str,options:model::ListingOptions,
                           cancel:&Arc<AtomicBool>)->io::Result<Vec<model::Entry>> {
     let uri=gio::File::for_path(dir).uri().to_string();
     let result=list_uri_bounded(&uri,query,options.show_hidden,options.max_entries,cancel)
-        .map_err(|e|io::Error::new(io::ErrorKind::Other,e))?;
+        .map_err(|e|{
+            let kind=if cancel.load(Ordering::Acquire){
+                io::ErrorKind::Interrupted
+            }else{
+                io::ErrorKind::Other
+            };
+            io::Error::new(kind,e)
+        })?;
     let mut entries=Vec::with_capacity(result.items.len());
     for item in result.items {
         if cancel.load(Ordering::Acquire) {
