@@ -17,10 +17,14 @@ libseat/logind completo.
   Start o sulla barra), riordino e persistenza locale degli ID validati.
 - Desktop virtuali selezionabili da un unico pulsante; orologio stile Windows
   con **ora sopra la data**, entrambe allineate al medesimo margine destro.
-- Melania Files: trasferimenti locali sicuri con copia e spostamento non
-  sovrascrivente. Il test automatico della CLI esercita byte reali in cartelle
-  temporanee, inclusi collisioni e symlink. Integrazione completa
-  GVfs/SMB/Qt/XWayland e parità con Nautilus restano da fare.
+- Melania Files: navigazione locale a schede e trasferimenti non sovrascriventi.
+  Una prima modalità GIO/GVfs permette di aprire schede URI (Rete, SMB, SFTP,
+  WebDAV con backend GVfs disponibili), copiare file e cartelle tra locale
+  e remoto, rinominare, creare cartelle, usare Cestino e preferiti URI.
+  La build, il test Wayland e la scheda GIO file:/// reale sono verificati in CI.
+  Restano da implementare l'unificazione completa PathBuf → gio::File,
+  autenticazione/mount interattivi, MOVE cross-app e parità Nautilus.
+  Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md).
 
 ## Avvio e sicurezza
 
