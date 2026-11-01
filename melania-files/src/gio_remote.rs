@@ -38,6 +38,9 @@ struct Remote {
     listing_pending: Rc<RefCell<Option<RemoteListingRequest>>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     job_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    rename_history:Rc<RefCell<RenameHistory>>,
+    undo_button:Button,
+    redo_button:Button,
     copy_progress: Rc<RefCell<Option<Arc<gio_backend::CopyProgress>>>>,
     transfer_bar: gtk::ProgressBar,
     mount_cancel: Rc<RefCell<Option<gio::Cancellable>>>,
@@ -474,8 +477,36 @@ fn render_row(remote:&Remote,item:Item) {
     remote.rows.append(&button);
 }
 
+#[derive(Clone,Default)]
+struct RenameHistory {
+    undo:Option<gio_backend::RenameReceipt>,
+    redo:Option<gio_backend::RenameReceipt>,
+}
+enum HistoryChange {
+    Clear,
+    New(Option<gio_backend::RenameReceipt>),
+    Undo,
+    Redo,
+}
+struct JobCompletion {
+    message:String,
+    change:HistoryChange,
+}
+fn sync_history_buttons(remote:&Remote) {
+    let history=remote.rename_history.borrow();
+    remote.undo_button.set_sensitive(history.undo.is_some());
+    remote.redo_button.set_sensitive(history.redo.is_some());
+}
 fn run_job<F>(remote:&Remote,description:&str,work:F)
 where F:FnOnce(Arc<AtomicBool>)->Result<String,String> + Send + 'static {
+    run_job_history(remote,description,move |cancel|{
+        work(cancel).map(|message|JobCompletion {
+            message,change:HistoryChange::Clear
+        })
+    });
+}
+fn run_job_history<F>(remote:&Remote,description:&str,work:F)
+where F:FnOnce(Arc<AtomicBool>)->Result<JobCompletion,String> + Send + 'static {
     if remote.job_cancel.borrow().is_some(){
         remote.status.set_text("Un trasferimento è già in corso; annullalo prima di riprovare.");
         return;
@@ -484,15 +515,35 @@ where F:FnOnce(Arc<AtomicBool>)->Result<String,String> + Send + 'static {
     *remote.job_cancel.borrow_mut()=Some(cancelled.clone());
     remote.status.set_text(description);
     let (tx,rx)=std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {let _=tx.send(work(cancelled));});
+    std::thread::spawn(move ||{let _=tx.send(work(cancelled));});
     let state=remote.clone();
-    glib::timeout_add_local(Duration::from_millis(70),move || match rx.try_recv() {
-        Ok(Ok(message))=>{
+    glib::timeout_add_local(Duration::from_millis(70),move || match rx.try_recv(){
+        Ok(Ok(done))=>{
             state.job_cancel.borrow_mut().take();
             state.copy_progress.borrow_mut().take();
             state.transfer_bar.set_visible(false);
+            {
+                let mut history=state.rename_history.borrow_mut();
+                match done.change {
+                    HistoryChange::Clear=>{
+                        history.undo=None;
+                        history.redo=None;
+                    },
+                    HistoryChange::New(receipt)=>{
+                        history.undo=receipt;
+                        history.redo=None;
+                    },
+                    HistoryChange::Undo=>{
+                        history.redo=history.undo.take();
+                    },
+                    HistoryChange::Redo=>{
+                        history.undo=history.redo.take();
+                    },
+                }
+            }
+            sync_history_buttons(&state);
             refresh(&state);
-            state.status.set_text(&message);
+            state.status.set_text(&done.message);
             glib::ControlFlow::Break
         },
         Ok(Err(error))=>{
@@ -521,7 +572,6 @@ where F:FnOnce(Arc<AtomicBool>)->Result<String,String> + Send + 'static {
         },
     });
 }
-
 fn copy_sources(remote:&Remote,uris:Vec<String>) {
     if remote.job_cancel.borrow().is_some(){
         remote.status.set_text("Un trasferimento è già in corso.");
@@ -624,6 +674,12 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     rename_field.set_placeholder_text(Some("Nuovo nome"));
     rename_field.set_width_chars(15);
     let rename=Button::with_label("Rinomina");
+    let undo=Button::with_label("Annulla rinomina");
+    undo.set_tooltip_text(Some("Ctrl+Z: annulla l'ultima rinomina verificabile"));
+    undo.set_sensitive(false);
+    let redo=Button::with_label("Ripeti rinomina");
+    redo.set_tooltip_text(Some("Ctrl+Maiusc+Z: ripeti la rinomina annullata"));
+    redo.set_sensitive(false);
     let blank_field=Entry::new();
     blank_field.set_placeholder_text(Some("Nome nuovo file"));
     blank_field.set_width_chars(14);
@@ -643,6 +699,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     for button in [&copy,&paste] {actionbar.append(button);}
     actionbar.append(&rename_field);
     actionbar.append(&rename);
+    actionbar.append(&undo);
+    actionbar.append(&redo);
     actionbar.append(&blank_field);
     actionbar.append(&blank);
     actionbar.append(&folder_field);
@@ -698,6 +756,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         listing_pending:Rc::new(RefCell::new(None)),
         listing_cancel:Rc::new(RefCell::new(None)),
         job_cancel:Rc::new(RefCell::new(None)),
+        rename_history:Rc::new(RefCell::new(RenameHistory::default())),
+        undo_button:undo.clone(),
+        redo_button:redo.clone(),
         copy_progress:Rc::new(RefCell::new(None)),
         transfer_bar,
         mount_cancel:Rc::new(RefCell::new(None)),
@@ -830,9 +891,40 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
             ui.status.set_text("Seleziona un file da rinominare.");return;
         };
         let name=rename_name.text().to_string();
-        run_job(&ui,"Rinomina tramite GIO…",move |_|{
-            gio_backend::rename_item(&selected.uri,&name)?;
-            Ok("Elemento rinominato.".to_string())
+        run_job_history(&ui,"Rinomina tramite GIO…",move |_|{
+            let (_,receipt)=gio_backend::rename_with_receipt(&selected.uri,&name)?;
+            let message=if receipt.is_some(){
+                "Elemento rinominato: puoi usare Annulla rinomina."
+            }else{
+                "Elemento rinominato. Annulla non disponibile: identificativo GVfs non verificabile."
+            };
+            Ok(JobCompletion {
+                message:message.to_string(),change:HistoryChange::New(receipt),
+            })
+        });
+    });
+    let ui=state.clone();
+    undo.connect_clicked(move |_|{
+        let receipt=ui.rename_history.borrow().undo.clone();
+        let Some(receipt)=receipt else{return;};
+        run_job_history(&ui,"Ripristino del nome precedente…",move |_|{
+            gio_backend::replay_rename(&receipt,true)?;
+            Ok(JobCompletion {
+                message:"Ultima rinomina annullata.".into(),
+                change:HistoryChange::Undo,
+            })
+        });
+    });
+    let ui=state.clone();
+    redo.connect_clicked(move |_|{
+        let receipt=ui.rename_history.borrow().redo.clone();
+        let Some(receipt)=receipt else{return;};
+        run_job_history(&ui,"Ripetizione della rinomina…",move |_|{
+            gio_backend::replay_rename(&receipt,false)?;
+            Ok(JobCompletion{
+                message:"Rinomina ripetuta.".into(),
+                change:HistoryChange::Redo,
+            })
         });
     });
     let ui=state.clone();
@@ -932,11 +1024,26 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let search_entry=state.search.clone();
     let copy_button=copy.clone();
     let paste_button=paste.clone();
+    let undo_button=undo.clone();
+    let redo_button=redo.clone();
+    let rename_entry=rename_field.clone();
+    let blank_entry=blank_field.clone();
+    let folder_entry=folder_field.clone();
     let hidden_button=show_hidden.clone();
     let properties_button=properties.clone();
     keyboard.connect_key_pressed(move |_,key,_,modifiers|{
         if key==gdk::Key::F5 {refresh_button.emit_clicked();return glib::Propagation::Stop;}
         if modifiers.contains(gdk::ModifierType::CONTROL_MASK){
+            // Preserve ordinary GTK Entry editing shortcuts.
+            let is_editing=location_entry.has_focus() || search_entry.has_focus()
+                || rename_entry.has_focus() || blank_entry.has_focus()
+                || folder_entry.has_focus();
+            if !is_editing && key==gdk::Key::z {
+                if modifiers.contains(gdk::ModifierType::SHIFT_MASK){
+                    if redo_button.is_sensitive(){redo_button.emit_clicked();}
+                }else if undo_button.is_sensitive(){undo_button.emit_clicked();}
+                return glib::Propagation::Stop;
+            }
             if key==gdk::Key::h {
                 hidden_button.set_active(!hidden_button.is_active());
                 return glib::Propagation::Stop;
