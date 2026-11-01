@@ -9,6 +9,8 @@ This milestone retains the existing Melania UI and uses Nautilus as a *functiona
 - Atomic Linux `renameat2(RENAME_NOREPLACE)` via the existing `melania-transfer::rename_local`. Neither existing targets nor broken symlinks are replaced. On a partial failure prior moves are reversed; if rollback itself fails the paths are shown prominently rather than falsely reporting completion.
 - Rust regression tests for successful renaming, injected partial failure/rollback, late destination collision, broken symlink collision and failed rollback.
 - Recursive search now runs outside the GTK main loop. Closing the results window sets a cancellation flag checked before each directory and entry; directory/result bounds remain in place.
+- MIME-aware Open With dialog populated from real GIO desktop handlers. Explicit per-app `Predefinita` action updates Linux user MIME associations; errors are shown in the window.
+- Explicit one-way import of existing local `gtk-3.0`/`gtk-4.0` Nautilus bookmarks. Does not mutate Nautilus bookmarks; remote URI bookmarks are reported as skipped.
 
 ## Existing features (main)
 
@@ -18,7 +20,7 @@ Local tabs, two views, multi-selection Ctrl/Shift/Ctrl+A, file transfer with bac
 
 - A `gio::File` URI-based browser model and GVfs backends for SMB, SFTP, WebDAV and remote search/operations.
 - Mount/unmount/eject flows, authentication, volume management and in-app Trash recovery.
-- Tree view, rich list columns, per-view preferences, file permission editor, ACLs, Open With dialog, default MIME associations.
+- Tree view, richer list customization, per-view preferences, file permission editor and ACLs. The new Open With picker and MIME defaults need real-world desktop coverage.
 - Thumbnails for PDF/video, remote thumbnail policy, fast indexed/content search and star metadata.
 - Extensible scripts/plugins, archive integrations, robust undo/redo transactions, resumable operations, drag-and-drop MOVE across applications, XWayland parity, complete Nautilus accessibility/HiDPI.
 - Real-world Linux/Wayland testing of this specific branch beyond GitHub Actions.
