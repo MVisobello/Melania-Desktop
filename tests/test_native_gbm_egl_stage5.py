@@ -19,7 +19,7 @@ class NativeGbmEglStage5(unittest.TestCase):
         self.assertIn("EGLDisplay::new(gbm)",RENDERER)
         self.assertIn("EGLContext::new(&display)",RENDERER)
         self.assertIn("GlesRenderer::new(context)",RENDERER)
-        self.assertIn("dmabuf_render_formats().len()",RENDERER)
+        self.assertIn("dmabuf_render_formats().iter().count()",RENDERER)
 
     def test_hardware_probe_only_after_tty_guard_and_seat_open(self):
         self.assertIn("assert_dedicated_console();",MAIN)
