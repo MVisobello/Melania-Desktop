@@ -16,7 +16,7 @@ class NativeInputStage20(unittest.TestCase):
         stage=MAIN.split("fn experiment()",1)[1].split("/// Stage2",1)[0]
         for token in (
             "Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(",
-            "session.clone().into()", "input_context.udev_assign_seat(&seat_name)?",
+            "session.clone().into()", "input_context.udev_assign_seat(&seat_name)",
             "LibinputInputBackend::new(input_context.clone())",
             "insert_source(input_backend", "InputEvent::DeviceAdded",
             "InputEvent::DeviceRemoved", "DeviceCapability::Keyboard",
