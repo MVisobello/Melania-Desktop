@@ -21,7 +21,6 @@ class LiveSystemSettings(unittest.TestCase):
         self.assertIn('apply.connect_clicked(move |_|', PAGES)
         self.assertIn('refresh.connect_clicked(move |_|', PAGES)
         self.assertIn('if muted {"Riattiva audio"} else {"Disattiva audio"}', PAGES)
-        self.assertIn('Non disponibile', PAGES) if False else None
 
     def test_wifi_is_an_explicit_networkmanager_action(self):
         self.assertIn("mod connectivity_controls;", MAIN)
