@@ -87,24 +87,10 @@ pub fn preferred_apps_page() -> GtkBox {
     let body=GtkBox::new(Orientation::Vertical,12);
     body.add_css_class("settings-body");
     body.append(&message("Applicazioni preferite","settings-heading"));
-    body.append(&message(
-        "Come in XFCE: scegli le applicazioni predefinite usando associazioni reali del sistema. "
-        ,"settings-subtitle"));
-    body.append(&message(
-        "Le preferenze XDG sono condivise con le altre sessioni Linux dell'utente. "
-        ,"settings-row-description"));
     body.append(&association_row("Browser web",
         "Per i collegamenti http e https.","x-scheme-handler/http",true));
     body.append(&association_row("Posta elettronica",
         "Per i collegamenti mailto.","x-scheme-handler/mailto",false));
-    body.append(&message("Gestore file e terminale",
-        "settings-section-heading"));
-    body.append(&message(
-        "La scelta del file manager e del terminale predefiniti richiede l'integrazione dei launcher "
-        ,"settings-row-description"));
-    body.append(&message(
-        "della sessione Melania. Non viene cambiata di nascosto l'applicazione del desktop ospitante.",
-        "settings-row-description"));
     body
 }
 
@@ -112,12 +98,6 @@ pub fn mime_page() -> GtkBox {
     let body=GtkBox::new(Orientation::Vertical,12);
     body.add_css_class("settings-body");
     body.append(&message("Associazioni MIME","settings-heading"));
-    body.append(&message(
-        "Seleziona l'applicazione predefinita per un tipo di file o protocollo. "
-        ,"settings-subtitle"));
-    body.append(&message(
-        "La modifica avviene mediante GIO/XDG, è persistente ed è condivisa con le altre sessioni dell'utente.",
-        "settings-row-description"));
     for (title,mime) in [
         ("Testi semplici","text/plain"),("Documenti PDF","application/pdf"),
         ("Immagini PNG","image/png"),("Immagini JPEG","image/jpeg"),
