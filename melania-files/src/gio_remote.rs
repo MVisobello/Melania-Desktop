@@ -184,6 +184,46 @@ fn copy_sources(remote:&Remote,uris:Vec<String>) {
     });
 }
 
+fn open_bookmarks_dialog(remote:&Remote){
+    let window=gtk::Window::builder().title("Posizioni di rete preferite — Melania Files")
+        .default_width(530).default_height(390).build();
+    let content=GtkBox::new(Orientation::Vertical,8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    let scroller=ScrolledWindow::new();
+    scroller.set_vexpand(true);
+    let rows=GtkBox::new(Orientation::Vertical,4);
+    match gio_backend::remote_bookmarks_path()
+        .and_then(|path|gio_backend::read_bookmarks(&path)){
+        Ok(locations) if locations.is_empty()=>{
+            rows.append(&Label::new(Some("Nessun indirizzo di rete salvato.")));
+        },
+        Ok(locations)=>{
+            for uri in locations {
+                let button=Button::with_label(&uri);
+                let active=remote.clone();
+                let dialog=window.clone();
+                button.connect_clicked(move |_|{
+                    navigation(&active,uri.clone(),true);
+                    dialog.close();
+                });
+                rows.append(&button);
+            }
+        },
+        Err(e)=>rows.append(&Label::new(Some(&e))),
+    }
+    scroller.set_child(Some(&rows));
+    content.append(&scroller);
+    let close=Button::with_label("Chiudi");
+    let win=window.clone();
+    close.connect_clicked(move |_|win.close());
+    content.append(&close);
+    window.set_child(Some(&content));
+    window.present();
+}
+
 pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let root=GtkBox::new(Orientation::Vertical,0);
     let toolbar=GtkBox::new(Orientation::Horizontal,5);
@@ -220,6 +260,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     folder_field.set_width_chars(16);
     let folder=Button::with_label("Nuova cartella");
     let trash=Button::with_label("Cestino");
+    let add_bookmark=Button::with_label("☆ Preferito");
+    let remove_bookmark=Button::with_label("− Preferito");
+    let bookmarks=Button::with_label("Preferiti rete");
     let cancel=Button::with_label("Annulla operazione");
     for button in [&copy,&paste] {actionbar.append(button);}
     actionbar.append(&rename_field);
@@ -227,6 +270,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     actionbar.append(&folder_field);
     actionbar.append(&folder);
     actionbar.append(&trash);
+    actionbar.append(&add_bookmark);
+    actionbar.append(&remove_bookmark);
+    actionbar.append(&bookmarks);
     actionbar.append(&cancel);
     let actions_scroll=ScrolledWindow::new();
     actions_scroll.set_policy(gtk::PolicyType::Automatic,gtk::PolicyType::Never);
@@ -357,6 +403,24 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
             Ok("Elemento spostato nel Cestino.".to_string())
         });
     });
+    let ui=state.clone();
+    add_bookmark.connect_clicked(move |_|{
+        let uri=ui.current.borrow().clone();
+        match gio_backend::add_bookmark(&uri){
+            Ok(_)=>ui.status.set_text("Percorso GVfs salvato nei preferiti di Melania."),
+            Err(error)=>ui.status.set_text(&format!("Preferito non salvato: {error}")),
+        }
+    });
+    let ui=state.clone();
+    remove_bookmark.connect_clicked(move |_|{
+        let uri=ui.current.borrow().clone();
+        match gio_backend::remove_bookmark(&uri){
+            Ok(_)=>ui.status.set_text("Percorso rimosso dai preferiti."),
+            Err(error)=>ui.status.set_text(&format!("Impossibile aggiornare i preferiti: {error}")),
+        }
+    });
+    let ui=state.clone();
+    bookmarks.connect_clicked(move |_|open_bookmarks_dialog(&ui));
     let ui=state.clone();
     cancel.connect_clicked(move |_|{
         if let Some(flag)=ui.job_cancel.borrow().as_ref(){
