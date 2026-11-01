@@ -130,11 +130,23 @@ jobs:
       - name: Install compositor development packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config build-essential libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev
+          sudo apt-get install -y pkg-config build-essential libwayland-dev libxkbcommon-dev libgtk4-layer-shell-dev libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev libinput-dev
       - name: Build real Linux desktop binaries
         run: |
           set -o pipefail
           cargo build -p melania-compositor -p melania-control -p melania-files -p melania-desktop-surface -p melania-panel -p melania-settings 2>&1 | tee compositor-build.log
+      - name: Compile and test native libseat/udev/DRM stage1
+        run: |
+          set -o pipefail
+          cargo test -p melania-native --all-targets 2>&1 | tee native-stage1-tests.log
+          cargo run -p melania-native -- --capabilities 2>&1 | tee native-stage1-capabilities.log
+          grep -q 'NATIVE_SESSION_READY=false' native-stage1-capabilities.log
+          # This deliberately cannot acquire devices on a GitHub runner.
+          if MELANIA_EXPERIMENTAL_SEAT=1 cargo run -p melania-native -- --experimental-seat > native-stage1-denied.log 2>&1; then
+            echo 'ERROR: native stage1 acquired a seat without a dedicated TTY' >&2
+            exit 1
+          fi
+          grep -q 'NATIVE_STAGE1_BLOCKED' native-stage1-denied.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -151,4 +163,8 @@ jobs:
         if: always()
         with:
           name: compositor-build-log
-          path: compositor-build.log
+          path: |
+            compositor-build.log
+            native-stage1-tests.log
+            native-stage1-capabilities.log
+            native-stage1-denied.log
