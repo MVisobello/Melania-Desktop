@@ -50,6 +50,11 @@ class NativeInputStage20(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_INPUT_ENUMERATED",HOST)
         self.assertIn("MELANIA_NATIVE_INPUT_WAYLAND_READY=false",HOST)
         self.assertIn("MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true",HOST)
+        self.assertIn("-device qemu-xhci,id=melania-usb",HOST)
+        self.assertIn("-device usb-kbd,bus=melania-usb.0",HOST)
+        self.assertIn("-device usb-tablet,bus=melania-usb.0",HOST)
+        self.assertIn("keyboards=[1-9][0-9]* pointers=[1-9][0-9]*",HOST)
+        self.assertIn("virtual_USB_keyboard_or_pointer_not_enumerated",GUEST)
         self.assertIn("MELANIA_QEMU_NATIVE_RESULT=FAIL",HOST)
         self.assertIn("MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false",HOST)
 
