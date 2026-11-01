@@ -32,9 +32,9 @@ class XfceSettingsParity(unittest.TestCase):
         self.assertNotIn('("Impostazioni complete XFCE", "xfce"', SOURCE)
 
         # The same registry drives sidebar construction and CLI validation.
-        match = re.search(r'const SETTINGS_NAVIGATION:.*?= \\[(.*?)\\];', SOURCE, re.S)
+        match = re.search(r'const SETTINGS_NAVIGATION:.*?= \[(.*?)\];', SOURCE, re.S)
         self.assertIsNotNone(match)
-        navigation = re.findall(r'^\\s*\\("[^"]+",\\s*"([^"]+)",\\s*"[^"]+"\\),',
+        navigation = re.findall(r'^\s*\("[^"]+",\s*"([^"]+)",\s*"[^"]+"\),',
                                 match.group(1), re.M)
         self.assertEqual(len(navigation), 25)
         self.assertEqual(len(set(navigation)), 25)
@@ -47,7 +47,7 @@ class XfceSettingsParity(unittest.TestCase):
         gnome = (ROOT / "melania-settings/src/gnome_pages.rs").read_text()
         all_sources = main + gnome + PAGES
         registered = set(re.findall(
-            r'stack\\.add_titled\\([^;]*?Some\\("([^"]+)"\\)', all_sources, re.S
+            r'stack\.add_titled\([^;]*?Some\("([^"]+)"\)', all_sources, re.S
         ))
         self.assertEqual(set(navigation), registered)
         self.assertNotIn("Non ancora operativo", PAGES)
