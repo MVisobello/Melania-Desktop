@@ -501,6 +501,48 @@ backend nativo **nella VM con un seat e una TTY dedicati**,
 con test dei percorsi DRM in sola lettura e successiva prova
 atomica `TEST_ONLY` protetta, senza mai compromettere l'host.
 
+## Fase 17 — esecuzione del vero backend Rust dentro una VM VirtIO
+
+Il workflow `.github/workflows/qemu-melania-native.yml` **compila**
+`cargo build -p melania-native` su un runner Ubuntu 24.04, esegue i
+test Rust, e trasporta l'ELF nativo tramite una ISO read-only in una VM
+Ubuntu 24.04 con `-vga virtio`, QEMU TCG e disco overlay temporaneo.
+Il guest installa le librerie native e `seatd` (il socket/servizio deve
+funzionare): la prova usa `/dev/tty1` come stdin, non una PTY o SSH,
+imposta `LIBSEAT_BACKEND=seatd` e abilita gli opt-in richiesti
+`MELANIA_EXPERIMENTAL_SEAT=1` e
+`MELANIA_KMS_TEST_ONLY=YES_QEMU_VM`. La verifica DMI e TTY è ripetuta
+**nel vero binario** prima di aprire la GPU. Lo script di avvio si
+chiama `scripts/run-qemu-melania-native.sh`, e il codice guest
+`scripts/melania-qemu-native-guest.sh`.
+
+La verifica completa richiede che l'**autentico binario** produca
+`Melania QEMU atomic TEST_ONLY passed:` con
+`baseline_unchanged=true`, `resources_unchanged=true`,
+`restore_ready=false visible=false`, e termini con codice 0.
+Non è sufficiente un probe C, `--capabilities` o il rilevamento
+del nodo `/dev/dri/card0`. Un blocco di libseat, la mancanza di
+librerie guest, un rendering EGL/GBM incompatibile o un fallimento
+DRM fanno **fallire** il workflow, conservando il log seriale in
+`qemu-real-melania-native-evidence`. Il watchdog esterno termina
+l'esperimento in caso di blocco.
+
+Se il test KMS passa, significa solo che **TEST_ONLY e rendering
+offscreen hanno funzionato in una GPU emulata** senza osservare
+mutazioni dello stato atomico. Non esistono ancora commit/pageflip
+visibili, ripristino delle risorse DRM kernel o login session nativa.
+La dicitura `MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false` resta
+obbligatoria e il recupero della console **non è garantito** da
+questo test; il collaudo del VT classico resta separato.
+
+**Esecuzione manuale limitata a host di prova QEMU isolato:**
+
+```sh
+cargo build -p melania-native
+MELANIA_QEMU_NATIVE_VM=YES_DISPOSABLE_QEMU \
+  bash scripts/run-qemu-melania-native.sh
+```
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
