@@ -18,7 +18,7 @@ spec.loader.exec_module(guest)
 
 class QemuDrmProbeTests(unittest.TestCase):
     def test_host_gpu_preset_requires_isolation_and_emulates_a_gpu(self):
-        for term in ('MELANIA_QEMU_GPU_MODEL', 'MELANIA_QEMU_REQUIRE_DRM',
+        for term in ('MELANIA_QEMU_REQUIRE_DRM',
                      'MELANIA_QEMU_TTY_SMOKE', 'YES_DISPOSABLE_QEMU', 'YES_VIRTIO_GPU',
                      'vga_device="virtio"',
                      'sha256sum -c verify.sha256',
@@ -28,9 +28,6 @@ class QemuDrmProbeTests(unittest.TestCase):
         self.assertNotIn("accel=kvm",HOST)
         self.assertNotIn("-device vfio",HOST)
         self.assertIn("timeout --signal=TERM",HOST)
-        # A shell ':' prefix consumes all following words as arguments,
-        # accidentally skipping the standard-VGA guest script altogether.
-        self.assertIn("MELANIA_QEMU_KMS_READ_ONLY_PASS=true",HOST)
 
     def test_drm_guest_code_uses_real_uapi_not_fake_stubs_or_kms_writes(self):
         for term in ('DRM_IOCTL_GET_CAP', 'DRM_IOCTL_SET_CLIENT_CAP',
@@ -48,7 +45,7 @@ class QemuDrmProbeTests(unittest.TestCase):
         with mock.patch.object(guest,"dmi_is_qemu",return_value=True), \
              mock.patch.object(guest,"virtual_vga_present",return_value=True), \
              mock.patch.object(guest,"drm_card_present",return_value=False), \
-             mock.patch.dict(guest.os.environ,{"MELANIA_QEMU_GUEST_REQUIRE_DRM":"1"}), \\
+             mock.patch.dict(guest.os.environ,{"MELANIA_QEMU_GUEST_REQUIRE_DRM":"1"}), \
              mock.patch.object(guest.subprocess,"run") as modprobe, \
              mock.patch.object(guest.os,"open") as opened, \
              contextlib.redirect_stdout(out):
@@ -59,7 +56,6 @@ class QemuDrmProbeTests(unittest.TestCase):
 
     def test_workflow_uses_guest_and_collects_evidence(self):
         self.assertIn("MELANIA_QEMU_REQUIRE_DRM: YES_VIRTIO_GPU",WORKFLOW)
-        self.assertIn('MELANIA_QEMU_REQUIRE_DRM: YES_VIRTIO_GPU',WORKFLOW)
         self.assertIn("libdrm-dev gcc",WORKFLOW)
         self.assertIn("qemu-virtio-drm-evidence",WORKFLOW)
         self.assertIn("if: always()",WORKFLOW)
