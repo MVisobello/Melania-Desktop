@@ -184,7 +184,7 @@ fn render_row(remote:&Remote,item:Item) {
         let sources:Vec<String>=if paths.contains(&dragged){
             paths.iter().take(100).cloned().collect()
         }else{vec![dragged.clone()]};
-        let files:Vec<gio::File>=sources.iter().map(gio::File::for_uri).collect();
+        let files:Vec<gio::File>=sources.iter().map(|uri| gio::File::for_uri(uri)).collect();
         let list=gdk::FileList::from_array(&files);
         Some(gdk::ContentProvider::for_value(&list.to_value()))
     });
@@ -404,7 +404,7 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         let Some(display)=gdk::Display::default() else {
             ui.status.set_text("Appunti indisponibili.");return;
         };
-        let files:Vec<gio::File>=selected.iter().map(gio::File::for_uri).collect();
+        let files:Vec<gio::File>=selected.iter().map(|uri| gio::File::for_uri(uri)).collect();
         let list=gdk::FileList::from_array(&files);
         let provider=gdk::ContentProvider::for_value(&list.to_value());
         match display.clipboard().set_content(Some(&provider)){
