@@ -13,6 +13,7 @@ pub mod kms_resources;
 pub mod preflight_guard;
 pub mod device_epoch;
 pub mod rollback_audit;
+pub mod input_registry;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
@@ -34,6 +35,7 @@ pub struct NativeLifecycle {
     devices: BTreeMap<u64, PathBuf>,
     events: u64,
     frame_gate: frame_gate::NativeFrameGate,
+    input_registry: input_registry::NativeInputRegistry,
 }
 
 impl NativeLifecycle {
@@ -41,6 +43,8 @@ impl NativeLifecycle {
     pub fn devices(&self) -> &BTreeMap<u64, PathBuf> { &self.devices }
     pub fn event_count(&self) -> u64 { self.events }
     pub fn frame_gate(&self)->&frame_gate::NativeFrameGate {&self.frame_gate}
+    pub fn input_registry(&self)->&input_registry::NativeInputRegistry {&self.input_registry}
+    pub fn input_registry_mut(&mut self)->&mut input_registry::NativeInputRegistry {&mut self.input_registry}
 
     pub fn on_session(&mut self, event: SessionEvent) {
         self.events = self.events.saturating_add(1);
@@ -50,11 +54,13 @@ impl NativeLifecycle {
                 // must suspend libinput and disable all KMS output managers.
                 self.seat_active = false;
                 self.frame_gate.set_seat_active(false);
+                self.input_registry.set_seat_active(false);
             }
             SessionEvent::ActivateSession => {
                 // Resume must restore all devices before any rendering.
                 self.seat_active = true;
                 self.frame_gate.set_seat_active(true);
+                self.input_registry.set_seat_active(true);
             }
         }
     }
