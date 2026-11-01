@@ -51,7 +51,7 @@ jobs:
             libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgles2-mesa-dev \
             libx11-dev libudev-dev libdbus-1-dev libinput-dev \
             mesa-utils libgl1-mesa-dri xvfb xauth xdotool scrot \
-            python3-pil dbus-user-session
+            python3-pil dbus-user-session dbus-x11
           python3 -c 'from PIL import Image; print("Pillow available")'
       - name: Compile real compositor and all four desktop client binaries
         run: |
@@ -69,11 +69,12 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           GDK_BACKEND: wayland
+          MELANIA_DEBUG_RENDER: "1"
         run: |
           set -euo pipefail
           mkdir -p reports
           xvfb-run -a -s '-screen 0 1280x800x24' \
-            bash scripts/smoke-full-desktop-wayland.sh \
+            dbus-run-session -- bash scripts/smoke-full-desktop-wayland.sh \
             2>&1 | tee reports/full-desktop-e2e.log
           grep -q 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit' \
             reports/full-desktop-e2e.log
