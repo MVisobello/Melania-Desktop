@@ -35,7 +35,7 @@ class AeroContinuity(unittest.TestCase):
         for label in [
             'fn start_window(', 'fn quick_window(', 'fn notifications_window(',
             'fn calendar_window(', 'fn taskbar(', 'fn running_window_strip(',
-            'fn workspace_strip(', 'melania-files', 'WindowCommand::Close',
+            'fn workspace_switcher(', 'melania-files', 'WindowCommand::Close',
             'gdk::DragAction::COPY',
         ]:
             self.assertIn(label, panel)
@@ -63,7 +63,7 @@ class AeroContinuity(unittest.TestCase):
         self.assertIn("high_contrast: false", config)
         panel = self.source("melania-panel/src/main.rs")
         self.assertIn("group_enabled", panel)
-        self.assertIn("melania-workspace-overflow", panel)
+        self.assertIn("melania-workspace-popover", panel)
 
 
 if __name__ == "__main__":
