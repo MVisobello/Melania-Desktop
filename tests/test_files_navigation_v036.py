@@ -42,6 +42,7 @@ class Files036(unittest.TestCase):
         self.assertIn('source.set_actions(gdk::DragAction::COPY)', SOURCE)
         self.assertIn('gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY)', SOURCE)
         self.assertNotIn('gdk::DragAction::MOVE)', SOURCE)
-        self.assertIn('gio::File::for_path(&path).trash(None::<&gio::Cancellable>)', SOURCE)
+        self.assertIn('gio_backend::move_to_trash(&uri)', SOURCE)
+        self.assertIn('gio_backend::rename_item(&source_uri', SOURCE)
 
 if __name__=='__main__': unittest.main()

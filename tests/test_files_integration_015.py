@@ -26,7 +26,9 @@ class FilesIntegration015(unittest.TestCase):
         self.assertNotIn('remove_confirmed_source(', SOURCE)
 
     def test_trash_remains_recoverable(self):
-        self.assertIn('gio::File::for_path(&path).trash(None::<&gio::Cancellable>)', SOURCE)
+        self.assertIn('gio_backend::move_to_trash(&uri)', SOURCE)
+        self.assertIn('gio_backend::make_folder(&folder_uri,name)', SOURCE)
+        self.assertIn('gio_backend::create_blank_file(&folder_uri,&name)', SOURCE)
         self.assertIn('trash:///', SOURCE)
         self.assertNotIn('fs::remove_file(', SOURCE)
         self.assertNotIn('fs::remove_dir_all(', SOURCE)

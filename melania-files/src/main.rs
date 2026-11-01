@@ -52,6 +52,7 @@ struct Browser {
     listing_running: Rc<Cell<bool>>,
     listing_pending: Rc<RefCell<Option<ListingRequest>>>,
     mounts_box: GtkBox,
+    open_remote: Rc<dyn Fn(String)>,
     copy_action: Button,
     cut_action: Button,
     trash_action: Button,
@@ -625,12 +626,21 @@ fn repaint_volumes(browser: &Browser) {
     heading.add_css_class("files-sidebar-heading");
     heading.set_xalign(0.0);
     browser.mounts_box.append(&heading);
-    // Only local mount roots are navigable in this PathBuf-based version.
-    // Remote GIO URIs require the planned backend migration to gio::File.
+    // VolumeMonitor exposes local and remote mounts as GIO Files. Remote
+    // roots must not be hidden merely because they lack a POSIX PathBuf.
     for mount in gio::VolumeMonitor::get().mounts() {
-        let Some(root) = mount.root().path() else { continue; };
-        if !root.is_dir() { continue; }
-        browser.mounts_box.append(&navigation_button_with_icon(&mount.name(), root, browser, Some("drive-harddisk-symbolic")));
+        let root=mount.root();
+        if let Some(path)=root.path().filter(|p|p.is_dir()){
+            browser.mounts_box.append(&navigation_button_with_icon(
+                &mount.name(),path,browser,Some("drive-harddisk-symbolic")));
+        } else {
+            let button=Button::with_label(&mount.name());
+            button.set_tooltip_text(Some(&root.uri()));
+            let uri=root.uri().to_string();
+            let open=browser.open_remote.clone();
+            button.connect_clicked(move |_|open(uri.clone()));
+            browser.mounts_box.append(&button);
+        }
     }
 }
 
@@ -1640,6 +1650,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         listing_running: Rc::new(Cell::new(false)),
         listing_pending: Rc::new(RefCell::new(None)),
         mounts_box: GtkBox::new(Orientation::Vertical, 6),
+        open_remote: open_remote.clone(),
         copy_action: copy_button.clone(), cut_action: cut_button.clone(),
         trash_action: trash_button.clone(), rename_field: rename_name.clone(),
         transfer_progress, transfer_cancel, active_job,
@@ -1730,7 +1741,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         let typed = entry.text().to_string();
         let typed = typed.trim();
         if typed.contains("://") {
-            open_remote(typed.to_string());
+            (state.open_remote)(typed.to_string());
             return;
         }
         let target = if let Some(tail) = typed.strip_prefix("~/") { home().join(tail) }
@@ -1745,9 +1756,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         if name.is_empty() || matches!(name.as_str(), "."|"..") || name.contains('/') || name.contains('\0') {
             state.status.set_text("Inserisci un nome valido per il nuovo file."); return;
         }
-        let target = state.current.borrow().join(&name);
-        match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
-            Ok(_)=> { refresh(&state); state.status.set_text(&format!("Documento creato: {name}")); },
+        let folder_uri=gio::File::for_path(state.current.borrow().clone()).uri();
+        match gio_backend::create_blank_file(&folder_uri,&name) {
+            Ok(())=> { refresh(&state); state.status.set_text(&format!("Documento creato: {name}")); },
             Err(e)=>state.status.set_text(&format!("File non creato: {e}")),
         }
     });
@@ -1759,8 +1770,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
             state.status.set_text("Inserisci un nome semplice, senza separatori di percorso.");
             return;
         }
-        let target=state.current.borrow().join(name);
-        match fs::create_dir(&target) {
+        let folder_uri=gio::File::for_path(state.current.borrow().clone()).uri();
+        match gio_backend::make_folder(&folder_uri,name) {
             Ok(())=>{ refresh(&state); state.status.set_text(&format!("Cartella creata: {name}")); },
             Err(err)=>state.status.set_text(&format!("Creazione annullata: {err}")),
         }
@@ -1942,11 +1953,12 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         let Some(old)=state.selected.borrow().clone() else {
             state.status.set_text("Seleziona un file prima di rinominarlo."); return;
         };
-        match transfer::rename_local(&old, &rename_name_for_click.text()) {
-            Ok(updated)=> {
-                *state.selected.borrow_mut()=Some(updated);
+        let source_uri=gio::File::for_path(&old).uri();
+        match gio_backend::rename_item(&source_uri,&rename_name_for_click.text()) {
+            Ok(updated_uri)=> {
+                *state.selected.borrow_mut()=gio::File::for_uri(&updated_uri).path();
                 refresh(&state);
-                state.status.set_text("Rinomina completata senza sovrascritture.");
+                state.status.set_text("Rinomina GIO completata senza sovrascritture.");
             },
             Err(err)=>state.status.set_text(&format!("Rinomina annullata: {err}")),
         }
@@ -2065,7 +2077,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         let mut moved=0;
         let mut failed=0;
         for path in paths {
-            match gio::File::for_path(&path).trash(None::<&gio::Cancellable>) {
+            let uri=gio::File::for_path(&path).uri();
+            match gio_backend::move_to_trash(&uri) {
                 Ok(()) => {state.selected_paths.borrow_mut().remove(&path); moved+=1;},
                 Err(_) => failed+=1,
             }

@@ -203,6 +203,22 @@ pub fn copy_uris(sources:&[String],destination_uri:&str,
     Ok(count)
 }
 
+/// Exclusive creation on both POSIX and GVfs backends: never truncate or
+/// overwrite an existing file, including targets seen through file:// URIs.
+pub fn create_blank_file(parent_uri:&str,name:&str)->Result<(),String>{
+    validate_uri(parent_uri)?;
+    if name.is_empty() || matches!(name,"."|"..") ||
+        name.contains('/') || name.chars().any(char::is_control){
+        return Err(error("Nome file non valido"));
+    }
+    let target=gio::File::for_uri(parent_uri).child(name);
+    let stream=target.create(gio::FileCreateFlags::NONE,None::<&gio::Cancellable>)
+        .map_err(|e|format!("File non creato senza sovrascrivere: {e}"))?;
+    stream.close(None::<&gio::Cancellable>)
+        .map_err(|e|format!("File creato, ma non è stato possibile chiuderlo: {e}"))?;
+    Ok(())
+}
+
 pub fn make_folder(parent_uri:&str, name:&str)->Result<(),String> {
     validate_uri(parent_uri)?;
     if name.is_empty() || name=="." || name==".." || name.contains('/')
@@ -221,6 +237,14 @@ pub fn rename_item(uri:&str,new_name:&str)->Result<String,String> {
         return Err(error("Nome non valido"));
     }
     let src=gio::File::for_uri(uri);
+    // On native Linux local files the existing renameat2(RENAME_NOREPLACE)
+    // remains the stronger atomic guarantee. Use GIO URI discovery but do
+    // not weaken local safety to a check-then-move sequence.
+    if let Some(path)=src.path() {
+        let updated=melania_transfer::rename_local(&path,new_name)
+            .map_err(|e|format!("Rinomina locale annullata: {e}"))?;
+        return Ok(gio::File::for_path(updated).uri().to_string());
+    }
     let parent=src.parent().ok_or_else(||error("Posizione senza cartella padre"))?;
     let dst=parent.child(new_name);
     if dst.equal(&src) {return Ok(uri.to_owned());}
@@ -355,6 +379,34 @@ mod tests {
         let stop=Arc::new(AtomicBool::new(true));
         assert_eq!(list_local_entries(&dir,"",model::ListingOptions::default(),&stop)
             .unwrap_err().kind(),io::ErrorKind::Interrupted);
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn shared_gio_creation_refuses_existing_local_file() {
+        let dir=std::env::temp_dir().join(format!("melania-gio-create-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let uri=gio::File::for_path(&dir).uri().to_string();
+        create_blank_file(&uri,"new.txt").unwrap();
+        fs::write(dir.join("new.txt"),b"important").unwrap();
+        assert!(create_blank_file(&uri,"new.txt").is_err());
+        assert_eq!(fs::read(dir.join("new.txt")).unwrap(),b"important");
+        make_folder(&uri,"subfolder").unwrap();
+        assert!(make_folder(&uri,"subfolder").is_err());
+        let _=fs::remove_dir_all(dir);
+    }
+    #[cfg(target_os="linux")]
+    #[test] fn shared_gio_rename_uses_atomic_local_no_replace() {
+        let dir=std::env::temp_dir().join(format!("melania-gio-rename-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("from.txt"),b"original").unwrap();
+        fs::write(dir.join("to.txt"),b"keep").unwrap();
+        let uri=gio::File::for_path(dir.join("from.txt")).uri().to_string();
+        assert!(rename_item(&uri,"to.txt").is_err());
+        assert_eq!(fs::read(dir.join("to.txt")).unwrap(),b"keep");
+        assert_eq!(fs::read(dir.join("from.txt")).unwrap(),b"original");
+        let next=rename_item(&uri,"renamed.txt").unwrap();
+        assert_eq!(gio::File::for_uri(&next).path().unwrap(),dir.join("renamed.txt"));
         let _=fs::remove_dir_all(dir);
     }
     #[test] fn accepted_network_protocols_and_credentials_safety() {

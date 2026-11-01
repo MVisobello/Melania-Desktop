@@ -305,6 +305,10 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     rename_field.set_placeholder_text(Some("Nuovo nome"));
     rename_field.set_width_chars(15);
     let rename=Button::with_label("Rinomina");
+    let blank_field=Entry::new();
+    blank_field.set_placeholder_text(Some("Nome nuovo file"));
+    blank_field.set_width_chars(14);
+    let blank=Button::with_label("File vuoto");
     let folder_field=Entry::new();
     folder_field.set_placeholder_text(Some("Nome nuova cartella"));
     folder_field.set_width_chars(16);
@@ -317,6 +321,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     for button in [&copy,&paste] {actionbar.append(button);}
     actionbar.append(&rename_field);
     actionbar.append(&rename);
+    actionbar.append(&blank_field);
+    actionbar.append(&blank);
     actionbar.append(&folder_field);
     actionbar.append(&folder);
     actionbar.append(&trash);
@@ -443,6 +449,15 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         run_job(&ui,"Rinomina tramite GIO…",move |_|{
             gio_backend::rename_item(&selected.uri,&name)?;
             Ok("Elemento rinominato.".to_string())
+        });
+    });
+    let ui=state.clone();
+    blank.connect_clicked(move |_| {
+        let name=blank_field.text().to_string();
+        let dest=ui.current.borrow().clone();
+        run_job(&ui,"Creazione file tramite GIO…",move |_|{
+            gio_backend::create_blank_file(&dest,&name)?;
+            Ok("File creato senza sovrascrivere.".to_owned())
         });
     });
     let ui=state.clone();
