@@ -35,6 +35,12 @@ class XfceSettingsParity(unittest.TestCase):
         self.assertIn('gnome_pages::linked_row(',PAGES)
         self.assertIn('"Non ancora operativo"',PAGES)
         self.assertIn('xfce_defaults::mime_page()',PAGES)
+        self.assertIn('crate::xfce_autostart::session_page()',PAGES)
+        autostart=(ROOT/'melania-settings/src/xfce_autostart.rs').read_text()
+        self.assertIn('set_enabled_in(dir:&Path',autostart)
+        self.assertIn('Hidden=',autostart)
+        self.assertIn('create_new(true).mode(0o600)',autostart)
+        self.assertIn('fs::rename(&temp,&path)',autostart)
         self.assertIn('xfce_defaults::preferred_apps_page()',PAGES)
 
     def test_mime_settings_are_real_gio_not_fake_buttons_or_shell(self):
