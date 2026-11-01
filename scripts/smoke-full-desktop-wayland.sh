@@ -221,6 +221,35 @@ assert max(diffs)>20, f"panel did not visually move to the upper edge: {diffs}"
 print("PASS: actual running panel reanchored to top edge with persisted preferences",diffs)
 PYPANEL
 fi
+# Change the *real* wallpaper while GTK Desktop is running. The color is
+# deliberately synthetic and remains inside the isolated CI temporary tree.
+python3 - "$TEMP/xfce-wallpaper-test.png" <<'PYWALL'
+from PIL import Image
+import sys
+Image.new("RGB",(1280,800),(19,161,82)).save(sys.argv[1])
+PYWALL
+cat >> "$XDG_CONFIG_HOME/melania/settings.conf" <<EOF
+desktop_wallpaper=$TEMP/xfce-wallpaper-test.png
+desktop_wallpaper_fit=cover
+desktop_show_icons=false
+EOF
+sleep 2
+pgrep -P "$PID" -f 'target/debug/melania-desktop-surface' >/dev/null || {
+  echo 'FAIL: desktop surface crashed on wallpaper update' >&2;exit 1;
+}
+if command -v scrot >/dev/null; then
+  scrot -z -o reports/nested-wayland-wallpaper-live.png
+  python3 - <<'PYWALLCHECK'
+from PIL import Image
+before=Image.open("reports/nested-wayland-full-desktop.png").convert("RGB")
+after=Image.open("reports/nested-wayland-wallpaper-live.png").convert("RGB")
+# Leftmost background strip is outside regular application windows.
+points=[(4,100),(8,150),(12,190)]
+diffs=[sum(abs(a-b) for a,b in zip(before.getpixel(p),after.getpixel(p))) for p in points]
+assert max(diffs)>60, f"wallpaper did not update in live desktop layer: {diffs}"
+print("PASS: actual GTK desktop wallpaper changed live from XDG preferences",diffs)
+PYWALLCHECK
+fi
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
 for i in $(seq 1 60); do
