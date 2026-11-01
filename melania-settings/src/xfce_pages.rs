@@ -45,6 +45,7 @@ pub fn add_pages(stack:&Stack) {
         let body=match spec.slug {
             "preferred" => xfce_defaults::preferred_apps_page(),
             "mime" => xfce_defaults::mime_page(),
+            "session" => crate::xfce_autostart::session_page(),
             _ => {
                 let body=page(spec.title,spec.description);
                 body.append(&label("Funzioni disponibili","settings-section-heading"));
