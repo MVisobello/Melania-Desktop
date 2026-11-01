@@ -4,7 +4,7 @@
 //! All COPY/MOVE operations refuse overwrites; failures are surfaced.
 use gtk::gio;
 use gtk::gio::prelude::*;
-use std::{sync::{Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}},path::Path,time::{Duration,SystemTime,UNIX_EPOCH},io};
+use std::{sync::{Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}},path::Path,time::{Duration,SystemTime,UNIX_EPOCH},io,collections::VecDeque};
 use melania_files_core as model;
 
 const MAX_ITEMS: usize = 2_000;
@@ -216,6 +216,115 @@ pub fn query_details(uri:&str)->Result<FileDetails,String> {
         can_read:info.boolean("access::can-read"),
         can_write:info.boolean("access::can-write"),
         can_execute:info.boolean("access::can-execute"),
+    })
+}
+
+const MAX_REMOTE_SEARCH_DEPTH:u8=8;
+const MAX_REMOTE_SEARCH_ITEMS:usize=5_000;
+const MAX_REMOTE_SEARCH_FOLDERS:usize=300;
+const MAX_REMOTE_SEARCH_RESULTS:usize=300;
+
+#[derive(Clone,Debug)]
+pub struct SearchHit {
+    pub uri:String,
+    pub name:String,
+    pub directory:bool,
+}
+#[derive(Debug)]
+pub struct SearchReport {
+    pub hits:Vec<SearchHit>,
+    pub scanned:usize,
+    pub skipped_folders:usize,
+    pub limited:bool,
+}
+#[derive(Debug,Default)]
+pub struct SearchProgress {
+    scanned:AtomicUsize,
+    found:AtomicUsize,
+}
+impl SearchProgress {
+    pub fn snapshot(&self)->(usize,usize){
+        (self.scanned.load(Ordering::Relaxed),self.found.load(Ordering::Relaxed))
+    }
+}
+
+/// Explicit, name-only remote search. The server sees only bounded GIO
+/// directory enumerations; file bodies are never read. A single Gio::Cancellable
+/// spans the entire operation and can interrupt a blocked remote read.
+pub fn search_tree(uri:&str,query:&str,hidden:bool,
+    cancelled:&Arc<AtomicBool>,progress:Option<&SearchProgress>)->Result<SearchReport,String>{
+    validate_uri(uri)?;
+    let needle=query.trim().to_lowercase();
+    if needle.chars().count()<2 || needle.chars().count()>120{
+        return Err(error("Cerca un nome di almeno 2 e massimo 120 caratteri"));
+    }
+    with_gio_cancel(cancelled,|provider|{
+        let mut queue=VecDeque::from([(gio::File::for_uri(uri),0u8)]);
+        let mut report=SearchReport {
+            hits:Vec::new(),scanned:0,skipped_folders:0,limited:false
+        };
+        let mut folders=0usize;
+        'walk: while let Some((folder,depth))=queue.pop_front() {
+            if cancelled.load(Ordering::Acquire) || provider.is_cancelled(){
+                return Err(error("Ricerca GVfs annullata"));
+            }
+            if folders>=MAX_REMOTE_SEARCH_FOLDERS{
+                report.limited=true;
+                break;
+            }
+            folders+=1;
+            let listing=folder.enumerate_children(
+                "standard::name,standard::display-name,standard::type,standard::is-hidden",
+                gio::FileQueryInfoFlags::NOFOLLOW_SYMLINKS,Some(provider));
+            let enumerator=match listing{
+                Ok(value)=>value,
+                Err(e) if folders==1=>return Err(format!(
+                    "Impossibile cercare nella cartella iniziale: {e}")),
+                Err(_)=>{report.skipped_folders+=1;continue;}
+            };
+            loop {
+                if cancelled.load(Ordering::Acquire) || provider.is_cancelled(){
+                    return Err(error("Ricerca GVfs annullata"));
+                }
+                let info=match enumerator.next_file(Some(provider)){
+                    Ok(Some(item))=>item,
+                    Ok(None)=>break,
+                    Err(e)=>return Err(format!("Ricerca interrotta dal provider: {e}")),
+                };
+                if report.scanned>=MAX_REMOTE_SEARCH_ITEMS{
+                    report.limited=true;
+                    break 'walk;
+                }
+                report.scanned+=1;
+                if let Some(p)=progress {p.scanned.store(report.scanned,Ordering::Relaxed);}
+                if !hidden && (info.is_hidden() || info.name().to_string_lossy().starts_with('.')){
+                    continue;
+                }
+                // NOFOLLOW_SYMLINKS applies to both traversal and metadata;
+                // never descend into symlinks even if their target is a folder.
+                let is_directory=info.file_type()==gio::FileType::Directory;
+                let child=enumerator.child(&info);
+                let name=info.display_name().to_string();
+                if name.to_lowercase().contains(&needle){
+                    if report.hits.len()>=MAX_REMOTE_SEARCH_RESULTS{
+                        report.limited=true;
+                        break 'walk;
+                    }
+                    report.hits.push(SearchHit {
+                        uri:child.uri().to_string(),name,directory:is_directory,
+                    });
+                    if let Some(p)=progress {p.found.store(report.hits.len(),Ordering::Relaxed);}
+                }
+                if is_directory{
+                    if depth<MAX_REMOTE_SEARCH_DEPTH{
+                        queue.push_back((child,depth+1));
+                    }else{
+                        report.limited=true;
+                    }
+                }
+            }
+        }
+        Ok(report)
     })
 }
 
@@ -592,6 +701,33 @@ mod tests {
         assert!(folder.is_directory);
         assert_eq!(folder.size,None);
         let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn bounded_remote_search_finds_nested_names_without_following_links(){
+        let dir=std::env::temp_dir().join(format!("melania-gvfs-search-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("nested").join("needle.txt"),b"ok").unwrap();
+        fs::write(dir.join(".needle-secret"),b"hidden").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.join("nested"),dir.join("shortcut")).unwrap();
+        let uri=gio::File::for_path(&dir).uri().to_string();
+        let stop=Arc::new(AtomicBool::new(false));
+        let prog=SearchProgress::default();
+        let report=search_tree(&uri,"needle",false,&stop,Some(&prog)).unwrap();
+        assert_eq!(report.hits.len(),1);
+        assert_eq!(report.hits[0].name,"needle.txt");
+        assert!(!report.limited);
+        assert_eq!(prog.snapshot().1,1);
+        let hidden=search_tree(&uri,"needle",true,&stop,None).unwrap();
+        assert_eq!(hidden.hits.len(),2);
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test] fn remote_search_stops_before_provider_io_when_pre_cancelled(){
+        let stop=Arc::new(AtomicBool::new(true));
+        let result=search_tree("sftp://offline.invalid/share","target",false,&stop,None);
+        assert!(result.unwrap_err().contains("annullata"));
+        assert!(search_tree("file:///tmp","a",false,
+            &Arc::new(AtomicBool::new(false)),None).is_err());
     }
     #[test] fn native_gio_cancellable_interrupts_a_provider_operation() {
         use std::sync::mpsc;
