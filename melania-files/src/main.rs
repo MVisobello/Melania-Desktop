@@ -15,6 +15,16 @@ use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf
 #[derive(Clone)]
 struct PendingTransfer { paths: Vec<PathBuf>, is_move: bool }
 
+/// GTK widgets stay on the UI thread; only paths and bounded RGBA cross the
+/// background thumbnail channel. A tab has one active and one queued request.
+struct LocalThumbnailRequest {
+    generation: u64,
+    targets: Vec<(PathBuf, GtkBox)>,
+    cancelled: Arc<AtomicBool>,
+}
+
+const MAX_LOCAL_THUMBNAILS: usize = 48;
+
 #[derive(Clone)]
 struct Browser {
     current: Rc<RefCell<PathBuf>>,
@@ -52,6 +62,9 @@ struct Browser {
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
     listing_running: Rc<Cell<bool>>,
     listing_pending: Rc<RefCell<Option<ListingRequest>>>,
+    thumbnail_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    thumbnail_running: Rc<Cell<bool>>,
+    thumbnail_pending: Rc<RefCell<Option<LocalThumbnailRequest>>>,
     mounts_box: GtkBox,
     open_remote: Rc<dyn Fn(String)>,
     copy_action: Button,
@@ -75,6 +88,10 @@ fn human_size(size: u64) -> String {
 }
 
 fn is_picture(path: &Path) -> bool { model::is_picture(path) }
+fn local_thumbnail_candidate(path:&Path)->bool{
+    matches!(path.extension().and_then(|x|x.to_str())
+        .unwrap_or("").to_ascii_lowercase().as_str(),"png"|"jpg"|"jpeg"|"webp")
+}
 
 /// Display metadata supplied by the bounded filesystem model, never
 /// recursively probe symlink targets just to populate a table row.
@@ -149,6 +166,7 @@ fn entry_icon(path: &Path, is_dir: bool) -> &'static str {
     }
     match path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
         "pdf" => "application-pdf",
+        "png"|"jpg"|"jpeg"|"webp"|"gif"|"bmp"|"svg" => "image-x-generic",
         "odt"|"doc"|"docx"|"txt"|"md" => "x-office-document",
         "ods"|"xls"|"xlsx"|"csv" => "x-office-spreadsheet",
         "odp"|"ppt"|"pptx" => "x-office-presentation",
@@ -800,7 +818,68 @@ fn start_listing_worker(browser: &Browser) {
 }
 
 /// Directory I/O never runs on GTK's event loop.
+/// One coalesced thumbnail worker per tab. Rapid F5/navigation cancels the
+/// obsolete request; the current worker drains and exits before a new one is
+/// started. Decoding and GIO calls NEVER run on the GTK main thread.
+fn start_local_thumbnail_worker(browser:&Browser) {
+    if browser.thumbnail_running.get(){return;}
+    let Some(request)=browser.thumbnail_pending.borrow_mut().take() else {return;};
+    browser.thumbnail_running.set(true);
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    let paths:Vec<PathBuf>=request.targets.iter().map(|(path,_)|path.clone()).collect();
+    let stop=request.cancelled.clone();
+    std::thread::spawn(move ||{
+        for (index,path) in paths.into_iter().enumerate() {
+            if stop.load(Ordering::Acquire){break;}
+            let uri=gio::File::for_path(&path).uri().to_string();
+            let result=gio_backend::image_thumbnail(&uri,&stop);
+            if tx.send((index,result)).is_err(){break;}
+        }
+    });
+    let ui=browser.clone();
+    let targets=request.targets;
+    let cancelled=request.cancelled;
+    let generation=request.generation;
+    glib::timeout_add_local(Duration::from_millis(55),move ||{
+        match rx.try_recv(){
+            Ok((index,Ok(thumbnail)))=>{
+                // Discard outdated decoded buffers without touching old tiles.
+                if !cancelled.load(Ordering::Acquire) &&
+                    ui.listing_generation.get()==generation{
+                    if let Some((_,frame))=targets.get(index){
+                        let bytes=glib::Bytes::from_owned(thumbnail.rgba);
+                        let texture=gdk::MemoryTexture::new(
+                            thumbnail.width as i32,thumbnail.height as i32,
+                            gdk::MemoryFormat::R8g8b8a8,&bytes,
+                            thumbnail.width as usize*4);
+                        let picture=Picture::new();
+                        picture.set_size_request(112,84);
+                        picture.set_content_fit(gtk::ContentFit::Contain);
+                        picture.set_paintable(Some(&texture));
+                        while let Some(child)=frame.first_child(){frame.remove(&child);}
+                        frame.append(&picture);
+                    }
+                }
+                glib::ControlFlow::Continue
+            },
+            Ok((_,Err(_)))=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                ui.thumbnail_running.set(false);
+                start_local_thumbnail_worker(&ui);
+                glib::ControlFlow::Break
+            },
+        }
+    });
+}
+
 fn refresh(browser: &Browser) {
+    if let Some(old)=browser.thumbnail_cancel.borrow_mut().take(){
+        old.store(true,Ordering::Release);
+    }
+    if let Some(pending)=browser.thumbnail_pending.borrow_mut().take(){
+        pending.cancelled.store(true,Ordering::Release);
+    }
     // Cancel obsolete GIO enumeration before scheduling a fresh request.
     if let Some(previous)=browser.listing_cancel.borrow_mut().take() {
         previous.store(true,Ordering::Release);
@@ -866,10 +945,13 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
     browser.tile_buttons.borrow_mut().clear();
     let mut count = 0;
     let list_mode = browser.list_mode.get();
+    let mut thumbnail_targets:Vec<(PathBuf,GtkBox)>=Vec::new();
     for entry in entries {
         let type_name = file_type_label(&entry);
         let file_size = if entry.is_directory {"—".to_string()} else {human_size(entry.size)};
         let changed = modified_time_label(entry.modified);
+        let thumbnail_candidate=!entry.is_directory && !entry.is_symlink &&
+            local_thumbnail_candidate(&entry.path);
         let path = entry.path;
         let name = entry.name;
         count += 1;
@@ -910,15 +992,18 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         } else {
             let stack = GtkBox::new(Orientation::Vertical, 6);
             stack.set_halign(Align::Center);
-            if is_picture(&path) && path.is_file() {
-                let picture = Picture::for_filename(&path);
-                picture.set_size_request(90, 70);
-                picture.set_content_fit(gtk::ContentFit::Contain);
-                stack.append(&picture);
-            } else {
-                let symbol = Image::from_icon_name(entry_icon(&path, folder));
-                symbol.set_pixel_size(42);
-                symbol.add_css_class("files-icon");
+            let symbol = Image::from_icon_name(entry_icon(&path, folder));
+            symbol.set_pixel_size(42);
+            symbol.add_css_class("files-icon");
+            if thumbnail_candidate && thumbnail_targets.len()<MAX_LOCAL_THUMBNAILS {
+                let placeholder=GtkBox::new(Orientation::Vertical,0);
+                placeholder.set_size_request(112,84);
+                placeholder.set_halign(Align::Center);
+                placeholder.set_valign(Align::Center);
+                placeholder.append(&symbol);
+                thumbnail_targets.push((path.clone(),placeholder.clone()));
+                stack.append(&placeholder);
+            }else{
                 stack.append(&symbol);
             }
             let short = if name.chars().count() > 20 {
@@ -1103,6 +1188,14 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         });
         button.add_controller(secondary_click);
         browser.tiles.insert(&button, -1);
+    }
+    if !list_mode && !thumbnail_targets.is_empty() {
+        let cancelled=Arc::new(AtomicBool::new(false));
+        *browser.thumbnail_cancel.borrow_mut()=Some(cancelled.clone());
+        *browser.thumbnail_pending.borrow_mut()=Some(LocalThumbnailRequest{
+            generation:browser.listing_generation.get(),targets:thumbnail_targets,cancelled,
+        });
+        start_local_thumbnail_worker(browser);
     }
     if browser.selected_paths.borrow().is_empty() {
         browser.preview_heading.set_text(&caption);
@@ -1747,6 +1840,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         listing_cancel: Rc::new(RefCell::new(None)),
         listing_running: Rc::new(Cell::new(false)),
         listing_pending: Rc::new(RefCell::new(None)),
+        thumbnail_cancel: Rc::new(RefCell::new(None)),
+        thumbnail_running: Rc::new(Cell::new(false)),
+        thumbnail_pending: Rc::new(RefCell::new(None)),
         mounts_box: GtkBox::new(Orientation::Vertical, 6),
         open_remote: open_remote.clone(),
         copy_action: copy_button.clone(), cut_action: cut_button.clone(),
