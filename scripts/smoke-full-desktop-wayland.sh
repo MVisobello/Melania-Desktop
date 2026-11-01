@@ -199,11 +199,12 @@ panel_auto_hide=false
 panel_opacity=100
 EOPANEL
 sleep 2
-for name in melania-compositor melania-panel; do
-  pgrep -P "$PID" -f "target/debug/$name" >/dev/null || {
-    echo "FAIL: $name exited after live panel configuration change" >&2; exit 1;
-  }
-done
+kill -0 "$PID" 2>/dev/null || {
+  echo 'FAIL: compositor exited after live panel configuration change' >&2; exit 1;
+}
+pgrep -P "$PID" -f 'target/debug/melania-panel' >/dev/null || {
+  echo 'FAIL: panel exited after live configuration change' >&2; exit 1;
+}
 if command -v scrot >/dev/null; then
   scrot -z -o reports/nested-wayland-panel-top.png
   python3 - <<'PYPANEL'
