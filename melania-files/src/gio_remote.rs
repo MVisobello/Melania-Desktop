@@ -4,7 +4,7 @@
 use gtk::prelude::*;
 use gtk::{gio, glib, gdk};
 use gtk::{Box as GtkBox, Button, Entry, Label, Orientation, ScrolledWindow};
-use std::{cell::{Cell,RefCell},rc::Rc,sync::{Arc,atomic::{AtomicBool,Ordering}},
+use std::{cell::{Cell,RefCell},collections::BTreeSet,rc::Rc,sync::{Arc,atomic::{AtomicBool,Ordering}},
           time::Duration};
 use super::gio_backend::{self,Item};
 
@@ -15,6 +15,10 @@ struct Remote {
     forward: Rc<RefCell<Vec<String>>>,
     selected: Rc<RefCell<Option<Item>>>,
     selected_button: Rc<RefCell<Option<Button>>>,
+    selected_paths: Rc<RefCell<BTreeSet<String>>>,
+    selection_anchor: Rc<RefCell<Option<String>>>,
+    visible_uris: Rc<RefCell<Vec<String>>>,
+    row_buttons: Rc<RefCell<Vec<(String,Button)>>>,
     rows: GtkBox,
     location: Entry,
     search: Entry,
@@ -47,6 +51,10 @@ fn refresh(remote:&Remote) {
     remote.generation.set(gen);
     *remote.selected.borrow_mut()=None;
     *remote.selected_button.borrow_mut()=None;
+    remote.selected_paths.borrow_mut().clear();
+    remote.visible_uris.borrow_mut().clear();
+    remote.row_buttons.borrow_mut().clear();
+    *remote.selection_anchor.borrow_mut()=None;
     while let Some(child)=remote.rows.first_child(){remote.rows.remove(&child);}
     let uri=remote.current.borrow().clone();
     remote.location.set_text(&uri);
@@ -69,6 +77,8 @@ fn refresh(remote:&Remote) {
         match rx.try_recv() {
             Ok(Ok(listing)) => {
                 let count=listing.items.len();
+                *ui.visible_uris.borrow_mut()=listing.items.iter()
+                    .map(|item|item.uri.clone()).collect();
                 for item in listing.items {render_row(&ui,item);}
                 ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
                     if listing.truncated {" (limite visualizzazione raggiunto)"} else {""}));
@@ -109,15 +119,47 @@ fn render_row(remote:&Remote,item:Item) {
     size.set_width_chars(9);
     row.append(&size);
     button.set_child(Some(&row));
+    remote.row_buttons.borrow_mut().push((item.uri.clone(),button.clone()));
+    let modifiers=Rc::new(Cell::new(gdk::ModifierType::empty()));
+    let capture=gtk::GestureClick::new();
+    capture.set_button(gdk::BUTTON_PRIMARY);
+    let observed=modifiers.clone();
+    capture.connect_pressed(move |gesture,_,_,_| {
+        observed.set(gesture.current_event_state());
+    });
+    button.add_controller(capture);
     let state=remote.clone();
     let selected=item.clone();
     button.connect_clicked(move |clicked| {
-        if let Some(previous)=state.selected_button.borrow_mut().replace(clicked.clone()){
-            previous.remove_css_class("files-tile-selected");
+        let mode=modifiers.get();
+        let mut paths=state.selected_paths.borrow_mut();
+        if mode.contains(gdk::ModifierType::SHIFT_MASK) {
+            let anchor=state.selection_anchor.borrow().clone();
+            let visible=state.visible_uris.borrow();
+            if let (Some(a),Some(b))=(visible.iter().position(|p|p==&selected.uri),
+                anchor.as_ref().and_then(|p|visible.iter().position(|v|v==p))) {
+                paths.clear();
+                paths.extend(visible[a.min(b)..=a.max(b)].iter().cloned());
+            } else {
+                paths.insert(selected.uri.clone());
+            }
+        } else if mode.contains(gdk::ModifierType::CONTROL_MASK) {
+            if !paths.insert(selected.uri.clone()){paths.remove(&selected.uri);}
+            *state.selection_anchor.borrow_mut()=Some(selected.uri.clone());
+        } else {
+            paths.clear();
+            paths.insert(selected.uri.clone());
+            *state.selection_anchor.borrow_mut()=Some(selected.uri.clone());
         }
-        clicked.add_css_class("files-tile-selected");
-        *state.selected.borrow_mut()=Some(selected.clone());
-        state.status.set_text(&selected.uri);
+        let count=paths.len();
+        for (uri,widget) in state.row_buttons.borrow().iter() {
+            if paths.contains(uri){widget.add_css_class("files-tile-selected");}
+            else {widget.remove_css_class("files-tile-selected");}
+        }
+        let chosen=paths.contains(&selected.uri);
+        *state.selected.borrow_mut()=if chosen {Some(selected.clone())}else {None};
+        *state.selected_button.borrow_mut()=if chosen {Some(clicked.clone())}else {None};
+        state.status.set_text(&format!("{count} elementi selezionati · GIO/GVfs"));
     });
     let double=gtk::GestureClick::new();
     double.set_button(gdk::BUTTON_PRIMARY);
@@ -136,8 +178,13 @@ fn render_row(remote:&Remote,item:Item) {
     let drag=gtk::DragSource::new();
     drag.set_actions(gdk::DragAction::COPY);
     let dragged=item.uri.clone();
+    let selection=remote.selected_paths.clone();
     drag.connect_prepare(move |_,_,_| {
-        let files=[gio::File::for_uri(&dragged)];
+        let paths=selection.borrow();
+        let sources:Vec<String>=if paths.contains(&dragged){
+            paths.iter().take(100).cloned().collect()
+        }else{vec![dragged.clone()]};
+        let files:Vec<gio::File>=sources.iter().map(|uri| gio::File::for_uri(uri)).collect();
         let list=gdk::FileList::from_array(&files);
         Some(gdk::ContentProvider::for_value(&list.to_value()))
     });
@@ -300,6 +347,10 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         forward:Rc::new(RefCell::new(Vec::new())),
         selected:Rc::new(RefCell::new(None)),
         selected_button:Rc::new(RefCell::new(None)),
+        selected_paths:Rc::new(RefCell::new(BTreeSet::new())),
+        selection_anchor:Rc::new(RefCell::new(None)),
+        visible_uris:Rc::new(RefCell::new(Vec::new())),
+        row_buttons:Rc::new(RefCell::new(Vec::new())),
         rows, location, search, status, title:tab_title,
         hidden:Rc::new(Cell::new(false)),
         generation:Rc::new(Cell::new(0)),
@@ -343,14 +394,18 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     });
     let ui=state.clone();
     copy.connect_clicked(move |_|{
-        let Some(selected)=ui.selected.borrow().clone() else {
-            ui.status.set_text("Seleziona un elemento.");return;
-        };
+        let selected:Vec<String>=ui.selected_paths.borrow().iter().cloned().collect();
+        if selected.is_empty() {
+            ui.status.set_text("Seleziona uno o più elementi.");return;
+        }
+        if selected.len()>100 {
+            ui.status.set_text("Massimo 100 elementi per trasferimento remoto.");return;
+        }
         let Some(display)=gdk::Display::default() else {
             ui.status.set_text("Appunti indisponibili.");return;
         };
-        let file=gio::File::for_uri(&selected.uri);
-        let list=gdk::FileList::from_array(&[file]);
+        let files:Vec<gio::File>=selected.iter().map(|uri| gio::File::for_uri(uri)).collect();
+        let list=gdk::FileList::from_array(&files);
         let provider=gdk::ContentProvider::for_value(&list.to_value());
         match display.clipboard().set_content(Some(&provider)){
             Ok(())=>ui.status.set_text("Elemento copiato negli appunti del sistema."),
@@ -378,6 +433,9 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     let ui=state.clone();
     let rename_name=rename_field.clone();
     rename.connect_clicked(move |_|{
+        if ui.selected_paths.borrow().len()!=1 {
+            ui.status.set_text("Per rinominare seleziona un solo elemento.");return;
+        }
         let Some(selected)=ui.selected.borrow().clone() else {
             ui.status.set_text("Seleziona un file da rinominare.");return;
         };
@@ -398,12 +456,21 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     });
     let ui=state.clone();
     trash.connect_clicked(move |_|{
-        let Some(selected)=ui.selected.borrow().clone() else {
-            ui.status.set_text("Seleziona un elemento per il Cestino.");return;
-        };
-        run_job(&ui,"Spostamento nel Cestino…",move |_|{
-            gio_backend::move_to_trash(&selected.uri)?;
-            Ok("Elemento spostato nel Cestino.".to_string())
+        let selected:Vec<String>=ui.selected_paths.borrow().iter().cloned().collect();
+        if selected.is_empty() {
+            ui.status.set_text("Seleziona uno o più elementi per il Cestino.");return;
+        }
+        run_job(&ui,"Spostamento nel Cestino…",move |cancel|{
+            let mut moved=0;
+            for uri in selected {
+                if cancel.load(Ordering::Acquire){
+                    return Err(format!("{moved} elementi nel Cestino; operazione interrotta."));
+                }
+                gio_backend::move_to_trash(&uri).map_err(|e|
+                    format!("{moved} elementi già spostati; file restante non eliminato: {e}"))?;
+                moved+=1;
+            }
+            Ok(format!("{moved} elementi spostati nel Cestino."))
         });
     });
     let ui=state.clone();
@@ -462,7 +529,19 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
                 if key==gdk::Key::v {paste_button.emit_clicked();return glib::Propagation::Stop;}
             }
         }
-        let _=&ui;
+        if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+            && key==gdk::Key::a
+            && !location_entry.has_focus() && !search_entry.has_focus(){
+            let visible=ui.visible_uris.borrow();
+            let mut selected=ui.selected_paths.borrow_mut();
+            selected.clear();
+            selected.extend(visible.iter().cloned());
+            for (_,row) in ui.row_buttons.borrow().iter(){
+                row.add_css_class("files-tile-selected");
+            }
+            ui.status.set_text(&format!("{} elementi selezionati",selected.len()));
+            return glib::Propagation::Stop;
+        }
         glib::Propagation::Proceed
     });
     root.add_controller(keyboard);

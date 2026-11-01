@@ -48,10 +48,15 @@ class ReleaseInvariants(unittest.TestCase):
         ci = (ROOT/'.github/workflows/linux-verify.yml').read_text()
         self.assertIn('"melania-files-core"', workspace)
         self.assertIn('melania-files-core = { path = "../melania-files-core" }', file_manifest)
-        for token in ('model::list_directory', 'gtk::Notebook::new',
+        # The real GTK manager now enumerates through the shared GIO/GVfs
+        # backend; the POSIX core listing remains available to CLI/tests.
+        for token in ('gio_backend::list_local_entries', 'gtk::Notebook::new',
                       'sort.connect_selected_notify', 'repaint_favorites',
                       'transfer::rename_local', 'shared_pending.clone()'):
             self.assertIn(token, manager)
+        backend=(ROOT/'melania-files/src/gio_backend.rs').read_text()
+        self.assertIn('fn list_uri_bounded(',backend)
+        self.assertIn('model::sort_entries(&mut entries,options)',backend)
         self.assertIn('cargo check -p melania-core', ci)
         self.assertIn('-p melania-files-core', ci)
 
