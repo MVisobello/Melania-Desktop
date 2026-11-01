@@ -83,7 +83,8 @@ pub fn attach_live_preferences(
     let hover=Rc::new(Cell::new(false));
     let panel_open=|start:&ApplicationWindow,quick:&ApplicationWindow,
                     notifications:&ApplicationWindow,calendar:&ApplicationWindow| {
-        start.is_visible() || quick.is_visible() ||
+        (start.is_visible() && !start.has_css_class("melania-start-concealed")) ||
+        quick.is_visible() ||
         notifications.is_visible() || calendar.is_visible()
     };
     let cfg=active.borrow().clone();
@@ -116,7 +117,9 @@ pub fn attach_live_preferences(
         let nt=nt.clone();
         let cal=cal.clone();
         glib::timeout_add_local_once(Duration::from_millis(650),move ||{
-            if hover.get() || sm.is_visible() || qs.is_visible() ||
+            if hover.get() ||
+               (sm.is_visible() && !sm.has_css_class("melania-start-concealed")) ||
+               qs.is_visible() ||
                nt.is_visible() || cal.is_visible() {return;}
             let p=prefs.borrow();
             if p.panel_auto_hide {set_revealed(&w,&p,false);}
