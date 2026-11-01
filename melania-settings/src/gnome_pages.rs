@@ -315,10 +315,7 @@ pub fn add_pages(stack: &Stack) {
         power.append(&feedback);
     }
     power.append(&info_row("dialog-information","Inattività e sospensione",
-        "I timer di inattività, le azioni del coperchio e la sospensione automatica "
-        ));
-    power.append(&label("richiedono ancora l'integrazione dei servizi di sessione Melania.",
-        "settings-row-description"));
+        "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
     stack.add_titled(&power, Some("power"), "Alimentazione");
 
     let storage = page("Archiviazione", "Informazioni sulle unità locali.", "drive-harddisk");
