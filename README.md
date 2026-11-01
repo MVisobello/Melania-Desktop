@@ -36,18 +36,22 @@ libseat/logind completo.
   PR #88 aggiunge ricerca ricorsiva remota per nome, annullabile e con limiti;
   PR #89 esegue un vero test di integrazione SFTP autenticato su un server
   temporaneo GitHub Actions (lettura, metadati, copia e anti-sovrascrittura).
+  PR #90 introduce Annulla/Ripeti per una rinomina per scheda, con controllo
+  d'identità del file, nessuna sovrascrittura intenzionale, Ctrl+Z e
+  Ctrl+Maiusc+Z; ora la CI esegue anche i test reali del backend Melania Files.
   Build Rust/GTK, Wayland e integrazione desktop passati.
   Restano adapter PathBuf per viste locali avanzate e funzioni POSIX,
   test SMB/WebDAV, dialoghi di password reali e dispositivi fisici, oltre
-  a undo/redo, anteprime e proprietà avanzate. La parità Nautilus
-  **non è ancora completa**.
+  a undo/redo completo per copie e spostamenti, anteprime e proprietà avanzate.
+  La parità Nautilus **non è ancora completa**.
   Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md),
   [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md),
   [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md),
   [worker GVfs](docs/FILES-GVFS-WORKER-LIMITS.md),
   [annullamento nativo](docs/FILES-GVFS-NATIVE-CANCELLATION.md),
   [ricerca ricorsiva](docs/FILES-GVFS-RECURSIVE-SEARCH.md) e
-  [test SFTP autenticato](docs/FILES-GVFS-SFTP-LOOPBACK-TEST.md).
+  [test SFTP autenticato](docs/FILES-GVFS-SFTP-LOOPBACK-TEST.md) e
+  [Annulla/Ripeti rinomina](docs/FILES-GVFS-RENAME-UNDO.md).
 
 ## Avvio e sicurezza
 
