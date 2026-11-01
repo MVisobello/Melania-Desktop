@@ -156,6 +156,11 @@ fn parse_power_profiles(output:&str)->Vec<&'static str> {
 }
 
 /// Read a PipeWire node without changing the current mixer state.
+fn audio_mute_label(target: &str, muted: bool) -> &'static str {
+    if target=="@DEFAULT_AUDIO_SOURCE@" {
+        if muted {"Attiva microfono"} else {"Disattiva microfono"}
+    } else if muted {"Riattiva audio"} else {"Disattiva audio"}
+}
 fn audio_status(target: &str) -> Option<(f64,bool)> {
     let response=read_command("wpctl", &["get-volume",target])?;
     let volume=parse_volume(&response)?;
@@ -165,7 +170,7 @@ fn refresh_audio_status(target: &str, slider: &Scale, mute: &Button,
                         reading: &Label) -> bool {
     let Some((volume,muted))=audio_status(target) else {return false;};
     slider.set_value(volume);
-    mute.set_label(if muted {"Riattiva audio"} else {"Disattiva audio"});
+    mute.set_label(audio_mute_label(target,muted));
     reading.set_text(&format!("Volume attuale: {volume:.0}%{}",
         if muted {" · disattivato"} else {""}));
     true
@@ -183,7 +188,7 @@ fn audio_device_controls(page: &GtkBox, title: &str, target: &'static str) {
     level.set_tooltip_text(Some("Volume del dispositivo in percentuale"));
     let apply=Button::with_label("Applica volume");
     apply.add_css_class("settings-save");
-    let mute=Button::with_label(if muted {"Riattiva audio"} else {"Disattiva audio"});
+    let mute=Button::with_label(audio_mute_label(target,muted));
     mute.add_css_class("settings-save");
     let refresh=Button::with_label("Aggiorna");
     refresh.add_css_class("settings-save");
@@ -479,6 +484,13 @@ mod tests {
         assert_eq!(parse_power_profiles(output),
             vec!["power-saver","balanced","performance"]);
         assert!(parse_power_profiles("No profiles found.").is_empty());
+    }
+    #[test]
+    fn labels_distinguish_microphone_from_output() {
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SINK@",false),"Disattiva audio");
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SINK@",true),"Riattiva audio");
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SOURCE@",false),"Disattiva microfono");
+        assert_eq!(super::audio_mute_label("@DEFAULT_AUDIO_SOURCE@",true),"Attiva microfono");
     }
     #[test]
     fn reads_pipewire_volume_without_exceeding_slider_range() {
