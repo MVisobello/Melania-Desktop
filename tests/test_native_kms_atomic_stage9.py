@@ -20,6 +20,17 @@ class KmsAtomicTestOnly(unittest.TestCase):
         self.assertIn("if !device.is_atomic()",KMS)
         self.assertIn("visible_frame_submitted:false",KMS)
 
+    def test_stage10_bounded_virtual_modes_and_read_only_crtc_preflight(self):
+        self.assertIn("safest_test_mode_index(&sizes)", KMS)
+        self.assertIn("acceptable_test_mode(width: u16, height: u16)", KMS)
+        self.assertIn("MAX_TEST_PIXELS: u32 = 1920 * 1080", KMS)
+        self.assertIn("fd.get_crtc(crtc)", KMS)
+        self.assertIn("crtc_state_readable:true", KMS)
+        self.assertIn("report.crtc_state_readable", MAIN)
+        self.assertNotIn("info.modes().first().cloned()", KMS)
+        self.assertIn("smallest_acceptable_mode_wins_over_first_advertised", KMS)
+        self.assertIn("bounded_mode_rejects_tiny_huge_and_invalid_dimensions", KMS)
+
     def test_experiment_is_qemu_only_fail_closed(self):
         self.assertIn("fn assert_qemu_test_guest()",MAIN)
         self.assertIn('MELANIA_KMS_TEST_ONLY',MAIN)
