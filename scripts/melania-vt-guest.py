@@ -93,6 +93,18 @@ def main():
         cards = list(pathlib.Path("/sys/class/drm").glob("card[0-9]"))
         print(f"MELANIA_QEMU_DRM_CARD_COUNT={len(cards)}", flush=True)
         print("MELANIA_QEMU_DRM_KMS_TESTED=false", flush=True)
+        # Real read-only DRM UAPI ioctls, compiled for THIS isolated guest.
+        # Unlike a device node existence check, this verifies actual atomic
+        # client capability and CRTC/connector enumeration.
+        probe = subprocess.run(
+            ["/usr/local/sbin/melania-qemu-kms-probe"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        for line in probe.stdout.splitlines():
+            print(line, flush=True)
+        if probe.returncode != 0:
+            print(probe.stderr.strip()[:300], flush=True)
+            raise RuntimeError("Read-only atomic KMS probe failed")
     fd = os.open("/dev/tty0", os.O_RDONLY | os.O_CLOEXEC)
     try:
         original = active_vt(fd)

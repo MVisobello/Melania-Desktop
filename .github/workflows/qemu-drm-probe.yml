@@ -1,0 +1,56 @@
+name: QEMU virtual DRM/KMS read-only probe
+
+on:
+  pull_request:
+    paths:
+      - scripts/melania-qemu-kms-probe.c
+      - scripts/melania-vt-guest.py
+      - scripts/run-qemu-vt-smoke.sh
+      - tests/test_qemu_drm_probe.py
+      - .github/workflows/qemu-drm-probe.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/melania-qemu-kms-probe.c
+      - scripts/melania-vt-guest.py
+      - scripts/run-qemu-vt-smoke.sh
+      - tests/test_qemu_drm_probe.py
+      - .github/workflows/qemu-drm-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  virtio-drm:
+    name: QEMU virtio-vga DRM atomic KMS inspection plus VT restore
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static safety and DRM probe unit tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_qemu_drm_probe.py' -v
+          bash -n scripts/run-qemu-vt-smoke.sh
+      - name: Install QEMU, compiler headers, and cloud ISO tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils curl libdrm-dev gcc
+          qemu-system-x86_64 --version
+          gcc -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+            -I/usr/include/libdrm scripts/melania-qemu-kms-probe.c
+      - name: Boot isolated virtio-vga guest and inspect real DRM/KMS capabilities
+        env:
+          MELANIA_QEMU_TTY_SMOKE: YES_DISPOSABLE_QEMU
+          MELANIA_QEMU_REQUIRE_DRM: YES_VIRTIO_GPU
+          MELANIA_QEMU_REPORT_DIR: reports/qemu-drm
+        run: bash scripts/run-qemu-vt-smoke.sh
+      - name: Upload QEMU GPU/VT serial evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-virtio-drm-evidence
+          path: reports/qemu-drm/
+          if-no-files-found: warn

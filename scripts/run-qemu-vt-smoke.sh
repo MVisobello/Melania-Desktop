@@ -38,6 +38,12 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" guest-overlay.qcow2
 printf '%s\n' 'instance-id: melania-qemu-vt-smoke' \
   'local-hostname: melania-qemu-smoke' > meta-data
 encoded="$(base64 -w 0 "$root/scripts/melania-vt-guest.py")"
+if [[ "$guest_require_drm" == "1" ]]; then
+  command -v cc >/dev/null || fail 'C compiler required for virtual KMS probing'
+  cc -D_GNU_SOURCE -std=c11 -O2 -Wall -Wextra -Werror -I/usr/include/libdrm \
+    "$root/scripts/melania-qemu-kms-probe.c" -o "$work/melania-qemu-kms-probe"
+  probe_encoded="$(base64 -w 0 "$work/melania-qemu-kms-probe")"
+fi
 cat > user-data <<EOF
 #cloud-config
 ssh_pwauth: false
@@ -47,6 +53,16 @@ write_files:
     permissions: '0700'
     encoding: b64
     content: $encoded
+EOF
+if [[ "$guest_require_drm" == "1" ]]; then
+cat >> user-data <<EOF
+  - path: /usr/local/sbin/melania-qemu-kms-probe
+    permissions: '0700'
+    encoding: b64
+    content: $probe_encoded
+EOF
+fi
+cat >> user-data <<EOF
 runcmd:
   - [ bash, -c, 'MELANIA_QEMU_GUEST_REQUIRE_DRM=$guest_require_drm python3 /usr/local/sbin/melania-vt-guest.py > /dev/ttyS0 2>&1; rc=\$?; echo "MELANIA_QEMU_VT_EXIT=\$rc" > /dev/ttyS0; sync; poweroff -f' ]
 EOF
@@ -74,7 +90,8 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_VGA_ENUMERATED=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
    { [[ "$guest_require_drm" == "1" ]] &&
-     ! grep -q '^MELANIA_QEMU_DRM_ENUMERATED=true' "$serial"; } ||
+     { ! grep -q '^MELANIA_QEMU_DRM_ENUMERATED=true' "$serial" ||
+       ! grep -q '^MELANIA_QEMU_KMS_READ_ONLY_PASS=true' "$serial"; }; } ||
    ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_EXIT=0' "$serial"; then
   printf '%s\n' 'MELANIA_QEMU_TTY_RESULT=FAIL' | tee -a "$report_dir/result.txt"
@@ -84,5 +101,8 @@ fi
 printf '%s\n' 'MELANIA_QEMU_TTY_RESULT=PASS' | tee -a "$report_dir/result.txt"
 printf 'MELANIA_QEMU_VGA_DEVICE=%s\n' "$vga_device" >> "$report_dir/result.txt"
 printf 'MELANIA_QEMU_REQUIRE_DRM=%s\n' "$guest_require_drm" >> "$report_dir/result.txt"
+if [[ "$guest_require_drm" == "1" ]]; then
+  printf '%s\n' 'MELANIA_QEMU_KMS_PROBE_RESULT=PASS' >> "$report_dir/result.txt"
+fi
 # A VT roundtrip does NOT prove that DRM scanout, libseat or KMS rollback works.
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report_dir/result.txt"

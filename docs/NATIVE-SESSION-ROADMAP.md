@@ -501,6 +501,38 @@ backend nativo **nella VM con un seat e una TTY dedicati**,
 con test dei percorsi DRM in sola lettura e successiva prova
 atomica `TEST_ONLY` protetta, senza mai compromettere l'host.
 
+## Fase 17 — verifica DRM/KMS atomica di una GPU VirtIO emulata
+
+La fase 16 verifica la presenza del device DRM ma non interroga le
+risorse atomiche. Questo collaudo aggiunge il programma compilato
+`scripts/melania-qemu-kms-probe.c` ed eseguito **soltanto nel guest**:
+usa gli ioctl reali del kernel Linux `DRM_IOCTL_GET_CAP`,
+`DRM_IOCTL_SET_CLIENT_CAP` (solo per il file descriptor del processo) e
+`DRM_IOCTL_MODE_GETRESOURCES`. Richiede il supporto al client atomico
+e almeno un CRTC e un connettore, oltre a verificare il ritorno alla VT
+iniziale. Non apre la GPU dell'host, non crea framebuffer o mode blobs
+e non esegue modeset, page flip o atomic commit.
+
+Il workflow `.github/workflows/qemu-drm-probe.yml` produce una VM
+Ubuntu temporanea TCG con GPU VirtIO e registra un artifact
+`qemu-virtio-drm-evidence`. Anche il job VirtIO del workflow VT
+regressivo richiede ora il risultato
+`MELANIA_QEMU_KMS_READ_ONLY_PASS=true`.
+L'assenza di driver, risorse o supporto atomico produce FAIL.
+
+**Risultato verificato il 1° novembre 2026 (workflow preliminare
+41329141576):** nella VM QEMU `/dev/dri/card0` era disponibile,
+`DRM_CLIENT_CAP_ATOMIC` è stato accettato, il driver ha esposto
+**1 CRTC e 1 connettore** e la console è tornata da VT2 a VT1;
+`qemu_exit=0`. Il log non prova un commit grafico. La successiva
+fusione con gli aggiornamenti paralleli della fase 16 richiede
+nuova verifica CI.
+
+**Stato del vero compositore:** `NATIVE_SESSION_READY=false`.
+Nessuna prova ha ancora eseguito il backend Rust Melania nel guest,
+un TEST_ONLY Smithay con GBM/EGL, la conservazione dei framebuffer
+originali o il rollback KMS. Questi sono i prossimi passi.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
