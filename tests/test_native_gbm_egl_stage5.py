@@ -28,7 +28,11 @@ class NativeGbmEglStage5(unittest.TestCase):
         self.assertIn("NO scanout",MAIN)
         self.assertNotIn("set_crtc(",RENDERER)
         self.assertNotIn("create_surface(",RENDERER)
-        self.assertNotIn("create_buffer(",RENDERER)
+        # Stage 5 is still capability-only; stage 6 intentionally allocates
+        # a tiny DMA-BUF in a separate, opt-in function.
+        capability_only=RENDERER.split("pub fn inspect_gbm_egl(",1)[1].split(
+            "pub fn smoke_render_gbm_offscreen(",1)[0]
+        self.assertNotIn("create_buffer(",capability_only)
         self.assertIn("pub fn native_scanout_is_implemented() -> bool {false}",RENDERER)
         self.assertIn('NATIVE_SESSION_READY=false',MAIN)
 

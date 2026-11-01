@@ -153,6 +153,13 @@ jobs:
             exit 1
           fi
           grep -q 'NATIVE_STAGE1_BLOCKED' native-stage2-denied.log
+          # The offscreen render path also requires an explicit private TTY,
+          # and must never touch GPU buffers on shared CI runners.
+          if MELANIA_EXPERIMENTAL_SEAT=1 cargo run -p melania-native -- --experimental-offscreen > native-stage6-denied.log 2>&1; then
+            echo 'ERROR: offscreen renderer ran without a dedicated VT' >&2
+            exit 1
+          fi
+          grep -q 'NATIVE_STAGE1_BLOCKED' native-stage6-denied.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -175,3 +182,4 @@ jobs:
             native-stage1-capabilities.log
             native-stage1-denied.log
             native-stage2-denied.log
+            native-stage6-denied.log

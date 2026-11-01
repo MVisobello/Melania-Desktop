@@ -44,6 +44,51 @@ pub fn inspect_gbm_egl(fd: DrmDeviceFd) -> Result<GpuRenderCapabilities, String>
     })
 }
 
+/// Draw a tiny 64x64 GLES test frame into a GBM DMA-BUF, entirely offscreen.
+///
+/// Unlike stage 5 capability discovery, this allocates one temporary render
+/// buffer and exercises GPU drawing/synchronization. It still cannot perform
+/// KMS scanout, modeset, page flip, or write a device framebuffer.
+/// Must only be called from the explicitly guarded experimental VM/TTY path.
+pub fn smoke_render_gbm_offscreen(fd: DrmDeviceFd) -> Result<(),String> {
+    use smithay::backend::{
+        allocator::{
+            gbm::{GbmAllocator, GbmBufferFlags},
+            dmabuf::DmabufAllocator,
+            Allocator, Fourcc, Modifier,
+        },
+        renderer::{Bind, Color32F, Frame, Renderer},
+    };
+    use smithay::utils::{Rectangle,Transform};
+
+    const SIZE: u32=64;
+    let gbm=GbmDevice::new(fd).map_err(|e|format!("GBM offscreen unavailable: {e}"))?;
+    let mut allocator=DmabufAllocator(GbmAllocator::new(gbm.clone(),GbmBufferFlags::RENDERING));
+    let mut buffer=allocator.create_buffer(SIZE,SIZE,Fourcc::Abgr8888,&[Modifier::Linear])
+        .map_err(|e|format!("DMA-BUF offscreen allocation failed: {e}"))?;
+
+    // Safety: the valid GBM device and DRM descriptor remain live until the
+    // renderer and temporary DMA-BUF have completed the GPU synchronization.
+    let display=unsafe {EGLDisplay::new(gbm)}
+        .map_err(|e|format!("EGL display unavailable: {e}"))?;
+    let context=EGLContext::new(&display)
+        .map_err(|e|format!("EGL context unavailable: {e}"))?;
+    let mut renderer=unsafe {GlesRenderer::new(context)}
+        .map_err(|e|format!("GLES renderer unavailable: {e}"))?;
+    let mut framebuffer=renderer.bind(&mut buffer)
+        .map_err(|e|format!("DMA-BUF render target unavailable: {e}"))?;
+    let mut frame=renderer.render(&mut framebuffer,(SIZE as i32,SIZE as i32).into(),Transform::Normal)
+        .map_err(|e|format!("GLES frame start failed: {e}"))?;
+    frame.clear(
+        Color32F::new(0.07,0.28,0.67,1.0),
+        &[Rectangle::from_size((SIZE as i32,SIZE as i32).into())],
+    ).map_err(|e|format!("GLES clear failed: {e}"))?;
+    frame.finish()
+        .map_err(|e|format!("GLES finish failed: {e}"))?
+        .wait().map_err(|e|format!("GLES synchronization failed: {e}"))?;
+    Ok(())
+}
+
 /// Stage 5 initialization is capability discovery only: presentation is
 /// deliberately disabled even if EGL/GLES setup succeeds on the GPU.
 pub fn native_scanout_is_implemented() -> bool {false}

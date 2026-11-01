@@ -111,12 +111,13 @@ fn experiment() -> Result<(),Box<dyn Error>> {
 
 /// Stage2: a deliberate, short-lived DRM capability inspection. libseat owns
 /// the device open; KMS connectors are NOT reset, mode-set or rendered into.
-fn experimental_drm() -> Result<(),Box<dyn Error>> {
+fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
     assert_dedicated_console();
     let (mut session,notifier)=LibSeatSession::new()?;
     let udev=UdevBackend::new(session.seat())?;
     let mut scanned=0usize;
     let mut initialized=0usize;
+    let mut rendered_offscreen=0usize;
     for (_,path) in udev.device_list() {
         scanned+=1;
         let descriptor=match session.open(
@@ -175,6 +176,17 @@ fn experimental_drm() -> Result<(),Box<dyn Error>> {
                     }
                     Err(error)=>eprintln!("Melania GPU renderer unavailable {}: {error}",path.display()),
                 }
+                if render_offscreen {
+                    // Explicitly isolated 64x64 GPU render test: no output
+                    // modeset, page flip, KMS surface or monitor interaction.
+                    match melania_native::renderer::smoke_render_gbm_offscreen(device.device_fd().clone()) {
+                        Ok(())=>{
+                            rendered_offscreen+=1;
+                            println!("Melania native offscreen GLES frame: OK (NOT displayed)");
+                        },
+                        Err(error)=>eprintln!("Melania native offscreen GLES frame: {error}"),
+                    }
+                }
                 // Device ownership and DRM master return to libseat on drop.
             }
             Err(error)=>{
@@ -185,6 +197,11 @@ fn experimental_drm() -> Result<(),Box<dyn Error>> {
     drop(notifier);
     println!("Melania native stage2: scanned={scanned}, initialized={initialized}");
     println!("NATIVE_SESSION_READY=false");
+    // Offscreen is an explicit rendering test: never return success unless
+    // at least one GPU actually rendered and synchronized a frame.
+    if render_offscreen && rendered_offscreen==0 {
+        return Err("No GPU produced an offscreen frame".into());
+    }
     Ok(())
 }
 
@@ -198,13 +215,19 @@ fn main() {
             }
         }
         [flag] if flag=="--experimental-drm" =>{
-            if let Err(error)=experimental_drm(){
+            if let Err(error)=experimental_drm(false){
                 eprintln!("Melania native stage2: {error}");
                 std::process::exit(1);
             }
         }
+        [flag] if flag=="--experimental-offscreen" =>{
+            if let Err(error)=experimental_drm(true){
+                eprintln!("Melania native stage6 offscreen: {error}");
+                std::process::exit(1);
+            }
+        }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen");
             std::process::exit(2);
         }
     }
