@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage21: QEMU-only GETFB2 -> GEM_CLOSE real-kernel lifecycle gate."""
 from pathlib import Path
+import subprocess
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -59,6 +60,15 @@ class FramebufferGemStage21(unittest.TestCase):
                        'MELANIA_FB2_ROLLBACK_READY=false'):
             self.assertIn(marker,HOST if marker!='MELANIA_QEMU_NATIVE_FB2_GEM_CLOSE_PASS=true' else GUEST+HOST)
         self.assertIn('"melania-fb2-probe=$fb_probe"',HOST)
+
+    def test_host_and_guest_shell_syntax_checked_independently(self):
+        for path in ("scripts/run-qemu-melania-native.sh",
+                     "scripts/melania-qemu-native-guest.sh"):
+            result = subprocess.run(["bash", "-n", str(ROOT/path)],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("bash -n scripts/run-qemu-melania-native.sh", CI)
+        self.assertIn("bash -n scripts/melania-qemu-native-guest.sh", CI)
 
     def test_compiled_with_libdrm_in_existing_vm_not_on_host(self):
         self.assertIn('scripts/melania-qemu-fb2-probe.c',CI)
