@@ -405,6 +405,55 @@ compresa la verifica che il percorso sperimentale non possa partire
 nei runner condivisi. Un vero test di cambio VT sotto carico
 rimane da effettuare in una VM QEMU isolata, non sul PC principale.
 
+## Fase 15 — collaudo VT in QEMU con evidenza seriale automatica
+
+È stato aggiunto un vero banco di prova VM separato per misurare il
+**passaggio fra due console virtuali Linux e il ritorno a quella originale**
+senza cambiare la configurazione KMS. La prova viene avviata dal workflow
+`.github/workflows/qemu-vt-smoke.yml` e dallo script
+`scripts/run-qemu-vt-smoke.sh`.
+
+Il workflow installa QEMU, scarica l'immagine cloud ufficiale Ubuntu 24.04
+e la verifica con `SHA256SUMS`, prepara un disco overlay temporaneo,
+e avvia una VM con VGA emulata, TCG (senza accesso a GPU o KVM dell'host),
+cloud-init e seriale su file. Nel guest, `scripts/melania-vt-guest.py`:
+verifica DMI QEMU e la presenza di una scheda DRM virtuale; legge la VT
+attiva con `VT_GETSTATE`; usa `VT_ACTIVATE`/`VT_WAITACTIVE` per passare
+a un'altra VT e prova **sempre** il ripristino di quella originaria tramite
+`finally`. Solo dopo una rilettura della VT originale stampa il
+marcatore `MELANIA_QEMU_VT_PASS=true`. La VM si spegne e il workflow
+verifica il codice di uscita del guest, la presenza dei marcatori e
+l'uscita di QEMU. Eventuali fallimenti generano log, non falsi PASS.
+
+Lo script host rifiuta l'esecuzione senza la variabile esplicita
+`MELANIA_QEMU_TTY_SMOKE=YES_DISPOSABLE_QEMU`, verifica gli eseguibili
+necessari e limita il tempo di vita di QEMU con un timeout esterno.
+I verbali sono archiviati come artifact `qemu-vt-evidence`
+(`serial.log` e `result.txt`). I test Python simulano il fallimento di
+un passaggio VT e controllano che la restituzione della console venga
+comunque tentata.
+
+**Interpretazione corretta:** un PASS dimostra soltanto che *questa*
+VM Linux ha cambiato VT ed è tornata alla precedente. Non esegue
+`melania-native --experimental-kms-test`, non prova il passaggio VT
+con il compositore attivo e **non dimostra il ripristino dello stato DRM**,
+dei framebuffer o di un driver bloccato. L'assenza di una GPU/VT
+utilizzabile, errori di boot o timeout devono restare FAIL, non SKIP.
+Lo stato `NATIVE_SESSION_READY=false` rimane invariato.
+
+Per eseguire manualmente la prova su un host di test con QEMU installato,
+senza toccare la sessione grafica dell'host:
+
+```sh
+MELANIA_QEMU_TTY_SMOKE=YES_DISPOSABLE_QEMU \
+  bash scripts/run-qemu-vt-smoke.sh
+```
+
+Per un recupero *vero* di Melania servono ancora proprietà DRM
+ripristinabili, possesso dei vecchi framebuffer e blob kernel,
+transazioni atomiche reversibili e verifica pause/resume del compositore
+dentro una VM, prima di provare hardware reale.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
