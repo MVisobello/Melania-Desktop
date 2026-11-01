@@ -28,6 +28,7 @@ La corrispondenza non va confusa con parità già ottenuta.
 | Display | Enumerazione monitor e sensori, lettura |
 | Energia | Stato batterie, lettura |
 | App preferite | Browser http/https e gestore email mailto tramite GIO |
+| Sessione e avvio | Abilita/disabilita voci di autostart già presenti nell'XDG_CONFIG_HOME dell'utente, con salvataggio atomico e protezione symlink |
 | Associazioni MIME | Editor GIO per tipi comuni o MIME inserito dall'utente |
 | File manager | Melania Files gestisce già file, cartelle, Cestino e trasferimenti |
 
@@ -44,7 +45,7 @@ nella stessa pagina.
 - Input: libinput mouse/touchpad, layout e ripetizione tastiera, mappature tasti.
 - Display: modi, rotazioni, profili monitor con rollback.
 - Energia: sleep, ibernazione, coperchio laptop, tasti e profili energia.
-- Sessione: autostart, salvataggio sessione, logout e ripristino applicazioni.
+- Sessione: gestione delle voci autostart di sistema, creazione nuove voci, salvataggio, logout e ripristino applicazioni.
 - Blocca schermo, salvaschermo, policy di inattività.
 - Applicazioni: terminale, file manager predefinito, azioni speciali e MIME avanzati.
 - Gestore file: tutte le preferenze persistenti di visualizzazione, colonne e supporti remoti.
@@ -61,4 +62,4 @@ regressione e verifica nella sessione Wayland. **Una pagina nel catalogo
 senza backend non conta come funzione completata.**
 
 Questa milestone costituisce **fase 1: copertura navigabile dell'inventario,
-più applicazioni e MIME operativi**. Non dichiara completezza funzionale.
+più applicazioni predefinite, MIME e autostart personale operativi**. Non dichiara completezza funzionale.
