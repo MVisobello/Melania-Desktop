@@ -32,14 +32,22 @@ libseat/logind completo.
   delle cartelle quando supportato dai provider. PR #86 limita a una
   per scheda le letture GVfs attive, scartando risultati obsoleti e
   mantenendo soltanto l'ultima richiesta in coda.
+  PR #87 collega la cancellazione direttamente alle chiamate native Gio;
+  PR #88 aggiunge ricerca ricorsiva remota per nome, annullabile e con limiti;
+  PR #89 esegue un vero test di integrazione SFTP autenticato su un server
+  temporaneo GitHub Actions (lettura, metadati, copia e anti-sovrascrittura).
   Build Rust/GTK, Wayland e integrazione desktop passati.
-  Restano alcuni adapter PathBuf per le viste locali avanzate e le operazioni
-  POSIX specializzate, e servono ancora test reali con SMB/SFTP/WebDAV,
-  autenticazione e dispositivi rimovibili. Parità Nautilus **non completa**.
-  Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md)
-  [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md) e
-  [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md) e
-  [worker GVfs e limiti](docs/FILES-GVFS-WORKER-LIMITS.md).
+  Restano adapter PathBuf per viste locali avanzate e funzioni POSIX,
+  test SMB/WebDAV, dialoghi di password reali e dispositivi fisici, oltre
+  a undo/redo, anteprime e proprietà avanzate. La parità Nautilus
+  **non è ancora completa**.
+  Dettagli: [backend GIO/GVfs](docs/FILES-GIO-GVFS-URI-BACKEND.md),
+  [autenticazione/mount](docs/FILES-GVFS-MOUNT-AUTH.md),
+  [vista remota avanzata](docs/FILES-GVFS-RICH-VIEW.md),
+  [worker GVfs](docs/FILES-GVFS-WORKER-LIMITS.md),
+  [annullamento nativo](docs/FILES-GVFS-NATIVE-CANCELLATION.md),
+  [ricerca ricorsiva](docs/FILES-GVFS-RECURSIVE-SEARCH.md) e
+  [test SFTP autenticato](docs/FILES-GVFS-SFTP-LOOPBACK-TEST.md).
 
 ## Avvio e sicurezza
 
