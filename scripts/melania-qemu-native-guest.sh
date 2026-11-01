@@ -46,9 +46,17 @@ report 'MELANIA_QEMU_NATIVE_CAPABILITIES=true'
 # Exercise the real libseat/udev/libinput event sources on the VM TTY.
 # This stage enumerates device classes, but cannot inject any event into
 # Wayland clients. It must exit cleanly before the KMS experiment starts.
-timeout --signal=TERM --kill-after=3s 18s \
-  "$binary" --experimental-seat < /dev/tty1 ||
+input_log="$(mktemp -t melania-qemu-libinput-XXXXXX)"
+if ! timeout --signal=TERM --kill-after=3s 18s \
+  "$binary" --experimental-seat < /dev/tty1 | tee "$input_log"; then
+  rm -f "$input_log"
   fatal 'native_libinput_session_smoke_failed'
+fi
+if ! grep -Eq '^MELANIA_NATIVE_INPUT_ENUMERATED keyboards=[1-9][0-9]* pointers=[1-9][0-9]* touch=[0-9]+ forwarded=false' "$input_log"; then
+  rm -f "$input_log"
+  fatal 'virtual_USB_keyboard_or_pointer_not_enumerated'
+fi
+rm -f "$input_log"
 report 'MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true'
 
 # Try the genuine Rust/Smithay KMS preflight, not a C substitute or mock.
