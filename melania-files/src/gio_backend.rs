@@ -729,6 +729,35 @@ mod tests {
         assert!(search_tree("file:///tmp","a",false,
             &Arc::new(AtomicBool::new(false)),None).is_err());
     }
+    /// Requires a dedicated, explicitly mounted SFTP fixture. This is never
+    /// run in normal developer builds; CI provides an isolated loopback server.
+    #[test]
+    #[ignore = "requires an isolated GVfs SFTP server and authenticated session"]
+    fn live_gvfs_sftp_loopback_fixture(){
+        let root=std::env::var("MELANIA_TEST_SFTP_URI")
+            .expect("Test SFTP disabilitato: impostare MELANIA_TEST_SFTP_URI");
+        assert!(root.starts_with("sftp://"),"Test richiesto su un backend SFTP reale");
+        validate_uri(&root).unwrap();
+        let stop=Arc::new(AtomicBool::new(false));
+        let listing=list_uri_sorted(&root,"melania-sftp-fixture",false,
+            model::SortBy::Name,false,&stop).unwrap();
+        assert_eq!(listing.items.len(),1,"La cartella SFTP isolata deve avere il fixture");
+        let file=&listing.items[0];
+        assert_eq!(file.name,"melania-sftp-fixture.txt");
+        assert!(!file.directory);
+        let details=query_details(&file.uri).unwrap();
+        assert_eq!(details.size,Some(20));
+        let target=gio::File::for_uri(&root).child("target").uri().to_string();
+        let before=copy_uris(&[file.uri.clone()],&target,&stop).unwrap();
+        assert_eq!(before,1);
+        let copied=list_uri_sorted(&target,"melania-sftp-fixture",false,
+            model::SortBy::Name,false,&stop).unwrap();
+        assert_eq!(copied.items.len(),1);
+        assert_eq!(query_details(&copied.items[0].uri).unwrap().size,Some(20));
+        assert!(copy_uris(&[file.uri.clone()],&target,&stop).is_err(),
+            "A second SFTP copy must refuse overwrite");
+        assert_eq!(query_details(&file.uri).unwrap().size,Some(20));
+    }
     #[test] fn native_gio_cancellable_interrupts_a_provider_operation() {
         use std::sync::mpsc;
         let cancelled=Arc::new(AtomicBool::new(false));
