@@ -45,10 +45,10 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
 StrictModes no
-UsePAM no
+UsePAM yes
 PermitRootLogin no
 AllowUsers $(id -un)
-LogLevel ERROR
+LogLevel DEBUG3
 EOF
 sudo mkdir -p /run/sshd
 sudo /usr/sbin/sshd -D -e -f "$TEMP/sshd.conf" > "$TEMP/sshd.log" 2>&1 &
@@ -77,7 +77,10 @@ for _ in $(seq 1 35); do
 done
 if [[ "$READY" != 1 ]]; then
   echo 'FAIL: loopback sshd did not accept the temporary key' >&2
-  cat "$TEMP/sshd.log" >&2
+  ssh -vv -F "$HOME/.ssh/config" 127.0.0.1 'true' 2>&1 |
+    grep -Ei 'Offering public key|Authentication|Permission denied|Connection|refused|key type|host key' |
+    tail -24 >&2 || true
+  tail -60 "$TEMP/sshd.log" >&2
   exit 1
 fi
 export GIO_USE_VFS=gvfs
