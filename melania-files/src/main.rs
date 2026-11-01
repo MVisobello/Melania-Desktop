@@ -391,6 +391,162 @@ fn open_with_dialog(path: &Path) {
     window.present();
 }
 
+#[derive(Debug)]
+struct TrashedItem {
+    title: String,
+    uri: String,
+    original: Option<PathBuf>,
+}
+
+/// Use GIO's trash:// backend so recoverability is not restricted to
+/// ~/.local/share/Trash and includes supported removable-device trash.
+fn read_trash_entries() -> Result<(Vec<TrashedItem>, bool), String> {
+    let trash = gio::File::for_uri("trash:///");
+    let enumerator = trash.enumerate_children(
+        "standard::name,standard::display-name,trash::orig-path",
+        gio::FileQueryInfoFlags::NONE,None::<&gio::Cancellable>
+    ).map_err(|err|format!("Cestino GIO non disponibile: {err}"))?;
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    loop {
+        let info = enumerator.next_file(None::<&gio::Cancellable>)
+            .map_err(|err|format!("Impossibile leggere il Cestino: {err}"))?;
+        let Some(info) = info else {break;};
+        if entries.len() >= 300 { truncated = true;break; }
+        let child = enumerator.child(&info);
+        let original = info.attribute_byte_string("trash::orig-path")
+            .map(|name|PathBuf::from(name.as_str()))
+            .filter(|path|path.is_absolute());
+        entries.push(TrashedItem {
+            title: info.display_name().to_string(),
+            uri: child.uri().to_string(),
+            original,
+        });
+    }
+    entries.sort_by(|a,b|a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    Ok((entries,truncated))
+}
+
+/// One item per explicit click. No permanent delete, no overwrite and no
+/// fabrication of missing original directories. GIO itself enforces the
+/// destination collision check unless the OVERWRITE flag is requested.
+fn restore_trash_item(uri: &str, original: &Path) -> Result<(), String> {
+    if !original.is_absolute() || !original.parent().is_some_and(|p|p.is_dir()) {
+        return Err("La cartella originale non esiste: ripristino non effettuato".into());
+    }
+    let source=gio::File::for_uri(uri);
+    let destination=gio::File::for_path(original);
+    source.move_(&destination, gio::FileCopyFlags::NONE,
+        None::<&gio::Cancellable>, None)
+        .map_err(|err|format!("Ripristino rifiutato senza sovrascrivere: {err}"))
+}
+
+/// Native, recoverable Trash listing instead of delegating trash:/// to a
+/// different file manager. GIO I/O stays off the GTK thread.
+fn open_trash_window(browser: &Browser) {
+    let window=gtk::Window::builder().title("Cestino — Melania Files")
+        .default_width(650).default_height(510).build();
+    let outer=GtkBox::new(Orientation::Vertical, 9);
+    outer.set_margin_top(12);
+    outer.set_margin_bottom(12);
+    outer.set_margin_start(12);
+    outer.set_margin_end(12);
+    let status=Label::new(Some("Lettura del Cestino in corso…"));
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    outer.append(&status);
+    let scroll=ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    let items_box=GtkBox::new(Orientation::Vertical, 4);
+    scroll.set_child(Some(&items_box));
+    outer.append(&scroll);
+    let close=Button::with_label("Chiudi");
+    let close_window=window.clone();
+    close.connect_clicked(move |_| close_window.close());
+    outer.append(&close);
+    window.set_child(Some(&outer));
+    window.present();
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {let _=tx.send(read_trash_entries());});
+    let state=browser.clone();
+    glib::timeout_add_local(Duration::from_millis(50),move || match rx.try_recv() {
+        Ok(Ok((entries,truncated))) => {
+            let len=entries.len();
+            status.set_text(&format!("{len} elementi nel Cestino{} · Nessuna eliminazione permanente",
+                if truncated {" (primi 300)"} else {""}));
+            if len==0 {items_box.append(&Label::new(Some("Il Cestino è vuoto.")));}
+            for item in entries {
+                let row=GtkBox::new(Orientation::Horizontal, 8);
+                let subtitle=match &item.original {
+                    Some(p)=>format!("{}\nOrigine: {}",item.title,p.display()),
+                    None=>format!("{}\nPercorso di origine non disponibile",item.title)
+                };
+                let name=Label::new(Some(&subtitle));
+                name.set_xalign(0.0);
+                name.set_wrap(true);
+                name.set_hexpand(true);
+                row.append(&name);
+                let restore=Button::with_label("Ripristina");
+                restore.set_sensitive(item.original.is_some());
+                if let Some(original)=item.original {
+                    let uri=item.uri.clone();
+                    let dialog_status=status.clone();
+                    let source_row=row.clone();
+                    let list=items_box.clone();
+                    let current_state=state.clone();
+                    restore.connect_clicked(move |clicked| {
+                        clicked.set_sensitive(false);
+                        dialog_status.set_text("Ripristino in corso…");
+                        let (tx,rx)=std::sync::mpsc::sync_channel(1);
+                        let uri=uri.clone();
+                        let original=original.clone();
+                        std::thread::spawn(move || {
+                            let _=tx.send(restore_trash_item(&uri,&original));
+                        });
+                        let status=dialog_status.clone();
+                        let row=source_row.clone();
+                        let list=list.clone();
+                        let clicked=clicked.clone();
+                        let browser=current_state.clone();
+                        glib::timeout_add_local(Duration::from_millis(50),move || match rx.try_recv() {
+                            Ok(Ok(()))=>{
+                                list.remove(&row);
+                                status.set_text("File ripristinato nel percorso originale senza sovrascritture.");
+                                refresh(&browser);
+                                glib::ControlFlow::Break
+                            }
+                            Ok(Err(message))=>{
+                                clicked.set_sensitive(true);
+                                status.set_text(&message);
+                                glib::ControlFlow::Break
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                                status.set_text("Ripristino interrotto: verificare i file.");
+                                glib::ControlFlow::Break
+                            }
+                        });
+                    });
+                } else {
+                    restore.set_tooltip_text(Some("Nessun percorso originale: non è possibile ripristinare in sicurezza"));
+                }
+                row.append(&restore);
+                items_box.append(&row);
+            }
+            glib::ControlFlow::Break
+        }
+        Ok(Err(error))=>{
+            status.set_text(&error);
+            glib::ControlFlow::Break
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+            status.set_text("Lettura del Cestino interrotta.");
+            glib::ControlFlow::Break
+        }
+    });
+}
+
 fn watch_directory(browser: &Browser) {
     // Drop the previous monitor when switching folders.
     *browser.monitor.borrow_mut() = None;
@@ -1493,12 +1649,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     trash_row.append(&trash_icon);
     trash_row.append(&Label::new(Some("Cestino")));
     open_trash.set_child(Some(&trash_row));
-    open_trash.set_tooltip_text(Some("Apri il Cestino tramite il file manager configurato"));
-    open_trash.connect_clicked(|_| {
-        if let Err(e) = Command::new("xdg-open").arg("trash:///").spawn() {
-            eprintln!("Melania Files: impossibile aprire il Cestino: {e}");
-        }
-    });
+    open_trash.set_tooltip_text(Some("Visualizza e ripristina file direttamente dal Cestino GIO"));
+    let trash_browser=browser.clone();
+    open_trash.connect_clicked(move |_| open_trash_window(&trash_browser));
     sidebar.append(&open_trash);
     sidebar.append(&browser.mounts_box);
     repaint_volumes(&browser);
