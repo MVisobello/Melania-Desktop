@@ -44,6 +44,10 @@ struct Browser {
     // GIO filesystem events refresh the active tab without polling.
     monitor: Rc<RefCell<Option<gio::FileMonitor>>>,
     refresh_pending: Rc<Cell<bool>>,
+    // Single coalescing filesystem worker per tab, with stale-result fencing.
+    listing_generation: Rc<Cell<u64>>,
+    listing_running: Rc<Cell<bool>>,
+    listing_pending: Rc<RefCell<Option<ListingRequest>>>,
     mounts_box: GtkBox,
     copy_action: Button,
     cut_action: Button,
@@ -347,36 +351,106 @@ fn repaint_volumes(browser: &Browser) {
     }
 }
 
+#[derive(Clone)]
+struct ListingRequest {
+    generation: u64,
+    directory: PathBuf,
+    query: String,
+    options: model::ListingOptions,
+}
+
+/// Run no more than one filesystem scan per browser tab. A later filter or
+/// navigation replaces the queued request instead of spawning unbounded jobs.
+fn start_listing_worker(browser: &Browser) {
+    if browser.listing_running.get() {return;}
+    let task=browser.listing_pending.borrow_mut().take();
+    let Some(request)=task else {return;};
+    browser.listing_running.set(true);
+    let (sender,receiver)=std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        // Only plain Rust filesystem data crosses the thread boundary.
+        // GTK widgets must remain exclusively on the owning main thread.
+        let result=model::list_directory(&request.directory,&request.query,request.options);
+        let _=sender.send((request,result));
+    });
+    let tab=browser.clone();
+    glib::timeout_add_local(Duration::from_millis(35),move || {
+        match receiver.try_recv() {
+            Ok((request,result)) => {
+                tab.listing_running.set(false);
+                if tab.listing_generation.get()==request.generation {
+                    match result {
+                        Ok(entries)=>render_listing(&tab,&request.directory,entries),
+                        Err(error)=>{
+                            tab.status.set_text(&format!("Impossibile accedere: {error}"));
+                            tab.preview.set_text("La cartella non è disponibile.");
+                            tab.preview_image.set_visible(false);
+                            tab.visible_paths.borrow_mut().clear();
+                            tab.selected_paths.borrow_mut().clear();
+                        }
+                    }
+                }
+                start_listing_worker(&tab);
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                tab.listing_running.set(false);
+                if tab.listing_pending.borrow().is_none() {
+                    tab.status.set_text("Lettura cartella interrotta.");
+                }
+                start_listing_worker(&tab);
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+/// Directory I/O never runs on GTK's event loop.
 fn refresh(browser: &Browser) {
-    // Previous tiles will be destroyed. Never keep a strong reference to an old tile.
-    browser.highlighted.borrow_mut().take();
-    while let Some(child) = browser.tiles.first_child() {
-        if let Ok(tile) = child.downcast::<gtk::FlowBoxChild>() {
-            browser.tiles.remove(&tile);
-        } else { break; }
-    }
-    let dir = browser.current.borrow().clone();
-    browser.location.set_text(&dir.display().to_string());
-    // The label belongs to this browser page. Never update another tab's title.
-    let caption = dir.file_name().filter(|n| !n.is_empty())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| dir.display().to_string());
-    browser.tab_title.set_text(&caption);
-    let query = browser.search.text().to_lowercase();
-    let options = model::ListingOptions {
+    let generation=browser.listing_generation.get().wrapping_add(1);
+    browser.listing_generation.set(generation);
+    let directory=browser.current.borrow().clone();
+    let query=browser.search.text().to_lowercase();
+    let options=model::ListingOptions {
         show_hidden: browser.show_hidden.get(),
         pictures_only: browser.only_images.get(),
         sort_by: browser.sort_by.get(),
         descending: browser.descending.get(),
         ..Default::default()
     };
-    let entries = match model::list_directory(&dir, &query, options) {
-        Ok(entries) => entries,
-        Err(err) => {
-            browser.status.set_text(&format!("Impossibile accedere: {err}"));
-            return;
-        }
-    };
+    browser.location.set_text(&directory.display().to_string());
+    let caption=directory.file_name().filter(|n|!n.is_empty())
+        .map(|n|n.to_string_lossy().into_owned())
+        .unwrap_or_else(||directory.display().to_string());
+    browser.tab_title.set_text(&caption);
+    // Stale rows and paths must not remain actionable while another folder
+    // or search filter is loading; never allow deleting a hidden old item.
+    browser.highlighted.borrow_mut().take();
+    browser.tile_buttons.borrow_mut().clear();
+    browser.visible_paths.borrow_mut().clear();
+    browser.selected_paths.borrow_mut().clear();
+    *browser.selected.borrow_mut()=None;
+    *browser.selection_anchor.borrow_mut()=None;
+    while let Some(child)=browser.tiles.first_child(){
+        if let Ok(tile)=child.downcast::<gtk::FlowBoxChild>() {
+            browser.tiles.remove(&tile);
+        } else {break;}
+    }
+    browser.preview.set_text("Lettura della cartella in corso…");
+    browser.preview_image.set_visible(false);
+    browser.status.set_text("Caricamento…");
+    *browser.listing_pending.borrow_mut()=Some(ListingRequest{
+        generation,directory,query,options,
+    });
+    start_listing_worker(browser);
+}
+
+/// GTK rows/actions are built only from the latest worker result for this tab.
+fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
+    let caption=dir.file_name().filter(|n|!n.is_empty())
+        .map(|n|n.to_string_lossy().into_owned())
+        .unwrap_or_else(||dir.display().to_string());
     // A selection filtered out of this tab must not remain actionable.
     // In particular, never allow Trash/Rename to operate on a hidden stale item.
     let visible: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
@@ -1080,6 +1154,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         highlighted: Rc::new(RefCell::new(None)),
         monitor: Rc::new(RefCell::new(None)),
         refresh_pending: Rc::new(Cell::new(false)),
+        listing_generation: Rc::new(Cell::new(0)),
+        listing_running: Rc::new(Cell::new(false)),
+        listing_pending: Rc::new(RefCell::new(None)),
         mounts_box: GtkBox::new(Orientation::Vertical, 6),
         copy_action: copy_button.clone(), cut_action: cut_button.clone(),
         trash_action: trash_button.clone(), rename_field: rename_name.clone(),
