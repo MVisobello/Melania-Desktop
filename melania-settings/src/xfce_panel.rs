@@ -23,13 +23,6 @@ pub fn page()->GtkBox {
     let body=GtkBox::new(Orientation::Vertical,12);
     body.add_css_class("settings-body");
     body.append(&label("Pannello e barra delle applicazioni","settings-heading"));
-    body.append(&label(
-        "Personalizza il pannello reale di Melania Desktop, come nelle preferenze di XFCE.",
-        "settings-subtitle"));
-    body.append(&label(
-        "Le modifiche vengono applicate senza riavviare il pannello. Menu Start, orologio e ordine degli elementi restano invariati.",
-        "settings-row-description"));
-
     let height=SpinButton::with_range(52.0,96.0,1.0);
     height.set_value(prefs.panel_height as f64);
     height.set_numeric(true);
@@ -61,7 +54,7 @@ pub fn page()->GtkBox {
         "Dal 40% al 100%. Il valore Aero iniziale è 94%; non modifica le finestre.",
         &opacity));
 
-    let feedback=label("Le impostazioni riguardano soltanto Melania.",
+    let feedback=label("",
         "settings-row-description");
     let action_row=GtkBox::new(Orientation::Horizontal,10);
     action_row.add_css_class("settings-action-row");
@@ -120,12 +113,5 @@ pub fn page()->GtkBox {
             Err(error)=>info.set_text(&format!("Impossibile ripristinare: {error}")),
         }
     });
-    body.append(&label("Organizzazione e applicazioni","settings-section-heading"));
-    body.append(&label(
-        "Per aggiungere o rimuovere applicazioni usa il clic destro sul menu Start o sulla barra. "
-        ,"settings-row-description"));
-    body.append(&label(
-        "Per riordinare i preferiti trascinali. Pannelli multipli e plugin saranno aggiunti in fasi successive.",
-        "settings-row-description"));
     body
 }
