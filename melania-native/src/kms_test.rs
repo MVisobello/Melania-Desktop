@@ -5,6 +5,8 @@
 //! unqueued GBM buffer. No queue_buffer, commit, page_flip or set_crtc.
 //! The caller must first verify a dedicated Linux console and QEMU DMI.
 use drm::control::{connector, Device as ControlDevice};
+use std::time::{Duration, Instant};
+use crate::preflight_guard::NativePreflightGuard;
 use smithay::{
     backend::{
         allocator::{
@@ -67,7 +69,12 @@ pub fn safest_test_mode_index(sizes: &[(u16, u16)]) -> Option<usize> {
 
 /// Read-only atomic test plus an unqueued GBM render candidate.
 /// Only called in a QEMU virtual GPU by the opted-in libseat experiment.
-pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport,String> {
+pub fn prepare_and_render_test_only<F>(
+    device:&mut DrmDevice,
+    seat_active:F,
+)->Result<KmsTestReport,String>
+where F: Fn() -> bool
+{
     if !device.is_atomic() {
         return Err("Atomic DRM required; legacy mode cannot guarantee TEST_ONLY".into());
     }
@@ -78,6 +85,14 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
         .map_err(|e|format!("KMS pre-test baseline incomplete: {e}"))?;
     let resource_copies=crate::kms_resources::capture_read_only(&fd,&baseline)
         .map_err(|e|format!("KMS resource payload preflight incomplete: {e}"))?;
+    // Own both observations together. Each GPU stage must recheck seat state
+    // and the bounded cooperative deadline; the external watchdog is still
+    // needed for a driver ioctl that itself never returns.
+    let mut guard=NativePreflightGuard::capture(
+        baseline,resource_copies,Instant::now(),Duration::from_secs(36)
+    ).map_err(|e|format!("KMS guard initialization failed: {e:?}"))?;
+    guard.checkpoint(seat_active(),Instant::now())
+        .map_err(|e|format!("KMS preflight stopped: {e:?}"))?;
     let resources=fd.resource_handles()
         .map_err(|e|format!("KMS connector discovery failed: {e}"))?;
     let mut diagnostics=Vec::new();
@@ -114,6 +129,10 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                     diagnostics.push(format!("CRTC state unavailable: {error}"));
                     continue;
                 }
+                // Refuse to begin a new candidate if the seat is no longer
+                // active or earlier work exceeded the safety deadline.
+                guard.checkpoint(seat_active(),Instant::now())
+                    .map_err(|e|format!("KMS preflight stopped: {e:?}"))?;
                 // Surface creation builds pending state but does not commit.
                 let surface=match device.create_surface(crtc,mode.clone(),&[*connector_handle]) {
                     Ok(surface)=>surface,
@@ -154,19 +173,22 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                     .map_err(|e|format!("KMS candidate finish failed: {e}"))?
                     .wait().map_err(|e|format!("KMS candidate GPU sync failed: {e}"))?;
 
-                // Verify that TEST_ONLY and the temporary GLES rendering did
-                // not mutate any observable atomic KMS properties. A mismatch
-                // may indicate a hotplug or another KMS client: fail closed.
+                // Check seat/deadline before and after read-only snapshot
+                // revalidation, rejecting races with resume or GPU changes.
+                guard.checkpoint(seat_active(),Instant::now())
+                    .map_err(|e|format!("KMS GPU stage stopped: {e:?}"))?;
                 let after=crate::kms_restore::capture_read_only(&fd)
                     .map_err(|e|format!("KMS post-test baseline incomplete: {e}"))?;
-                if !after.unchanged_since(&baseline) {
-                    return Err("KMS baseline changed during TEST_ONLY preflight".into());
-                }
                 let resources_after=crate::kms_resources::capture_read_only(&fd,&after)
                     .map_err(|e|format!("KMS post-test resource inspection failed: {e}"))?;
-                if !resources_after.unchanged_since(&resource_copies) {
-                    return Err("KMS blob payload or framebuffer bindings changed during TEST_ONLY".into());
-                }
+                guard.verify_after(&after,&resources_after,seat_active(),Instant::now())
+                    .map_err(|e|match e {
+                        crate::preflight_guard::PreflightError::BaselineChanged =>
+                            "KMS baseline changed during TEST_ONLY preflight".to_string(),
+                        crate::preflight_guard::PreflightError::ResourcesChanged =>
+                            "KMS blob payload or framebuffer bindings changed during TEST_ONLY".to_string(),
+                        _ =>format!("KMS preflight verification stopped: {e:?}"),
+                    })?;
                 // In-memory blob bytes do not own the kernel MODE_ID or FB_ID,
                 // so a real rollback and page flip remain strictly disabled.
                 // This still cannot restore mode blobs, scanout buffers or VT.
@@ -177,10 +199,10 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                     buffer_rendered:true,
                     crtc_state_readable:true,
                     baseline_unchanged:true,
-                    copied_blob_count:resource_copies.copied_blob_count(),
-                    borrowed_framebuffer_count:resource_copies.borrowed_framebuffer_count(),
+                    copied_blob_count:guard.copied_blobs(),
+                    borrowed_framebuffer_count:guard.observed_framebuffers(),
                     resources_unchanged:true,
-                    restoration_implemented:baseline.restoration_implemented(),
+                    restoration_implemented:guard.restoration_implemented(),
                     visible_frame_submitted:false,
                 });
             }
