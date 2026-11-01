@@ -50,3 +50,34 @@ jobs:
           name: qemu-vt-evidence
           path: reports/qemu-tty/
           if-no-files-found: warn
+
+  virtio-drm:
+    name: QEMU VirtIO GPU DRM card + VT roundtrip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify test scripts
+        run: |
+          set -euo pipefail
+          bash -n scripts/run-qemu-vt-smoke.sh
+          python3 -m unittest discover -s tests -p 'test_qemu_vt_smoke.py' -v
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils curl
+          qemu-system-x86_64 --version
+      - name: Boot disposable VirtIO GPU VM; require DRM card and original VT
+        env:
+          MELANIA_QEMU_TTY_SMOKE: YES_DISPOSABLE_QEMU
+          MELANIA_QEMU_REQUIRE_DRM: YES_VIRTIO_GPU
+          MELANIA_QEMU_REPORT_DIR: reports/qemu-virtio-drm
+        run: bash scripts/run-qemu-vt-smoke.sh
+      - name: Upload VM DRM and VT evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-virtio-drm-evidence
+          path: reports/qemu-virtio-drm/
+          if-no-files-found: warn
