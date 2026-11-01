@@ -6,6 +6,8 @@ on:
       - scripts/melania-qemu-native-guest.sh
       - scripts/run-qemu-melania-native.sh
       - tests/test_qemu_native_stage17.py
+      - tests/test_native_rollback_stage19.py
+      - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
   push:
@@ -14,6 +16,8 @@ on:
       - scripts/melania-qemu-native-guest.sh
       - scripts/run-qemu-melania-native.sh
       - tests/test_qemu_native_stage17.py
+      - tests/test_native_rollback_stage19.py
+      - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
   workflow_dispatch:
@@ -35,6 +39,7 @@ jobs:
           set -euo pipefail
           bash -n scripts/melania-qemu-native-guest.sh scripts/run-qemu-melania-native.sh
           python3 -m unittest discover -s tests -p 'test_qemu_native_stage17.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_rollback_stage19.py' -v
       - name: Build actual Rust backend on same Ubuntu release as guest
         run: |
           set -euo pipefail
