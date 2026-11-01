@@ -167,7 +167,8 @@ fn list_uri_bounded(uri:&str,text_filter:&str,show_hidden:bool,max_items:usize,
             name,
             directory: info.file_type()==gio::FileType::Directory,
             size: info.size().max(0) as u64,
-            content_type: info.content_type().map(|s|s.to_string()).unwrap_or_default(),
+            content_type: info.attribute_string("standard::content-type")
+                .map(|s|s.to_string()).unwrap_or_default(),
             modified: match info.attribute_uint64("time::modified") {
                 0 => None,
                 seconds => UNIX_EPOCH.checked_add(Duration::from_secs(seconds)),
