@@ -1,0 +1,32 @@
+name: Melania Files GVfs SFTP loopback test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-sftp:
+    name: Authenticated SFTP GIO backend (loopback only)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install temporary GVfs, GTK and SSH test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgtk-4-dev gvfs-backends gvfs-daemons dbus dbus-user-session openssh-server openssh-client
+      - name: Real authenticated SFTP provider smoke
+        run: |
+          set -o pipefail
+          bash scripts/smoke-gvfs-sftp-loopback.sh 2>&1 | tee gvfs-sftp-smoke.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melania-gvfs-sftp-smoke-log
+          path: gvfs-sftp-smoke.log
