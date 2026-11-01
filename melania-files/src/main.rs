@@ -897,6 +897,44 @@ fn repaint_favorites(browser: &Browser) {
     }
 }
 
+/// Explicit, non-destructive import of local GTK/Nautilus folder bookmarks.
+/// Remote URIs are deliberately skipped until the browser becomes gio::File-based.
+fn import_nautilus_bookmarks(browser: &Browser) {
+    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|s|!s.is_empty())
+        .map(PathBuf::from).unwrap_or_else(||home().join(".config"));
+    let mut imported=0usize;
+    let mut skipped_remote=0usize;
+    let mut bookmarks=browser.bookmarks.borrow_mut();
+    for version in ["gtk-3.0","gtk-4.0"] {
+        let source=config.join(version).join("bookmarks");
+        let Ok(bytes)=fs::read(&source) else {continue;};
+        if bytes.len()>128*1024 {continue;}
+        let Ok(content)=String::from_utf8(bytes) else {continue;};
+        for line in content.lines().take(500) {
+            let Some(uri)=line.split_whitespace().next() else {continue;};
+            if uri.starts_with('#') {continue;}
+            if !uri.starts_with("file://") {skipped_remote+=1;continue;}
+            let Some(path)=gio::File::for_uri(uri).path() else {continue;};
+            if let Ok(true)=bookmarks.add(&path) {imported+=1;}
+        }
+    }
+    let result=if imported>0 {
+        model::bookmarks_path().and_then(|path|bookmarks.write_to(&path))
+    } else {Ok(())};
+    drop(bookmarks);
+    match result {
+        Ok(()) => {
+            repaint_favorites(browser);
+            browser.status.set_text(&format!(
+                "Importati {imported} preferiti locali da Nautilus/GTK. URI remoti saltati: {skipped_remote}."
+            ));
+        }
+        Err(error) => browser.status.set_text(&format!(
+            "Importazione non salvata: {error}; ricontrollare i preferiti prima di chiudere."
+        )),
+    }
+}
+
 /// Numbered batch rename keeps Melania's browser UI and delegates all
 /// filesystem mutations to the same Linux atomic no-replace primitive used by
 /// single-file rename. A preview is shown before any operation.
@@ -1084,6 +1122,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let mark = Button::with_label("☆ Preferito");
     mark.set_tooltip_text(Some("Aggiungi la cartella corrente ai preferiti"));
 
+    let import_bookmarks = Button::with_label("Importa preferiti Nautilus");
+    import_bookmarks.set_tooltip_text(Some("Importa soltanto cartelle locali dai preferiti GTK; non cambia i preferiti di Nautilus"));
     let unmark = Button::with_label("− Preferito");
     unmark.set_tooltip_text(Some("Rimuovi la cartella corrente dai preferiti"));
 
@@ -1170,6 +1210,7 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     other_choices.append(&recursive_search_button);
     other_choices.append(&mark);
     other_choices.append(&unmark);
+    other_choices.append(&import_bookmarks);
     root.append(&actions_scroll);
     root.append(&toolbar);
     // A pair of native GTK Paned containers guarantee that the sidebar,
@@ -1614,6 +1655,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
             Err(err)=>state.status.set_text(&format!("Impossibile salvare preferito: {err}")),
         }
     });
+    let state_for_import=browser.clone();
+    import_bookmarks.connect_clicked(move |_| import_nautilus_bookmarks(&state_for_import));
     let state=browser.clone();
     unmark.connect_clicked(move |_| {
         let folder=state.current.borrow().canonicalize();
