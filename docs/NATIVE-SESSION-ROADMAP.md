@@ -99,6 +99,23 @@ L'acquisizione DRM master può temporaneamente interagire con le risorse
 grafiche della console: **non usare la prova sulla macchina di lavoro**.
 Anche qui NATIVE_SESSION_READY=false: non è una sessione desktop.
 
+## Inventario connettori e modalità — fase 3
+
+Il modulo Rust `melania-native/src/outputs.rs` interroga con il trait drm-rs
+`control::Device` i connettori rilevati dal dispositivo già aperto tramite
+libseat nella modalità sperimentale `--experimental-drm`.
+Legge lo stato connesso/scollegato, dimensioni fisiche dichiarate e modalità
+video pubblicate; evita ricerche infinite durante gli eventi hotplug e
+ordina/deduplica le modalità. Una scelta **provvisoria** basata su risoluzione
+e refresh viene mostrata in sola lettura, non applicata.
+
+La fase 3 **non** determina ancora la compatibilità encoder/CRTC/plane,
+il flag EDID preferred, il mapping degli output Wayland, l'acquisizione
+GBM/EGL o la gestione delle VT. Nessun modeset o renderer è stato abilitato.
+I test includono monitor scollegati, EDID non valido e selezione deterministica
+della modalità. Ogni test hardware richiede sempre una VM dedicata e l'opt-in
+già presente. Il desktop annidato non viene modificato.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.
