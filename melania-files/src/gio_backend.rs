@@ -292,7 +292,8 @@ pub fn image_quicklook(uri:&str,cancelled:&Arc<AtomicBool>)
             }
             let remaining=MAX_IMAGE_TRANSFER_BYTES+1-bytes.len();
             if remaining==0{break;}
-            let read=stream.read(&mut chunk[..remaining.min(chunk.len())],Some(provider))
+            let available=remaining.min(chunk.len());
+            let read=stream.read(&mut chunk[..available],Some(provider))
                 .map_err(|e|format!("Lettura immagine fallita: {e}"))?;
             if read==0{break;}
             bytes.extend_from_slice(&chunk[..read]);
