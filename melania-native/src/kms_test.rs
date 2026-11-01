@@ -29,6 +29,12 @@ pub struct KmsTestReport {
     pub crtc_state_readable: bool,
     /// All pre/post atomic KMS properties read and compared without mutations.
     pub baseline_unchanged: bool,
+    /// In-memory copies of old mode/color/HDR blobs; not live DRM objects.
+    pub copied_blob_count: usize,
+    /// Observed old FB_ID values; never pretend they own framebuffer memory.
+    pub borrowed_framebuffer_count: usize,
+    /// The before/after KMS blob payloads and FB observations matched.
+    pub resources_unchanged: bool,
     /// Nothing can be restored from these numbers without owned blobs and FBs.
     pub restoration_implemented: bool,
     pub visible_frame_submitted: bool,
@@ -70,6 +76,8 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
     // prerequisite for future rollback. Refuse incomplete property trees.
     let baseline=crate::kms_restore::capture_read_only(&fd)
         .map_err(|e|format!("KMS pre-test baseline incomplete: {e}"))?;
+    let resource_copies=crate::kms_resources::capture_read_only(&fd,&baseline)
+        .map_err(|e|format!("KMS resource payload preflight incomplete: {e}"))?;
     let resources=fd.resource_handles()
         .map_err(|e|format!("KMS connector discovery failed: {e}"))?;
     let mut diagnostics=Vec::new();
@@ -154,6 +162,13 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                 if !after.unchanged_since(&baseline) {
                     return Err("KMS baseline changed during TEST_ONLY preflight".into());
                 }
+                let resources_after=crate::kms_resources::capture_read_only(&fd,&after)
+                    .map_err(|e|format!("KMS post-test resource inspection failed: {e}"))?;
+                if !resources_after.unchanged_since(&resource_copies) {
+                    return Err("KMS blob payload or framebuffer bindings changed during TEST_ONLY".into());
+                }
+                // In-memory blob bytes do not own the kernel MODE_ID or FB_ID,
+                // so a real rollback and page flip remain strictly disabled.
                 // This still cannot restore mode blobs, scanout buffers or VT.
                 // No queue_buffer, commit or page_flip occurs here.
                 return Ok(KmsTestReport {
@@ -162,6 +177,9 @@ pub fn prepare_and_render_test_only(device:&mut DrmDevice)->Result<KmsTestReport
                     buffer_rendered:true,
                     crtc_state_readable:true,
                     baseline_unchanged:true,
+                    copied_blob_count:resource_copies.copied_blob_count(),
+                    borrowed_framebuffer_count:resource_copies.borrowed_framebuffer_count(),
+                    resources_unchanged:true,
                     restoration_implemented:baseline.restoration_implemented(),
                     visible_frame_submitted:false,
                 });
@@ -198,11 +216,14 @@ mod tests {
             connector:"Virtual-1".into(),width:1280,height:720,
             test_only_passed:true,buffer_rendered:true,
             crtc_state_readable:true,baseline_unchanged:true,
+            copied_blob_count:2,borrowed_framebuffer_count:1,resources_unchanged:true,
             restoration_implemented:false,visible_frame_submitted:false,
         };
         assert!(result.test_only_passed);
         assert!(result.crtc_state_readable);
         assert!(result.baseline_unchanged);
+        assert!(result.resources_unchanged);
+        assert_eq!(result.copied_blob_count,2);
         assert!(!result.restoration_implemented);
         assert!(!result.visible_frame_submitted);
         assert!(!crate::renderer::native_scanout_is_implemented());
