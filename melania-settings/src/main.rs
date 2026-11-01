@@ -1,5 +1,8 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
+mod xfce_catalog;
+mod xfce_defaults;
+mod xfce_pages;
 mod symbols;
 mod sensors;
 #[path = "../../branding/window_controls.rs"]
@@ -378,6 +381,7 @@ fn build_ui(
     stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
     // Summary and category pages reflect actual status, without fake hardware switches.
     gnome_pages::add_pages(&stack);
+    xfce_pages::add_pages(&stack);
     let system = gnome_pages::overview(&stack);
     stack.add_titled(&system, Some("system"), "Sistema");
     let notifications = page("Notifiche", "Gestisci il comportamento delle notifiche di Melania.");
@@ -416,6 +420,7 @@ fn build_ui(
         ("Scorciatoie", "shortcuts", "input-keyboard"),
         ("Schermo", "display", "video-display"),
         ("Archiviazione", "storage", "drive-harddisk"),
+        ("Impostazioni complete XFCE", "xfce", "preferences-system"),
     ] {
         // Group headings make the long navigation easier to scan.
         let group = match target {
@@ -423,6 +428,7 @@ fn build_ui(
             "appearance" => Some("PERSONALIZZAZIONE"),
             "account" => Some("UTENTI E APPLICAZIONI"),
             "desktop" => Some("DESKTOP E FINESTRE"),
+            "xfce" => Some("CATALOGO COMPLETO XFCE 4.20"),
             _ => None,
         };
         if let Some(group) = group {
@@ -532,12 +538,14 @@ fn setup_melania_icon_theme() {
     }
 }
 
-const SETTINGS_PAGES: [&str; 20] = [
+const SETTINGS_PAGES: [&str; 21] = [
     "system", "network", "bluetooth", "appearance", "notifications", "applications",
     "account", "datetime", "power", "audio", "devices", "privacy", "region",
-    "accessibility", "about", "desktop", "workspaces", "shortcuts", "display", "storage"
+    "accessibility", "about", "desktop", "workspaces", "shortcuts", "display", "storage", "xfce"
 ];
-fn is_valid_page(page: &str) -> bool { SETTINGS_PAGES.contains(&page) }
+fn is_valid_page(page: &str) -> bool {
+    SETTINGS_PAGES.contains(&page) || xfce_pages::is_known_page(page)
+}
 
 fn main() -> gtk::glib::ExitCode {
     // Handle remote positional page requests even when Settings is already
