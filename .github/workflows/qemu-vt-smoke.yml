@@ -1,0 +1,52 @@
+name: QEMU isolated virtual-console smoke
+
+on:
+  pull_request:
+    paths:
+      - scripts/melania-vt-guest.py
+      - scripts/run-qemu-vt-smoke.sh
+      - tests/test_qemu_vt_smoke.py
+      - .github/workflows/qemu-vt-smoke.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/melania-vt-guest.py
+      - scripts/run-qemu-vt-smoke.sh
+      - tests/test_qemu_vt_smoke.py
+      - .github/workflows/qemu-vt-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  virtual-console:
+    name: QEMU TCG guest VT switch and return
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static and fail-closed test
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_qemu_vt_smoke.py' -v
+          bash -n scripts/run-qemu-vt-smoke.sh
+          python3 -m py_compile scripts/melania-vt-guest.py
+      - name: Install QEMU and cloud-init ISO tooling
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils curl
+          qemu-system-x86_64 --version
+      - name: Boot disposable VM and check real virtual console recovery
+        env:
+          MELANIA_QEMU_TTY_SMOKE: YES_DISPOSABLE_QEMU
+          MELANIA_QEMU_REPORT_DIR: reports/qemu-tty
+        run: bash scripts/run-qemu-vt-smoke.sh
+      - name: Upload guest serial transcript and result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-vt-evidence
+          path: reports/qemu-tty/
+          if-no-files-found: warn
