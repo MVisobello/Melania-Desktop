@@ -465,6 +465,42 @@ ripristinabili, possesso dei vecchi framebuffer e blob kernel,
 transazioni atomiche reversibili e verifica pause/resume del compositore
 dentro una VM, prima di provare hardware reale.
 
+## Fase 16 — riconoscimento DRM VirtIO in una VM QEMU senza passthrough
+
+Il banco di prova QEMU della fase 15 ha ora una seconda modalità,
+`MELANIA_QEMU_REQUIRE_DRM=YES_VIRTIO_GPU`: seleziona una periferica
+VGA VirtIO paravirtualizzata al posto della VGA standard. Il sistema
+Linux guest può caricare il modulo `virtio_gpu` e deve esporre
+**almeno un dispositivo a caratteri** `/dev/dri/cardN`; in caso
+contrario il test fallisce prima di toccare le VT. Il test verifica
+anche il passaggio VT e il ritorno alla console originale.
+
+La pipeline `.github/workflows/qemu-vt-smoke.yml` esegue
+**due VM isolate**: una con VGA classica per il test VT regressivo,
+una con VirtIO GPU che richiede *sia* DRM *sia* recupero VT.
+Per entrambi i job rimangono obbligatori l'immagine Ubuntu con
+checksum SHA256, disco temporaneo, timeout, solo TCG e nessun
+dispositivo grafico passato dall'host. I risultati sono separati
+negli artifact `qemu-vt-evidence` e `qemu-virtio-drm-evidence`.
+
+Si può ripetere la prova VirtIO su un host di test abilitato:
+
+```sh
+MELANIA_QEMU_TTY_SMOKE=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_REQUIRE_DRM=YES_VIRTIO_GPU \
+bash scripts/run-qemu-vt-smoke.sh
+```
+
+**Limite:** `/dev/dri/cardN` non dimostra che il driver supporti
+atomic KMS, GBM/EGL, rendering o rollback dello stato hardware.
+Il guest emette esplicitamente
+`MELANIA_QEMU_DRM_KMS_TESTED=false`; la fase non esegue
+`melania-native --experimental-kms-test` e non effettua scanout.
+Il passo successivo richiede la compilazione e l'esecuzione del
+backend nativo **nella VM con un seat e una TTY dedicati**,
+con test dei percorsi DRM in sola lettura e successiva prova
+atomica `TEST_ONLY` protetta, senza mai compromettere l'host.
+
 ## Lavoro necessario per una vera sessione di login
 1. Backend DRM/KMS (o libdisplay-info + GBM/EGL) nel compositore, discovery di
    output reali e hotplug; renderer/headless fallback e test espliciti.

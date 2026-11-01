@@ -4,6 +4,13 @@ set -euo pipefail
 fail() { printf 'MELANIA_QEMU_HOST_BLOCKED: %s\n' "$*" >&2; exit 78; }
 [[ "${MELANIA_QEMU_TTY_SMOKE:-}" == "YES_DISPOSABLE_QEMU" ]] ||
   fail 'explicit MELANIA_QEMU_TTY_SMOKE=YES_DISPOSABLE_QEMU required'
+# Explicit opt-in for a second, hardware-independent VirtIO DRM inventory
+# test. No host /dev/dri, /dev/kvm, GL or PCI passthrough is ever opened.
+case "${MELANIA_QEMU_REQUIRE_DRM:-}" in
+  "" ) vga_device="std"; guest_require_drm="0" ;;
+  YES_VIRTIO_GPU ) vga_device="virtio"; guest_require_drm="1" ;;
+  * ) fail 'MELANIA_QEMU_REQUIRE_DRM must be unset or YES_VIRTIO_GPU' ;;
+esac
 for bin in qemu-system-x86_64 qemu-img cloud-localds curl timeout sha256sum base64; do
   command -v "$bin" >/dev/null || fail "$bin is required"
 done
@@ -41,7 +48,7 @@ write_files:
     encoding: b64
     content: $encoded
 runcmd:
-  - [ bash, -c, 'python3 /usr/local/sbin/melania-vt-guest.py > /dev/ttyS0 2>&1; rc=\$?; echo "MELANIA_QEMU_VT_EXIT=\$rc" > /dev/ttyS0; sync; poweroff -f' ]
+  - [ bash, -c, 'MELANIA_QEMU_GUEST_REQUIRE_DRM=$guest_require_drm python3 /usr/local/sbin/melania-vt-guest.py > /dev/ttyS0 2>&1; rc=\$?; echo "MELANIA_QEMU_VT_EXIT=\$rc" > /dev/ttyS0; sync; poweroff -f' ]
 EOF
 cloud-localds seed.img user-data meta-data
 
@@ -53,7 +60,7 @@ set +e
 timeout --signal=TERM --kill-after=10s 840s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 2048 \
-  -display none -vga std -serial "file:$serial" -monitor none -no-reboot \
+  -display none -vga "$vga_device" -serial "file:$serial" -monitor none -no-reboot \
   -device virtio-scsi-pci,id=scsi \
   -drive if=none,file=guest-overlay.qcow2,id=drive0,format=qcow2 \
   -device scsi-hd,drive=drive0 \
@@ -66,6 +73,8 @@ printf 'qemu_exit=%s\n' "$qemu_code" > "$report_dir/result.txt"
 if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_VGA_ENUMERATED=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_SWITCH=true' "$serial" ||
+   { [[ "$guest_require_drm" == "1" ]] &&
+     ! grep -q '^MELANIA_QEMU_DRM_ENUMERATED=true' "$serial"; } ||
    ! grep -q '^MELANIA_QEMU_VT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VT_EXIT=0' "$serial"; then
   printf '%s\n' 'MELANIA_QEMU_TTY_RESULT=FAIL' | tee -a "$report_dir/result.txt"
@@ -73,5 +82,7 @@ if [[ "$qemu_code" -ne 0 ]] ||
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_TTY_RESULT=PASS' | tee -a "$report_dir/result.txt"
+printf 'MELANIA_QEMU_VGA_DEVICE=%s\n' "$vga_device" >> "$report_dir/result.txt"
+printf 'MELANIA_QEMU_REQUIRE_DRM=%s\n' "$guest_require_drm" >> "$report_dir/result.txt"
 # A VT roundtrip does NOT prove that DRM scanout, libseat or KMS rollback works.
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report_dir/result.txt"
