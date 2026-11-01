@@ -288,6 +288,7 @@ pub fn overview(stack: &Stack) -> GtkBox {
 }
 pub fn add_pages(stack: &Stack) {
     let display = page("Schermo", "video-display");
+    crate::display_controls::append_backlight(&display);
     let monitor_count = gtk::gdk::Display::default()
         .map(|d| d.monitors().n_items()).unwrap_or(0);
     group(&display, "Monitor");
