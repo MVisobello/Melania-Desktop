@@ -17,6 +17,11 @@ mkdir -m 700 "$TEMP/config"
 export XDG_RUNTIME_DIR="$TEMP/runtime"
 # No CI settings test may mutate developer or runner personal config files.
 export XDG_CONFIG_HOME="$TEMP/config"
+# Real GVfs local URI exercises the exact same GIO tab rendering pipeline as
+# network:/// and sftp:/// without relying on a server on shared CI runners.
+mkdir -p "$TEMP/gvfs-case"
+printf '%s\n' 'real GTK/GIO/GVfs navigation' > "$TEMP/gvfs-case/gio-proof.txt"
+export MELANIA_SMOKE_GIO_FILE_URI="file://$TEMP/gvfs-case"
 PID=''
 cleanup(){
   if [[ -n "$PID" ]]; then
@@ -96,6 +101,18 @@ for i in $(seq 1 100); do
 done
 [[ "$FILES_LISTED" == 1 ]] || { echo 'FAIL: no async Melania Files list completion';exit 1; }
 echo 'PASS: asynchronous filesystem listing reached real GTK Files window'
+# Ensure remote-mode GIO tabs are not just source code: the worker must
+# enumerate a real file URI and GTK must populate its rows.
+GIO_LISTED=0
+for i in $(seq 1 100); do
+  if grep -q 'MELANIA_GIO_LISTING_READY count=1' "$TEMP/compositor.log"; then
+    GIO_LISTED=1; break
+  fi
+  kill -0 "$PID" 2>/dev/null || { echo 'FAIL: compositor exited during GIO tab scan';exit 1; }
+  sleep .1
+done
+[[ "$GIO_LISTED" == 1 ]] || { echo 'FAIL: GVfs file:// tab never listed real file';exit 1; }
+echo 'PASS: real GTK network-style GIO URI tab enumerated a local file'
 sleep .8
 # Request a real compositor-owned window-only thumbnail through the same
 # 0600 control socket used by the taskbar. Validate the actual BMP pixels.

@@ -9,8 +9,13 @@ class Files036(unittest.TestCase):
     def test_title_belongs_to_each_tab(self):
         for text in ('tab_title: Label', 'browser.tab_title.set_text(&caption)',
                      'fn file_tab(start_dir: PathBuf, shared_pending:',
-                     'let child = file_tab(path, pending, text.clone())'):
+                     'let child = file_tab(path, pending, text.clone(), open_remote)'):
             self.assertIn(text, SOURCE)
+
+    def test_local_and_gvfs_use_same_tab_rail(self):
+        for marker in ('fn append_remote_tab(', 'append_file_page(notebook,tab_strip,headers,window',
+                       'mod gio_backend;', 'mod gio_remote;', 'network_button.connect_clicked'):
+            self.assertIn(marker, SOURCE)
 
     def test_single_click_selects_double_click_opens(self):
         click=SOURCE[SOURCE.index('button.connect_clicked(move |_| {'):SOURCE.index('let activation = gtk::GestureClick::new()')]
