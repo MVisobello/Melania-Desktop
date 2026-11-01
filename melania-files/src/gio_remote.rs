@@ -268,6 +268,17 @@ fn open_text_quicklook(remote:&Remote,uri:String){
 
 /// Encoded bytes are transferred and decoded in a worker thread, never in
 /// the GTK main loop. The worker sends only a bounded, scaled RGBA buffer.
+/// Some providers, including authenticated SFTP mounts, may omit MIME
+/// metadata during directory enumeration. A known image suffix only chooses
+/// which Quick Look to try: the backend still validates MIME AND actual bytes.
+fn image_preview_candidate(uri:&str,mime:&str)->bool{
+    if mime.starts_with("image/"){return true;}
+    if !mime.is_empty() && mime!="application/octet-stream"{return false;}
+    let basename=gio::File::for_uri(uri).basename()
+        .map(|name|name.to_string_lossy().to_lowercase()).unwrap_or_default();
+    [".png",".jpg",".jpeg",".webp"].iter().any(|suffix|basename.ends_with(suffix))
+}
+
 fn open_image_quicklook(remote:&Remote,uri:String){
     let window=gtk::Window::builder()
         .title("Anteprima immagine — Melania Files")
@@ -1127,8 +1138,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
             let uri=uri.clone();
             let is_image=ui.selected.borrow().as_ref()
                 .filter(|item|item.uri==uri)
-                .map(|item|item.content_type.starts_with("image/"))
-                .unwrap_or(false);
+                .map(|item|image_preview_candidate(&uri,&item.content_type))
+                .unwrap_or_else(||image_preview_candidate(&uri,""));
             if is_image{
                 open_image_quicklook(&ui,uri);
             }else{
@@ -1267,3 +1278,16 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     refresh(&state);
     root
 }
+
+#[cfg(test)]
+mod quicklook_routing_tests {
+    use super::image_preview_candidate;
+    #[test] fn gvfs_missing_mime_uses_suffix_without_trusting_file_contents(){
+        assert!(image_preview_candidate("sftp://example.com/photo.PNG",""));
+        assert!(image_preview_candidate("sftp://example.com/photo.webp","application/octet-stream"));
+        assert!(image_preview_candidate("file:///tmp/photo.jpg","image/jpeg"));
+        assert!(!image_preview_candidate("sftp://example.com/unrelated.txt",""));
+        assert!(!image_preview_candidate("sftp://example.com/fake.png","text/plain"));
+    }
+}
+
