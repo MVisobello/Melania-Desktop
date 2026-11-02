@@ -4,7 +4,7 @@
 use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd};
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
-    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output},
+    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_wm_base,xdg_surface,xdg_toplevel,
@@ -22,6 +22,7 @@ struct Client {
     output_mode_received:bool,
     xdg_acked:bool,
     buffer_released:bool,
+    frame_done_count:u32,
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Client {
@@ -83,6 +84,16 @@ impl Dispatch<wl_shm_pool::WlShmPool,()> for Client {
     fn event(_: &mut Self,_:&wl_shm_pool::WlShmPool,_:wl_shm_pool::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
+impl Dispatch<wl_callback::WlCallback,()> for Client {
+    fn event(state:&mut Self,_:&wl_callback::WlCallback,event:wl_callback::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let wl_callback::Event::Done{callback_data}=event {
+            state.frame_done_count=state.frame_done_count.saturating_add(1);
+            println!("MELANIA_NATIVE_CLIENT_FRAME_CALLBACK_DONE={} at_ms={}",
+                     state.frame_done_count,callback_data);
+        }
+    }
+}
 impl Dispatch<wl_buffer::WlBuffer,()> for Client {
     fn event(state: &mut Self,_:&wl_buffer::WlBuffer,event:wl_buffer::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
@@ -115,8 +126,13 @@ fn main()->Result<(),Box<dyn Error>> {
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("server failed to configure xdg_toplevel".into());}
+    let callback_probe=std::env::var("MELANIA_NATIVE_WAIT_PRESENT_CALLBACK")
+        .as_deref()==Ok("YES_QEMU_VM");
     let three_frames=std::env::var("MELANIA_NATIVE_THREE_FRAMES")
         .as_deref()==Ok("YES_QEMU_VM");
+    if callback_probe && !three_frames {
+        return Err("QEMU frame callback test needs three live commits".into());
+    }
     let two_frames=std::env::var("MELANIA_NATIVE_TWO_FRAMES")
         .as_deref()==Ok("YES_QEMU_VM");
     let count=if three_frames {3} else if two_frames {2} else {1};
@@ -159,21 +175,39 @@ fn main()->Result<(),Box<dyn Error>> {
             0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
         );
         state.buffer_released=false;
+        // wl_surface.frame must be requested BEFORE commit. This is
+        // deliberately tested on the QEMU-only live presentation path.
+        let _frame_callback=if callback_probe {
+            Some(surface.frame(&qh,()))
+        } else {None};
         surface.attach(Some(&buffer),0,0);
         surface.damage_buffer(0,0,W as i32,H as i32);
         surface.commit();
-        for _ in 0..5 {
+        for _ in 0..7 {
             queue.roundtrip(&mut state)?;
-            if state.buffer_released {break;}
+            if state.buffer_released &&
+               (!callback_probe || state.frame_done_count==frame_index as u32+1) {
+                break;
+            }
         }
-        if !state.buffer_released {
-            return Err(format!("compositor did not release client frame {}",
+        if !state.buffer_released ||
+           (callback_probe && state.frame_done_count!=frame_index as u32+1) {
+            return Err(format!("KMS presentation did not complete client frame callback {}",
                                frame_index+1).into());
         }
         println!("MELANIA_NATIVE_CLIENT_WL_SHM_RELEASED=true");
         println!("MELANIA_NATIVE_CLIENT_FRAME_COMMITTED={}",frame_index+1);
+        if callback_probe {
+            println!("MELANIA_NATIVE_CLIENT_FRAME_PRESENTED={}",frame_index+1);
+        }
         buffer.destroy();
         pool.destroy();
+    }
+    if callback_probe {
+        if state.frame_done_count!=3 {
+            return Err("not all three frame callbacks arrived from native renderer".into());
+        }
+        println!("MELANIA_NATIVE_CLIENT_FRAME_CALLBACKS_PRESENTED_PASS=true");
     }
     println!("MELANIA_NATIVE_CLIENT_XDG_WINDOW_DRAWN=true");
     std::io::stdout().flush()?;

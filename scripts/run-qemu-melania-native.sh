@@ -168,6 +168,11 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! grep -q '^MELANIA_RUST_STREAM_FRAME3_ACTIVE=true' "$serial" ||
    ! grep -q '^MELANIA_RUST_STREAM_THREE_CLIENT_FRAMES_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_LIVE_WAYLAND_KMS_STREAM_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_PRESENTED_FRAME_CALLBACKS_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_CLIENT_FRAME_CALLBACKS_PRESENTED_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_CLIENT_FRAME_PRESENTED=3' "$serial" ||
    ! grep -q '^MELANIA_QEMU_RUST_KMS_TWO_CAPTURE_PASS=true' "$report/qmp-rust-frames.log" ||
    ! grep -q '^MELANIA_QEMU_RUST_KMS_FRAME1_PIXELS=true' "$report/qmp-rust-frames.log" ||
    ! grep -q '^MELANIA_QEMU_RUST_KMS_FRAME2_PIXELS=true' "$report/qmp-rust-frames.log" ||
@@ -253,3 +258,4 @@ printf '%s\n' 'MELANIA_VM_CLIENT_PIXELS_RUST_COMPOSED_C_SCANOUT=true' >> "$repor
 printf '%s\n' 'MELANIA_VM_NATIVE_WL_OUTPUT_MODE_VERIFIED=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_RUST_DIRECT_KMS_TWO_CLIENT_FRAMES=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_LIVE_WAYLAND_STREAM_THREE_FRAMES=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_NATIVE_POST_KMS_FRAME_CALLBACKS_VERIFIED=true' >> "$report/result.txt"

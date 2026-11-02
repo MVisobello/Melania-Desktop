@@ -273,6 +273,7 @@ stream_kms_log="$(mktemp -t melania-live-kms-XXXXXX)"
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
 MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 39s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$stream_server_log" 2>&1 &
 stream_server_pid=$!
@@ -305,7 +306,8 @@ if ! grep -q '^MELANIA_RUST_STREAM_KMS_CONNECTED=true' "$stream_kms_log"; then
   wait "$stream_server_pid" "$stream_kms_pid" 2>/dev/null || true
   fatal 'Rust_KMS_did_not_connect_to_live_Smithay_stream'
 fi
-if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM WAYLAND_DISPLAY="$live_socket" \
+if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
+  MELANIA_NATIVE_WAIT_PRESENT_CALLBACK=YES_QEMU_VM WAYLAND_DISPLAY="$live_socket" \
   timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
   cat "$stream_server_log"
   kill "$stream_server_pid" "$stream_kms_pid" 2>/dev/null || true
@@ -329,8 +331,13 @@ grep -q '^MELANIA_NATIVE_CLIENT_FRAME_COUNT=3' "$stream_server_log" ||
   fatal 'Smithay_did_not_deliver_three_real_client_buffers'
 grep -q '^MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true' "$stream_server_log" ||
   fatal 'Smithay_native_live_stream_not_acknowledged'
+grep -q '^MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true' "$stream_server_log" ||
+  fatal 'Smithay_did_not_deliver_three_post_KMS_frame_callbacks'
+grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$stream_server_log" ||
+  fatal 'Smithay_frame_callback_count_incorrect'
 rm -f "$stream_server_log" "$stream_kms_log"
 report 'MELANIA_QEMU_NATIVE_LIVE_WAYLAND_KMS_STREAM_PASS=true'
+report 'MELANIA_QEMU_NATIVE_PRESENTED_FRAME_CALLBACKS_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'
