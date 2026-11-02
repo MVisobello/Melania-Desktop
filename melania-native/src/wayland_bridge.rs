@@ -256,7 +256,8 @@ impl CompositorHandler for BridgeState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
     }
     fn commit(&mut self,surface:&WlSurface) {
-        if self.pixel_probe && self.pixel_frame_count<3 && self.xdg_toplevel_count>0 {
+        if self.pixel_probe && self.pixel_frame_count<self.pixel_frame_target &&
+           self.pixel_frame_count<3 && self.xdg_toplevel_count>0 {
             let assignment=with_states(surface,|states|{
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
