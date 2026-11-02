@@ -21,5 +21,35 @@ This checklist distinguishes **automated evidence** from **manual validation**. 
 - [ ] Check multi-monitor, HiDPI, keyboard layouts and failure recovery.
 - [ ] Record known limitations and provide an uninstall/rollback procedure.
 
+## Preview install and rollback (per-user only)
+
+The current stage is a **nested development preview**, not a standalone login session.
+From the repository checkout on a Linux machine with an existing desktop:
+
+```bash
+bash scripts/melania-session --nested
+# Optional: register/remove an application menu entry for the current user
+bash scripts/install-melania-preview-launcher.sh
+bash scripts/uninstall-melania-preview-launcher.sh
+```
+
+The installer touches only `~/.local/bin/melania-session` and a user application
+entry under `${XDG_DATA_HOME:-$HOME/.local/share}/applications`. The rollback
+checks the launcher and desktop entry before removing either one; it refuses
+symlinks or unexpected/tampered content. Neither operation creates a
+`wayland-sessions` or `xsessions` login entry.
+
 ## Release decision
-Only label the build **Alpha** when all automated gates are green on the *same candidate commit*, manual gates have recorded results, and critical blockers are resolved. Otherwise label it **development preview**.
+
+**Nested Alpha preview:** automated gates green on the *same candidate commit*,
+a documented clean Linux VM usability review, and all critical nested blockers
+resolved. This mode runs within an existing graphical host.
+
+**Standalone installable native Alpha:** additionally requires the hardware
+DRM/KMS + libseat/Wayland input/lifecycle and display-manager login, logout,
+recovery gates in `docs/ALPHA-01-SESSION-ACCEPTANCE.md`. A QEMU
+`TEST_ONLY` pass is not proof of a native graphical session.
+
+If any gate is incomplete, keep the label **development preview**. Record the
+commit SHA, successful workflow links, machine and manual observations, and
+known limitations instead of inferring readiness from a runner starting.
