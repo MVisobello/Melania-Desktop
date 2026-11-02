@@ -141,6 +141,22 @@ for i in $(seq 1 100); do
 done
 [[ "$FILES_LISTED" == 1 ]] || { echo 'FAIL: no async Melania Files list completion';exit 1; }
 echo 'PASS: asynchronous filesystem listing reached real GTK Files window'
+# The actual GTK Files window should be submitted before the expensive
+# first browser tab, which in turn precedes the asynchronous GIO listing.
+python3 - "$TEMP/compositor.log" <<'PYFILESFIRST'
+from pathlib import Path
+import sys
+lines=Path(sys.argv[1]).read_text().splitlines()
+def first(needle):
+    for i,line in enumerate(lines):
+        if needle in line:return i
+    raise AssertionError(f"Missing startup marker: {needle}")
+window=first("MELANIA_FILES_FIRST_WINDOW_MS=")
+tab=first("MELANIA_FILES_FIRST_TAB_MS=")
+listing=first("MELANIA_FILES_LISTING_READY count=")
+assert window<tab<listing,(window,tab,listing)
+print("PASS: Files submitted its window before building its first tab and completing GIO listing")
+PYFILESFIRST
 # A quiet frame must not continually redraw the whole software-rendered
 # desktop. Verify at least one real idle skip was counted by the compositor.
 IDLE_SKIP=0

@@ -24,7 +24,8 @@ class PhasedSessionAndStartTests(unittest.TestCase):
     def test_existing_search_filter_and_actions_remain_live(self):
         self.assertIn('query.connect_changed(move |q|',PANEL)
         self.assertIn('searchable_for_filter.borrow().iter()',PANEL)
-        self.assertIn('searchable_for_enter.borrow().iter().find',PANEL)
+        self.assertIn('let first=searchable_for_enter.borrow().iter()',PANEL)
+        self.assertIn('if let Some(button)=first {button.emit_clicked();}',PANEL)
         self.assertIn('start_history::record_launch(id);',PANEL)
         self.assertIn('attach_pin_context_trusted(&button,id);',PANEL)
         self.assertIn('hide_start_surface(&window);',PANEL)
