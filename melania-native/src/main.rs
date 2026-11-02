@@ -15,6 +15,7 @@ use smithay::{
 };
 use melania_native::NativeLifecycle;
 mod wayland_bridge;
+mod native_client_frame;
 
 const BLOCKED: i32 = 78;
 fn blocked(why:&str)->! {
