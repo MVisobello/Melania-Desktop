@@ -9,7 +9,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, thread, time::Duration};
+use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::{Path, PathBuf}, process::Command, rc::Rc, thread, time::Duration};
 use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -718,6 +718,11 @@ fn quick_window(app:&Application, notifications:&ApplicationWindow)->Application
     let setting=Button::with_label("Apri Impostazioni");setting.connect_clicked(|_|run("melania-settings"));root.append(&setting);
     w.set_child(Some(&root));w
 }
+/// Metadata-only change detection keeps installed-app enumeration off the
+/// periodic UI tick. Atomic XDG file replacement changes the inode.
+fn file_stamp(path:&Path)->Option<(u64,u64,i64,i64)> {
+    fs::metadata(path).ok().map(|m|(m.ino(),m.len(),m.mtime(),m.mtime_nsec()))
+}
 fn pins_path()->Option<PathBuf> {
     let dir=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
         .or_else(||std::env::var_os("HOME").map(|h|PathBuf::from(h).join(".config")))?;
@@ -1424,9 +1429,15 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let pinned_area=pinned.clone();
     let pinned_widgets=pinned_buttons.clone();
     let pinned_ids=pinned_order.clone();
+    let pins_file=pins_path();
+    let mut pins_stamp=pins_file.as_deref().and_then(file_stamp);
     glib::timeout_add_local(Duration::from_millis(800),move ||{
-        if load_pins()!=*pinned_ids.borrow(){
-            populate_pins(&pinned_area,&pinned_widgets,&pinned_ids);
+        let updated=pins_file.as_deref().and_then(file_stamp);
+        if updated!=pins_stamp {
+            pins_stamp=updated;
+            if load_pins()!=*pinned_ids.borrow(){
+                populate_pins(&pinned_area,&pinned_widgets,&pinned_ids);
+            }
         }
         glib::ControlFlow::Continue
     });
