@@ -71,6 +71,8 @@ struct BridgeState {
     multi_window_mode:bool,
     async_kms_mode:bool,
     layout_repaint_mode:bool,
+    resize_configure_mode:bool,
+    last_resize_request:Option<(u64,i32,i32)>,
     layout_dirty:bool,
     async_layout_pending:Option<PendingLayoutFrame>,
     async_stream:Option<AsyncKmsWorker>,
@@ -162,8 +164,25 @@ impl BridgeState {
                 }
             },
             Some(InteractionKind::ResizeBottomRight)=>{
-                // A real xdg.configure + client ACK must precede actual
-                // resize/scanout. For now this is a non-destructive preview.
+                if self.resize_configure_mode &&
+                   self.last_resize_request!=Some((key,rect.width,rect.height)) {
+                    if let Some(surface)=self.known_window_surfaces.get((key-1) as usize) {
+                        if let Some(top)=self.xdg_shell.toplevel_surfaces().into_iter()
+                            .find(|top|top.wl_surface()==surface) {
+                            top.with_pending_state(|state|{
+                                state.size=Some((rect.width,rect.height).into());
+                                state.states.set(xdg_toplevel::State::Resizing);
+                            });
+                            top.send_pending_configure();
+                            self.last_resize_request=Some((key,rect.width,rect.height));
+                            println!("MELANIA_NATIVE_RESIZE_CONFIGURE_SENT={} w={} h={}",
+                                key,rect.width,rect.height);
+                            let _=std::io::stdout().flush();
+                        }
+                    }
+                }
+                // Actual new-size wl_shm import follows the xdg ack and is
+                // NOT claimed by this bounded QEMU protocol probe.
                 println!("MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW={} w={} h={}",
                          key,rect.width,rect.height);
             },
@@ -638,8 +657,23 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             pointer.frame(state);
             if state.multi_window_mode && event.button_code()==0x110 &&
                event.state()==ButtonState::Released {
+                let was_resize=state.window_interaction.active_kind() ==
+                    Some(InteractionKind::ResizeBottomRight);
                 if let Some(id)=state.window_interaction.end() {
+                    if state.resize_configure_mode && was_resize {
+                        if let Some(surface)=state.known_window_surfaces.get((id-1) as usize) {
+                            if let Some(top)=state.xdg_shell.toplevel_surfaces().into_iter()
+                                .find(|top|top.wl_surface()==surface) {
+                                top.with_pending_state(|pending|{
+                                    pending.states.unset(xdg_toplevel::State::Resizing);
+                                });
+                                top.send_pending_configure();
+                                println!("MELANIA_NATIVE_RESIZE_CONFIGURE_END={id}");
+                            }
+                        }
+                    }
                     println!("MELANIA_NATIVE_WINDOW_INTERACTION_END={id}");
+                    let _=std::io::stdout().flush();
                 }
             }
             state.delivered_buttons+=1;
@@ -696,6 +730,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         layout_repaint_mode:std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
             .as_deref()==Ok("YES_QEMU_VM"),
+        resize_configure_mode:std::env::var("MELANIA_NATIVE_RESIZE_CONFIGURE")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        last_resize_request:None,
         layout_dirty:false,async_layout_pending:None,
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
@@ -761,6 +798,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.multi_window_mode || !state.async_kms_mode ||
         state.pixel_frame_target!=4) {
         return Err("layout repaint requires bounded QEMU two-window async KMS".into());
+    }
+    if state.resize_configure_mode && !state.layout_repaint_mode {
+        return Err("resize configure probe requires bounded layout QEMU mode".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
