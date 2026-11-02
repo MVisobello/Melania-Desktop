@@ -66,6 +66,14 @@ def stage(archive: Path, destination: Path = TARGET) -> None:
         ):
             if not (staged / required).is_file():
                 raise ValueError(f"Icona essenziale mancante: {required}")
+        # Preserve compatibility with previews compiled before Fluent v0.3.
+        legacy = {
+            "Melania-Fluent-Light": "Melania-Light",
+            "Melania-Fluent-Dark": "Melania-Dark",
+            "Melania-Fluent-Light-on-Dark-Panel": "Melania-Light-darkPanel",
+        }
+        for alias, actual in legacy.items():
+            (staged / alias).symlink_to(actual, target_is_directory=True)
         for path in staged.rglob("*"):
             if path.is_symlink() and (
                 not path.resolve().is_relative_to(staged.resolve())
