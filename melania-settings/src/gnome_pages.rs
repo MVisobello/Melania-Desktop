@@ -286,199 +286,246 @@ pub fn overview(stack: &Stack) -> GtkBox {
     }
     system
 }
-pub fn add_pages(stack: &Stack) {
-    let display = page("Schermo", "video-display");
-    crate::display_controls::append_backlight(&display);
-    let monitor_count = gtk::gdk::Display::default()
-        .map(|d| d.monitors().n_items()).unwrap_or(0);
-    group(&display, "Monitor");
-    display.append(&info_row("video-display", "Schermi rilevati",
-        &format!("{monitor_count} monitor rilevati da GTK nella sessione corrente.")));
-    display.append(&info_row("dialog-information", "Risoluzione e scala",
-        "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
-    group(&display, "Rotazione dello schermo");
-    display.append(&info_row("video-display", "Sensore di orientamento",
-        "Disponibilità del sensore interrogata tramite iio-sensor-proxy."));
-    let sensor_status=label(sensors::explanation(sensors::accelerometer()),"settings-row-description");
-    sensor_status.add_css_class("settings-card");
-    display.append(&sensor_status);
-    let sensor_refresh=Button::with_label("Rileva nuovamente i sensori");
-    sensor_refresh.add_css_class("settings-save");
-    sensor_refresh.set_halign(Align::Start);
-    let sensor_description=sensor_status.clone();
-    sensor_refresh.connect_clicked(move |_| {
-        sensor_description.set_text(sensors::explanation(sensors::accelerometer()));
-    });
-    display.append(&sensor_refresh);
-    display.append(&info_row("dialog-information", "Rotazione manuale e blocco",
-        "Non ancora disponibili: occorre una connessione al compositore Wayland, con sincronizzazione di touchscreen, finestre e area utile. Nessun comando esterno modifica lo schermo."));
-    stack.add_titled(&display, Some("display"), "Schermo");
+pub const LAZY_PAGE_NAMES: [(&str,&str); 12] = [
+    ("display", "Schermo"),
+    ("audio", "Audio"),
+    ("power", "Alimentazione"),
+    ("storage", "Archiviazione"),
+    ("bluetooth", "Bluetooth"),
+    ("applications", "App"),
+    ("account", "Account"),
+    ("datetime", "Data e ora"),
+    ("devices", "Dispositivi"),
+    ("privacy", "Privacy"),
+    ("region", "Lingua e regione"),
+    ("about", "Informazioni"),
+];
 
-    let audio = page("Audio", "audio-card");
-    // Input and output are separate PipeWire nodes. A missing device gets a
-    // clear unavailable state; no fake slider or host-wide mixer fallback.
-    audio_device_controls(&audio, "Uscita audio", "@DEFAULT_AUDIO_SINK@");
-    audio_device_controls(&audio, "Microfono", "@DEFAULT_AUDIO_SOURCE@");
-    stack.add_titled(&audio, Some("audio"), "Audio");
+/// Register a stable child for each category before GTK first paint.
+/// The heavy controls are built only when the user navigates there.
+pub fn add_pages(stack:&Stack) {
+    crate::lazy_pages::register(stack, "display", "Schermo");
+    crate::lazy_pages::register(stack, "audio", "Audio");
+    crate::lazy_pages::register(stack, "power", "Alimentazione");
+    crate::lazy_pages::register(stack, "storage", "Archiviazione");
+    crate::lazy_pages::register(stack, "bluetooth", "Bluetooth");
+    crate::lazy_pages::register(stack, "applications", "App");
+    crate::lazy_pages::register(stack, "account", "Account");
+    crate::lazy_pages::register(stack, "datetime", "Data e ora");
+    crate::lazy_pages::register(stack, "devices", "Dispositivi");
+    crate::lazy_pages::register(stack, "privacy", "Privacy");
+    crate::lazy_pages::register(stack, "region", "Lingua e regione");
+    crate::lazy_pages::register(stack, "about", "Informazioni");
+}
 
-    let power = page("Alimentazione", "battery");
-    group(&power, "Batteria");
-    let charge = battery_status();
-    power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
-    group(&power,"Profili energetici");
-    // XFCE-style power profile choice backed by the real Linux service. No
-    // toggle is shown when power-profiles-daemon is absent or unsupported.
-    let profile_list=Command::new("powerprofilesctl").arg("list").output().ok()
-        .filter(|result|result.status.success())
-        .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
-        .unwrap_or_default();
-    if profile_list.is_empty() {
-        power.append(&info_row("dialog-information","Profili non disponibili",
-            "power-profiles-daemon non è disponibile o non espone profili supportati."));
-    } else {
-        let active_profile=read_command("powerprofilesctl",&["get"]).unwrap_or_default();
-        let labels=profile_list.iter().map(|name|match *name {
-            "power-saver"=>"Risparmio energetico",
-            "balanced"=>"Bilanciato",
-            "performance"=>"Prestazioni elevate",
-            _=>*name
-        }).collect::<Vec<_>>();
-        let selector=gtk::DropDown::from_strings(&labels);
-        let selected=profile_list.iter().position(|name|*name==active_profile)
-            .unwrap_or(0);
-        selector.set_selected(selected as u32);
-        selector.set_hexpand(true);
-        let controls=GtkBox::new(Orientation::Horizontal,10);
-        controls.add_css_class("settings-action-row");
-        controls.append(&selector);
-        let apply=Button::with_label("Applica profilo");
-        apply.add_css_class("settings-save");
-        controls.append(&apply);
-        let feedback=label("La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
-            "settings-row-description");
-        let response=feedback.clone();
-        apply.connect_clicked(move |_|{
-            let Some(&profile)=profile_list.get(selector.selected() as usize) else {return;};
-            let result=Command::new("powerprofilesctl").args(["set",profile]).status();
-            match result {
-                Ok(status) if status.success() =>response.set_text(
-                    &format!("Profilo energetico applicato: {profile}.")
-                ),
-                Ok(status)=>response.set_text(&format!(
-                    "Impossibile applicare il profilo {profile}: codice {status}."
-                )),
-                Err(error)=>response.set_text(&format!(
-                    "Servizio profili energetici non disponibile: {error}"
-                )),
+/// Construct exactly the selected real category, retaining its original
+/// controls and signal handlers. Other pages remain inert until selected.
+pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
+    match key {
+        "display" => {
+        let display = page("Schermo", "video-display");
+        crate::display_controls::append_backlight(&display);
+        let monitor_count = gtk::gdk::Display::default()
+            .map(|d| d.monitors().n_items()).unwrap_or(0);
+        group(&display, "Monitor");
+        display.append(&info_row("video-display", "Schermi rilevati",
+            &format!("{monitor_count} monitor rilevati da GTK nella sessione corrente.")));
+        display.append(&info_row("dialog-information", "Risoluzione e scala",
+            "La configurazione dei monitor richiede ancora un'interfaccia al compositore Melania. Nessuna modifica è applicata al sistema ospitante."));
+        group(&display, "Rotazione dello schermo");
+        display.append(&info_row("video-display", "Sensore di orientamento",
+            "Disponibilità del sensore interrogata tramite iio-sensor-proxy."));
+        let sensor_status=label(sensors::explanation(sensors::accelerometer()),"settings-row-description");
+        sensor_status.add_css_class("settings-card");
+        display.append(&sensor_status);
+        let sensor_refresh=Button::with_label("Rileva nuovamente i sensori");
+        sensor_refresh.add_css_class("settings-save");
+        sensor_refresh.set_halign(Align::Start);
+        let sensor_description=sensor_status.clone();
+        sensor_refresh.connect_clicked(move |_| {
+            sensor_description.set_text(sensors::explanation(sensors::accelerometer()));
+        });
+        display.append(&sensor_refresh);
+        display.append(&info_row("dialog-information", "Rotazione manuale e blocco",
+            "Non ancora disponibili: occorre una connessione al compositore Wayland, con sincronizzazione di touchscreen, finestre e area utile. Nessun comando esterno modifica lo schermo."));
+        Some(display)
+        },
+        "audio" => {
+        let audio = page("Audio", "audio-card");
+        // Input and output are separate PipeWire nodes. A missing device gets a
+        // clear unavailable state; no fake slider or host-wide mixer fallback.
+        audio_device_controls(&audio, "Uscita audio", "@DEFAULT_AUDIO_SINK@");
+        audio_device_controls(&audio, "Microfono", "@DEFAULT_AUDIO_SOURCE@");
+        Some(audio)
+        },
+        "power" => {
+        let power = page("Alimentazione", "battery");
+        group(&power, "Batteria");
+        let charge = battery_status();
+        power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
+        group(&power,"Profili energetici");
+        // XFCE-style power profile choice backed by the real Linux service. No
+        // toggle is shown when power-profiles-daemon is absent or unsupported.
+        let profile_list=Command::new("powerprofilesctl").arg("list").output().ok()
+            .filter(|result|result.status.success())
+            .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
+            .unwrap_or_default();
+        if profile_list.is_empty() {
+            power.append(&info_row("dialog-information","Profili non disponibili",
+                "power-profiles-daemon non è disponibile o non espone profili supportati."));
+        } else {
+            let active_profile=read_command("powerprofilesctl",&["get"]).unwrap_or_default();
+            let labels=profile_list.iter().map(|name|match *name {
+                "power-saver"=>"Risparmio energetico",
+                "balanced"=>"Bilanciato",
+                "performance"=>"Prestazioni elevate",
+                _=>*name
+            }).collect::<Vec<_>>();
+            let selector=gtk::DropDown::from_strings(&labels);
+            let selected=profile_list.iter().position(|name|*name==active_profile)
+                .unwrap_or(0);
+            selector.set_selected(selected as u32);
+            selector.set_hexpand(true);
+            let controls=GtkBox::new(Orientation::Horizontal,10);
+            controls.add_css_class("settings-action-row");
+            controls.append(&selector);
+            let apply=Button::with_label("Applica profilo");
+            apply.add_css_class("settings-save");
+            controls.append(&apply);
+            let feedback=label("La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
+                "settings-row-description");
+            let response=feedback.clone();
+            apply.connect_clicked(move |_|{
+                let Some(&profile)=profile_list.get(selector.selected() as usize) else {return;};
+                let result=Command::new("powerprofilesctl").args(["set",profile]).status();
+                match result {
+                    Ok(status) if status.success() =>response.set_text(
+                        &format!("Profilo energetico applicato: {profile}.")
+                    ),
+                    Ok(status)=>response.set_text(&format!(
+                        "Impossibile applicare il profilo {profile}: codice {status}."
+                    )),
+                    Err(error)=>response.set_text(&format!(
+                        "Servizio profili energetici non disponibile: {error}"
+                    )),
+                }
+            });
+            power.append(&controls);
+            power.append(&feedback);
+        }
+        power.append(&info_row("dialog-information","Inattività e sospensione",
+            "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
+        Some(power)
+        },
+        "storage" => {
+        let storage = page("Archiviazione", "drive-harddisk");
+        group(&storage, "Dischi");
+        let space = root_storage();
+        storage.append(&info_row("drive-harddisk", "Filesystem principale", &space));
+        storage.append(&info_row("dialog-information", "Gestione delle unità",
+            "Le operazioni sui dischi rimangono affidate alle utility del sistema operativo."));
+        Some(storage)
+        },
+        "bluetooth" => {
+        let bluetooth = page("Bluetooth", "bluetooth");
+        crate::connectivity_controls::append_bluetooth(&bluetooth);
+        group(&bluetooth, "Stato del controller");
+        bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
+            &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
+        Some(bluetooth)
+        },
+        "applications" => {
+        let applications = page("App", "application-x-executable");
+        group(&applications, "Applicazioni");
+        applications.append(&info_row("applications-other", "Applicazioni installate",
+            "Le applicazioni disponibili compaiono nel menu Start di Melania."));
+        // Put real controls one click away from their logical parent category,
+        // not only in a long left sidebar or the generic System overview.
+        applications.append(&linked_row(stack, "xfce-preferred", "applications-default",
+            "App predefinite", "Browser e posta elettronica"));
+        applications.append(&linked_row(stack, "xfce-mime", "text-x-generic",
+            "Associazioni file", "Scegli l'applicazione per ogni tipo di file"));
+        applications.append(&linked_row(stack, "xfce-session", "system-run",
+            "Avvio automatico", "Applicazioni all'avvio della sessione"));
+        Some(applications)
+        },
+        "account" => {
+        let account = page("Account", "avatar-default");
+        group(&account, "Utente");
+        account.append(&info_row("avatar-default", "Account corrente",
+            &env::var("USER").unwrap_or_else(|_| "Utente non disponibile".into())));
+        account.append(&info_row("dialog-information", "Sicurezza account",
+            "Password e autorizzazioni sono gestite dal sistema Linux; Melania non modifica le credenziali."));
+        Some(account)
+        },
+        "datetime" => {
+        let datetime = page("Data e ora", "x-office-calendar");
+        group(&datetime, "Sistema");
+        datetime.append(&info_row("x-office-calendar", "Ora del sistema",
+            &read_command("date", &["+%d/%m/%Y %H:%M %Z"])
+                .unwrap_or_else(|| "Ora non disponibile.".into())));
+        datetime.append(&info_row("dialog-information", "Sincronizzazione",
+            "Data e fuso orario vengono regolati dai servizi del sistema operativo."));
+        Some(datetime)
+        },
+        "devices" => {
+        let devices = page("Dispositivi", "input-keyboard");
+        group(&devices, "Hardware");
+        devices.append(&info_row("input-keyboard", "Input e periferiche",
+            "Tastiera, mouse e dispositivi USB vengono gestiti dal sottosistema Linux."));
+        Some(devices)
+        },
+        "privacy" => {
+        let privacy = page("Privacy e sicurezza", "security-high");
+        group(&privacy, "Privacy");
+        privacy.append(&info_row("security-high", "Permessi applicazioni",
+            "Le autorizzazioni delle applicazioni sono amministrate dai servizi e dai portali di Linux."));
+        privacy.append(&info_row("user-trash", "Cestino",
+            "Il gestore file Melania utilizza il Cestino di GIO, evitando l'eliminazione definitiva non richiesta."));
+        group(&privacy, "Cronologia locale");
+        privacy.append(&info_row("document-open-recent", "App recenti nel menu Start",
+            "Melania conserva localmente soltanto gli ID delle ultime applicazioni avviate dal suo menu Start, non i documenti o le attività di navigazione."));
+        let erase_recent=Button::with_label("Cancella app recenti");
+        erase_recent.add_css_class("settings-save");
+        erase_recent.set_halign(Align::Start);
+        let erase_feedback=label("", "settings-action-feedback");
+        let message=erase_feedback.clone();
+        erase_recent.connect_clicked(move |_| {
+            match melania_config::recent_apps_path() {
+                Some(path)=>match fs::remove_file(&path) {
+                    Ok(())=>message.set_text("Cronologia delle app recenti cancellata."),
+                    Err(error) if error.kind()==std::io::ErrorKind::NotFound=>
+                        message.set_text("Nessuna cronologia di app recenti da cancellare."),
+                    Err(error)=>message.set_text(&format!("Impossibile cancellare la cronologia: {error}")),
+                },
+                None=>message.set_text("Directory dello stato utente non disponibile."),
             }
         });
-        power.append(&controls);
-        power.append(&feedback);
+        privacy.append(&erase_recent);
+        privacy.append(&erase_feedback);
+        Some(privacy)
+        },
+        "region" => {
+        let region = page("Lingua e regione", "preferences-desktop-locale");
+        group(&region, "Lingua");
+        region.append(&info_row("preferences-desktop-locale", "Lingua della sessione",
+            &env::var("LANG").unwrap_or_else(|_| "Locale non disponibile".into())));
+        Some(region)
+        },
+        "about" => {
+        let about = page("Informazioni", "dialog-information");
+        group(&about, "Versione");
+        about.append(&info_row("computer", "Melania Desktop",
+            &format!("Versione {} · progetto sperimentale GTK 4 / Wayland",
+                     env!("CARGO_PKG_VERSION"))));
+        about.append(&info_row("computer", "Sistema Linux",
+            &format!("{} · architettura {}", os_name(), env::consts::ARCH)));
+        about.append(&info_row("dialog-information", "Stato del progetto",
+            "Alcune pagine sono informative. Le opzioni che possono essere cambiate sono contrassegnate da controlli reali."));
+        Some(about)
+        },
+        _ => None,
     }
-    power.append(&info_row("dialog-information","Inattività e sospensione",
-        "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
-    stack.add_titled(&power, Some("power"), "Alimentazione");
-
-    let storage = page("Archiviazione", "drive-harddisk");
-    group(&storage, "Dischi");
-    let space = root_storage();
-    storage.append(&info_row("drive-harddisk", "Filesystem principale", &space));
-    storage.append(&info_row("dialog-information", "Gestione delle unità",
-        "Le operazioni sui dischi rimangono affidate alle utility del sistema operativo."));
-    stack.add_titled(&storage, Some("storage"), "Archiviazione");
-
-    let bluetooth = page("Bluetooth", "bluetooth");
-    crate::connectivity_controls::append_bluetooth(&bluetooth);
-    group(&bluetooth, "Stato del controller");
-    bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
-        &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
-    stack.add_titled(&bluetooth, Some("bluetooth"), "Bluetooth");
-    // The network overview is read-only until Melania integrates NetworkManager
-    // controls; never misrepresent a setting as applied to the host.
-
-
-    let applications = page("App", "application-x-executable");
-    group(&applications, "Applicazioni");
-    applications.append(&info_row("applications-other", "Applicazioni installate",
-        "Le applicazioni disponibili compaiono nel menu Start di Melania."));
-    // Put real controls one click away from their logical parent category,
-    // not only in a long left sidebar or the generic System overview.
-    applications.append(&linked_row(stack, "xfce-preferred", "applications-default",
-        "App predefinite", "Browser e posta elettronica"));
-    applications.append(&linked_row(stack, "xfce-mime", "text-x-generic",
-        "Associazioni file", "Scegli l'applicazione per ogni tipo di file"));
-    applications.append(&linked_row(stack, "xfce-session", "system-run",
-        "Avvio automatico", "Applicazioni all'avvio della sessione"));
-    stack.add_titled(&applications, Some("applications"), "App");
-
-    let account = page("Account", "avatar-default");
-    group(&account, "Utente");
-    account.append(&info_row("avatar-default", "Account corrente",
-        &env::var("USER").unwrap_or_else(|_| "Utente non disponibile".into())));
-    account.append(&info_row("dialog-information", "Sicurezza account",
-        "Password e autorizzazioni sono gestite dal sistema Linux; Melania non modifica le credenziali."));
-    stack.add_titled(&account, Some("account"), "Account");
-
-    let datetime = page("Data e ora", "x-office-calendar");
-    group(&datetime, "Sistema");
-    datetime.append(&info_row("x-office-calendar", "Ora del sistema",
-        &read_command("date", &["+%d/%m/%Y %H:%M %Z"])
-            .unwrap_or_else(|| "Ora non disponibile.".into())));
-    datetime.append(&info_row("dialog-information", "Sincronizzazione",
-        "Data e fuso orario vengono regolati dai servizi del sistema operativo."));
-    stack.add_titled(&datetime, Some("datetime"), "Data e ora");
-
-    let devices = page("Dispositivi", "input-keyboard");
-    group(&devices, "Hardware");
-    devices.append(&info_row("input-keyboard", "Input e periferiche",
-        "Tastiera, mouse e dispositivi USB vengono gestiti dal sottosistema Linux."));
-    stack.add_titled(&devices, Some("devices"), "Dispositivi");
-
-    let privacy = page("Privacy e sicurezza", "security-high");
-    group(&privacy, "Privacy");
-    privacy.append(&info_row("security-high", "Permessi applicazioni",
-        "Le autorizzazioni delle applicazioni sono amministrate dai servizi e dai portali di Linux."));
-    privacy.append(&info_row("user-trash", "Cestino",
-        "Il gestore file Melania utilizza il Cestino di GIO, evitando l'eliminazione definitiva non richiesta."));
-    group(&privacy, "Cronologia locale");
-    privacy.append(&info_row("document-open-recent", "App recenti nel menu Start",
-        "Melania conserva localmente soltanto gli ID delle ultime applicazioni avviate dal suo menu Start, non i documenti o le attività di navigazione."));
-    let erase_recent=Button::with_label("Cancella app recenti");
-    erase_recent.add_css_class("settings-save");
-    erase_recent.set_halign(Align::Start);
-    let erase_feedback=label("", "settings-action-feedback");
-    let message=erase_feedback.clone();
-    erase_recent.connect_clicked(move |_| {
-        match melania_config::recent_apps_path() {
-            Some(path)=>match fs::remove_file(&path) {
-                Ok(())=>message.set_text("Cronologia delle app recenti cancellata."),
-                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>
-                    message.set_text("Nessuna cronologia di app recenti da cancellare."),
-                Err(error)=>message.set_text(&format!("Impossibile cancellare la cronologia: {error}")),
-            },
-            None=>message.set_text("Directory dello stato utente non disponibile."),
-        }
-    });
-    privacy.append(&erase_recent);
-    privacy.append(&erase_feedback);
-    stack.add_titled(&privacy, Some("privacy"), "Privacy");
-
-    let region = page("Lingua e regione", "preferences-desktop-locale");
-    group(&region, "Lingua");
-    region.append(&info_row("preferences-desktop-locale", "Lingua della sessione",
-        &env::var("LANG").unwrap_or_else(|_| "Locale non disponibile".into())));
-    stack.add_titled(&region, Some("region"), "Lingua e regione");
-
-    let about = page("Informazioni", "dialog-information");
-    group(&about, "Versione");
-    about.append(&info_row("computer", "Melania Desktop",
-        &format!("Versione {} · progetto sperimentale GTK 4 / Wayland",
-                 env!("CARGO_PKG_VERSION"))));
-    about.append(&info_row("computer", "Sistema Linux",
-        &format!("{} · architettura {}", os_name(), env::consts::ARCH)));
-    about.append(&info_row("dialog-information", "Stato del progetto",
-        "Alcune pagine sono informative. Le opzioni che possono essere cambiate sono contrassegnate da controlli reali."));
-    stack.add_titled(&about, Some("about"), "Informazioni");
 }
 
 #[cfg(test)]
