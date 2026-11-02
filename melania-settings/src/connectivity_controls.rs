@@ -80,7 +80,7 @@ pub fn append_wifi(page: &GtkBox) {
     let ready_button=button.clone();
     let ready_row=row.clone();
     let ready_status=status.clone();
-    crate::settings_async::run(wifi_radio,move |result|{
+    crate::settings_async::run("wifi-detect",wifi_radio,move |result|{
         match result.flatten(){
             Some(enabled)=>{
                 ready_button.set_label(if enabled {"Disattiva Wi-Fi"}else{"Attiva Wi-Fi"});
@@ -97,7 +97,7 @@ pub fn append_wifi(page: &GtkBox) {
         feedback.set_text("Aggiornamento Wi-Fi in corso…");
         let ui_button=button.clone();
         let ui_feedback=feedback.clone();
-        crate::settings_async::run(move ||{
+        crate::settings_async::run("wifi-toggle",move ||{
             // Verify current state only after an explicit user click.
             let Some(current)=wifi_radio() else{return (false,None);};
             let next=if current {"off"}else{"on"};
@@ -137,7 +137,7 @@ pub fn append_bluetooth(page: &GtkBox) {
     let ready_button=button.clone();
     let ready_row=row.clone();
     let ready_status=status.clone();
-    crate::settings_async::run(bluetooth_power,move |result|{
+    crate::settings_async::run("bluetooth-detect",bluetooth_power,move |result|{
         match result.flatten(){
             Some(enabled)=>{
                 ready_button.set_label(if enabled {"Disattiva Bluetooth"}else{"Attiva Bluetooth"});
@@ -154,7 +154,7 @@ pub fn append_bluetooth(page: &GtkBox) {
         feedback.set_text("Aggiornamento Bluetooth in corso…");
         let ui_button=button.clone();
         let ui_feedback=feedback.clone();
-        crate::settings_async::run(move ||{
+        crate::settings_async::run("bluetooth-toggle",move ||{
             let Some(current)=bluetooth_power() else{return (false,None);};
             let next=if current {"off"}else{"on"};
             let successful=Command::new("bluetoothctl").args(["power",next])
