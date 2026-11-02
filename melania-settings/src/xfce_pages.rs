@@ -4,19 +4,31 @@
 use gtk::{prelude::*, Stack};
 use crate::{xfce_catalog::{self, XFCE_SECTIONS}, xfce_defaults};
 
-pub fn add_pages(stack: &Stack) {
-    // Only create pages that actually expose Melania controls. All five are
-    // registered in SETTINGS_NAVIGATION and therefore always discoverable.
-    stack.add_titled(&xfce_defaults::preferred_apps_page(),
-        Some("xfce-preferred"), "Applicazioni preferite");
-    stack.add_titled(&xfce_defaults::mime_page(),
-        Some("xfce-mime"), "Associazioni MIME");
-    stack.add_titled(&crate::xfce_autostart::session_page(),
-        Some("xfce-session"), "Sessione e avvio");
-    stack.add_titled(&crate::xfce_panel::page(),
-        Some("xfce-panel"), "Pannello");
-    stack.add_titled(&crate::xfce_desktop::page(),
-        Some("xfce-desktop"), "Scrivania e sfondo");
+pub const LAZY_PAGE_NAMES: [(&str,&str);5]=[
+    ("xfce-preferred","Applicazioni preferite"),
+    ("xfce-mime","Associazioni MIME"),
+    ("xfce-session","Sessione e avvio"),
+    ("xfce-panel","Pannello"),
+    ("xfce-desktop","Scrivania e sfondo"),
+];
+
+pub fn add_pages(stack:&Stack){
+    // Every actual XFCE-derived category is immediately navigable, while
+    // expensive GIO association queries wait until its first selection.
+    for &(key,title) in &LAZY_PAGE_NAMES {
+        crate::lazy_pages::register(stack,key,title);
+    }
+}
+
+pub fn build_page(key:&str)->Option<gtk::Box> {
+    match key {
+        "xfce-preferred"=>Some(xfce_defaults::preferred_apps_page()),
+        "xfce-mime"=>Some(xfce_defaults::mime_page()),
+        "xfce-session"=>Some(crate::xfce_autostart::session_page()),
+        "xfce-panel"=>Some(crate::xfce_panel::page()),
+        "xfce-desktop"=>Some(crate::xfce_desktop::page()),
+        _=>None,
+    }
 }
 
 /// Maintain compatibility with old "xfce-*" command-line/deep links. Generic
