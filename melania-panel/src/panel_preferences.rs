@@ -7,7 +7,12 @@ use gtk::{self, gdk, glib, prelude::*};
 use gtk::{ApplicationWindow, Box as GtkBox};
 use gtk4_layer_shell::{Edge, LayerShell};
 use melania_config::Preferences;
-use std::{cell::{Cell,RefCell},rc::Rc,time::Duration};
+use std::{cell::{Cell,RefCell},fs,os::unix::fs::MetadataExt,path::Path,rc::Rc,time::Duration};
+
+fn config_stamp(path:&Path)->Option<(u64,u64,i64,i64)> {
+    fs::metadata(path).ok().map(|meta|
+        (meta.ino(),meta.len(),meta.mtime(),meta.mtime_nsec()))
+}
 
 fn relocate(window:&ApplicationWindow,to_top:bool,offset:i32){
     window.set_anchor(Edge::Top,to_top);
@@ -134,20 +139,31 @@ pub fn attach_live_preferences(
     let panel=panel.clone();let bar=bar.clone();
     let start=start.clone();let quick=quick.clone();
     let notifications=notifications.clone();let calendar=calendar.clone();
+    let preferences_file=melania_config::config_path().ok();
+    let mut previous_stamp=preferences_file.as_deref().and_then(config_stamp);
     glib::timeout_add_local(Duration::from_millis(500),move ||{
-        if let Ok(latest)=melania_config::load(){
-            if *active.borrow()!=latest {
-                let reveal=!latest.panel_auto_hide || hover.get() ||
-                    panel_open(&start,&quick,&notifications,&calendar);
-                apply_preferences(&panel,&bar,&start,&quick,&notifications,&calendar,
-                    &latest,&provider,reveal);
-                *active.borrow_mut()=latest;
-            } else if active.borrow().panel_auto_hide {
-                // Also re-hide after transient Start/calendar popovers close.
-                let showing=hover.get()||
-                    panel_open(&start,&quick,&notifications,&calendar);
-                set_revealed(&panel,&active.borrow(),showing);
+        // A 500ms stat is cheaper than opening, reading and parsing settings
+        // twice a second. An atomic rename changes inode, even for same-size
+        // values, so normal Settings writes are never silently ignored.
+        let current_stamp=preferences_file.as_deref().and_then(config_stamp);
+        if current_stamp!=previous_stamp {
+            previous_stamp=current_stamp;
+            if let Ok(latest)=melania_config::load(){
+                if *active.borrow()!=latest {
+                    let reveal=!latest.panel_auto_hide || hover.get() ||
+                        panel_open(&start,&quick,&notifications,&calendar);
+                    apply_preferences(&panel,&bar,&start,&quick,&notifications,&calendar,
+                        &latest,&provider,reveal);
+                    *active.borrow_mut()=latest;
+                }
             }
+        }
+        if active.borrow().panel_auto_hide {
+            // Auto-hide and transient popups still need a cheap periodic
+            // reveal check even when preferences remain unchanged.
+            let showing=hover.get()||
+                panel_open(&start,&quick,&notifications,&calendar);
+            set_revealed(&panel,&active.borrow(),showing);
         }
         glib::ControlFlow::Continue
     });
