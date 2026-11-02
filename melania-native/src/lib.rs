@@ -5,6 +5,7 @@
 //! libinput devices, switch VTs, or advertise a functioning native session.
 pub mod outputs;
 pub mod renderer;
+pub mod scene;
 pub mod planes;
 pub mod frame_gate;
 pub mod kms_test;
