@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::OsString, fs, io::Write, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::PathBuf, process::Command, sync::Arc, time::{Duration, Instant}};
+use std::{error::Error, ffi::{OsStr, OsString}, fs, io::{self, Write}, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::{Path, PathBuf}, process::{Child, Command}, sync::Arc, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -707,6 +707,19 @@ fn frame_done(surface: &WlSurface, elapsed_ms: u32) {
     );
 }
 
+/// Launch clients in the private nested session only, never the host.
+fn spawn_nested_client(program: OsString, socket: &OsStr, control_path: &Path) -> io::Result<(OsString, Child)> {
+    let child = Command::new(&program).env("WAYLAND_DISPLAY", socket)
+        .env(SOCKET_ENV, control_path)
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("XDG_CURRENT_DESKTOP", "Melania")
+        .env("MELANIA_NESTED_SESSION", "1")
+        .env("GDK_BACKEND", "wayland").spawn()?;
+    eprintln!("MELANIA_CLIENT_STARTED program={} pid={}",
+        program.to_string_lossy(), child.id());
+    Ok((program, child))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut display = Display::<Melania>::new()?;
     let mut handle = display.handle();
@@ -778,29 +791,42 @@ fn main() -> Result<(), Box<dyn Error>> {
     let debug_render = std::env::var_os("MELANIA_DEBUG_RENDER").is_some();
     let mut last_render_report = Instant::now();
 
-    // Optional clients. Each --command PROGRAM starts inside our nested
-    // compositor, with no changes to the parent session's environment.
-    // These are test clients; the preview is not yet a true layer-shell.
-    let mut children = Vec::new();
-    // A lone Super press/release toggles Start; using Super with any other key
-    // must not toggle it (e.g. Super+E continues opening Melania Files).
-    let mut super_pressed_alone=false;
+    // Launch the shell first: desktop background and taskbar get the first
+    // real Wayland frame before expensive application GTK windows are spawned.
+    // A reduced/standalone --command invocation retains immediate launch.
+    let mut children: Vec<(OsString, Child)> = Vec::new();
+    let mut applications = Vec::new();
+    let mut commands = Vec::new();
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         if flag != "--command" {
             return Err(format!("Unknown option {:?}; use --command /path/to/program", flag).into());
         }
-        let program = arguments.next().ok_or("--command requires a program")?;
-        let child = Command::new(&program).env("WAYLAND_DISPLAY", &socket)
-            .env(SOCKET_ENV, &control_path)
-            .env("XDG_SESSION_TYPE", "wayland")
-            .env("XDG_CURRENT_DESKTOP", "Melania")
-            .env("MELANIA_NESTED_SESSION", "1")
-            .env("GDK_BACKEND", "wayland").spawn()?;
-        eprintln!("MELANIA_CLIENT_STARTED program={} pid={}",
-            program.to_string_lossy(), child.id());
-        children.push((program, child));
+        commands.push(arguments.next().ok_or("--command requires a program")?);
     }
+    let is_client = |program: &OsString, name: &str| ->
+        bool {Path::new(program).file_name()==Some(OsStr::new(name))};
+    let stage_shell = commands.iter().any(|p|is_client(p,"melania-desktop-surface"))
+        && commands.iter().any(|p|is_client(p,"melania-panel"));
+    if stage_shell {
+        // Explicit order even when caller passes --command flags differently.
+        for name in ["melania-desktop-surface","melania-panel"] {
+            for program in commands.iter().filter(|p|is_client(p,name)) {
+                children.push(spawn_nested_client(program.clone(),&socket,&control_path)?);
+            }
+        }
+        applications.extend(commands.into_iter().filter(|p|!is_client(p,"melania-desktop-surface")
+            && !is_client(p,"melania-panel")));
+    } else {
+        for program in commands {
+            children.push(spawn_nested_client(program,&socket,&control_path)?);
+        }
+    }
+    let mut shell_frame_painted = false;
+    let startup_begin = Instant::now();
+    // A lone Super press/release toggles Start; using Super with any other key
+    // must not toggle it (e.g. Super+E continues opening Melania Files).
+    let mut super_pressed_alone=false;
     loop {
         let status = host.dispatch_new_events(|event| match event {
             WinitEvent::Resized { size, .. } => {
@@ -996,6 +1022,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            let background_render_elements =
+                elements.len().saturating_sub(top_render_elements+xdg_render_elements);
+            // Must be genuine Wayland render elements, not merely connected
+            // processes or an empty mapped layer. Capture this before xdg apps.
+            let shell_drawn_this_frame = stage_shell && !shell_frame_painted &&
+                top_render_elements > 0 && background_render_elements > 0;
             if debug_render && last_render_report.elapsed() >= Duration::from_secs(1) {
                 eprintln!("MELANIA_RENDER windows={} layers={} elements={} xdg={} top={} size={}x{}",
                           state.space.elements().count(),
@@ -1007,6 +1039,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             frame.clear(Color32F::new(0.035, 0.08, 0.18, 1.0), &[damage])?;
             draw_render_elements(&mut frame, 1.0, &elements, &[damage])?;
             frame.finish()?;
+            if shell_drawn_this_frame {
+                shell_frame_painted = true;
+                eprintln!("MELANIA_BOOT_SHELL_FRAME_MS={} background={} panel={}",
+                    startup_begin.elapsed().as_millis(),
+                    background_render_elements,top_render_elements);
+            }
             for top in state.shell.toplevel_surfaces() {
                 frame_done(top.wl_surface(), begin.elapsed().as_millis() as u32);
             }
@@ -1092,6 +1130,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         state.refresh_start_focus();
         display.flush_clients()?;
         backend.submit(Some(&[damage]))?;
+        if !applications.is_empty() &&
+            (shell_frame_painted || startup_begin.elapsed()>=Duration::from_secs(6)) {
+            let fallback = !shell_frame_painted;
+            eprintln!("MELANIA_BOOT_APPLICATIONS_RELEASED_MS={} fallback={fallback}",
+                startup_begin.elapsed().as_millis());
+            for program in applications.drain(..) {
+                children.push(spawn_nested_client(program,&socket,&control_path)?);
+            }
+        }
         // A GTK client can quit after a Vulkan/EGL initialization failure.
         // Log *which* application exited; a Wayland ConnectionClosed event
         // alone is not enough to distinguish panel from Files or Settings.
