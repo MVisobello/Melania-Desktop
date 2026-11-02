@@ -129,8 +129,8 @@ class PortablePreviewBundle(unittest.TestCase):
             fake_bin.mkdir()
             fake_ldd = fake_bin / "ldd"
             fake_ldd.write_text(
-                "#!/bin/sh\\n"
-                "printf '  libgtk4-layer-shell.so.0 => not found\\\\n'\\n",
+                "#!/bin/sh\n"
+                "printf '  libgtk4-layer-shell.so.0 => not found\\n'\n",
                 encoding="utf-8",
             )
             fake_ldd.chmod(0o755)
@@ -157,8 +157,8 @@ class PortablePreviewBundle(unittest.TestCase):
             fake_bin.mkdir()
             fake_ldd = fake_bin / "ldd"
             fake_ldd.write_text(
-                "#!/bin/sh\\n"
-                "printf '  libgtk4-layer-shell.so.0 => /usr/lib/libgtk4-layer-shell.so.0 (0x01)\\\\n'\\n",
+                "#!/bin/sh\n"
+                "printf '  libgtk4-layer-shell.so.0 => /usr/lib/libgtk4-layer-shell.so.0 (0x01)\\n'\n",
                 encoding="utf-8",
             )
             fake_ldd.chmod(0o755)
