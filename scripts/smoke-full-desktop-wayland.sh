@@ -83,6 +83,25 @@ if [[ "$READY" != 1 ]]; then
   echo 'FAIL: Files and Settings did not both map' >&2
   cat "$TEMP/windows.log" >&2 || true; cat "$TEMP/compositor.log" >&2; exit 1
 fi
+# Assert the shell was actually rendered and submitted *before* any
+# application window was spawned; process-start order alone isn't evidence.
+python3 - "$TEMP/compositor.log" <<'PYBOOT'
+from pathlib import Path
+import re, sys
+log=Path(sys.argv[1]).read_text().splitlines()
+def line_index(pattern):
+    for i,line in enumerate(log):
+        if re.search(pattern,line): return i
+    raise AssertionError(f"missing shell startup evidence: {pattern}")
+start_d=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-desktop-surface")
+start_p=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-panel")
+paint=line_index(r"MELANIA_BOOT_SHELL_FRAME_MS=[0-9]+ background=[1-9][0-9]* panel=[1-9][0-9]*")
+released=line_index(r"MELANIA_BOOT_APPLICATIONS_RELEASED_MS=[0-9]+ fallback=false")
+files=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-files")
+settings=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-settings")
+assert max(start_d,start_p)<paint<released<min(files,settings), (start_d,start_p,paint,released,files,settings)
+print("PASS: real desktop wallpaper and panel rendered before Files/Settings launch")
+PYBOOT
 for name in melania-desktop-surface melania-panel melania-files melania-settings; do
   pgrep -P "$PID" -f "target/debug/$name" >/dev/null || { echo "FAIL: $name exited early" >&2; cat "$TEMP/compositor.log" >&2; exit 1; }
 done

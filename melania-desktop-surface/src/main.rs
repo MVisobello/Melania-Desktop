@@ -4,7 +4,7 @@
 use gtk::{self, gdk, gio, prelude::*};
 use gtk::{Align, Application, ApplicationWindow, Box as GtkBox, Button, FlowBox, Image, Label, Orientation, Overlay, Picture};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
-use std::{cell::RefCell, path::{Path, PathBuf}, process::Command, rc::Rc, time::Duration};
+use std::{cell::{Cell,RefCell}, path::{Path, PathBuf}, process::Command, rc::Rc, time::Duration};
 use melania_desktop_core::{Selection, list_desktop, create_unique_folder};
 
 const APP_ID: &str = "org.melaniadesktop.Desktop";
@@ -283,7 +283,17 @@ fn build(app: &Application) {
     let directory = desktop_directory();
     let selected: DesktopSelection = Rc::new(RefCell::new(Selection::default()));
     let icon_registry: IconRegistry = Rc::new(RefCell::new(Vec::new()));
-    reload_icons(&grid, &directory, &message, &selected, &icon_registry);
+    // Paint the wallpaper before scanning the Desktop folder. This avoids
+    // delaying the first visible frame on software-rendered virtual machines.
+    let initial_grid=grid.clone();
+    let initial_directory=directory.clone();
+    let initial_message=message.clone();
+    let initial_selection=selected.clone();
+    let initial_registry=icon_registry.clone();
+    gtk::glib::timeout_add_local_once(Duration::from_millis(120),move || {
+        reload_icons(&initial_grid,&initial_directory,&initial_message,
+            &initial_selection,&initial_registry);
+    });
     let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     let grid_after_drop = grid.clone();
     let dir_after_drop = directory.clone();
@@ -377,8 +387,20 @@ fn build(app: &Application) {
         let base = directory.clone();
         let selected_for_monitor = selected.clone();
         let icons_for_monitor = icon_registry.clone();
+        // Burst of file system events: rebuild the icon grid only once.
+        let refresh_pending=Rc::new(Cell::new(false));
         monitor.connect_changed(move |_, _, _, _| {
-            reload_icons(&updated, &base, &status, &selected_for_monitor, &icons_for_monitor);
+            if refresh_pending.replace(true){return;}
+            let pending=refresh_pending.clone();
+            let updated=updated.clone();
+            let base=base.clone();
+            let status=status.clone();
+            let selected=selected_for_monitor.clone();
+            let icons=icons_for_monitor.clone();
+            gtk::glib::timeout_add_local_once(Duration::from_millis(180),move ||{
+                pending.set(false);
+                reload_icons(&updated,&base,&status,&selected,&icons);
+            });
         });
         // Retain the monitor for the life of the desktop window.
         window.connect_hide(move |_| { monitor.cancel(); });
