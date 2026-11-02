@@ -48,6 +48,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QMP two-window real focus injector missing'
 [[ -f "$root/scripts/inject-qemu-layout-drag.py" ]] ||
   deny 'QMP real window drag injector missing'
+[[ -f "$root/scripts/inject-qemu-resize-configure.py" ]] ||
+  deny 'QMP xdg resize handshake injector missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -149,6 +151,10 @@ python3 "$root/scripts/capture-qemu-layout-repaint.py" \
   --output "$report/layout-dragged-frame4.ppm" --timeout 950 \
   > "$report/qmp-layout-repaint.log" 2>&1 &
 layout_capture_pid=$!
+python3 "$root/scripts/inject-qemu-resize-configure.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  > "$report/qmp-resize-configure.log" 2>&1 &
+resize_inject_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -185,9 +191,13 @@ wait "$layout_drag_pid"
 layout_drag_code=$?
 wait "$layout_capture_pid"
 layout_capture_code=$?
+wait "$resize_inject_pid"
+resize_inject_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$layout_drag_code" -ne 0 || "$layout_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$layout_drag_code" -ne 0 || "$layout_capture_code" -ne 0 || "$resize_inject_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_REAL_XDG_RESIZE_ACK_PASS=true' "$report/qmp-resize-configure.log" ||
+   ! grep -q '^MELANIA_QEMU_XDG_RESIZE_PROBE_ENABLED=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_DRAG_VISIBLE_GPU_PASS=true' "$report/qmp-layout-repaint.log" ||
    ! grep -q '^MELANIA_QEMU_LAYOUT_FRAME4_PIXELS=true' "$report/qmp-layout-repaint.log" ||
    ! grep -q '^MELANIA_QEMU_LAYOUT_REPAINT_KMS_ACK=true' "$report/qmp-layout-drag.log" ||
@@ -305,6 +315,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-two-window-focus.log" || true
   tail -n 30 "$report/qmp-layout-drag.log" || true
   tail -n 30 "$report/qmp-layout-repaint.log" || true
+  tail -n 30 "$report/qmp-resize-configure.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -323,3 +334,5 @@ printf '%s\n' 'MELANIA_VM_TWO_REAL_WAYLAND_WINDOWS_QMP_PRESENTED=true' >> "$repo
 printf '%s\n' 'MELANIA_VM_TWO_WINDOWS_REAL_FOCUS_INPUT=true' >> "$report/result.txt"
 
 printf '%s\n' 'MELANIA_VM_DRAG_LAYOUT_VISIBLE_IN_FOURTH_KMS_FRAME=true' >> "$report/result.txt"
+
+printf '%s\n' 'MELANIA_VM_REAL_XDG_RESIZE_CONFIGURE_ACK=true' >> "$report/result.txt"
