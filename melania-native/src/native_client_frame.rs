@@ -2,6 +2,7 @@
 //! QEMU test guest. This produces pixels; it does NOT own the KMS pageflip.
 //! The QEMU-only DRM diagnostic later scans out this exact immutable snapshot.
 use std::{fs,io::Write, path::Path};
+use melania_native::scene::{self,Layer,Pixels,Surface};
 use smithay::{reexports::wayland_server::protocol::wl_shm,
               wayland::shm::BufferData};
 
@@ -34,36 +35,41 @@ pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)
     if last>len || ptr.is_null() {
         return Err("wl_shm pool does not contain requested client pixels".into());
     }
-    let mut frame=vec![0u8;OUT_W*OUT_H*4];
-    // Background and frame are compositor-owned; window pixels below originate
-    // exclusively in the client's wl_shm pool, never synthesized by the helper.
-    for pixel in frame.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[58,33,27,0]); // RGB(27,33,58), dark desktop
-    }
-    for y in TOP-6..TOP+WIN_H+6 {
-        for x in LEFT-6..LEFT+WIN_W+6 {
-            let p=(y*OUT_W+x)*4;
-            frame[p..p+4].copy_from_slice(&[216,171,65,0]); // border
-        }
-    }
+    // Copy untrusted wl_shm bytes into owned memory while Smithay holds the
+    // mapping. Never retain a borrowed client pointer across a redraw.
+    let mut client=vec![0u8;WIN_W*WIN_H*4];
     for y in 0..WIN_H {
         let in_row=start+y*stride;
-        let out_row=((TOP+y)*OUT_W+LEFT)*4;
+        let out_row=y*WIN_W*4;
         for x in 0..WIN_W {
             let p=in_row+x*4;
             let q=out_row+x*4;
-            // SAFETY: each individual pointer arithmetic index is bounded by
-            // last<=len. Volatile byte loads do not construct shared references
-            // into mutable client memory. The wl_shm mapping is valid for the
-            // whole Smithay with_buffer_contents callback. A malicious client
-            // could still change pixel values concurrently; this is only a
-            // bounded test probe, not a production buffer import path.
+            // SAFETY: all reads are inside the validated wl_shm range, and
+            // the mapping remains valid for the entire callback. Volatile
+            // reads avoid assuming the mutable client buffer is immutable.
             for c in 0..3 {
-                frame[q+c]=unsafe {std::ptr::read_volatile(ptr.add(p+c))};
+                client[q+c]=unsafe {std::ptr::read_volatile(ptr.add(p+c))};
             }
-            frame[q+3]=0;
+            client[q+3]=0;
         }
     }
+    // The disposable VM now exercises the same position-aware scene
+    // composition primitive intended for multiple windows and shell layers.
+    // Stage31 still has ONE real Wayland client, not a native desktop session.
+    let surfaces=[
+        Surface{
+            x:(LEFT-6) as i32,y:(TOP-6) as i32,
+            width:WIN_W+12,height:WIN_H+12,layer:Layer::Bottom,
+            pixels:Pixels::Solid([216,171,65,0]),
+        },
+        Surface{
+            x:LEFT as i32,y:TOP as i32,
+            width:WIN_W,height:WIN_H,layer:Layer::Normal,
+            pixels:Pixels::OpaqueBgra{data:&client,stride:WIN_W*4},
+        },
+    ];
+    let frame=scene::compose(OUT_W,OUT_H,[58,33,27,0],&surfaces)
+        .map_err(|err|format!("native scene composition failed: {err:?}"))?;
     Ok(frame)
 }
 
