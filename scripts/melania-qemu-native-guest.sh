@@ -335,6 +335,13 @@ grep -q '^MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true' "$stream_server_lo
   fatal 'Smithay_did_not_deliver_three_post_KMS_frame_callbacks'
 grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$stream_server_log" ||
   fatal 'Smithay_frame_callback_count_incorrect'
+# Stage32: the three callbacks are also tied to scheduler tickets which
+# must be retired only after the individual Rust KMS ACK arrives.
+for index in 1 2 3; do
+  grep -q "^MELANIA_NATIVE_SCHEDULED_FRAME_ACK=$index$" "$stream_server_log" ||
+    fatal "Smithay_scheduled_frame_ticket_$index_not_retired"
+done
+report 'MELANIA_QEMU_NATIVE_SCHEDULED_FRAMES_PASS=true'
 rm -f "$stream_server_log" "$stream_kms_log"
 report 'MELANIA_QEMU_NATIVE_LIVE_WAYLAND_KMS_STREAM_PASS=true'
 report 'MELANIA_QEMU_NATIVE_PRESENTED_FRAME_CALLBACKS_PASS=true'
