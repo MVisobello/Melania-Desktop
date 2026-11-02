@@ -10,6 +10,9 @@ on:
       - scripts/smoke-portable-bundle.sh
       - docs/MINT22-RUNTIME.md
       - tests/test_preview_bundle.py
+      - tests/test_panel_popups.py
+      - melania-config/**
+      - branding/Melania/scalable/apps/**
       - tests/test_virtualbox_preview.py
       - melania-compositor/**
       - melania-desktop-surface/**
@@ -29,6 +32,9 @@ on:
       - scripts/smoke-portable-bundle.sh
       - docs/MINT22-RUNTIME.md
       - tests/test_preview_bundle.py
+      - tests/test_panel_popups.py
+      - melania-config/**
+      - branding/Melania/scalable/apps/**
       - tests/test_virtualbox_preview.py
       - melania-compositor/**
       - melania-desktop-surface/**
@@ -81,6 +87,7 @@ jobs:
           set -euo pipefail
           pkg-config --modversion gtk4 gtk4-layer-shell-0
           python3 -m unittest discover -s tests -p test_preview_bundle.py -v
+          python3 -m unittest discover -s tests -p test_panel_popups.py -v
           python3 -m unittest discover -s tests -p test_virtualbox_preview.py -v
           bash -n scripts/run-melania-bundle.sh
           bash -n scripts/smoke-portable-bundle.sh
@@ -121,6 +128,8 @@ jobs:
           sha256sum -c SHA256SUMS
           tar -tzf melania-nested-preview.tar.gz > archive-members.txt
           grep -Fxq 'melania-nested-preview/lib/libgtk4-layer-shell.so.0' archive-members.txt
+          grep -Fxq 'melania-nested-preview/share/icons/Melania-Preview/index.theme' archive-members.txt
+          grep -Fxq 'melania-nested-preview/share/icons/Melania-Preview/scalable/status/melania-tray-notifications.svg' archive-members.txt
           grep -Fxq 'melania-nested-preview/manifest.json' archive-members.txt
       - name: Launch extracted Mint-compatible bundle on isolated Xvfb
         env:
@@ -137,6 +146,8 @@ jobs:
             reports/mint22-bundle-smoke.log
           grep -q 'MELANIA_RENDERING_BACKEND=software' reports/bundle-nested-desktop.log
           test -s reports/bundle-nested-desktop.png
+          grep -q 'PASS: quick controls to notifications click preserves the panel client' \
+            reports/mint22-bundle-smoke.log
       - name: Publish Mint-compatible archive and SHA256 checksum
         if: success()
         uses: actions/upload-artifact@v4
