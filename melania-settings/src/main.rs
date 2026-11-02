@@ -1,6 +1,7 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
 mod lazy_pages;
+mod settings_async;
 mod connectivity_controls;
 mod display_controls;
 mod xfce_catalog;
@@ -141,20 +142,35 @@ fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
 
 /// NetworkManager queries occur only on an explicit visit to Rete.
 fn network_page()->GtkBox {
-    let network = page("Rete");
+    let network=page("Rete");
     connectivity_controls::append_wifi(&network);
-    let live_network = text(&gnome_pages::network_status(), "settings-row-description");
+    let live_network=text("Rilevamento connessioni in corso…","settings-row-description");
     live_network.add_css_class("settings-card");
     network.append(&live_network);
-    let refresh_network = Button::with_label("Aggiorna stato della rete");
+    let refresh_network=Button::with_label("Aggiorna stato della rete");
     refresh_network.add_css_class("settings-save");
     refresh_network.add_css_class("settings-refresh-button");
     refresh_network.set_halign(gtk::Align::Start);
-    let current_network = live_network.clone();
-    refresh_network.connect_clicked(move |_| {
-        current_network.set_text(&gnome_pages::network_status());
-    });
+    refresh_network.set_sensitive(false);
     network.append(&refresh_network);
+    let first_label=live_network.clone();
+    let first_button=refresh_network.clone();
+    settings_async::run(gnome_pages::network_status,move |result|{
+        first_label.set_text(result.as_deref().unwrap_or(
+            "NetworkManager non risponde. Riprova con Aggiorna."));
+        first_button.set_sensitive(true);
+    });
+    refresh_network.connect_clicked(move |button|{
+        button.set_sensitive(false);
+        live_network.set_text("Aggiornamento connessioni in corso…");
+        let label=live_network.clone();
+        let action=button.clone();
+        settings_async::run(gnome_pages::network_status,move |result|{
+            label.set_text(result.as_deref().unwrap_or(
+                "NetworkManager non risponde. Riprova con Aggiorna."));
+            action.set_sensitive(true);
+        });
+    });
     network
 }
 
