@@ -736,6 +736,13 @@ fn frame_idle_budget(frame_elapsed: Duration) -> Duration {
     Duration::from_nanos(16_666_667).saturating_sub(frame_elapsed)
 }
 
+/// A conservative two-second recovery repaint handles nonstandard clients
+/// which bypass normal damage/commit notifications. On usual GTK sessions
+/// every surface commit or input redraws immediately.
+fn should_render_scene(dirty:bool,ipc_pending:bool,since_present:Duration)->bool {
+    dirty || ipc_pending || since_present>=Duration::from_secs(2)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut display = Display::<Melania>::new()?;
     let mut handle = display.handle();
@@ -1012,9 +1019,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
         });
         if matches!(status, PumpStatus::Exit(_)) { break; }
+        // Process control sockets on every tick, even when no pixels
+        // changed. An IPC request forces the capture-capable render path;
+        // otherwise a quiet desktop never binds EGL or swaps host buffers.
+        let mut pending_control=Vec::new();
+        for _ in 0..8 {
+            match control_listener.accept() {
+                Ok((client,_))=>pending_control.push(client),
+                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
+                Err(error)=>{eprintln!("Melania control accept: {error}");break;},
+            }
+        }
+        let render_needed = should_render_scene(state.visual_dirty,
+            !pending_control.is_empty(),last_present.elapsed());
         let size = backend.window_size();
         let damage = Rectangle::from_size(size);
-        {
+        if render_needed {
+            state.visual_dirty=false;
+            last_present=Instant::now();
+            if profile_frames {sampled_redraws+=1;}
             let (renderer, mut framebuffer) = backend.bind()?;
             let mut elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
             // Smithay draw_render_elements consumes FRONT-TO-BACK elements:
@@ -1074,17 +1097,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     startup_begin.elapsed().as_millis(),
                     background_render_elements,top_render_elements);
             }
-            for top in state.shell.toplevel_surfaces() {
-                frame_done(top.wl_surface(), begin.elapsed().as_millis() as u32);
-            }
-            for layer in layer_map_for_output(&output).layers() {
-                frame_done(layer.wl_surface(), begin.elapsed().as_millis() as u32);
-            }
             // Per-window offscreen capture. Never read composed desktop pixels.
             let mut captures_this_frame=0u8;
-            for _ in 0..8 {
-                match control_listener.accept() {
-                    Ok((mut client, _)) => {
+            for mut client in pending_control {
                         let _=client.set_read_timeout(Some(Duration::from_millis(40)));
                         let _=client.set_write_timeout(Some(Duration::from_millis(120)));
                         let response=match read_command(&mut client) {
@@ -1137,10 +1152,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                             Err(e) => respond_error(&format!("Lettura IPC fallita: {e}")),
                         };
                         let _=client.write_all(response.as_bytes());
-                    }
-                    Err(e) if e.kind()==std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => {eprintln!("Melania control socket: {e}");break;}
-                }
             }
             // The offscreen EGL readback changes the current GL target.
             // Re-establish the host window framebuffer before the winit
@@ -1149,6 +1160,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let restore = renderer.render(&mut framebuffer,size,Transform::Flipped180)?;
                 restore.finish()?;
             }
+        } else if profile_frames {
+            sampled_skips+=1;
+        }
+        // Frame callbacks must still advance while a scene is unchanged:
+        // clients can use them to schedule their next animated buffer.
+        for top in state.shell.toplevel_surfaces() {
+            frame_done(top.wl_surface(), begin.elapsed().as_millis() as u32);
+        }
+        for layer in layer_map_for_output(&output).layers() {
+            frame_done(layer.wl_surface(), begin.elapsed().as_millis() as u32);
         }
         while let Some(stream) = listener.accept()? {
             handle.insert_client(stream, Arc::new(ClientState::default()))?;
@@ -1158,7 +1179,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         display.dispatch_clients(&mut state)?;
         state.refresh_start_focus();
         display.flush_clients()?;
-        backend.submit(Some(&[damage]))?;
+        if render_needed {backend.submit(Some(&[damage]))?;}
         if !applications.is_empty() &&
             (shell_frame_painted || startup_begin.elapsed()>=Duration::from_secs(6)) {
             let fallback = !shell_frame_painted;
@@ -1195,10 +1216,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         if profile_frames && sample_started.elapsed()>=Duration::from_secs(2) {
             let elapsed=sample_started.elapsed().as_secs_f64();
             let average=sampled_busy_us as f64/sampled_frames.max(1) as f64/1000.0;
-            eprintln!("MELANIA_COMPOSITOR_FPS={:.1} busy_ms_avg={:.2} samples={}",
-                sampled_frames as f64/elapsed,average,sampled_frames);
+            eprintln!("MELANIA_COMPOSITOR_FPS={:.1} busy_ms_avg={:.2} samples={} redraws={} idle_skipped={}",
+                sampled_redraws as f64/elapsed,average,sampled_frames,
+                sampled_redraws,sampled_skips);
             sampled_frames=0;
             sampled_busy_us=0;
+            sampled_redraws=0;
+            sampled_skips=0;
             sample_started=Instant::now();
         }
     }
