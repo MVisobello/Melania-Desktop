@@ -72,6 +72,7 @@ struct BridgeState {
     async_kms_mode:bool,
     layout_repaint_mode:bool,
     resize_configure_mode:bool,
+    resize_buffer_mode:bool,
     last_resize_request:Option<(u64,i32,i32)>,
     layout_dirty:bool,
     async_layout_pending:Option<PendingLayoutFrame>,
@@ -241,7 +242,11 @@ impl BridgeState {
                 return Err("layout-only KMS ACK invalidated by seat pause".into());
             }
             self.pixel_frame_count=pending.ordinal;
-            self.pixel_ready=true;
+            self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
+            if self.resize_buffer_mode {
+                std::fs::write("/run/melania-native-qemu/layout-ready-for-resize.flag",
+                    b"verified-KMS-layout-frame4")?;
+            }
             println!("MELANIA_NATIVE_LAYOUT_REPAINT_ACK=4");
             println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK=4");
             std::io::stdout().flush()?;
@@ -298,9 +303,23 @@ impl CompositorHandler for BridgeState {
                 // In the two-window VM test each COMMIT carries pixel data
                 // from a distinct wl_surface. Keep the previous window's
                 // last owned snapshot for the next full-scene composition.
+                let mut sized_import=None;
                 let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
                     if self.multi_window_mode {
-                        native_client_frame::copy_client_shm(ptr,len,metadata)
+                        let resized=self.resize_buffer_mode &&
+                            (metadata.width!=360 || metadata.height!=224);
+                        if resized {
+                            let width=metadata.width;
+                            let height=metadata.height;
+                            let result=native_client_frame::copy_client_shm_sized(
+                                ptr,len,metadata);
+                            if result.is_ok() && width>0 && height>0 {
+                                sized_import=Some((width as usize,height as usize));
+                            }
+                            result
+                        } else {
+                            native_client_frame::copy_client_shm(ptr,len,metadata)
+                        }
                     } else {
                         native_client_frame::compose_from_shm(ptr,len,metadata)
                     }
@@ -319,9 +338,19 @@ impl CompositorHandler for BridgeState {
                                 self.known_window_surfaces.push(surface.clone());
                                 self.known_window_surfaces.len() as u64
                             };
-                            if self.multi_scene.upsert(key,imported).is_err() {
+                            let accepted=if let Some((width,height))=sized_import {
+                                self.multi_scene.upsert_sized(key,width,height,imported)
+                            } else {
+                                self.multi_scene.upsert(key,imported)
+                            };
+                            if accepted.is_err() {
                                 eprintln!("QEMU retained window rejected invalid wl_shm image");
                                 return;
+                            }
+                            if let Some((width,height))=sized_import {
+                                println!("MELANIA_NATIVE_REAL_RESIZED_WL_SHM_IMPORTED={}x{}",
+                                    width,height);
+                                let _=std::io::stdout().flush();
                             }
                             match self.multi_scene.composite() {
                                 Ok(frame)=>frame,
@@ -716,7 +745,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         pixel_frame_count:0,
-        pixel_frame_target:if std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_RESIZED_BUFFER")
+            .as_deref()==Ok("YES_QEMU_VM") {5} else if std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
             .as_deref()==Ok("YES_QEMU_VM") {4} else if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
             .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
@@ -731,6 +761,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         layout_repaint_mode:std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
             .as_deref()==Ok("YES_QEMU_VM"),
         resize_configure_mode:std::env::var("MELANIA_NATIVE_RESIZE_CONFIGURE")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        resize_buffer_mode:std::env::var("MELANIA_NATIVE_RESIZED_BUFFER")
             .as_deref()==Ok("YES_QEMU_VM"),
         last_resize_request:None,
         layout_dirty:false,async_layout_pending:None,
@@ -788,7 +820,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     if state.multi_window_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
-        !(3..=4).contains(&state.pixel_frame_target)) {
+        !(3..=5).contains(&state.pixel_frame_target)) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
     if state.async_kms_mode && !state.multi_window_mode {
@@ -801,6 +833,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     if state.resize_configure_mode && !state.layout_repaint_mode {
         return Err("resize configure probe requires bounded layout QEMU mode".into());
+    }
+    if state.resize_buffer_mode &&
+       (!state.resize_configure_mode || !state.layout_repaint_mode ||
+        state.pixel_frame_target!=5) {
+        return Err("resized client pixels require QEMU configure + layout VM gates".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -872,7 +909,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
                 if state.frame_callbacks_probe {
-                    if state.frame_callback_count!=if state.layout_repaint_mode {3} else {state.pixel_frame_target as u32} {
+                    if state.frame_callback_count!=if state.resize_buffer_mode {4} else if state.layout_repaint_mode {3} else {state.pixel_frame_target as u32} {
                         return Err("not all Wayland frame callbacks completed after KMS".into());
                     }
                     println!("MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true");
