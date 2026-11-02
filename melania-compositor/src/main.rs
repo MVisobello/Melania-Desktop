@@ -1249,7 +1249,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod frame_pacing_tests {
-    use super::frame_idle_budget;
+    use super::{frame_idle_budget,should_render_scene};
     use std::time::Duration;
 
     #[test]
@@ -1261,5 +1261,18 @@ mod frame_pacing_tests {
     #[test]
     fn overloaded_software_frame_never_waits_more() {
         assert_eq!(frame_idle_budget(Duration::from_millis(20)),Duration::ZERO);
+    }
+
+    #[test]
+    fn idle_scene_does_not_bind_egl_or_swap_until_recovery() {
+        assert!(!should_render_scene(false,false,Duration::from_millis(500)));
+        assert!(!should_render_scene(false,false,Duration::from_millis(1999)));
+        assert!(should_render_scene(false,false,Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn commits_and_private_preview_requests_force_immediate_render() {
+        assert!(should_render_scene(true,false,Duration::ZERO));
+        assert!(should_render_scene(false,true,Duration::ZERO));
     }
 }
