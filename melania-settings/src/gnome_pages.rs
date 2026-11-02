@@ -435,27 +435,52 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         Some(audio)
         },
         "power" => {
-        let power = page("Alimentazione", "battery");
-        group(&power, "Batteria");
-        let charge = battery_status();
-        power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
+        let power=page("Alimentazione","battery");
+        group(&power,"Batteria");
+        let battery_reading=info_row("battery","Stato dell'alimentazione",
+            "Rilevamento batteria in corso…");
+        power.append(&battery_reading);
         group(&power,"Profili energetici");
-        // XFCE-style power profile choice backed by the real Linux service. No
-        // toggle is shown when power-profiles-daemon is absent or unsupported.
-        let profile_list=Command::new("powerprofilesctl").arg("list").output().ok()
-            .filter(|result|result.status.success())
-            .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
-            .unwrap_or_default();
-        if profile_list.is_empty() {
-            power.append(&info_row("dialog-information","Profili non disponibili",
-                "power-profiles-daemon non è disponibile o non espone profili supportati."));
-        } else {
-            let active_profile=read_command("powerprofilesctl",&["get"]).unwrap_or_default();
+        let profiles_host=GtkBox::new(Orientation::Vertical,8);
+        let pending=label("Lettura profili energetici in corso…",
+            "settings-row-description");
+        profiles_host.append(&pending);
+        power.append(&profiles_host);
+        power.append(&info_row("dialog-information","Inattività e sospensione",
+            "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
+        // powerprofilesctl can wait on D-Bus; only plain data is sent
+        // from the worker to GTK. No profile is changed on page open.
+        crate::settings_async::run("power-detect",move ||{
+            let battery=battery_status();
+            let list=Command::new("powerprofilesctl").arg("list").output().ok()
+                .filter(|result|result.status.success())
+                .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
+                .unwrap_or_default();
+            let active=if list.is_empty() {String::new()}else{
+                read_command("powerprofilesctl",&["get"]).unwrap_or_default()
+            };
+            (battery,list,active)
+        },move |result|{
+            let Some((battery,profile_list,active_profile))=result else {
+                pending.set_text("Impossibile leggere i profili energetici. Riprova riaprendo la sezione.");
+                return;
+            };
+            // The real battery status is a fresh, read-only Linux sysfs scan.
+            while let Some(child)=battery_reading.first_child(){
+                battery_reading.remove(&child);
+            }
+            battery_reading.append(&info_row("battery","Stato dell'alimentazione",&battery));
+            profiles_host.remove(&pending);
+            if profile_list.is_empty() {
+                profiles_host.append(&info_row("dialog-information","Profili non disponibili",
+                    "power-profiles-daemon non è disponibile o non espone profili supportati."));
+                return;
+            }
             let labels=profile_list.iter().map(|name|match *name {
                 "power-saver"=>"Risparmio energetico",
                 "balanced"=>"Bilanciato",
                 "performance"=>"Prestazioni elevate",
-                _=>*name
+                _=>*name,
             }).collect::<Vec<_>>();
             let selector=gtk::DropDown::from_strings(&labels);
             let selected=profile_list.iter().position(|name|*name==active_profile)
@@ -468,29 +493,38 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
             let apply=Button::with_label("Applica profilo");
             apply.add_css_class("settings-save");
             controls.append(&apply);
-            let feedback=label("La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
+            let feedback=label(
+                "La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
                 "settings-row-description");
             let response=feedback.clone();
-            apply.connect_clicked(move |_|{
-                let Some(&profile)=profile_list.get(selector.selected() as usize) else {return;};
-                let result=Command::new("powerprofilesctl").args(["set",profile]).status();
-                match result {
-                    Ok(status) if status.success() =>response.set_text(
-                        &format!("Profilo energetico applicato: {profile}.")
-                    ),
-                    Ok(status)=>response.set_text(&format!(
-                        "Impossibile applicare il profilo {profile}: codice {status}."
-                    )),
-                    Err(error)=>response.set_text(&format!(
-                        "Servizio profili energetici non disponibile: {error}"
-                    )),
-                }
+            apply.connect_clicked(move |button|{
+                let Some(&profile)=profile_list.get(selector.selected() as usize)
+                    else {return;};
+                button.set_sensitive(false);
+                response.set_text("Applicazione profilo energetico in corso…");
+                let action=button.clone();
+                let feedback=response.clone();
+                crate::settings_async::run("power-set",move ||{
+                    let result=Command::new("powerprofilesctl").args(["set",profile]).status();
+                    let success=result.is_ok_and(|status|status.success());
+                    (success,if success {
+                        read_command("powerprofilesctl",&["get"])
+                    }else{None})
+                },move |result|{
+                    action.set_sensitive(true);
+                    match result{
+                        Some((true,Some(actual))) if actual==profile=>
+                            feedback.set_text(&format!("Profilo energetico applicato: {profile}.")),
+                        Some((true,_))=>feedback.set_text(
+                            "Comando inviato, ma non è possibile verificare il profilo attivo."),
+                        _=>feedback.set_text(
+                            "Impossibile applicare il profilo energetico. Verifica power-profiles-daemon."),
+                    }
+                });
             });
-            power.append(&controls);
-            power.append(&feedback);
-        }
-        power.append(&info_row("dialog-information","Inattività e sospensione",
-            "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
+            profiles_host.append(&controls);
+            profiles_host.append(&feedback);
+        });
         Some(power)
         },
         "storage" => {
