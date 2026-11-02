@@ -35,7 +35,7 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Subpixel},
     wayland::{
         buffer::BufferHandler,
-        compositor::{with_states,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
+        compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
@@ -65,6 +65,8 @@ struct BridgeState {
     pixel_probe:bool,
     pixel_ready:bool,
     live_stream:bool,
+    frame_callbacks_probe:bool,
+    frame_callback_count:u32,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
     pixel_frame_target:u8,
@@ -80,6 +82,26 @@ struct BridgeState {
     delivered_keys: u32,
     delivered_buttons: u32,
     delivered_motions: u32,
+}
+
+/// Send wl_surface.frame completions only after the KMS presenter has
+/// acknowledged that client-owned pixels actually reached the VM CRTC.
+/// Traverse subsurfaces so a client does not stall an animated surface tree.
+fn complete_presented_frame(surface:&WlSurface,elapsed_ms:u32)->u32 {
+    let mut delivered=0u32;
+    with_surface_tree_downward(
+        surface,(),
+        |_,_,&()|TraversalAction::DoChildren(()),
+        |_,attributes,&()|{
+            for callback in attributes.cached_state.get::<SurfaceAttributes>()
+                .current().frame_callbacks.drain(..) {
+                callback.done(elapsed_ms);
+                delivered=delivered.saturating_add(1);
+            }
+        },
+        |_,_,&()|true,
+    );
+    delivered
 }
 
 impl BufferHandler for BridgeState {
@@ -128,6 +150,17 @@ impl CompositorHandler for BridgeState {
                                 println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
                                 println!("MELANIA_NATIVE_CLIENT_FRAME_INDEX={}",self.pixel_frame_count);
                                 println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
+                                if self.live_stream && self.frame_callbacks_probe {
+                                    // ACK follows successful FB_ID check in drm-rs.
+                                    // A frame callback before that point would
+                                    // falsely tell the client rendering completed.
+                                    let count=complete_presented_frame(
+                                        surface,self.pixel_frame_count as u32*16
+                                    );
+                                    self.frame_callback_count+=count;
+                                    println!("MELANIA_NATIVE_FRAME_CALLBACK_DONE={}",self.pixel_frame_count);
+                                    println!("MELANIA_NATIVE_FRAME_CALLBACK_COUNT={}",self.frame_callback_count);
+                                }
                                 let _=std::io::stdout().flush();
                             },
                             Err(error)=>{
@@ -326,7 +359,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
         live_stream:std::env::var("MELANIA_NATIVE_LIVE_STREAM")
-            .as_deref()==Ok("YES_QEMU_VM"),stream:None,
+            .as_deref()==Ok("YES_QEMU_VM"),
+        frame_callbacks_probe:std::env::var("MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        frame_callback_count:0,
+        stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
         xdg_toplevel_count:0,layer_surface_count:0,
@@ -361,6 +398,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     if live_stream && !state.pixel_probe {
         return Err("live KMS stream needs explicit QEMU client-pixel probe".into());
+    }
+    if state.frame_callbacks_probe && !live_stream {
+        return Err("frame presentation probe needs live VM Rust DRM stream".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -413,6 +453,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
                 if state.live_stream {
                     println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
+                }
+                if state.frame_callbacks_probe {
+                    if state.frame_callback_count!=state.pixel_frame_target as u32 {
+                        return Err("not all Wayland frame callbacks completed after KMS".into());
+                    }
+                    println!("MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true");
                 }
                 println!("MELANIA_NATIVE_LIVE_KMS_RENDERING=false");
                 println!("MELANIA_NATIVE_SESSION_READY=false");
