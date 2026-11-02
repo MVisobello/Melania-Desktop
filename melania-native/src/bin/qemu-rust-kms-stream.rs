@@ -169,8 +169,12 @@ fn run()->Result<(),Box<dyn Error>> {
     };
     let mut previous:Option<Vec<u8>>=None;
 
+    let layout_repaint=std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
+        .as_deref()==Ok("YES_QEMU_VM") &&
+        std::env::var("MELANIA_QEMU_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM");
+    let frame_target=if layout_repaint {4u8} else {3u8};
     let attempt=(||->Result<(),Box<dyn Error>> {
-        for index in 0..3u8 {
+        for index in 0..frame_target {
             // Bounded payload prevents arbitrary allocation or partial frames.
             let mut size=[0u8;4];
             stream.read_exact(&mut size)?;
@@ -213,8 +217,9 @@ fn run()->Result<(),Box<dyn Error>> {
             previous=Some(pixels);
             // QMP observes actual virtual display bytes while this FB is live.
             thread::sleep(Duration::from_secs(5));
-            // Frame 3 is acknowledged *only after* the CRTC has been restored.
-            if index==2 {
+            // Final frame ACK follows verified restoration of the
+            // original console CRTC, even when layout adds a fourth frame.
+            if index+1==frame_target {
                 rollback.restore()?;
             }
             stream.write_all(&[index+1])?;
@@ -231,6 +236,9 @@ fn run()->Result<(),Box<dyn Error>> {
         card.destroy_dumb_buffer(db2)?;
         card.destroy_dumb_buffer(db1)?;
         println!("MELANIA_RUST_STREAM_THREE_CLIENT_FRAMES_PASS=true");
+        if layout_repaint {
+            println!("MELANIA_RUST_LAYOUT_REPAINT_FOUR_FRAMES_PASS=true");
+        }
         println!("MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false");
         println!("MELANIA_NATIVE_SESSION_READY=false");
         return Ok(());

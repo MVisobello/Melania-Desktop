@@ -33,6 +33,8 @@ rust_kms="$root/target/debug/qemu-rust-kms-frames"
   deny 'real two-frame QMP capture verifier missing'
 [[ -f "$root/scripts/capture-qemu-two-windows.py" ]] ||
   deny 'real two-window QMP capture verifier missing'
+[[ -f "$root/scripts/capture-qemu-layout-repaint.py" ]] ||
+  deny 'real layout repaint GPU verifier missing'
 pixel_scanout="$root/target/debug/melania-qemu-client-window-scanout"
 [[ -x "$pixel_scanout" ]] || deny 'build QEMU-only real-client scanout program first'
 [[ -f "$root/scripts/capture-qemu-client-window.py" ]] ||
@@ -44,6 +46,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QMP virtual USB event injector missing'
 [[ -f "$root/scripts/inject-qemu-two-window-focus.py" ]] ||
   deny 'QMP two-window real focus injector missing'
+[[ -f "$root/scripts/inject-qemu-layout-drag.py" ]] ||
+  deny 'QMP real window drag injector missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -136,6 +140,15 @@ python3 "$root/scripts/inject-qemu-two-window-focus.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
   > "$report/qmp-two-window-focus.log" 2>&1 &
 focus_inject_pid=$!
+python3 "$root/scripts/inject-qemu-layout-drag.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  > "$report/qmp-layout-drag.log" 2>&1 &
+layout_drag_pid=$!
+python3 "$root/scripts/capture-qemu-layout-repaint.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/layout-dragged-frame4.ppm" --timeout 950 \
+  > "$report/qmp-layout-repaint.log" 2>&1 &
+layout_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -168,9 +181,19 @@ wait "$multi_capture_pid"
 multi_capture_code=$?
 wait "$focus_inject_pid"
 focus_inject_code=$?
+wait "$layout_drag_pid"
+layout_drag_code=$?
+wait "$layout_capture_pid"
+layout_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$layout_drag_code" -ne 0 || "$layout_capture_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_DRAG_VISIBLE_GPU_PASS=true' "$report/qmp-layout-repaint.log" ||
+   ! grep -q '^MELANIA_QEMU_LAYOUT_FRAME4_PIXELS=true' "$report/qmp-layout-repaint.log" ||
+   ! grep -q '^MELANIA_QEMU_LAYOUT_REPAINT_KMS_ACK=true' "$report/qmp-layout-drag.log" ||
+   ! grep -q '^MELANIA_QEMU_REAL_MOUSE_DRAG_PROCESSED=true' "$report/qmp-layout-drag.log" ||
+   ! test -s "$report/layout-dragged-frame4.ppm" ||
+   ! grep -q '^MELANIA_QEMU_LAYOUT_ONLY_KMS_REPAINT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_TWO_WINDOW_REAL_INPUT_PASS=true' "$report/qmp-two-window-focus.log" ||
    ! grep -q '^MELANIA_QEMU_WINDOW2_POINTER_FOCUS=true' "$report/qmp-two-window-focus.log" ||
    ! grep -q '^MELANIA_QEMU_WINDOW1_POINTER_FOCUS=true' "$report/qmp-two-window-focus.log" ||
@@ -280,6 +303,8 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-live-stream.log" || true
   tail -n 30 "$report/qmp-two-windows.log" || true
   tail -n 30 "$report/qmp-two-window-focus.log" || true
+  tail -n 30 "$report/qmp-layout-drag.log" || true
+  tail -n 30 "$report/qmp-layout-repaint.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -296,3 +321,5 @@ printf '%s\n' 'MELANIA_VM_NATIVE_POST_KMS_FRAME_CALLBACKS_VERIFIED=true' >> "$re
 printf '%s\n' 'MELANIA_VM_TWO_REAL_WAYLAND_WINDOWS_QMP_PRESENTED=true' >> "$report/result.txt"
 
 printf '%s\n' 'MELANIA_VM_TWO_WINDOWS_REAL_FOCUS_INPUT=true' >> "$report/result.txt"
+
+printf '%s\n' 'MELANIA_VM_DRAG_LAYOUT_VISIBLE_IN_FOURTH_KMS_FRAME=true' >> "$report/result.txt"
