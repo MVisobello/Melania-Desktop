@@ -9,6 +9,9 @@ on:
       - tests/test_native_rollback_stage19.py
       - tests/test_native_fb2_stage21.py
       - scripts/melania-qemu-fb2-probe.c
+      - scripts/melania-qemu-visible-frame.c
+      - scripts/capture-qemu-visible-scanout.py
+      - tests/test_qemu_visible_scanout.py
       - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
@@ -21,6 +24,9 @@ on:
       - tests/test_native_rollback_stage19.py
       - tests/test_native_fb2_stage21.py
       - scripts/melania-qemu-fb2-probe.c
+      - scripts/melania-qemu-visible-frame.c
+      - scripts/capture-qemu-visible-scanout.py
+      - tests/test_qemu_visible_scanout.py
       - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
@@ -52,6 +58,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_native_stage17.py' -v
           python3 -m unittest discover -s tests -p 'test_native_rollback_stage19.py' -v
           python3 -m unittest discover -s tests -p 'test_native_fb2_stage21.py' -v
+          python3 -m unittest discover -s tests -p 'test_qemu_visible_scanout.py' -v
+          python3 -m py_compile scripts/capture-qemu-visible-scanout.py
       - name: Build actual Rust backend on same Ubuntu release as guest
         run: |
           set -euo pipefail
@@ -69,6 +77,10 @@ jobs:
             -I/usr/include/libdrm scripts/melania-qemu-fb2-probe.c \
             -o target/debug/melania-qemu-fb2-probe -ldrm
           test -x target/debug/melania-qemu-fb2-probe
+          cc -O2 -Wall -Wextra -Werror -std=c11 \
+            -I/usr/include/libdrm scripts/melania-qemu-visible-frame.c \
+            -o target/debug/melania-qemu-visible-probe -ldrm
+          test -x target/debug/melania-qemu-visible-probe
           ldd target/debug/melania-native | tee native-runtime-libs.txt
           test -x target/debug/melania-native
       - name: Boot QEMU guest and execute REAL binary against virtual DRM card

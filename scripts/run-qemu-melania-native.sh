@@ -14,6 +14,11 @@ native="$root/target/debug/melania-native"
 fb_probe="$root/target/debug/melania-qemu-fb2-probe"
 [[ -f "$fb_probe" && -x "$fb_probe" ]] ||
   deny 'build QEMU-only framebuffer GEM audit probe first'
+visible_probe="$root/target/debug/melania-qemu-visible-probe"
+[[ -f "$visible_probe" && -x "$visible_probe" ]] ||
+  deny 'compile the QEMU-only visible-frame probe first'
+[[ -f "$root/scripts/capture-qemu-visible-scanout.py" ]] ||
+  deny 'QEMU QMP screenshot verifier unavailable'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -34,7 +39,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -66,11 +71,19 @@ cloud-localds seed.iso user-data meta-data
 
 serial="$report/serial.log"
 : > "$serial"
+# QMP uses only a private Unix socket attached to the disposable QEMU VM.
+# Capture actual virtual display pixels during the brief live KMS frame.
+python3 "$root/scripts/capture-qemu-visible-scanout.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/visible-frame.ppm" --timeout 950 \
+  > "$report/qmp-scanout.log" 2>&1 &
+capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \
+  -qmp "unix:$work/melania-qmp.sock,server=on,wait=off" \
   -device qemu-xhci,id=melania-usb \
   -device usb-kbd,bus=melania-usb.0 \
   -device usb-tablet,bus=melania-usb.0 \
@@ -83,9 +96,17 @@ timeout --signal=TERM --kill-after=10s 1020s \
   -device scsi-cd,drive=payload \
   -netdev user,id=net0 -device virtio-net-pci,netdev=net0
 qemu_code=$?
+wait "$capture_pid"
+capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_VISIBLE_PIXELS_VERIFIED=true' "$report/qmp-scanout.log" ||
+   ! test -s "$report/visible-frame.ppm" ||
+   ! grep -q '^MELANIA_QEMU_VISIBLE_SCANOUT_ACTIVE=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_VISIBLE_RESTORE_VERIFIED=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_VISIBLE_RESULT=PASS' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_VISIBLE_EXPERIMENT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_DRM_PRESENT=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_SEATD_READY=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_CAPABILITIES=true' "$serial" ||
@@ -108,7 +129,9 @@ if [[ "$qemu_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial"; then
   printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
   tail -n 100 "$serial" || true
+  tail -n 30 "$report/qmp-scanout.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
