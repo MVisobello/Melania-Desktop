@@ -60,6 +60,54 @@ Mint 22.x x86_64 / Ubuntu 24.04 ABI. Mint 21.x **non è coperto**.
 La build è sperimentale: la riuscita in CI su Ubuntu 24.04 non sostituisce
 un collaudo manuale su una VM Linux Mint reale.
 
+## VirtualBox: finestra Smithay ma barra e Impostazioni assenti
+
+Nelle VM VirtualBox la scheda grafica virtuale può non supportare
+correttamente il percorso EGL/DRI3/Vulkan. Messaggi come
+`ZINK: failed to choose pdev`, `failed to create dri2 screen`
+o client Wayland che si disconnettono indicano che il compositor può
+restare avviato mentre alcune finestre GTK non riescono a disegnare.
+
+Il launcher ora riconosce VirtualBox e prova automaticamente
+**GTK4 Cairo + Mesa llvmpipe**, senza cambiare driver, impostazioni
+di Mint o librerie installate. Si può forzare esplicitamente:
+
+```bash
+./run.sh --software
+```
+
+Per provare la GPU normale, disabilitando il fallback automatico:
+
+```bash
+MELANIA_SOFTWARE_RENDER=0 ./run.sh
+```
+
+Per diagnosticare un avvio incompleto:
+
+```bash
+MELANIA_DEBUG_RENDER=1 ./run.sh --software 2>&1 | tee "$HOME/melania-virtualbox.log"
+```
+
+Nell'output, `MELANIA_RENDER ... top=0` ripetuto può indicare
+che la barra non sta producendo pixel. Le righe
+`MELANIA_CLIENT_STARTED` e `MELANIA_CLIENT_EXIT` indicano
+quale componente si è avviato o si è chiuso, insieme allo stato di uscita.
+Lo smoke test CI ora richiede anche un vero layer grafico della barra.
+
+Gli avvisi `xdg-desktop-portal`/FUSE possono essere indipendenti dal
+problema EGL: non cambiare i permessi di `/run/user/UID` e non avviare
+Melania come root. In caso di blocchi persistenti si può esaminare
+separatamente l'interazione tra la sessione D-Bus isolata della preview
+e i servizi desktop Mint.
+
+Per le versioni del pacchetto *precedenti* a questa correzione,
+il workaround manuale equivalente è:
+
+```bash
+GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 \
+  GALLIUM_DRIVER=llvmpipe MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./run.sh
+```
+
 ## Disinstallazione
 
 Chiudi la finestra Melania ed elimina la directory estratta. Non
