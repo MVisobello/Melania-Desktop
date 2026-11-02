@@ -27,8 +27,9 @@ class DesktopSettings(unittest.TestCase):
         self.assertIn("Duration::from_millis(700)",SURFACE)
 
     def test_settings_apply_and_restore_safely(self):
-        self.assertIn('stack.add_titled(&crate::xfce_desktop::page(),',PAGES)
-        self.assertIn('Some("xfce-desktop")',PAGES)
+        self.assertIn('("xfce-desktop","Scrivania e sfondo")',PAGES)
+        self.assertIn('"xfce-desktop"=>Some(crate::xfce_desktop::page())',PAGES)
+        self.assertIn('crate::lazy_pages::register(stack,key,title);',PAGES)
         self.assertIn('("Scrivania e sfondo", "xfce-desktop"', (ROOT/"melania-settings/src/main.rs").read_text())
         self.assertIn('gtk::FileChooserNative::new(',SETTINGS)
         self.assertIn('valid_wallpaper(&image)',SETTINGS)
