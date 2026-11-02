@@ -30,7 +30,10 @@ class UniversalPinning(unittest.TestCase):
 
     def test_start_context_and_taskbar_live_refresh(self):
         self.assertIn('attach_pin_context(&button,program.to_string());',PANEL)
-        self.assertIn('attach_pin_context(&button,id);',PANEL)
+        self.assertIn('attach_pin_context_trusted(&button,id);',PANEL)
+        self.assertIn('fn attach_pin_context(widget:&Button,id:String)',PANEL)
+        self.assertIn('if !valid_pin(&id){return;}',PANEL)
+        self.assertIn('fn attach_pin_context_trusted(widget:&Button,id:String)',PANEL)
         self.assertIn('click.set_button(3);',PANEL)
         self.assertIn('"Rimuovi dalla barra"',PANEL)
         self.assertIn('"Aggiungi alla barra"',PANEL)

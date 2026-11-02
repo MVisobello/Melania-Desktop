@@ -13,9 +13,9 @@ class ShellFirstBoot(unittest.TestCase):
         self.assertIn("let stage_shell = ",COMPOSITOR)
         self.assertIn("if shell_drawn_this_frame {",COMPOSITOR)
         self.assertIn("backend.submit(Some(&[damage]))?;",COMPOSITOR)
-        self.assertIn("for program in applications.drain(..)",COMPOSITOR)
+        self.assertIn("applications.pop_front().expect",COMPOSITOR)
         self.assertLess(COMPOSITOR.index("backend.submit(Some(&[damage]))?;"),
-                        COMPOSITOR.index("for program in applications.drain(..)"))
+                        COMPOSITOR.index("applications.pop_front().expect"))
         self.assertIn("startup_begin.elapsed()>=Duration::from_secs(6)",COMPOSITOR)
 
     def test_real_buffers_prove_first_shell_frame(self):

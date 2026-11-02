@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::{OsStr, OsString}, fs, io::{self, Write}, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::{Path, PathBuf}, process::{Child, Command}, sync::Arc, thread, time::{Duration, Instant}};
+use std::{collections::VecDeque, error::Error, ffi::{OsStr, OsString}, fs, io::{self, Write}, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::{Path, PathBuf}, process::{Child, Command}, sync::Arc, thread, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -826,7 +826,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // real Wayland frame before expensive application GTK windows are spawned.
     // A reduced/standalone --command invocation retains immediate launch.
     let mut children: Vec<(OsString, Child)> = Vec::new();
-    let mut applications = Vec::new();
+    let mut applications:VecDeque<OsString> = VecDeque::new();
     let mut commands = Vec::new();
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
@@ -854,6 +854,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let mut shell_frame_painted = false;
+    let mut next_application_start:Option<Instant>=None;
     let startup_begin = Instant::now();
     // A lone Super press/release toggles Start; using Super with any other key
     // must not toggle it (e.g. Super+E continues opening Melania Files).
@@ -1192,13 +1193,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         state.refresh_start_focus();
         display.flush_clients()?;
         if render_needed {backend.submit(Some(&[damage]))?;}
+        // Like Cinnamon's session phases, release ordinary applications only
+        // after the panel/desktop phase. Spread cold GTK process startup over
+        // successive frames instead of competing for one llvmpipe CPU burst.
         if !applications.is_empty() &&
             (shell_frame_painted || startup_begin.elapsed()>=Duration::from_secs(6)) {
-            let fallback = !shell_frame_painted;
-            eprintln!("MELANIA_BOOT_APPLICATIONS_RELEASED_MS={} fallback={fallback}",
-                startup_begin.elapsed().as_millis());
-            for program in applications.drain(..) {
+            if next_application_start.is_none() {
+                let fallback=!shell_frame_painted;
+                eprintln!("MELANIA_BOOT_APPLICATIONS_RELEASED_MS={} fallback={fallback}",
+                    startup_begin.elapsed().as_millis());
+                next_application_start=Some(Instant::now());
+            }
+            if next_application_start.is_some_and(|at|Instant::now()>=at) {
+                let program=applications.pop_front().expect("nonempty startup queue");
+                eprintln!("MELANIA_BOOT_APP_STARTED_MS={} program={}",
+                    startup_begin.elapsed().as_millis(),program.to_string_lossy());
                 children.push(spawn_nested_client(program,&socket,&control_path)?);
+                next_application_start=Some(Instant::now()+Duration::from_millis(180));
             }
         }
         // A GTK client can quit after a Vulkan/EGL initialization failure.

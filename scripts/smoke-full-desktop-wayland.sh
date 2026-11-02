@@ -97,6 +97,10 @@ start_d=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-desktop-surface")
 start_p=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-panel")
 paint=line_index(r"MELANIA_BOOT_SHELL_FRAME_MS=[0-9]+ background=[1-9][0-9]* panel=[1-9][0-9]*")
 released=line_index(r"MELANIA_BOOT_APPLICATIONS_RELEASED_MS=[0-9]+ fallback=false")
+started=[int(m.group(1)) for line in log
+         if (m:=re.search(r"MELANIA_BOOT_APP_STARTED_MS=([0-9]+) program=",line))]
+assert len(started)>=2, f"missing per-app startup evidence: {started}"
+assert started[1]-started[0]>=150, f"GTK startup not staggered: {started}"
 files=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-files")
 settings=line_index(r"MELANIA_CLIENT_STARTED program=.*melania-settings")
 assert max(start_d,start_p)<paint<released<min(files,settings), (start_d,start_p,paint,released,files,settings)

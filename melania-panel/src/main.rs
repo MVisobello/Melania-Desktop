@@ -9,7 +9,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::{Path, PathBuf}, process::Command, rc::Rc, thread, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::VecDeque, fs, io::Write, os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::{Path, PathBuf}, process::Command, rc::Rc, thread, time::Duration};
 use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -306,7 +306,7 @@ fn start_window(app:&Application)->ApplicationWindow {
     let apps_box=GtkBox::new(Orientation::Vertical,1);
     apps_box.add_css_class("melania-start-apps");
     // Search-only results remain hidden in the normal classic app list.
-    let mut searchable:Vec<(Button,String,bool)>=Vec::new();
+    let searchable:Rc<RefCell<Vec<(Button,String,bool)>>>=Rc::new(RefCell::new(Vec::new()));
     for (name,program,icon) in [
         ("Melania Files", "melania-files", "org.melaniadesktop.Files"),
         ("Impostazioni", "melania-settings", "org.melaniadesktop.Settings"),
@@ -327,44 +327,12 @@ fn start_window(app:&Application)->ApplicationWindow {
         });
         attach_pin_context(&button,program.to_string());
         apps_box.append(&button);
-        searchable.push((button,name.to_lowercase(),false));
+        searchable.borrow_mut().push((button,name.to_lowercase(),false));
     }
-    let mut apps=gio::AppInfo::all().into_iter().filter(|app| {
-        if !app.should_show() { return false; }
-        // Builtin Melania launchers are already shown at the top. Avoid
-        // doubling them when their freedesktop .desktop files are installed.
-        let identifier=app.id().map(|id|id.to_string()).unwrap_or_default();
-        let normalized=identifier.trim_end_matches(".desktop");
-        normalized!="org.melaniadesktop.Files" && normalized!="org.melaniadesktop.Settings"
-    }).collect::<Vec<_>>();
-    apps.sort_by_key(|app|app.name().to_string().to_lowercase());
-    for app_info in apps {
-        let name=app_info.name().to_string();
-        let button=Button::new();button.add_css_class("melania-action");
-        let row=GtkBox::new(Orientation::Horizontal,12);
-        let icon=app_info.icon().map(|i|Image::from_gicon(&i))
-            .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
-        icon.set_pixel_size(27);
-        icon.add_css_class("melania-menu-app-icon");
-        row.append(&icon);
-        let caption=label(&name,"melania-row-text");caption.set_hexpand(true);row.append(&caption);
-        button.set_child(Some(&row));
-        let menu=w.clone();
-        let history_id=app_info.id().map(|id| id.to_string());
-        let pin_id=history_id.clone();
-        button.connect_clicked(move |_| {
-            match app_info.launch(&[],None::<&gio::AppLaunchContext>) {
-                Ok(())=>{
-                    if let Some(id)=history_id.as_deref() {start_history::record_launch(id);}
-                    hide_start_surface(&menu);
-                },
-                Err(e)=>eprintln!("Melania app launch: {e}")
-            }
-        });
-        if let Some(id)=pin_id {attach_pin_context(&button,id);}
-        apps_box.append(&button);
-        searchable.push((button,name.to_lowercase(),false));
-    }
+    // Keep the installed-app list separate so it can be filled after
+    // the first Start presentation rather than delaying the taskbar.
+    let installed_box=GtkBox::new(Orientation::Vertical,1);
+    apps_box.append(&installed_box);
     // GNOME/COSMIC-inspired unified search without background indexing or
     // filesystem traversal: only apps, known settings sections and XDG folders.
     for (name, page, keywords) in [
@@ -386,7 +354,7 @@ fn start_window(app:&Application)->ApplicationWindow {
                 eprintln!("Melania settings search: {e}");
             } else { hide_start_surface(&menu); }
         });
-        searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),keywords),true));
+        searchable.borrow_mut().push((button.clone(),format!("{} {}",caption.to_lowercase(),keywords),true));
         apps_box.append(&button);
     }
     for (name, kind, icon_name) in [
@@ -406,12 +374,11 @@ fn start_window(app:&Application)->ApplicationWindow {
                 eprintln!("Melania folder search: {e}");
             } else {hide_start_surface(&menu);}
         });
-        searchable.push((button.clone(),format!("{} {}",caption.to_lowercase(),kind.to_lowercase()),true));
+        searchable.borrow_mut().push((button.clone(),format!("{} {}",caption.to_lowercase(),kind.to_lowercase()),true));
         apps_box.append(&button);
     }
     let empty=label("Nessun risultato: applicazioni, cartelle o impostazioni", "melania-sub");
     empty.set_visible(false);apps_box.append(&empty);
-    let searchable=Rc::new(searchable);
     let searchable_for_filter=searchable.clone();
     query.connect_changed(move |q| {
         let term=q.text().trim().to_lowercase();
@@ -422,7 +389,7 @@ fn start_window(app:&Application)->ApplicationWindow {
             eprintln!("MELANIA_START_SEARCH_RECEIVED");
         }
         let mut visible=0;
-        for (button,name,search_only) in searchable_for_filter.iter() {
+        for (button,name,search_only) in searchable_for_filter.borrow().iter() {
             let matches=if term.is_empty() { !search_only } else { name.contains(&term) };
             button.set_visible(matches);
             if matches {visible+=1;}
@@ -434,9 +401,78 @@ fn start_window(app:&Application)->ApplicationWindow {
     query.connect_activate(move |_| {
         let term=entry.text().trim().to_lowercase();
         if term.is_empty(){return;}
-        if let Some((button,_,_))=searchable_for_enter.iter().find(|(_,name,_)|name.contains(&term)) {
+        if let Some((button,_,_))=searchable_for_enter.borrow().iter().find(|(_,name,_)|name.contains(&term)) {
             button.emit_clicked();
         }
+    });
+    // Build app widgets only after Start becomes visible. Batch the work
+    // to avoid a one-shot GTK stall when many .desktop launchers are installed.
+    let installed_once=Rc::new(Cell::new(false));
+    let apps_for_open=installed_box.clone();
+    let all_searchable=searchable.clone();
+    let menu_for_apps=w.clone();
+    let query_for_apps=query.clone();
+    w.connect_notify_local(Some("visible"),move |surface,_|{
+        if !surface.is_visible() || installed_once.replace(true){return;}
+        let installed_box=apps_for_open.clone();
+        let searchable=all_searchable.clone();
+        let menu=menu_for_apps.clone();
+        let query=query_for_apps.clone();
+        glib::timeout_add_local_once(Duration::from_millis(75),move ||{
+            let mut apps=gio::AppInfo::all().into_iter().filter(|app|{
+                if !app.should_show(){return false;}
+                let identifier=app.id().map(|id|id.to_string()).unwrap_or_default();
+                let normalized=identifier.trim_end_matches(".desktop");
+                normalized!="org.melaniadesktop.Files" && normalized!="org.melaniadesktop.Settings"
+            }).collect::<Vec<_>>();
+            apps.sort_by_key(|app|app.name().to_string().to_lowercase());
+            let pending=Rc::new(RefCell::new(VecDeque::from(apps)));
+            glib::timeout_add_local(Duration::from_millis(16),move ||{
+                for _ in 0..12 {
+                    let Some(app_info)=pending.borrow_mut().pop_front() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    let name=app_info.name().to_string();
+                    let name_lower=name.to_lowercase();
+                    let button=Button::new();button.add_css_class("melania-action");
+                    let row=GtkBox::new(Orientation::Horizontal,12);
+                    let icon=app_info.icon().map(|i|Image::from_gicon(&i))
+                        .unwrap_or_else(||Image::from_icon_name("application-x-executable"));
+                    icon.set_pixel_size(27);
+                    icon.add_css_class("melania-menu-app-icon");
+                    row.append(&icon);
+                    let caption=label(&name,"melania-row-text");
+                    caption.set_hexpand(true);
+                    row.append(&caption);
+                    button.set_child(Some(&row));
+                    let window=menu.clone();
+                    let history_id=app_info.id().map(|id|id.to_string());
+                    let pin_id=history_id.clone();
+                    button.connect_clicked(move |_|{
+                        match app_info.launch(&[],None::<&gio::AppLaunchContext>){
+                            Ok(())=>{
+                                if let Some(id)=history_id.as_deref(){
+                                    start_history::record_launch(id);
+                                }
+                                hide_start_surface(&window);
+                            },
+                            Err(error)=>eprintln!("Melania app launch: {error}"),
+                        }
+                    });
+                    if let Some(id)=pin_id{
+                        // Trusted ID from this Gio installed-app enumeration.
+                        attach_pin_context_trusted(&button,id);
+                    }
+                    let term=query.text().trim().to_lowercase();
+                    button.set_visible(term.is_empty() || name_lower.contains(&term));
+                    installed_box.append(&button);
+                    searchable.borrow_mut().push((button,name_lower,false));
+                }
+                if pending.borrow().is_empty(){
+                    glib::ControlFlow::Break
+                }else{glib::ControlFlow::Continue}
+            });
+        });
     });
     scroll.set_child(Some(&apps_box));
     // A bounded recent list, refreshed whenever Start opens. Store only
@@ -782,6 +818,10 @@ fn toggle_pin(id:&str) {
 /// A right-click popover in Start and on the taskbar for validated launchers.
 fn attach_pin_context(widget:&Button,id:String) {
     if !valid_pin(&id){return;}
+    attach_pin_context_trusted(widget,id);
+}
+/// Only callers with a builtin or Gio-discovered application may skip validation.
+fn attach_pin_context_trusted(widget:&Button,id:String){
     let popup=gtk::Popover::new();
     popup.add_css_class("melania-pin-popover");
     popup.set_parent(widget);
