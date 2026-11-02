@@ -1235,6 +1235,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         button.add_controller(secondary_click);
         browser.tiles.insert(&button, -1);
     }
+    let queued_thumbnails=thumbnail_targets.len();
     if !list_mode && !thumbnail_targets.is_empty() {
         let cancelled=Arc::new(AtomicBool::new(false));
         *browser.thumbnail_cancel.borrow_mut()=Some(cancelled.clone());
@@ -1256,7 +1257,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
     browser.status.set_text(&format!("{count} elementi visibili · Melania Files"));
     if files_profile_enabled() {
         eprintln!("MELANIA_FILES_RENDER_MS={} entries={} thumbnails_queued={} software_budget={}",
-            rendering_started.elapsed().as_millis(),entry_count,thumbnail_targets.len(),max_thumbnails);
+            rendering_started.elapsed().as_millis(),entry_count,queued_thumbnails,max_thumbnails);
     }
     // CI-only proof that a real worker result reached the GTK renderer.
     if std::env::var_os("MELANIA_SMOKE_FILES_LISTING").is_some() {
@@ -2526,6 +2527,7 @@ fn files_initial_size(screen_width: i32, screen_height: i32) -> (i32, i32) {
 }
 
 fn build_ui(app: &Application) {
+    install_files_ui_stall_probe();
     setup_melania_icon_theme();
     let css = gtk::CssProvider::new();
     #[allow(deprecated)]
