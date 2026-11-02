@@ -51,7 +51,7 @@ cleanup(){
 trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
-MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
+MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
@@ -262,6 +262,38 @@ assert data['files_window_mapped'] and data['settings_window_mapped'], data
 assert data['start_search_visual_change'], data
 print('PASS: mandatory real nested screenshot and Start input evidence retained')
 PYEVIDENCE
+# Prove a real mouse press outside Start reaches the nested compositor and
+# dismisses every transient overlay without disconnecting the GTK panel.
+# Both the before and after frames come from the same actual Xvfb session.
+xdotool mousemove --window "$HOST_WINDOW" 920 55 click 1
+DISMISSED=0
+for i in $(seq 1 35); do
+  if grep -q 'MELANIA_OUTSIDE_CLICK_DISMISSED previously_open=true now_open=false' "$TEMP/compositor.log"; then
+    DISMISSED=1; break
+  fi
+  kill -0 "$PID" 2>/dev/null || { echo 'FAIL: desktop crashed after outside-click' >&2; exit 1; }
+  sleep .1
+done
+[[ "$DISMISSED" == 1 ]] || {
+  echo 'FAIL: desktop click did not close the visible Start popup' >&2
+  tail -80 "$TEMP/compositor.log" >&2; exit 1;
+}
+pgrep -P "$PID" -f 'target/debug/melania-panel' >/dev/null || {
+  echo 'FAIL: outside-click disconnected taskbar client' >&2; exit 1;
+}
+sleep .35
+scrot -z -o reports/nested-wayland-start-dismissed.png
+python3 - <<'PYDISMISS'
+from PIL import Image, ImageChops
+before=Image.open('reports/nested-wayland-start-search.png').convert('RGB')
+after=Image.open('reports/nested-wayland-start-dismissed.png').convert('RGB')
+assert before.size==after.size
+region=(12,320,min(390,before.width-1),min(760,before.height-1))
+diff=ImageChops.difference(before.crop(region),after.crop(region))
+changed=sum(1 for pixel in diff.getdata() if max(pixel)>35)
+assert changed>1000, f'Start was not visibly dismissed: changed pixels={changed}'
+print(f'PASS: real outside mouse click concealed Start and kept panel alive ({changed} changed pixels)')
+PYDISMISS
 # Verify a REAL running Melania taskbar accepts a changed user config and
 # moves from the bottom to the top edge without a restart or compositor exit.
 # The setting is isolated under the temporary CI XDG_CONFIG_HOME.
