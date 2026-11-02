@@ -10,7 +10,7 @@ use melania_transfer as transfer;
 use melania_files_core as model;
 use model::nautilus_features as nautilus;
 use gtk::{Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, FlowBox, Image, Label, Orientation, Picture, ScrolledWindow};
-use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command, rc::Rc, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command, rc::Rc, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
 #[derive(Clone)]
 struct PendingTransfer { paths: Vec<PathBuf>, is_move: bool }
@@ -24,6 +24,37 @@ struct LocalThumbnailRequest {
 }
 
 const MAX_LOCAL_THUMBNAILS: usize = 48;
+
+/// Software-rendered previews spend CPU time drawing GTK as well as decoding
+/// thumbnails. Keep the normal 48-image limit on accelerated sessions; use a
+/// smaller, bounded first batch with Cairo/llvmpipe (VirtualBox preview).
+fn thumbnail_budget() -> usize {
+    if std::env::var("GSK_RENDERER").ok().as_deref()==Some("cairo") ||
+       std::env::var("LIBGL_ALWAYS_SOFTWARE").ok().as_deref()==Some("1") {
+        16
+    } else {
+        MAX_LOCAL_THUMBNAILS
+    }
+}
+
+fn files_profile_enabled() -> bool {
+    std::env::var("MELANIA_PROFILE_FILES").ok().as_deref()==Some("1")
+}
+
+/// Opt-in frame/event-loop diagnostic; reports sustained UI stalls rather than
+/// making ungrounded claims about the renderer or filesystem provider.
+fn install_files_ui_stall_probe() {
+    if !files_profile_enabled() {return;}
+    let previous=Rc::new(Cell::new(Instant::now()));
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        let now=Instant::now();
+        let elapsed=now.duration_since(previous.replace(now));
+        if elapsed>=Duration::from_millis(250) {
+            eprintln!("MELANIA_FILES_UI_STALL_MS={}",elapsed.as_millis());
+        }
+        glib::ControlFlow::Continue
+    });
+}
 
 #[derive(Clone)]
 struct Browser {
@@ -780,14 +811,19 @@ fn start_listing_worker(browser: &Browser) {
     std::thread::spawn(move || {
         // Only plain Rust filesystem data crosses the thread boundary.
         // GTK widgets must remain exclusively on the owning main thread.
+        let started=Instant::now();
         let result=gio_backend::list_local_entries(&request.directory,&request.query,
             request.options,&request.cancelled);
-        let _=sender.send((request,result));
+        let _=sender.send((request,result,started.elapsed()));
     });
     let tab=browser.clone();
     glib::timeout_add_local(Duration::from_millis(35),move || {
         match receiver.try_recv() {
-            Ok((request,result)) => {
+            Ok((request,result,elapsed)) => {
+                if files_profile_enabled() && tab.listing_generation.get()==request.generation {
+                    eprintln!("MELANIA_FILES_SCAN_MS={} path={}",
+                        elapsed.as_millis(), request.directory.display());
+                }
                 tab.listing_running.set(false);
                 if tab.listing_generation.get()==request.generation {
                     match result {
@@ -829,11 +865,18 @@ fn start_local_thumbnail_worker(browser:&Browser) {
     let paths:Vec<PathBuf>=request.targets.iter().map(|(path,_)|path.clone()).collect();
     let stop=request.cancelled.clone();
     std::thread::spawn(move ||{
+        let started=Instant::now();
+        let mut processed=0usize;
         for (index,path) in paths.into_iter().enumerate() {
             if stop.load(Ordering::Acquire){break;}
             let uri=gio::File::for_path(&path).uri().to_string();
             let result=gio_backend::image_thumbnail(&uri,&stop);
+            processed+=1;
             if tx.send((index,result)).is_err(){break;}
+        }
+        if files_profile_enabled() {
+            eprintln!("MELANIA_FILES_THUMBNAILS_MS={} processed={} cancelled={}",
+                started.elapsed().as_millis(),processed,stop.load(Ordering::Acquire));
         }
     });
     let ui=browser.clone();
@@ -926,6 +969,8 @@ fn refresh(browser: &Browser) {
 
 /// GTK rows/actions are built only from the latest worker result for this tab.
 fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
+    let rendering_started=Instant::now();
+    let entry_count=entries.len();
     let caption=dir.file_name().filter(|n|!n.is_empty())
         .map(|n|n.to_string_lossy().into_owned())
         .unwrap_or_else(||dir.display().to_string());
@@ -946,6 +991,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
     let mut count = 0;
     let list_mode = browser.list_mode.get();
     let mut thumbnail_targets:Vec<(PathBuf,GtkBox)>=Vec::new();
+    let max_thumbnails=thumbnail_budget();
     for entry in entries {
         let type_name = file_type_label(&entry);
         let file_size = if entry.is_directory {"—".to_string()} else {human_size(entry.size)};
@@ -995,7 +1041,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
             let symbol = Image::from_icon_name(entry_icon(&path, folder));
             symbol.set_pixel_size(42);
             symbol.add_css_class("files-icon");
-            if thumbnail_candidate && thumbnail_targets.len()<MAX_LOCAL_THUMBNAILS {
+            if thumbnail_candidate && thumbnail_targets.len()<max_thumbnails {
                 let placeholder=GtkBox::new(Orientation::Vertical,0);
                 placeholder.set_size_request(112,84);
                 placeholder.set_halign(Align::Center);
@@ -1208,6 +1254,10 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         ));
     }
     browser.status.set_text(&format!("{count} elementi visibili · Melania Files"));
+    if files_profile_enabled() {
+        eprintln!("MELANIA_FILES_RENDER_MS={} entries={} thumbnails_queued={} software_budget={}",
+            rendering_started.elapsed().as_millis(),entry_count,thumbnail_targets.len(),max_thumbnails);
+    }
     // CI-only proof that a real worker result reached the GTK renderer.
     if std::env::var_os("MELANIA_SMOKE_FILES_LISTING").is_some() {
         eprintln!("MELANIA_FILES_LISTING_READY count={count}");
