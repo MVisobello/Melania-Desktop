@@ -14,6 +14,7 @@ use smithay::{
     utils::DeviceFd,
 };
 use melania_native::NativeLifecycle;
+mod wayland_bridge;
 
 const BLOCKED: i32 = 78;
 fn blocked(why:&str)->! {
@@ -416,6 +417,17 @@ fn main() {
         [flag] if flag=="--experimental-offscreen" =>{
             if let Err(error)=experimental_drm(true){
                 eprintln!("Melania native stage6 offscreen: {error}");
+                std::process::exit(1);
+            }
+        }
+        [flag] if flag=="--experimental-wayland-seat" =>{
+            assert_dedicated_console();
+            assert_qemu_test_guest();
+            if env::var("MELANIA_NATIVE_WAYLAND_EXPERIMENT").as_deref()!=Ok("YES_QEMU_VM") {
+                blocked("MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM required");
+            }
+            if let Err(error)=wayland_bridge::run(){
+                eprintln!("Melania QEMU Wayland input bridge: {error}");
                 std::process::exit(1);
             }
         }
