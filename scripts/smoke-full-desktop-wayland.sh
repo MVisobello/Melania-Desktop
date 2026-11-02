@@ -51,7 +51,7 @@ cleanup(){
 trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
-MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
+MELANIA_PROFILE_FILES=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
@@ -117,6 +117,15 @@ for i in $(seq 1 100); do
 done
 [[ "$FILES_LISTED" == 1 ]] || { echo 'FAIL: no async Melania Files list completion';exit 1; }
 echo 'PASS: asynchronous filesystem listing reached real GTK Files window'
+# Profile the real GIO-backed folder scan and GTK render. The CI session uses
+# LIBGL_ALWAYS_SOFTWARE=1, so thumbnail budget should be 16, not 48.
+grep -Eq 'MELANIA_FILES_SCAN_MS=[0-9]+' "$TEMP/compositor.log" || {
+  echo 'FAIL: missing Files directory scan timing' >&2; exit 1;
+}
+grep -Eq 'MELANIA_FILES_RENDER_MS=[0-9]+ entries=[0-9]+ thumbnails_queued=[0-9]+ software_budget=16' "$TEMP/compositor.log" || {
+  echo 'FAIL: missing Files UI render timing or software thumbnail cap' >&2; exit 1;
+}
+echo 'PASS: real Files scan and GTK rendering profiled with software thumbnail budget 16'
 # Ensure remote-mode GIO tabs are not just source code: the worker must
 # enumerate a real file URI and GTK must populate its rows.
 GIO_LISTED=0
