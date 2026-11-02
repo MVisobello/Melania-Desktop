@@ -155,7 +155,7 @@ fn network_page()->GtkBox {
     network.append(&refresh_network);
     let first_label=live_network.clone();
     let first_button=refresh_network.clone();
-    settings_async::run(gnome_pages::network_status,move |result|{
+    settings_async::run("network-status",gnome_pages::network_status,move |result|{
         first_label.set_text(result.as_deref().unwrap_or(
             "NetworkManager non risponde. Riprova con Aggiorna."));
         first_button.set_sensitive(true);
@@ -165,7 +165,7 @@ fn network_page()->GtkBox {
         live_network.set_text("Aggiornamento connessioni in corso…");
         let label=live_network.clone();
         let action=button.clone();
-        settings_async::run(gnome_pages::network_status,move |result|{
+        settings_async::run("network-status",gnome_pages::network_status,move |result|{
             label.set_text(result.as_deref().unwrap_or(
                 "NetworkManager non risponde. Riprova con Aggiorna."));
             action.set_sensitive(true);
