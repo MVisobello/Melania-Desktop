@@ -131,6 +131,8 @@ struct Melania {
     next_window_id: u64,
     active_window: Option<u64>,
     exit_requested: bool,
+    /// True when client commits, input or mapped geometry may change pixels.
+    visual_dirty: bool,
 }
 
 impl BufferHandler for Melania {
@@ -142,6 +144,7 @@ impl CompositorHandler for Melania {
         &client.get_data::<ClientState>().expect("known client").compositor
     }
     fn commit(&mut self, surface: &WlSurface) {
+        self.visual_dirty=true;
         on_commit_buffer_handler::<Self>(surface);
         if std::env::var_os("MELANIA_DEBUG_RENDER").is_some() &&
            self.managed.iter().any(|w| w.surface == *surface) {
@@ -169,6 +172,7 @@ impl ShmHandler for Melania {
 impl XdgShellHandler for Melania {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState { &mut self.shell }
     fn new_toplevel(&mut self, top: ToplevelSurface) {
+        self.visual_dirty=true;
         let step = (self.space.elements().count() as i32 % 7) * 34;
         let window = Window::new_wayland_window(top.clone());
         self.space.map_element(window.clone(), (45 + step, 45 + step), true);
@@ -209,6 +213,7 @@ impl XdgShellHandler for Melania {
         }
     }
     fn toplevel_destroyed(&mut self, top: ToplevelSurface) {
+        self.visual_dirty=true;
         if self.interaction.as_ref().is_some_and(|g| g.surface == *top.wl_surface()) {
             self.interaction = None;
         }
@@ -232,6 +237,7 @@ impl WlrLayerShellHandler for Melania {
     fn shell_state(&mut self) -> &mut WlrLayerShellState { &mut self.layer_shell }
     fn new_layer_surface(&mut self, surface: WlrLayerSurface,
         _: Option<WlOutput>, _: WlrLayer, namespace: String) {
+        self.visual_dirty=true;
         if namespace=="melania-start" {
             self.start_layer=Some(surface.wl_surface().clone());
         }
@@ -246,6 +252,7 @@ impl WlrLayerShellHandler for Melania {
         surface.send_configure();
     }
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        self.visual_dirty=true;
         let mapped = layer_map_for_output(&self.output).layers()
             .find(|l| l.wl_surface() == surface.wl_surface()).cloned();
         if let Some(mapped) = mapped { layer_map_for_output(&self.output).unmap_layer(&mapped); }
@@ -333,6 +340,7 @@ impl Melania {
     fn refresh_usable_area(&mut self) {
         let area = self.usable_area();
         if self.last_usable_area == Some(area) { return; }
+        self.visual_dirty=true;
         self.last_usable_area = Some(area);
         for w in &self.managed {
             if w.restore_geometry.is_none() { continue; }
@@ -432,6 +440,7 @@ impl Melania {
     }
     fn update_interaction(&mut self, location: Point<f64, Logical>) {
         let Some(active) = self.interaction.as_ref() else { return; };
+        self.visual_dirty=true;
         let rect = active.model.updated((location.x, location.y));
         let operation = active.model.operation;
         let surface = active.surface.clone();
@@ -771,6 +780,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         next_window_id: 1,
         active_window: None,
         exit_requested: false,
+        visual_dirty: true,
     };
     state.space.map_output(&output, (0, 0));
     let listener = ListeningSocket::bind_auto("melania", 1..=32)?;
@@ -801,6 +811,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sample_started = Instant::now();
     let mut sampled_frames = 0u64;
     let mut sampled_busy_us = 0u128;
+    let mut sampled_redraws = 0u64;
+    let mut sampled_skips = 0u64;
+    let mut last_present = Instant::now();
 
     // Launch the shell first: desktop background and taskbar get the first
     // real Wayland frame before expensive application GTK windows are spawned.
@@ -842,11 +855,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let frame_started=Instant::now();
         let status = host.dispatch_new_events(|event| match event {
             WinitEvent::Resized { size, .. } => {
+                state.visual_dirty=true;
                 output.change_current_state(Some(Mode { size, refresh: 60_000 }), None, None, None);
                 layer_map_for_output(&output).arrange();
                 state.refresh_usable_area();
             }
-            WinitEvent::Input(input) => match input {
+            WinitEvent::Input(input) => {
+                state.visual_dirty=true;
+                match input {
                 InputEvent::Keyboard { event, .. } => {
                     let serial = SERIAL_COUNTER.next_serial();
                     let keyboard = state.seat.get_keyboard().expect("keyboard");
@@ -991,6 +1007,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 _ => {}
+                }
             },
             _ => {}
         });
