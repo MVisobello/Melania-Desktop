@@ -119,9 +119,7 @@ impl CompositorHandler for BridgeState {
                                 Ok(())
                             })()
                         } else {
-                            native_client_frame::write_frame_index(
-                                &frame,self.pixel_frame_count
-                            )
+                            native_client_frame::write_frame_index(&frame,self.pixel_frame_count)
                         };
                         match handoff {
                             Ok(())=>{
