@@ -117,5 +117,63 @@ class PortablePreviewBundle(unittest.TestCase):
                         text.index('std::env::var_os("MELANIA_BUNDLE_DATA_DIR")'))
 
 
+    def test_check_rejects_missing_gtk4_layer_shell_before_launch(self):
+        # The previous release incorrectly said preflight OK and left the
+        # compositor running when GTK desktop/panel immediately died.
+        with tempfile.TemporaryDirectory(prefix="melania-bundle-ldd-") as tmp:
+            root = Path(tmp)
+            output = root / "output"
+            packager.stage(self.make_binaries(root), output, "unknown")
+            bundle = output / packager.BUNDLE_NAME
+            fake_bin = root / "fakebin"
+            fake_bin.mkdir()
+            fake_ldd = fake_bin / "ldd"
+            fake_ldd.write_text(
+                "#!/bin/sh\\n"
+                "printf '  libgtk4-layer-shell.so.0 => not found\\\\n'\\n",
+                encoding="utf-8",
+            )
+            fake_ldd.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = str(fake_bin) + ":" + env["PATH"]
+            env["DISPLAY"] = ":99"
+            env["XDG_RUNTIME_DIR"] = str(root)
+            result = subprocess.run(
+                ["bash", str(bundle / "run.sh"), "--check"],
+                env=env, capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 78, result.stdout + result.stderr)
+            self.assertIn("libgtk4-layer-shell.so.0", result.stderr)
+            self.assertIn("unresolved shared libraries", result.stderr)
+            self.assertNotIn("PREFLIGHT_OK", result.stdout)
+
+    def test_check_passes_when_dynamic_libraries_resolve(self):
+        with tempfile.TemporaryDirectory(prefix="melania-bundle-ldd-ok-") as tmp:
+            root = Path(tmp)
+            output = root / "output"
+            packager.stage(self.make_binaries(root), output, "unknown")
+            bundle = output / packager.BUNDLE_NAME
+            fake_bin = root / "fakebin"
+            fake_bin.mkdir()
+            fake_ldd = fake_bin / "ldd"
+            fake_ldd.write_text(
+                "#!/bin/sh\\n"
+                "printf '  libgtk4-layer-shell.so.0 => /usr/lib/libgtk4-layer-shell.so.0 (0x01)\\\\n'\\n",
+                encoding="utf-8",
+            )
+            fake_ldd.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = str(fake_bin) + ":" + env["PATH"]
+            env["DISPLAY"] = ":99"
+            env["XDG_RUNTIME_DIR"] = str(root)
+            result = subprocess.run(
+                ["bash", str(bundle / "run.sh"), "--check"],
+                env=env, capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true", result.stdout)
+            self.assertIn("MELANIA_NATIVE_LOGIN_SESSION_READY=false", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
