@@ -111,10 +111,10 @@ jobs:
           PY
           python3 scripts/package-nested-preview.py \
             --bin-dir target/debug \
-            --output-dir target/melania-mint22-release \
+            --output-dir "$RUNNER_TEMP/melania-mint22-release" \
             --commit "$GITHUB_SHA" \
             --gtk-layer-shell-lib target/mint-runtime/lib/libgtk4-layer-shell.so.1.0.4
-          cd target/melania-mint22-release
+          cd "$RUNNER_TEMP/melania-mint22-release"
           sha256sum -c SHA256SUMS
           tar -tzf melania-nested-preview.tar.gz > archive-members.txt
           grep -Fxq 'melania-nested-preview/lib/libgtk4-layer-shell.so.0' archive-members.txt
@@ -123,11 +123,10 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
+          MELANIA_BUNDLE_TEST_ROOT: ${{ runner.temp }}/melania-mint22-release/melania-nested-preview
         run: |
           set -euo pipefail
-          mkdir -p target/melania-preview-release reports
-          cp -a target/melania-mint22-release/melania-nested-preview \
-            target/melania-preview-release/
+          mkdir -p reports
           xvfb-run -a -s '-screen 0 1280x800x24' \
             bash scripts/smoke-portable-bundle.sh 2>&1 | tee reports/mint22-bundle-smoke.log
           grep -q 'PASS: extracted portable bundle launched real nested GTK desktop and exited cleanly' \
@@ -139,8 +138,8 @@ jobs:
         with:
           name: melania-nested-preview-mint22-linux-x86_64
           path: |
-            target/melania-mint22-release/melania-nested-preview.tar.gz
-            target/melania-mint22-release/SHA256SUMS
+            ${{ runner.temp }}/melania-mint22-release/melania-nested-preview.tar.gz
+            ${{ runner.temp }}/melania-mint22-release/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
       - name: Publish Mint compatibility test evidence
