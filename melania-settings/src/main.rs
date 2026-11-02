@@ -139,6 +139,25 @@ fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
     }
 }
 
+/// NetworkManager queries occur only on an explicit visit to Rete.
+fn network_page()->GtkBox {
+    let network = page("Rete");
+    connectivity_controls::append_wifi(&network);
+    let live_network = text(&gnome_pages::network_status(), "settings-row-description");
+    live_network.add_css_class("settings-card");
+    network.append(&live_network);
+    let refresh_network = Button::with_label("Aggiorna stato della rete");
+    refresh_network.add_css_class("settings-save");
+    refresh_network.add_css_class("settings-refresh-button");
+    refresh_network.set_halign(gtk::Align::Start);
+    let current_network = live_network.clone();
+    refresh_network.connect_clicked(move |_| {
+        current_network.set_text(&gnome_pages::network_status());
+    });
+    network.append(&refresh_network);
+    network
+}
+
 fn build_ui(
     app: &Application,
     initial_page: &str,
@@ -350,21 +369,7 @@ fn build_ui(
     workspaces.append(&apply_workspaces);
     workspaces.append(&workspace_feedback);
     stack.add_titled(&workspaces, Some("workspaces"), "Spazi di lavoro");
-    let network = page("Rete");
-    connectivity_controls::append_wifi(&network);
-    let live_network = text(&gnome_pages::network_status(), "settings-row-description");
-    live_network.add_css_class("settings-card");
-    network.append(&live_network);
-    let refresh_network = Button::with_label("Aggiorna stato della rete");
-    refresh_network.add_css_class("settings-save");
-    refresh_network.add_css_class("settings-refresh-button");
-    refresh_network.set_halign(gtk::Align::Start);
-    let current_network = live_network.clone();
-    refresh_network.connect_clicked(move |_| {
-        current_network.set_text(&gnome_pages::network_status());
-    });
-    network.append(&refresh_network);
-    stack.add_titled(&network, Some("network"), "Rete");
+    lazy_pages::register(&stack,"network","Rete");
     let accessibility = page("Accessibilità");
     accessibility.append(&saved_option(
         "Riduci movimento",
@@ -416,7 +421,7 @@ fn build_ui(
     let pending_pages=deferred.clone();
     let catalog=stack.clone();
     let activate_page:Rc<dyn Fn(&str)>=Rc::new(move |key:&str|{
-        let known=gnome_pages::LAZY_PAGE_NAMES.iter().any(|(page,_)|*page==key)
+        let known=key=="network" || gnome_pages::LAZY_PAGE_NAMES.iter().any(|(page,_)|*page==key)
             || xfce_pages::LAZY_PAGE_NAMES.iter().any(|(page,_)|*page==key);
         if !known || !pending_pages.borrow_mut().insert(key.to_owned()) {return;}
         let target=key.to_owned();
@@ -426,7 +431,8 @@ fn build_ui(
         gtk::glib::timeout_add_local_once(Duration::from_millis(45),move ||{
             let started=Instant::now();
             let content=gnome_pages::build_page(&stack,&target)
-                .or_else(||xfce_pages::build_page(&target));
+                .or_else(||xfce_pages::build_page(&target))
+                .or_else(||if target=="network" {Some(network_page())}else{None});
             if let Some(page)=content {
                 lazy_pages::fill(&stack,&target,page);
                 if std::env::var_os("MELANIA_PROFILE_SETTINGS").is_some() {
