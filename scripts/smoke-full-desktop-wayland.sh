@@ -52,7 +52,7 @@ trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
 export MELANIA_PROFILE_FILES=1
-MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
+MELANIA_PROFILE_COMPOSITOR=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
@@ -137,6 +137,22 @@ for i in $(seq 1 100); do
 done
 [[ "$FILES_LISTED" == 1 ]] || { echo 'FAIL: no async Melania Files list completion';exit 1; }
 echo 'PASS: asynchronous filesystem listing reached real GTK Files window'
+# A quiet frame must not continually redraw the whole software-rendered
+# desktop. Verify at least one real idle skip was counted by the compositor.
+IDLE_SKIP=0
+for i in $(seq 1 60); do
+  if grep -Eq 'MELANIA_COMPOSITOR_FPS=.* idle_skipped=[1-9][0-9]*' "$TEMP/compositor.log"; then
+    IDLE_SKIP=1; break
+  fi
+  sleep .1
+done
+[[ "$IDLE_SKIP" == 1 ]] || {
+  echo 'FAIL: compositor did not skip unchanged frames' >&2
+  grep 'MELANIA_COMPOSITOR_FPS' "$TEMP/compositor.log" >&2 || true
+  exit 1
+}
+echo 'PASS: real nested compositor skipped unchanged EGL redraws'
+
 # Profile the real GIO-backed folder scan and GTK render. The CI session uses
 # LIBGL_ALWAYS_SOFTWARE=1, so thumbnail budget should be 16, not 48.
 grep -Eq 'MELANIA_FILES_SCAN_MS=[0-9]+' "$TEMP/compositor.log" || {
