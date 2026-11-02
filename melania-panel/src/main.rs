@@ -1653,9 +1653,10 @@ fn setup_melania_icon_theme() {
             if location.is_dir() {icons.add_search_path(&location);}
         }
     }
+    let selected_theme=melania_config::resolved_icon_theme(&prefs);
+    eprintln!("MELANIA_PANEL_ICON_THEME_SELECTED={selected_theme}");
     if let Some(settings)=gtk::Settings::default() {
-        settings.set_property("gtk-icon-theme-name",
-            melania_config::resolved_icon_theme(&prefs));
+        settings.set_property("gtk-icon-theme-name",selected_theme);
     }
 }
 
