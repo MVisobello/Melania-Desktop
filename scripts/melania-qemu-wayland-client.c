@@ -84,9 +84,24 @@ static void on_pointer_axis(void *data,struct wl_pointer *obj,uint32_t time,
                             uint32_t axis,wl_fixed_t value) {
     (void)data;(void)obj;(void)time;(void)axis;(void)value;
 }
+static void on_pointer_frame(void *data,struct wl_pointer *obj) {
+    (void)data;(void)obj;
+}
+static void on_pointer_axis_source(void *data,struct wl_pointer *obj,uint32_t source) {
+    (void)data;(void)obj;(void)source;
+}
+static void on_pointer_axis_stop(void *data,struct wl_pointer *obj,uint32_t time,uint32_t axis) {
+    (void)data;(void)obj;(void)time;(void)axis;
+}
+static void on_pointer_axis_discrete(void *data,struct wl_pointer *obj,
+                                     uint32_t axis,int32_t discrete) {
+    (void)data;(void)obj;(void)axis;(void)discrete;
+}
 static const struct wl_pointer_listener pointer_listener={
     .enter=on_pointer_enter,.leave=on_pointer_leave,
     .motion=on_pointer_motion,.button=on_pointer_button,.axis=on_pointer_axis,
+    .frame=on_pointer_frame,.axis_source=on_pointer_axis_source,
+    .axis_stop=on_pointer_axis_stop,.axis_discrete=on_pointer_axis_discrete,
 };
 static void seat_capabilities(void *data,struct wl_seat *seat,uint32_t caps) {
     struct state *s=data;
