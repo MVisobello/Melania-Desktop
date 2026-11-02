@@ -170,7 +170,8 @@ fn run()->Result<(),Box<dyn Error>> {
     let mut previous:Option<Vec<u8>>=None;
 
     let attempt=(||->Result<(),Box<dyn Error>> {
-        let total=if std::env::var("MELANIA_QEMU_DRAG_FRAME").as_deref()==Ok("YES_QEMU_VM") {4u8} else {3u8};
+        let total=if std::env::var("MELANIA_QEMU_DRAG_COALESCED").as_deref()==Ok("YES_QEMU_VM") {5u8}
+            else if std::env::var("MELANIA_QEMU_DRAG_FRAME").as_deref()==Ok("YES_QEMU_VM") {4u8} else {3u8};
         for index in 0..total {
             // Bounded payload prevents arbitrary allocation or partial frames.
             let mut size=[0u8;4];
@@ -211,8 +212,11 @@ fn run()->Result<(),Box<dyn Error>> {
             if std::env::var("MELANIA_QEMU_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM") {
                 println!("MELANIA_RUST_MULTI_FRAME{}_ACTIVE=true",index+1);
             }
-            if total==4 && index==3 {
+            if total>=4 && index==3 {
                 println!("MELANIA_RUST_DRAG_FRAME_ACTIVE=true");
+            }
+            if total==5 && index==4 {
+                println!("MELANIA_RUST_DRAG_FRAME5_ACTIVE=true");
             }
             previous=Some(pixels);
             // QMP observes actual virtual display bytes while this FB is live.
@@ -237,6 +241,7 @@ fn run()->Result<(),Box<dyn Error>> {
         println!("MELANIA_RUST_STREAM_THREE_CLIENT_FRAMES_PASS=true");
         if std::env::var("MELANIA_QEMU_DRAG_FRAME").as_deref()==Ok("YES_QEMU_VM") {
             println!("MELANIA_RUST_COMPOSITOR_DRAG_FRAME4_PASS=true");
+            if total==5 {println!("MELANIA_RUST_COALESCED_DRAG_FRAME5_PASS=true");}
         }
         println!("MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false");
         println!("MELANIA_NATIVE_SESSION_READY=false");
