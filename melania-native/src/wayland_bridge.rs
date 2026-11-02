@@ -8,7 +8,7 @@ use std::{error::Error, io::Write, sync::Arc, time::{Duration,Instant}};
 use smithay::{
     backend::{
         input::{InputEvent, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
-                AbsolutePositionEvent, ButtonState},
+                AbsolutePositionEvent, Event},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
@@ -104,9 +104,9 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceAdded {device} =>register(state,device),
         InputEvent::DeviceRemoved {device} =>
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device)),
-        InputEvent::Keyboard {device,event} => {
+        InputEvent::Keyboard {event} => {
             if state.focused.is_none() ||
-               state.lifecycle.input_registry_mut().event(&InputDevice::id(&device)).is_err() {
+               state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             let keyboard=state.seat.get_keyboard().expect("keyboard");
@@ -115,9 +115,9 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 |_,_,_|FilterResult::Forward);
             state.delivered_keys+=1;
         }
-        InputEvent::PointerMotion {device,event} => {
+        InputEvent::PointerMotion {event} => {
             if state.focused.is_none() ||
-               state.lifecycle.input_registry_mut().event(&InputDevice::id(&device)).is_err() {
+               state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             let point:Point<f64,Logical>=((
@@ -126,29 +126,31 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             )).into();
             state.pointer_position=point;
             let pointer=state.seat.get_pointer().expect("pointer");
-            pointer.motion(state,state.focused.clone().map(|s|(s,(0.0,0.0).into())),
+            let target=state.focused.clone().map(|s|(s,(0.0,0.0).into()));
+            pointer.motion(state,target,
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
             state.delivered_motions+=1;
         }
-        InputEvent::PointerMotionAbsolute {device,event} => {
+        InputEvent::PointerMotionAbsolute {event} => {
             if state.focused.is_none() ||
-               state.lifecycle.input_registry_mut().event(&InputDevice::id(&device)).is_err() {
+               state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             let point=event.position_transformed((640,480).into());
             state.pointer_position=point;
             let pointer=state.seat.get_pointer().expect("pointer");
-            pointer.motion(state,state.focused.clone().map(|s|(s,(0.0,0.0).into())),
+            let target=state.focused.clone().map(|s|(s,(0.0,0.0).into()));
+            pointer.motion(state,target,
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
             state.delivered_motions+=1;
         }
-        InputEvent::PointerButton {device,event} => {
+        InputEvent::PointerButton {event} => {
             if state.focused.is_none() ||
-               state.lifecycle.input_registry_mut().event(&InputDevice::id(&device)).is_err() {
+               state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             let pointer=state.seat.get_pointer().expect("pointer");
