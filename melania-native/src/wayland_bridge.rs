@@ -3,7 +3,9 @@
  //! This is a real Smithay wl_compositor + wl_seat endpoint receiving libinput
  //! from libseat in a dedicated VM console, NOT a full graphical compositor.
  //! A client can create a wl_surface and receive keyboard/pointer events, but
- //! xdg-shell, wl_output, KMS scanout of client buffers and login remain OFF.
+ //! KMS scanout of client buffers and native login remain OFF. A separate
+//! QEMU-only shell mode checks real xdg_toplevel and layer-surface configure
+//! roundtrips without claiming these clients are displayed.
 use std::{error::Error, io::Write, sync::Arc, time::{Duration,Instant}};
 use smithay::{
     backend::{
@@ -12,25 +14,29 @@ use smithay::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
-    delegate_compositor, delegate_seat,
+    delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell,
     input::{keyboard::FilterResult, pointer::{ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
         input::{self as libinput, DeviceCapability, Libinput},
         wayland_server::{
             backend::{ClientData,ClientId,DisconnectReason},
-            protocol::{wl_buffer,wl_surface::WlSurface},
+            protocol::{wl_buffer,wl_surface::WlSurface,wl_seat,wl_output::WlOutput},
             Client, Display, ListeningSocket,
         },
     },
-    utils::{Logical, Point, SERIAL_COUNTER},
+    utils::{Logical, Point, Serial, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState,CompositorHandler,CompositorState},
+        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
+                wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
+                           LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
 use melania_native::NativeLifecycle;
 use smithay::backend::input::Device as InputDevice;
+use wayland_protocols::xdg::shell::server::xdg_toplevel;
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -43,6 +49,10 @@ impl ClientData for BridgeClientState {
 
 struct BridgeState {
     compositor: CompositorState,
+    xdg_shell: XdgShellState,
+    layer_shell: WlrLayerShellState,
+    xdg_toplevel_count: u32,
+    layer_surface_count: u32,
     seats: SeatState<Self>,
     seat: Seat<Self>,
     focused: Option<WlSurface>,
@@ -83,8 +93,44 @@ impl SeatHandler for BridgeState {
     fn focus_changed(&mut self,_:&Seat<Self>,_:Option<&WlSurface>){}
     fn cursor_image(&mut self,_:&Seat<Self>,_:CursorImageStatus){}
 }
+// Match the protocol implementations of the nested compositor, but keep
+// this guest-specific backend headless: configuring a role is NOT rendering.
+impl XdgShellHandler for BridgeState {
+    fn xdg_shell_state(&mut self)->&mut XdgShellState {&mut self.xdg_shell}
+    fn new_toplevel(&mut self,top:ToplevelSurface) {
+        self.xdg_toplevel_count=self.xdg_toplevel_count.saturating_add(1);
+        top.send_configure();
+        println!("MELANIA_NATIVE_XDG_TOPLEVEL_CONFIGURE_SENT=true");
+    }
+    fn new_popup(&mut self,popup:PopupSurface,_:PositionerState) {
+        let _=popup.send_configure();
+    }
+    fn move_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,_:Serial){}
+    fn resize_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,
+                      _:Serial,_:xdg_toplevel::ResizeEdge){}
+    fn maximize_request(&mut self,top:ToplevelSurface) {top.send_configure();}
+    fn unmaximize_request(&mut self,top:ToplevelSurface) {top.send_configure();}
+    fn minimize_request(&mut self,_:ToplevelSurface){}
+    fn toplevel_destroyed(&mut self,_:ToplevelSurface){}
+    fn grab(&mut self,_:PopupSurface,_:wl_seat::WlSeat,_:Serial){}
+    fn reposition_request(&mut self,popup:PopupSurface,_:PositionerState,token:u32){
+        popup.send_repositioned(token);
+    }
+}
+impl WlrLayerShellHandler for BridgeState {
+    fn shell_state(&mut self)->&mut WlrLayerShellState {&mut self.layer_shell}
+    fn new_layer_surface(&mut self,surface:WlrLayerSurface,
+                         _:Option<WlOutput>,_:WlrLayer,_:String) {
+        self.layer_surface_count=self.layer_surface_count.saturating_add(1);
+        surface.send_configure();
+        println!("MELANIA_NATIVE_LAYER_SURFACE_CONFIGURE_SENT=true");
+    }
+    fn layer_destroyed(&mut self,_:WlrLayerSurface){}
+}
 delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
+delegate_xdg_shell!(BridgeState);
+delegate_layer_shell!(BridgeState);
 
 fn register(state:&mut BridgeState,device:libinput::Device) {
     let caps=melania_native::input_registry::InputCapabilities{
@@ -182,6 +228,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     seat.add_pointer();
     let mut state=BridgeState{
         compositor:CompositorState::new::<BridgeState>(&handle),
+        xdg_shell:XdgShellState::new::<BridgeState>(&handle),
+        layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
+        xdg_toplevel_count:0,layer_surface_count:0,
         seats,seat,focused:None,pointer_position:(0.0,0.0).into(),
         lifecycle:NativeLifecycle::default(),delivered_keys:0,
         delivered_buttons:0,delivered_motions:0,
@@ -214,7 +263,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     println!("MELANIA_NATIVE_WAYLAND_SOCKET_READY={}",socket.to_string_lossy());
     println!("MELANIA_NATIVE_WAYLAND_RENDER_READY=false");
     std::io::stdout().flush()?;
+    // Only a disposable QEMU VM may select shell protocol handshake mode.
+    // The parent process enforces the opt-in, DMI and Linux VT gates.
+    let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
+        .as_deref()==Ok("YES_QEMU_VM");
     let deadline=Instant::now()+Duration::from_secs(27);
+    let mut both_shell_roles_seen_at=None;
     while Instant::now()<deadline {
         events.dispatch(Some(Duration::from_millis(12)),&mut state)?;
         while let Some(stream)=listener.accept()? {
@@ -222,7 +276,20 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         }
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;
-        if state.delivered_keys>=2 && state.delivered_buttons>=2 && state.focused.is_some() {
+        if shell_probe && state.xdg_toplevel_count>0 && state.layer_surface_count>0 {
+            let since=both_shell_roles_seen_at.get_or_insert_with(Instant::now);
+            // Let the real client receive, ack and finish its configure
+            // roundtrips before closing the Wayland server.
+            if since.elapsed()>=Duration::from_secs(3) {
+                println!("MELANIA_NATIVE_XDG_TOPLEVEL_COUNT={}",state.xdg_toplevel_count);
+                println!("MELANIA_NATIVE_LAYER_SURFACE_COUNT={}",state.layer_surface_count);
+                println!("MELANIA_NATIVE_SHELL_PROTOCOLS_READY=true");
+                println!("MELANIA_NATIVE_SHELL_RENDERED=false");
+                println!("MELANIA_NATIVE_SESSION_READY=false");
+                return Ok(());
+            }
+        }
+        if !shell_probe && state.delivered_keys>=2 && state.delivered_buttons>=2 && state.focused.is_some() {
             println!("MELANIA_NATIVE_WAYLAND_KEYBOARD_EVENTS={}",state.delivered_keys);
             println!("MELANIA_NATIVE_WAYLAND_POINTER_BUTTON_EVENTS={}",state.delivered_buttons);
             println!("MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true");
