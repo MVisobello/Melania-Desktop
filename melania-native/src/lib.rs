@@ -6,6 +6,7 @@
 pub mod outputs;
 pub mod renderer;
 pub mod scene;
+pub mod render_scheduler;
 pub mod planes;
 pub mod frame_gate;
 pub mod kms_test;
