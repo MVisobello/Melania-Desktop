@@ -175,7 +175,13 @@ fn main()->Result<(),Box<dyn Error>> {
         }
         // The Stage28 test uses the default filenames earlier in this same
         // guest boot; the concurrent Stage29 run must not reuse them.
-        let path=if three_frames {
+        let path=if two_windows {
+            match frame_index {
+                0=>"/run/melania-native-qemu/two-window-live-1.bin",
+                1=>"/run/melania-native-qemu/two-window-live-2.bin",
+                _=>"/run/melania-native-qemu/two-window-live-3.bin",
+            }
+        } else if three_frames {
             match frame_index {
                 0=>"/run/melania-native-qemu/client-live-1.bin",
                 1=>"/run/melania-native-qemu/client-live-2.bin",
