@@ -8,6 +8,22 @@ cd "$ROOT"
 for name in melania-compositor melania-desktop-surface melania-panel melania-files melania-settings melania-winctl; do
   [[ -x "target/debug/$name" ]] || { echo "BLOCKED: missing $name" >&2; exit 3; }
 done
+# These dependencies are essential to prove actual pixels and keyboard input.
+# A process-only smoke must never silently pass as a full desktop test.
+for executable in scrot xdotool python3; do
+  command -v "$executable" >/dev/null || {
+    echo "BLOCKED: required full-desktop visual/input tool missing: $executable" >&2
+    exit 3
+  }
+done
+python3 -c 'from PIL import Image, ImageChops' || {
+  echo 'BLOCKED: Pillow required for visual assertion and screenshot provenance' >&2
+  exit 3
+}
+[[ -f tools/check_shared_window_chrome.py ]] || {
+  echo 'BLOCKED: shared window chrome pixel validator missing' >&2
+  exit 3
+}
 mkdir -p reports
 # Ensure the XDG Desktop directory exists on fresh CI runners.
 mkdir -p "$HOME/Desktop"
@@ -227,6 +243,25 @@ if command -v scrot >/dev/null && command -v xdotool >/dev/null; then
     --output reports/melania-real-desktop-preview.png \
     --manifest reports/melania-real-desktop-preview.json
 fi
+# This evidence is required, not an optional by-product of a passing test.
+# Screenshots and machine-readable provenance must be available for Alpha QA.
+for proof in reports/nested-wayland-full-desktop.png \
+             reports/nested-wayland-start-search.png \
+             reports/melania-real-desktop-preview.png \
+             reports/melania-real-desktop-preview.json; do
+  [[ -s "$proof" ]] || { echo "FAIL: missing mandatory visual evidence: $proof" >&2; exit 1; }
+done
+python3 - <<'PYEVIDENCE'
+import json
+from pathlib import Path
+data = json.loads(Path('reports/melania-real-desktop-preview.json').read_text())
+assert data['capture_type'] == 'real_nested_wayland_xvfb', data
+assert data['native_kms_desktop'] is False, data
+assert data['synthetic_ui_pixels'] is False, data
+assert data['files_window_mapped'] and data['settings_window_mapped'], data
+assert data['start_search_visual_change'], data
+print('PASS: mandatory real nested screenshot and Start input evidence retained')
+PYEVIDENCE
 # Verify a REAL running Melania taskbar accepts a changed user config and
 # moves from the bottom to the top edge without a restart or compositor exit.
 # The setting is isolated under the temporary CI XDG_CONFIG_HOME.

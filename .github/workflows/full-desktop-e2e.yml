@@ -5,6 +5,8 @@ on:
     paths:
       - .github/workflows/full-desktop-e2e.yml
       - scripts/smoke-full-desktop-wayland.sh
+      - scripts/check-real-desktop-preview.py
+      - tests/test_full_desktop_ci.py
       - melania-compositor/**
       - melania-desktop-surface/**
       - melania-panel/**
@@ -17,6 +19,8 @@ on:
     paths:
       - .github/workflows/full-desktop-e2e.yml
       - scripts/smoke-full-desktop-wayland.sh
+      - scripts/check-real-desktop-preview.py
+      - tests/test_full_desktop_ci.py
       - melania-compositor/**
       - melania-desktop-surface/**
       - melania-panel/**
@@ -64,6 +68,7 @@ jobs:
             test -x "target/debug/$exe"
           done
           bash -n scripts/smoke-full-desktop-wayland.sh
+          python3 -m unittest discover -s tests -p test_full_desktop_ci.py -v
       - name: Full real nested desktop, actual window pixels, input and clean quit
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -78,6 +83,13 @@ jobs:
             2>&1 | tee reports/full-desktop-e2e.log
           grep -q 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit' \
             reports/full-desktop-e2e.log
+          grep -q 'PASS: mandatory real nested screenshot and Start input evidence retained' \
+            reports/full-desktop-e2e.log
+          grep -q 'MELANIA_REAL_NESTED_DESKTOP_PREVIEW=PASS' reports/full-desktop-e2e.log
+          test -s reports/nested-wayland-full-desktop.png
+          test -s reports/nested-wayland-start-search.png
+          test -s reports/melania-real-desktop-preview.png
+          test -s reports/melania-real-desktop-preview.json
       - name: Upload real rendered screenshots and debug logs
         uses: actions/upload-artifact@v4
         if: always()
@@ -86,6 +98,8 @@ jobs:
           path: |
             reports/nested-wayland-*.png
             reports/nested-wayland-*.bmp
+            reports/melania-real-desktop-preview.png
+            reports/melania-real-desktop-preview.json
             reports/wayland-full-*.log
             reports/full-desktop-e2e.log
           if-no-files-found: warn
