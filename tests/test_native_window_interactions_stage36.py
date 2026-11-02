@@ -40,7 +40,7 @@ class NativeWindowInteractionsStage36(unittest.TestCase):
             "window_interaction:WindowInteraction",
             "fn apply_window_motion(&mut self,point:Point<f64,Logical>)",
             "state.apply_window_motion(point);",
-            "state.multi_scene.move_to(key,rect.x,rect.y)",
+            "self.multi_scene.move_to(key,rect.x,rect.y)",
             "MELANIA_NATIVE_WINDOW_DRAG_MODEL=",
             "MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW=",
             "event.button_code()==0x110",
