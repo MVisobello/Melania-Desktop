@@ -82,6 +82,19 @@ MELANIA_FB2_QEMU_ONLY=YES_DISPOSABLE_VM \
   fatal 'framebuffer_GEM_lifecycle_unverified'
 report 'MELANIA_QEMU_NATIVE_FB2_GEM_CLOSE_PASS=true'
 
+# Stage 23: a single visible framebuffer in a DISPOSABLE VM, separate from
+# melania-native's still-disabled compositor scanout. This probe captures
+# the old CRTC FB+mode, sets a synthetic VM-only framebuffer, and MUST restore
+# the exact original CRTC before exiting. The QMP host watcher captures
+# real virtual display pixels while the new framebuffer is active.
+visible_probe=/mnt/melania-native/melania-visible-probe
+[[ -f "$visible_probe" && -x "$visible_probe" ]] ||
+  fatal 'QEMU_only_visible_probe_missing_from_payload'
+MELANIA_QEMU_VISIBLE_FRAME=YES_DISPOSABLE_QEMU \
+  timeout --signal=TERM --kill-after=3s 22s "$visible_probe" < /dev/tty1 ||
+  fatal 'QEMU_visible_frame_or_CRTC_restore_failed'
+report 'MELANIA_QEMU_NATIVE_VISIBLE_EXPERIMENT_PASS=true'
+
 # Only AFTER the native process returns, confirm the console can still be
 # changed and restored via Linux VT ioctl in the SAME disposable guest.
 # This is a real VT test but NOT a rollback after visible scanout.
