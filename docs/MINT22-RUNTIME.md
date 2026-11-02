@@ -108,6 +108,43 @@ GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 \
   GALLIUM_DRIVER=llvmpipe MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./run.sh
 ```
 
+## Correzione barra: icone e Centro notifiche (Mint / VirtualBox)
+
+Le prime preview mostravano la barra senza le icone Melania perché il pacchetto
+non conteneva il tema di icone usato dalla barra. La release aggiornata include
+`share/icons/Melania-Preview/index.theme`, tre icone originali per Start, Files
+e Settings e le varianti chiare/scure dei simboli Wi-Fi, Bluetooth, audio,
+batteria e notifiche. Nessun tema GTK di Mint viene sovrascritto.
+
+C'era anche un bug di gestione delle superfici layer-shell GTK4: premendo
+l'icona del Centro notifiche accanto al gruppo Wi-Fi/Bluetooth, la chiusura
+di `quick` tramite `set_visible(false)` poteva scollegare l'intero processo
+Panel. Ora quick, notifiche e calendario si nascondono fuori dallo schermo,
+con il layer Wayland ancora valido, proprio come il menu Start.
+
+La verifica automatica della build prova davvero:
+- avvio del pannello con tema `Melania-Preview` dal pacchetto estratto;
+- attivazione dei controlli rapidi e segnale GTK `clicked` del Centro notifiche;
+- presenza dei pixel del pannello dopo il clic e assenza dell'uscita del processo.
+
+Per provare la versione corretta, scarica il nuovo ZIP
+`melania-nested-preview-mint22-linux-x86_64` dal workflow GitHub Actions
+**Melania Linux Mint 22 compatibility preview** dell'ultimo commit verde.
+Estrai in una **cartella nuova** per evitare di mescolare i file vecchi e nuovi.
+
+```bash
+./run.sh --software
+```
+
+Per raccogliere le righe di errore se il pannello scompare ancora:
+
+```bash
+MELANIA_DEBUG_RENDER=1 ./run.sh --software 2>&1 | tee "$HOME/melania-panel.log"
+```
+
+La preview è sempre annidata e sperimentale: test CI verdi non sostituiscono
+il collaudo manuale sul VirtualBox dell'utente.
+
 ## Disinstallazione
 
 Chiudi la finestra Melania ed elimina la directory estratta. Non
