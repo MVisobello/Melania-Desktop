@@ -448,6 +448,11 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     .clamp(0.0,if state.multi_window_mode {799.0} else {479.0})
             ).into();
             state.pointer_position=point;
+            if state.multi_window_mode {
+                println!("MELANIA_NATIVE_WINDOW_POINTER_REL=({:.1},{:.1}) target={:?}",
+                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y));
+                let _=std::io::stdout().flush();
+            }
             let pointer=state.seat.get_pointer().expect("pointer");
             let target=state.pointer_target(point);
             pointer.motion(state,target,
@@ -467,6 +472,11 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 event.position_transformed((640,480).into())
             };
             state.pointer_position=point;
+            if state.multi_window_mode {
+                println!("MELANIA_NATIVE_WINDOW_POINTER_ABS=({:.1},{:.1}) target={:?}",
+                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y));
+                let _=std::io::stdout().flush();
+            }
             let pointer=state.seat.get_pointer().expect("pointer");
             let target=state.pointer_target(point);
             pointer.motion(state,target,
@@ -481,6 +491,11 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 return;
             }
             let point=state.pointer_position;
+            if state.multi_window_mode {
+                println!("MELANIA_NATIVE_WINDOW_BUTTON=({:.1},{:.1}) target={:?} state={:?}",
+                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y),event.state());
+                let _=std::io::stdout().flush();
+            }
             let pointer=state.seat.get_pointer().expect("pointer");
             if state.multi_window_mode {
                 let target=state.pointer_target(point);
