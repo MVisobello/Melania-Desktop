@@ -103,7 +103,7 @@ impl CompositorHandler for BridgeState {
                     Ok(Ok(frame))=>{
                         let next=self.pixel_frame_count+1;
                         let handoff:Result<(),Box<dyn Error>>=if self.live_stream {
-                            (||{
+                            (||->Result<(),Box<dyn Error>>{
                                 let stream=self.stream.as_mut()
                                     .ok_or("native DRM stream not connected")?;
                                 let length=u32::try_from(frame.len())?;
