@@ -14,7 +14,7 @@ use smithay::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
-    delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm,
+    delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
     input::{keyboard::FilterResult, pointer::{ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
@@ -25,11 +25,13 @@ use smithay::{
             Client, Display, ListeningSocket,
         },
     },
-    utils::{Logical, Point, Serial, SERIAL_COUNTER},
+    utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
+    output::{Mode, Output, PhysicalProperties, Subpixel},
     wayland::{
         buffer::BufferHandler,
         compositor::{with_states,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
+        output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
@@ -52,6 +54,8 @@ impl ClientData for BridgeClientState {
 struct BridgeState {
     compositor: CompositorState,
     shm:ShmState,
+    output:Output,
+    output_manager:OutputManagerState,
     pixel_probe:bool,
     pixel_ready:bool,
     xdg_shell: XdgShellState,
@@ -116,6 +120,7 @@ impl CompositorHandler for BridgeState {
         let _=std::io::stdout().flush();
     }
 }
+impl OutputHandler for BridgeState {}
 impl ShmHandler for BridgeState {
     fn shm_state(&self)->&ShmState {&self.shm}
 }
@@ -166,6 +171,7 @@ delegate_seat!(BridgeState);
 delegate_xdg_shell!(BridgeState);
 delegate_layer_shell!(BridgeState);
 delegate_shm!(BridgeState);
+delegate_output!(BridgeState);
 
 fn register(state:&mut BridgeState,device:libinput::Device) {
     let caps=melania_native::input_registry::InputCapabilities{
@@ -257,6 +263,17 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         .map_err(|_|"Cannot bind libinput to QEMU libseat")?;
     let mut display=Display::<BridgeState>::new()?;
     let mut handle=display.handle();
+    let output=Output::new("MELANIA-QEMU-1".into(),PhysicalProperties{
+        size:(0,0).into(),subpixel:Subpixel::Unknown,
+        make:"Melania".into(),model:"Virtual display (QEMU only)".into(),
+    });
+    // Protocol-advertised virtual output, not proof of a live KMS renderer.
+    // Mode matches the VM-only 1280x800 scanout snapshot tested in Stage 26.
+    let virtual_mode=Mode{size:(1280,800).into(),refresh:60_000};
+    output.create_global::<BridgeState>(&handle);
+    output.change_current_state(Some(virtual_mode),Some(Transform::Normal),
+                                None,Some((0,0).into()));
+    output.set_preferred(virtual_mode);
     let mut seats=SeatState::new();
     let mut seat=seats.new_wl_seat(&handle,"melania-native-seat0");
     seat.add_keyboard(Default::default(),250,40)?;
@@ -264,6 +281,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let mut state=BridgeState{
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
+        output_manager:OutputManagerState::new_with_xdg_output::<BridgeState>(&handle),
+        output,
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
@@ -300,6 +319,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let socket=listener.socket_name().ok_or("Missing native Wayland socket name")?;
     println!("MELANIA_NATIVE_WAYLAND_SOCKET_READY={}",socket.to_string_lossy());
     println!("MELANIA_NATIVE_WAYLAND_RENDER_READY=false");
+    println!("MELANIA_NATIVE_WL_OUTPUT_ADVERTISED=1280x800");
     std::io::stdout().flush()?;
     // Only a disposable QEMU VM may select shell protocol handshake mode.
     // The parent process enforces the opt-in, DMI and Linux VT gates.
