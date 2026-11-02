@@ -3,7 +3,7 @@
 //! events, and acknowledges both. No window buffers or frame are displayed.
 use std::{error::Error,io::Write};
 use wayland_client::{
-    Connection,Dispatch,QueueHandle,Proxy,
+    Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface},
 };
 use wayland_protocols::xdg::shell::client::{
@@ -24,20 +24,20 @@ struct Probe {
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Probe {
-    fn event(&mut self,registry:&wl_registry::WlRegistry,
+    fn event(state:&mut Self,registry:&wl_registry::WlRegistry,
              event:wl_registry::Event,_:&(),_:&Connection,qh:&QueueHandle<Self>) {
         if let wl_registry::Event::Global{name,interface,version}=event {
             match interface.as_str() {
                 "wl_compositor"=>{
-                    self.compositor=Some(registry.bind(
+                    state.compositor=Some(registry.bind(
                         name,version.min(4),qh,()
                     ));
                 }
                 "xdg_wm_base"=>{
-                    self.wm=Some(registry.bind(name,version.min(3),qh,()));
+                    state.wm=Some(registry.bind(name,version.min(3),qh,()));
                 }
                 "zwlr_layer_shell_v1"=>{
-                    self.shell=Some(registry.bind(name,version.min(1),qh,()));
+                    state.shell=Some(registry.bind(name,version.min(1),qh,()));
                 }
                 _=>{}
             }
@@ -45,48 +45,48 @@ impl Dispatch<wl_registry::WlRegistry,()> for Probe {
     }
 }
 impl Dispatch<xdg_wm_base::XdgWmBase,()> for Probe {
-    fn event(&mut self,wm:&xdg_wm_base::XdgWmBase,
+    fn event(state:&mut Self,wm:&xdg_wm_base::XdgWmBase,
              event:xdg_wm_base::Event,_:&(),_:&Connection,_:&QueueHandle<Self>) {
         if let xdg_wm_base::Event::Ping{serial}=event {wm.pong(serial);}
     }
 }
 impl Dispatch<xdg_surface::XdgSurface,()> for Probe {
-    fn event(&mut self,surface:&xdg_surface::XdgSurface,
+    fn event(state:&mut Self,surface:&xdg_surface::XdgSurface,
              event:xdg_surface::Event,_:&(),_:&Connection,_:&QueueHandle<Self>) {
         if let xdg_surface::Event::Configure{serial}=event {
             surface.ack_configure(serial);
-            self.xdg_acked=true;
+            state.xdg_acked=true;
         }
     }
 }
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,()> for Probe {
-    fn event(&mut self,surface:&zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    fn event(state:&mut Self,surface:&zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
              event:zwlr_layer_surface_v1::Event,_:&(),_:&Connection,_:&QueueHandle<Self>) {
         match event {
             zwlr_layer_surface_v1::Event::Configure{serial,..}=>{
                 surface.ack_configure(serial);
-                self.layer_acked=true;
+                state.layer_acked=true;
             }
-            zwlr_layer_surface_v1::Event::Closed=>self.server_closed_layer=true,
+            zwlr_layer_surface_v1::Event::Closed=>state.server_closed_layer=true,
             _=>{}
         }
     }
 }
 impl Dispatch<xdg_toplevel::XdgToplevel,()> for Probe {
-    fn event(&mut self,_:&xdg_toplevel::XdgToplevel,_:xdg_toplevel::Event,
+    fn event(state:&mut Self,_:&xdg_toplevel::XdgToplevel,_:xdg_toplevel::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
 // wl_compositor, wl_surface and layer_shell have no incoming events here.
 impl Dispatch<wl_compositor::WlCompositor,()> for Probe {
-    fn event(&mut self,_:&wl_compositor::WlCompositor,_:wl_compositor::Event,
+    fn event(state:&mut Self,_:&wl_compositor::WlCompositor,_:wl_compositor::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
 impl Dispatch<wl_surface::WlSurface,()> for Probe {
-    fn event(&mut self,_:&wl_surface::WlSurface,_:wl_surface::Event,
+    fn event(state:&mut Self,_:&wl_surface::WlSurface,_:wl_surface::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
 impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1,()> for Probe {
-    fn event(&mut self,_:&zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    fn event(state:&mut Self,_:&zwlr_layer_shell_v1::ZwlrLayerShellV1,
              _:zwlr_layer_shell_v1::Event,_:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
 fn main()->Result<(),Box<dyn Error>> {
@@ -139,7 +139,7 @@ fn main()->Result<(),Box<dyn Error>> {
     window_surface.destroy();
     shell.destroy();
     wm.destroy();
-    compositor.destroy();
+    drop(compositor);
     connection.flush()?;
     Ok(())
 }
