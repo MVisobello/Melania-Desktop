@@ -189,6 +189,61 @@ grep -q '^MELANIA_NATIVE_SHELL_RENDERED=false' "$shell_log" ||
 rm -f "$shell_log"
 report 'MELANIA_QEMU_NATIVE_SHELL_PROBE_PASS=true'
 
+# Stage 26: The Rust native Smithay server accepts an actual Wayland xdg
+# client's wl_shm XRGB8888 buffer and composes the client's pixels into
+# an immutable QEMU-only framebuffer snapshot. A separate short-lived
+# C/libdrm diagnostic presents those EXACT pixels and restores the CRTC.
+# This is not a live Rust KMS compositor or a GTK application session.
+pixel_client=/mnt/melania-native/melania-pixel-client
+pixel_scanout=/mnt/melania-native/melania-pixel-scanout
+[[ -x "$pixel_client" && -x "$pixel_scanout" ]] ||
+  fatal 'QEMU_real_client_window_probes_missing'
+pixel_log="$(mktemp -t melania-pixel-bridge-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 32s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 > "$pixel_log" 2>&1 &
+pixel_pid=$!
+pixel_socket=''
+for attempt in $(seq 1 100); do
+  pixel_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$pixel_log" | head -n 1)"
+  [[ -n "$pixel_socket" ]] && break
+  kill -0 "$pixel_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$pixel_socket" ]]; then
+  cat "$pixel_log"
+  kill "$pixel_pid" 2>/dev/null || true
+  wait "$pixel_pid" 2>/dev/null || true
+  fatal 'QEMU_real_client_socket_unavailable'
+fi
+if ! WAYLAND_DISPLAY="$pixel_socket" \
+  timeout --signal=TERM --kill-after=3s 19s "$pixel_client"; then
+  cat "$pixel_log"
+  kill "$pixel_pid" 2>/dev/null || true
+  wait "$pixel_pid" 2>/dev/null || true
+  fatal 'QEMU_real_xdg_client_wl_shm_failed'
+fi
+if ! wait "$pixel_pid"; then
+  cat "$pixel_log"
+  fatal 'Rust_compositor_did_not_capture_client_buffer'
+fi
+cat "$pixel_log"
+grep -q '^MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true' "$pixel_log" ||
+  fatal 'wl_shm_pixels_not_imported'
+grep -q '^MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true' "$pixel_log" ||
+  fatal 'Rust_client_frame_composition_missing'
+[[ -f /run/melania-native-qemu/client-frame.bgra ]] ||
+  fatal 'Rust_composed_frame_missing'
+rm -f "$pixel_log"
+report 'MELANIA_QEMU_NATIVE_RUST_CLIENT_FRAME_COMPOSED=true'
+
+MELANIA_QEMU_CLIENT_WINDOW_FRAME=YES_DISPOSABLE_QEMU \
+  timeout --signal=TERM --kill-after=3s 22s "$pixel_scanout" < /dev/tty1 ||
+  fatal 'QEMU_client_window_scanout_or_CRTC_restore_failed'
+report 'MELANIA_QEMU_NATIVE_CLIENT_WINDOW_SCANOUT_PASS=true'
+report 'MELANIA_NATIVE_LIVE_KMS_RENDERING=false'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'

@@ -14,6 +14,9 @@ on:
       - scripts/inject-qemu-native-input.py
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
+      - tests/test_qemu_client_pixel_stage26.py
+      - scripts/melania-qemu-client-window-scanout.c
+      - scripts/capture-qemu-client-window.py
       - scripts/capture-qemu-visible-scanout.py
       - tests/test_qemu_visible_scanout.py
       - scripts/melania-vt-guest.py
@@ -33,6 +36,9 @@ on:
       - scripts/inject-qemu-native-input.py
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
+      - tests/test_qemu_client_pixel_stage26.py
+      - scripts/melania-qemu-client-window-scanout.c
+      - scripts/capture-qemu-client-window.py
       - scripts/capture-qemu-visible-scanout.py
       - tests/test_qemu_visible_scanout.py
       - scripts/melania-vt-guest.py
@@ -69,6 +75,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_visible_scanout.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_wayland_bridge.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_shell_stage25.py' -v
+          python3 -m unittest discover -s tests -p 'test_qemu_client_pixel_stage26.py' -v
+          python3 -m py_compile scripts/capture-qemu-client-window.py
           python3 -m py_compile scripts/inject-qemu-native-input.py
           python3 -m py_compile scripts/capture-qemu-visible-scanout.py
       - name: Build actual Rust backend on same Ubuntu release as guest
@@ -83,6 +91,7 @@ jobs:
           cargo test -p melania-native --all-targets
           cargo build -p melania-native --bins
           test -x target/debug/qemu-shell-client
+          test -x target/debug/qemu-client-window
           # GETFB2 may return new GEM handles. Prove every handle is closed
           # on the same fd, inside the sacrificial VM (never on the runner).
           cc -O2 -Wall -Wextra -Werror -std=c11 \
@@ -93,6 +102,10 @@ jobs:
             -I/usr/include/libdrm scripts/melania-qemu-visible-frame.c \
             -o target/debug/melania-qemu-visible-probe -ldrm
           test -x target/debug/melania-qemu-visible-probe
+          cc -O2 -Wall -Wextra -Werror -std=c11 \
+            -I/usr/include/libdrm scripts/melania-qemu-client-window-scanout.c \
+            -o target/debug/melania-qemu-client-window-scanout -ldrm
+          test -x target/debug/melania-qemu-client-window-scanout
           cc -O2 -Wall -Wextra -Werror -std=c11 \
             scripts/melania-qemu-wayland-client.c \
             -o target/debug/melania-qemu-wayland-client -lwayland-client
