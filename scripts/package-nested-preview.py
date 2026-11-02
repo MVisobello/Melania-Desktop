@@ -63,7 +63,7 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
     vendored = None
     if gtk_layer_shell_lib is not None:
         vendored = input_file(gtk_layer_shell_lib)
-        if vendored.open("rb").read(4) != b"\\x7fELF":
+        if vendored.open("rb").read(4) != b"\x7fELF":
             raise ValueError("Bundled GTK4 layer-shell is not an ELF shared library")
     inputs = {
         "run.sh": input_file(ROOT / "scripts/run-melania-bundle.sh"),
