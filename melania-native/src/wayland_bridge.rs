@@ -14,7 +14,7 @@ use smithay::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
-    delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell,
+    delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm,
     input::{keyboard::FilterResult, pointer::{ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
@@ -28,7 +28,8 @@ use smithay::{
     utils::{Logical, Point, Serial, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
-        compositor::{CompositorClientState,CompositorHandler,CompositorState},
+        compositor::{with_states,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
+        shm::{ShmState,ShmHandler,with_buffer_contents},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
@@ -37,6 +38,7 @@ use smithay::{
 use melania_native::NativeLifecycle;
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
+use crate::native_client_frame;
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -49,6 +51,9 @@ impl ClientData for BridgeClientState {
 
 struct BridgeState {
     compositor: CompositorState,
+    shm:ShmState,
+    pixel_probe:bool,
+    pixel_ready:bool,
     xdg_shell: XdgShellState,
     layer_shell: WlrLayerShellState,
     xdg_toplevel_count: u32,
@@ -72,6 +77,32 @@ impl CompositorHandler for BridgeState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
     }
     fn commit(&mut self,surface:&WlSurface) {
+        if self.pixel_probe && !self.pixel_ready && self.xdg_toplevel_count>0 {
+            let assignment=with_states(surface,|states|{
+                states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
+            });
+            if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
+                let frame=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                    native_client_frame::compose_from_shm(ptr,len,metadata)
+                });
+                match frame {
+                    Ok(Ok(frame))=>{
+                        match native_client_frame::write_frame(&frame) {
+                            Ok(())=>{
+                                self.pixel_ready=true;
+                                println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
+                                println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
+                                let _=std::io::stdout().flush();
+                            },
+                            Err(error)=>eprintln!("Melania client frame write: {error}"),
+                        }
+                    },
+                    Ok(Err(error))=>eprintln!("Melania invalid client pixels: {error}"),
+                    Err(error)=>eprintln!("Melania wl_shm access error: {error:?}"),
+                }
+                buffer.release();
+            }
+        }
         if self.focused.is_some() {return;}
         self.focused=Some(surface.clone());
         let key=self.seat.get_keyboard().expect("keyboard");
@@ -84,6 +115,9 @@ impl CompositorHandler for BridgeState {
         println!("MELANIA_NATIVE_WAYLAND_SURFACE_FOCUSED=true");
         let _=std::io::stdout().flush();
     }
+}
+impl ShmHandler for BridgeState {
+    fn shm_state(&self)->&ShmState {&self.shm}
 }
 impl SeatHandler for BridgeState {
     type KeyboardFocus=WlSurface;
@@ -131,6 +165,7 @@ delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
 delegate_xdg_shell!(BridgeState);
 delegate_layer_shell!(BridgeState);
+delegate_shm!(BridgeState);
 
 fn register(state:&mut BridgeState,device:libinput::Device) {
     let caps=melania_native::input_registry::InputCapabilities{
@@ -228,6 +263,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     seat.add_pointer();
     let mut state=BridgeState{
         compositor:CompositorState::new::<BridgeState>(&handle),
+        shm:ShmState::new::<BridgeState>(&handle,vec![]),
+        pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
+            .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
         xdg_toplevel_count:0,layer_surface_count:0,
@@ -269,6 +307,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     let deadline=Instant::now()+Duration::from_secs(27);
     let mut both_shell_roles_seen_at=None;
+    let mut pixel_ready_since=None;
     while Instant::now()<deadline {
         events.dispatch(Some(Duration::from_millis(12)),&mut state)?;
         while let Some(stream)=listener.accept()? {
@@ -276,6 +315,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         }
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;
+        if state.pixel_probe && state.pixel_ready {
+            let since=pixel_ready_since.get_or_insert_with(Instant::now);
+            if since.elapsed()>=Duration::from_secs(3) {
+                println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
+                println!("MELANIA_NATIVE_LIVE_KMS_RENDERING=false");
+                println!("MELANIA_NATIVE_SESSION_READY=false");
+                return Ok(());
+            }
+        }
         if shell_probe && state.xdg_toplevel_count>0 && state.layer_surface_count>0 {
             let since=both_shell_roles_seen_at.get_or_insert_with(Instant::now);
             // Let the real client receive, ack and finish its configure
@@ -289,7 +337,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Ok(());
             }
         }
-        if !shell_probe && state.delivered_keys>=2 && state.delivered_buttons>=2 && state.focused.is_some() {
+        if !shell_probe && !state.pixel_probe && state.delivered_keys>=2 && state.delivered_buttons>=2 && state.focused.is_some() {
             println!("MELANIA_NATIVE_WAYLAND_KEYBOARD_EVENTS={}",state.delivered_keys);
             println!("MELANIA_NATIVE_WAYLAND_POINTER_BUTTON_EVENTS={}",state.delivered_buttons);
             println!("MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true");
