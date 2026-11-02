@@ -31,6 +31,8 @@ rust_kms="$root/target/debug/qemu-rust-kms-frames"
 [[ -x "$rust_kms" ]] || deny 'build Rust DRM KMS page-flip executable first'
 [[ -f "$root/scripts/capture-qemu-rust-kms-frames.py" ]] ||
   deny 'real two-frame QMP capture verifier missing'
+[[ -f "$root/scripts/capture-qemu-two-windows.py" ]] ||
+  deny 'real two-window QMP capture verifier missing'
 pixel_scanout="$root/target/debug/melania-qemu-client-window-scanout"
 [[ -x "$pixel_scanout" ]] || deny 'build QEMU-only real-client scanout program first'
 [[ -f "$root/scripts/capture-qemu-client-window.py" ]] ||
@@ -121,6 +123,13 @@ python3 "$root/scripts/capture-qemu-live-kms-stream.py" \
   --third "$report/live-client-frame3.ppm" --timeout 950 \
   > "$report/qmp-live-stream.log" 2>&1 &
 live_capture_pid=$!
+python3 "$root/scripts/capture-qemu-two-windows.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --first "$report/two-window-frame1.ppm" \
+  --second "$report/two-window-frame2.ppm" \
+  --third "$report/two-window-frame3.ppm" --timeout 950 \
+  > "$report/qmp-two-windows.log" 2>&1 &
+multi_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -149,9 +158,19 @@ wait "$rust_capture_pid"
 rust_capture_code=$?
 wait "$live_capture_pid"
 live_capture_code=$?
+wait "$multi_capture_pid"
+multi_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_THREE_CAPTURE_PASS=true' "$report/qmp-two-windows.log" ||
+   ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_FRAME1_PIXELS=true' "$report/qmp-two-windows.log" ||
+   ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_FRAME2_PIXELS=true' "$report/qmp-two-windows.log" ||
+   ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_FRAME3_PIXELS=true' "$report/qmp-two-windows.log" ||
+   ! test -s "$report/two-window-frame1.ppm" ||
+   ! test -s "$report/two-window-frame2.ppm" ||
+   ! test -s "$report/two-window-frame3.ppm" ||
+   ! grep -q '^MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_LIVE_KMS_THREE_CAPTURE_PASS=true' "$report/qmp-live-stream.log" ||
    ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME1_PIXELS=true' "$report/qmp-live-stream.log" ||
    ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME2_PIXELS=true' "$report/qmp-live-stream.log" ||
@@ -247,6 +266,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-client-window.log" || true
   tail -n 30 "$report/qmp-rust-frames.log" || true
   tail -n 30 "$report/qmp-live-stream.log" || true
+  tail -n 30 "$report/qmp-two-windows.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -259,3 +279,5 @@ printf '%s\n' 'MELANIA_VM_NATIVE_WL_OUTPUT_MODE_VERIFIED=true' >> "$report/resul
 printf '%s\n' 'MELANIA_VM_RUST_DIRECT_KMS_TWO_CLIENT_FRAMES=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_LIVE_WAYLAND_STREAM_THREE_FRAMES=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_POST_KMS_FRAME_CALLBACKS_VERIFIED=true' >> "$report/result.txt"
+
+printf '%s\n' 'MELANIA_VM_TWO_REAL_WAYLAND_WINDOWS_QMP_PRESENTED=true' >> "$report/result.txt"

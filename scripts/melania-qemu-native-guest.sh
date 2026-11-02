@@ -347,6 +347,75 @@ report 'MELANIA_QEMU_NATIVE_LIVE_WAYLAND_KMS_STREAM_PASS=true'
 report 'MELANIA_QEMU_NATIVE_PRESENTED_FRAME_CALLBACKS_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
+# Stage33: a separate, still disposable VM experiment uses TWO independent
+# xdg_toplevel clients with genuine wl_shm pixel buffers. Exactly three
+# commits are presented: A, B, A. The scene must retain window A when B
+# commits, and retain window B when A changes. QMP checks BOTH regions.
+rm -f /run/melania-native-qemu/frame-stream.sock
+multi_server_log="$(mktemp -t melania-two-window-server-XXXXXX)"
+multi_kms_log="$(mktemp -t melania-two-window-kms-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 39s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
+multi_server_pid=$!
+multi_socket=''
+for attempt in $(seq 1 100); do
+  multi_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$multi_server_log" | head -n 1)"
+  [[ -n "$multi_socket" ]] && grep -q '^MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true' "$multi_server_log" && break
+  kill -0 "$multi_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$multi_socket" || ! -S /run/melania-native-qemu/frame-stream.sock ]]; then
+  cat "$multi_server_log"
+  kill "$multi_server_pid" 2>/dev/null || true
+  wait "$multi_server_pid" 2>/dev/null || true
+  fatal 'two_window_live_wayland_socket_unavailable'
+fi
+MELANIA_QEMU_RUST_LIVE_STREAM_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_TWO_WINDOWS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 38s \
+  "$stream_binary" < /dev/tty1 2>&1 | tee "$multi_kms_log" &
+multi_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_STREAM_KMS_CONNECTED=true' "$multi_kms_log" && break
+  kill -0 "$multi_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_STREAM_KMS_CONNECTED=true' "$multi_kms_log"; then
+  kill "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
+  wait "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
+  fatal 'two_window_Rust_KMS_not_connected'
+fi
+if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
+  MELANIA_NATIVE_WAIT_PRESENT_CALLBACK=YES_QEMU_VM \
+  MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
+  timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
+  cat "$multi_server_log"
+  kill "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
+  wait "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
+  fatal 'two_window_Wayland_client_commit_failed'
+fi
+wait "$multi_kms_pid" || fatal 'two_window_KMS_three_presentations_failed'
+wait "$multi_server_pid" || fatal 'two_window_Smithay_failed'
+cat "$multi_server_log"
+grep -q '^MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true' "$multi_server_log" ||
+  fatal 'two_windows_not_retained_in_scene'
+grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$multi_server_log" ||
+  fatal 'two_window_frame_callbacks_missing'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
+  fatal 'two_window_KMS_original_CRTC_not_restored'
+for index in 1 2 3; do
+  grep -q "^MELANIA_NATIVE_SCHEDULED_FRAME_ACK=$index$" "$multi_server_log" ||
+    fatal "two_window_frame_ticket_$index_not_retired"
+done
+rm -f "$multi_server_log" "$multi_kms_log"
+report 'MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true'
+report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'

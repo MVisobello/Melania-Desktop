@@ -14,7 +14,9 @@ const LEFT:usize=160;
 const TOP:usize=120;
 pub const FRAME_PATH:&str="/run/melania-native-qemu/client-frame.bgra";
 
-pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)
+/// Extract exactly one validated wl_shm snapshot into owned XRGB pixels.
+/// The pointer is never saved past the Smithay buffer access callback.
+pub fn copy_client_shm(ptr:*const u8,len:usize,meta:BufferData)
     ->Result<Vec<u8>,String>
 {
     if meta.format!=wl_shm::Format::Xrgb8888 {
@@ -53,6 +55,13 @@ pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)
             client[q+3]=0;
         }
     }
+    Ok(client)
+}
+
+pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)
+    ->Result<Vec<u8>,String>
+{
+    let client=copy_client_shm(ptr,len,meta)?;
     // The disposable VM now exercises the same position-aware scene
     // composition primitive intended for multiple windows and shell layers.
     // Stage31 still has ONE real Wayland client, not a native desktop session.

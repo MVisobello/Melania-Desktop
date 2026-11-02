@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -68,6 +68,9 @@ struct BridgeState {
     frame_callbacks_probe:bool,
     frame_callback_count:u32,
     render_scheduler:RenderScheduler,
+    multi_window_mode:bool,
+    multi_scene:MultiWindowScene,
+    known_window_surfaces:Vec<WlSurface>,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
     pixel_frame_target:u8,
@@ -119,11 +122,42 @@ impl CompositorHandler for BridgeState {
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
             if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
-                let frame=with_buffer_contents(&buffer,|ptr,len,metadata|{
-                    native_client_frame::compose_from_shm(ptr,len,metadata)
+                // In the two-window VM test each COMMIT carries pixel data
+                // from a distinct wl_surface. Keep the previous window's
+                // last owned snapshot for the next full-scene composition.
+                let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                    if self.multi_window_mode {
+                        native_client_frame::copy_client_shm(ptr,len,metadata)
+                    } else {
+                        native_client_frame::compose_from_shm(ptr,len,metadata)
+                    }
                 });
-                match frame {
-                    Ok(Ok(frame))=>{
+                match imported {
+                    Ok(Ok(imported))=>{
+                        let frame=if self.multi_window_mode {
+                            let key=if let Some(index)=self.known_window_surfaces
+                                .iter().position(|known|known==surface) {
+                                (index+1) as u64
+                            } else {
+                                if self.known_window_surfaces.len()>=2 {
+                                    eprintln!("QEMU two-window scene exceeded bound");
+                                    return;
+                                }
+                                self.known_window_surfaces.push(surface.clone());
+                                self.known_window_surfaces.len() as u64
+                            };
+                            if self.multi_scene.upsert(key,imported).is_err() {
+                                eprintln!("QEMU retained window rejected invalid wl_shm image");
+                                return;
+                            }
+                            match self.multi_scene.composite() {
+                                Ok(frame)=>frame,
+                                Err(error)=>{
+                                    eprintln!("QEMU multi-window composition failed: {error:?}");
+                                    return;
+                                }
+                            }
+                        } else {imported};
                         let next=self.pixel_frame_count+1;
                         // This still uses a bounded, synchronous QEMU stream.
                         // Stage32 adds verified frame identity and coalesced
@@ -393,6 +427,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         frame_callback_count:0,
         render_scheduler:RenderScheduler::default(),
+        multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        multi_scene:MultiWindowScene::default(),
+        known_window_surfaces:Vec::new(),
         stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
@@ -437,6 +475,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     if state.frame_callbacks_probe && !live_stream {
         return Err("frame presentation probe needs live VM Rust DRM stream".into());
+    }
+    if state.multi_window_mode &&
+       (!live_stream || !state.frame_callbacks_probe || state.pixel_frame_target!=3) {
+        return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -489,6 +531,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
                 if state.live_stream {
                     println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
+                }
+                if state.multi_window_mode {
+                    if state.multi_scene.window_count()!=2 {
+                        return Err("QEMU native scene never received both client windows".into());
+                    }
+                    println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
                 if state.frame_callbacks_probe {
                     if state.frame_callback_count!=state.pixel_frame_target as u32 {
