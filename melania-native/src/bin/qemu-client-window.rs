@@ -105,7 +105,7 @@ fn main()->Result<(),Box<dyn Error>> {
         let (r,g,b)=if x<W/2 {(245u8,108u8,34u8)} else {(16u8,205u8,155u8)};
         p.copy_from_slice(&[b,g,r,0]);
     }
-    let mut file=OpenOptions::new().create_new(true).write(true)
+    let mut file=OpenOptions::new().create_new(true).read(true).write(true)
         .open("/run/melania-native-qemu/client-window-shm.bin")?;
     file.write_all(&pixels)?;
     file.sync_all()?;
@@ -128,9 +128,9 @@ fn main()->Result<(),Box<dyn Error>> {
     std::io::stdout().flush()?;
     buffer.destroy();
     pool.destroy();
-    surface.destroy();
     toplevel.destroy();
     xdg.destroy();
+    surface.destroy();
     wm.destroy();
     drop(shm);
     connection.flush()?;
