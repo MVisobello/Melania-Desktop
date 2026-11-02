@@ -599,6 +599,20 @@ fn build_ui(
             eprintln!("MELANIA_SETTINGS_ASYNC_NAVIGATION_OK");
         });
     }
+    // Explicit CI navigation exercises genuine PipeWire and power services
+    // without invoking any volume/mute/profile write action.
+    if std::env::var_os("MELANIA_SMOKE_SETTINGS_HARDWARE").as_deref()
+        ==Some(std::ffi::OsStr::new("1")) {
+        let audio_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(1900),move ||{
+            audio_stack.set_visible_child_name("audio");
+        });
+        let power_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(2500),move ||{
+            power_stack.set_visible_child_name("power");
+            eprintln!("MELANIA_SETTINGS_AUDIO_POWER_NAVIGATION_OK");
+        });
+    }
     if audit_settings {
         // The initial page may be selected before the signal handler is wired.
         eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",

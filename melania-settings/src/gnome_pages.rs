@@ -166,87 +166,161 @@ fn audio_status(target: &str) -> Option<(f64,bool)> {
     let volume=parse_volume(&response)?;
     Some((volume,response.contains("[MUTED]")))
 }
-fn refresh_audio_status(target: &str, slider: &Scale, mute: &Button,
-                        reading: &Label) -> bool {
-    let Some((volume,muted))=audio_status(target) else {return false;};
+/// Apply a verified PipeWire snapshot on GTK's owning thread.
+fn apply_audio_snapshot(target:&str, snapshot:(f64,bool), slider:&Scale,
+                        mute:&Button, reading:&Label) {
+    let (volume,muted)=snapshot;
     slider.set_value(volume);
     mute.set_label(audio_mute_label(target,muted));
     reading.set_text(&format!("Volume attuale: {volume:.0}%{}",
-        if muted {" · disattivato"} else {""}));
-    true
+        if muted {" · disattivato"}else{""}));
 }
-fn audio_device_controls(page: &GtkBox, title: &str, target: &'static str) {
+
+/// PipeWire can be slow or unavailable on software-rendered VMs. All status
+/// queries and explicit writes run through a bounded worker. Widgets are
+/// built immediately but remain hidden until a real device is confirmed.
+fn audio_device_controls(page:&GtkBox, title:&str, target:&'static str) {
     group(page,title);
-    let Some((volume,muted))=audio_status(target) else {
-        page.append(&info_row("dialog-information",title,
-            "Dispositivo PipeWire/WirePlumber non disponibile: nessun controllo fittizio."));
-        return;
-    };
+    let status=label("Rilevamento dispositivo audio…","settings-row-description");
+    page.append(&status);
     let level=Scale::with_range(Orientation::Horizontal,0.0,100.0,1.0);
-    level.set_value(volume);
     level.set_hexpand(true);
     level.set_tooltip_text(Some("Volume del dispositivo in percentuale"));
     let apply=Button::with_label("Applica volume");
     apply.add_css_class("settings-save");
-    let mute=Button::with_label(audio_mute_label(target,muted));
+    let mute=Button::with_label("Disattiva audio");
     mute.add_css_class("settings-save");
     let refresh=Button::with_label("Aggiorna");
     refresh.add_css_class("settings-save");
-    let reading=label(&format!("Volume attuale: {volume:.0}%{}",
-        if muted {" · disattivato"} else {""}),"settings-row-description");
+    let reading=label("","settings-row-description");
     let feedback=label("","settings-action-feedback");
-    let controls=GtkBox::new(Orientation::Horizontal,8);
-    controls.add_css_class("settings-action-row");
-    controls.append(&level);
-    controls.append(&apply);
-    controls.append(&mute);
-    controls.append(&refresh);
-    page.append(&reading);
+    let buttons=GtkBox::new(Orientation::Horizontal,8);
+    buttons.add_css_class("settings-action-row");
+    buttons.append(&level);
+    buttons.append(&apply);
+    buttons.append(&mute);
+    buttons.append(&refresh);
+    let controls=GtkBox::new(Orientation::Vertical,8);
+    controls.append(&reading);
+    controls.append(&buttons);
+    controls.append(&feedback);
+    controls.set_visible(false);
     page.append(&controls);
-    page.append(&feedback);
+
+    let ready_controls=controls.clone();
+    let ready_status=status.clone();
+    let ready_level=level.clone();
+    let ready_mute=mute.clone();
+    let ready_reading=reading.clone();
+    let unavailable=title.to_owned();
+    crate::settings_async::run("audio-detect",move ||audio_status(target),move |result|{
+        match result.flatten(){
+            Some(snapshot)=>{
+                apply_audio_snapshot(target,snapshot,&ready_level,&ready_mute,&ready_reading);
+                ready_controls.set_visible(true);
+                ready_status.set_visible(false);
+            },
+            None=>ready_status.set_text(&format!(
+                "{unavailable}: dispositivo PipeWire/WirePlumber non disponibile; nessun controllo fittizio.")),
+        }
+    });
+
+    let slider=level.clone();
+    let mute_button=mute.clone();
+    let refresh_button=refresh.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    apply.connect_clicked(move |button|{
+        // Only the user's explicit click may change host mixer state.
+        let requested=format!("{:.2}",slider.value().clamp(0.0,100.0)/100.0);
+        button.set_sensitive(false);
+        mute_button.set_sensitive(false);
+        refresh_button.set_sensitive(false);
+        message.set_text("Applicazione volume in corso…");
+        let action=button.clone();
+        let other=mute_button.clone();
+        let reload=refresh_button.clone();
+        let slider=slider.clone();
+        let mute=other.clone();
+        let reading=state.clone();
+        let feedback=message.clone();
+        crate::settings_async::run("audio-volume",move ||{
+            let result=Command::new("wpctl")
+                .args(["set-volume",target,requested.as_str()]).status();
+            let ok=result.is_ok_and(|status|status.success());
+            (ok,if ok {audio_status(target)}else{None})
+        },move |response|{
+            action.set_sensitive(true);
+            other.set_sensitive(true);
+            reload.set_sensitive(true);
+            match response{
+                Some((true,Some(snapshot)))=>{
+                    apply_audio_snapshot(target,snapshot,&slider,&mute,&reading);
+                    feedback.set_text("Volume applicato.");
+                },
+                Some((true,None))=>feedback.set_text(
+                    "Comando eseguito, ma non è possibile verificare il volume."),
+                _=>feedback.set_text(
+                    "Impossibile applicare il volume. Verifica WirePlumber."),
+            }
+        });
+    });
+
+    let slider=level.clone();
+    let apply_button=apply.clone();
+    let refresh_button=refresh.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    mute.connect_clicked(move |button|{
+        button.set_sensitive(false);
+        apply_button.set_sensitive(false);
+        refresh_button.set_sensitive(false);
+        message.set_text("Aggiornamento audio in corso…");
+        let action=button.clone();
+        let other=apply_button.clone();
+        let reload=refresh_button.clone();
+        let slider=slider.clone();
+        let reading=state.clone();
+        let feedback=message.clone();
+        crate::settings_async::run("audio-mute",move ||{
+            let result=Command::new("wpctl").args(["set-mute",target,"toggle"]).status();
+            let ok=result.is_ok_and(|status|status.success());
+            (ok,if ok {audio_status(target)}else{None})
+        },move |response|{
+            action.set_sensitive(true);
+            other.set_sensitive(true);
+            reload.set_sensitive(true);
+            match response{
+                Some((true,Some(snapshot)))=>{
+                    apply_audio_snapshot(target,snapshot,&slider,&action,&reading);
+                    feedback.set_text("Stato audio aggiornato.");
+                },
+                Some((true,None))=>feedback.set_text(
+                    "Comando eseguito, ma il dispositivo non risponde."),
+                _=>feedback.set_text("Impossibile modificare lo stato audio."),
+            }
+        });
+    });
 
     let slider=level.clone();
     let mute_button=mute.clone();
     let state=reading.clone();
     let message=feedback.clone();
-    apply.connect_clicked(move |_| {
-        // Only an explicit click changes a system PipeWire volume. The target
-        // is a compile-time selected sink/source, never a user command.
-        let requested=format!("{:.2}",slider.value().clamp(0.0,100.0)/100.0);
-        let result=Command::new("wpctl")
-            .args(["set-volume",target,requested.as_str()]).status();
-        if !result.is_ok_and(|status|status.success()) {
-            message.set_text("Impossibile applicare il volume. Verifica WirePlumber.");
-        } else if refresh_audio_status(target,&slider,&mute_button,&state) {
-            message.set_text("Volume applicato.");
-        } else {
-            message.set_text("Comando eseguito, ma non è possibile verificare il volume.");
-        }
-    });
-    let slider=level.clone();
-    let mute_button=mute.clone();
-    let state=reading.clone();
-    let message=feedback.clone();
-    mute.connect_clicked(move |_| {
-        let result=Command::new("wpctl").args(["set-mute",target,"toggle"]).status();
-        if !result.is_ok_and(|status|status.success()) {
-            message.set_text("Impossibile modificare lo stato audio.");
-        } else if refresh_audio_status(target,&slider,&mute_button,&state) {
-            message.set_text("Stato audio aggiornato.");
-        } else {
-            message.set_text("Comando eseguito, ma il dispositivo non risponde.");
-        }
-    });
-    let slider=level.clone();
-    let mute_button=mute.clone();
-    let state=reading.clone();
-    let message=feedback.clone();
-    refresh.connect_clicked(move |_| {
-        if refresh_audio_status(target,&slider,&mute_button,&state) {
-            message.set_text("");
-        } else {
-            message.set_text("Impossibile leggere il dispositivo audio.");
-        }
+    refresh.connect_clicked(move |_|{
+        message.set_text("Lettura dispositivo in corso…");
+        let slider=slider.clone();
+        let mute=mute_button.clone();
+        let reading=state.clone();
+        let feedback=message.clone();
+        crate::settings_async::run("audio-refresh",move ||audio_status(target),move |response|{
+            match response.flatten(){
+                Some(snapshot)=>{
+                    apply_audio_snapshot(target,snapshot,&slider,&mute,&reading);
+                    feedback.set_text("");
+                },
+                None=>feedback.set_text("Impossibile leggere il dispositivo audio."),
+            }
+        });
     });
 }
 
@@ -359,27 +433,53 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         Some(audio)
         },
         "power" => {
-        let power = page("Alimentazione", "battery");
-        group(&power, "Batteria");
-        let charge = battery_status();
-        power.append(&info_row("battery", "Stato dell'alimentazione", &charge));
+        let power=page("Alimentazione","battery");
+        group(&power,"Batteria");
+        let battery_reading=GtkBox::new(Orientation::Vertical,0);
+        battery_reading.append(&info_row("battery","Stato dell'alimentazione",
+            "Rilevamento batteria in corso…"));
+        power.append(&battery_reading);
         group(&power,"Profili energetici");
-        // XFCE-style power profile choice backed by the real Linux service. No
-        // toggle is shown when power-profiles-daemon is absent or unsupported.
-        let profile_list=Command::new("powerprofilesctl").arg("list").output().ok()
-            .filter(|result|result.status.success())
-            .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
-            .unwrap_or_default();
-        if profile_list.is_empty() {
-            power.append(&info_row("dialog-information","Profili non disponibili",
-                "power-profiles-daemon non è disponibile o non espone profili supportati."));
-        } else {
-            let active_profile=read_command("powerprofilesctl",&["get"]).unwrap_or_default();
+        let profiles_host=GtkBox::new(Orientation::Vertical,8);
+        let pending=label("Lettura profili energetici in corso…",
+            "settings-row-description");
+        profiles_host.append(&pending);
+        power.append(&profiles_host);
+        power.append(&info_row("dialog-information","Inattività e sospensione",
+            "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
+        // powerprofilesctl can wait on D-Bus; only plain data is sent
+        // from the worker to GTK. No profile is changed on page open.
+        crate::settings_async::run("power-detect",move ||{
+            let battery=battery_status();
+            let list=Command::new("powerprofilesctl").arg("list").output().ok()
+                .filter(|result|result.status.success())
+                .map(|result|parse_power_profiles(&String::from_utf8_lossy(&result.stdout)))
+                .unwrap_or_default();
+            let active=if list.is_empty() {String::new()}else{
+                read_command("powerprofilesctl",&["get"]).unwrap_or_default()
+            };
+            (battery,list,active)
+        },move |result|{
+            let Some((battery,profile_list,active_profile))=result else {
+                pending.set_text("Impossibile leggere i profili energetici. Riprova riaprendo la sezione.");
+                return;
+            };
+            // The real battery status is a fresh, read-only Linux sysfs scan.
+            while let Some(child)=battery_reading.first_child(){
+                battery_reading.remove(&child);
+            }
+            battery_reading.append(&info_row("battery","Stato dell'alimentazione",&battery));
+            profiles_host.remove(&pending);
+            if profile_list.is_empty() {
+                profiles_host.append(&info_row("dialog-information","Profili non disponibili",
+                    "power-profiles-daemon non è disponibile o non espone profili supportati."));
+                return;
+            }
             let labels=profile_list.iter().map(|name|match *name {
                 "power-saver"=>"Risparmio energetico",
                 "balanced"=>"Bilanciato",
                 "performance"=>"Prestazioni elevate",
-                _=>*name
+                _=>*name,
             }).collect::<Vec<_>>();
             let selector=gtk::DropDown::from_strings(&labels);
             let selected=profile_list.iter().position(|name|*name==active_profile)
@@ -392,29 +492,38 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
             let apply=Button::with_label("Applica profilo");
             apply.add_css_class("settings-save");
             controls.append(&apply);
-            let feedback=label("La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
+            let feedback=label(
+                "La scelta modifica il profilo energetico Linux, anche nelle altre sessioni.",
                 "settings-row-description");
             let response=feedback.clone();
-            apply.connect_clicked(move |_|{
-                let Some(&profile)=profile_list.get(selector.selected() as usize) else {return;};
-                let result=Command::new("powerprofilesctl").args(["set",profile]).status();
-                match result {
-                    Ok(status) if status.success() =>response.set_text(
-                        &format!("Profilo energetico applicato: {profile}.")
-                    ),
-                    Ok(status)=>response.set_text(&format!(
-                        "Impossibile applicare il profilo {profile}: codice {status}."
-                    )),
-                    Err(error)=>response.set_text(&format!(
-                        "Servizio profili energetici non disponibile: {error}"
-                    )),
-                }
+            apply.connect_clicked(move |button|{
+                let Some(&profile)=profile_list.get(selector.selected() as usize)
+                    else {return;};
+                button.set_sensitive(false);
+                response.set_text("Applicazione profilo energetico in corso…");
+                let action=button.clone();
+                let feedback=response.clone();
+                crate::settings_async::run("power-set",move ||{
+                    let result=Command::new("powerprofilesctl").args(["set",profile]).status();
+                    let success=result.is_ok_and(|status|status.success());
+                    (success,if success {
+                        read_command("powerprofilesctl",&["get"])
+                    }else{None})
+                },move |result|{
+                    action.set_sensitive(true);
+                    match result{
+                        Some((true,Some(actual))) if actual==profile=>
+                            feedback.set_text(&format!("Profilo energetico applicato: {profile}.")),
+                        Some((true,_))=>feedback.set_text(
+                            "Comando inviato, ma non è possibile verificare il profilo attivo."),
+                        _=>feedback.set_text(
+                            "Impossibile applicare il profilo energetico. Verifica power-profiles-daemon."),
+                    }
+                });
             });
-            power.append(&controls);
-            power.append(&feedback);
-        }
-        power.append(&info_row("dialog-information","Inattività e sospensione",
-            "I timer di inattività, le azioni del coperchio e la sospensione automatica richiedono ancora l'integrazione dei servizi di sessione Melania."));
+            profiles_host.append(&controls);
+            profiles_host.append(&feedback);
+        });
         Some(power)
         },
         "storage" => {
