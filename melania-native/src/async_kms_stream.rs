@@ -41,7 +41,7 @@ impl AsyncKmsWorker {
         thread::spawn(move || {
             while let Ok(job)=jobs.recv() {
                 let result=(||->Result<(),String> {
-                    if job.pixels.len()!=MAX_IMAGE_BYTES || !(1..=3).contains(&job.ordinal) {
+                    if job.pixels.len()!=MAX_IMAGE_BYTES || !(1..=4).contains(&job.ordinal) {
                         return Err("invalid bounded QEMU frame dimensions or ordinal".into());
                     }
                     let size=u32::try_from(job.pixels.len())

@@ -70,6 +70,8 @@ struct BridgeState {
     render_scheduler:RenderScheduler,
     multi_window_mode:bool,
     async_kms_mode:bool,
+    drag_redraw_mode:bool,
+    presented_layout_generation:u64,
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
@@ -93,8 +95,8 @@ struct BridgeState {
 }
 
 struct PendingAsyncFrame {
-    surface:WlSurface,
-    buffer:wl_buffer::WlBuffer,
+    client:Option<(WlSurface,wl_buffer::WlBuffer)>,
+    layout_generation:u64,
     ticket:FrameTicket,
     ordinal:u8,
 }
@@ -146,6 +148,9 @@ impl BridgeState {
                 if self.multi_scene.move_to(key,rect.x,rect.y).is_ok() {
                     println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
                              key,rect.x,rect.y);
+                    if let Err(error)=self.submit_drag_frame() {
+                        eprintln!("QEMU drag KMS frame rejected: {error}");
+                    }
                 }
             },
             Some(InteractionKind::ResizeBottomRight)=>{
@@ -156,6 +161,37 @@ impl BridgeState {
             },
             None=>{},
         }
+    }
+
+    /// A real libinput pointer movement can repaint the compositor's
+    /// retained scene without requiring an extra wl_surface.commit.
+    /// Stage38 is intentionally limited to ONE additional frame (ordinal 4).
+    fn submit_drag_frame(&mut self) -> Result<(),Box<dyn Error>> {
+        if !self.drag_redraw_mode || self.pixel_frame_count!=3 ||
+           self.async_pending.is_some() ||
+           self.multi_scene.layout_generation()==self.presented_layout_generation {
+            return Ok(());
+        }
+        let frame=self.multi_scene.composite()
+            .map_err(|_|"QEMU drag scene compose failed")?;
+        if !self.render_scheduler.damage() {
+            return Err("QEMU drag damage rejected by suspended session".into());
+        }
+        let ticket=self.render_scheduler.begin_frame()
+            .ok_or("QEMU drag presentation already in progress")?;
+        let worker=self.async_stream.as_ref()
+            .ok_or("QEMU drag KMS worker unavailable")?;
+        if worker.submit(FrameJob{ticket,ordinal:4,pixels:frame}).is_err() {
+            self.render_scheduler.fail_present(ticket);
+            return Err("QEMU drag KMS queue rejected fourth frame".into());
+        }
+        self.async_pending=Some(PendingAsyncFrame{
+            client:None,ticket,ordinal:4,
+            layout_generation:self.multi_scene.layout_generation(),
+        });
+        println!("MELANIA_NATIVE_DRAG_FRAME_SUBMITTED=4");
+        std::io::stdout().flush()?;
+        Ok(())
     }
 
     /// Poll the worker without blocking the Smithay/calloop dispatcher.
@@ -183,21 +219,29 @@ impl BridgeState {
         }
         self.pixel_frame_count=pending.ordinal;
         self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
+        self.presented_layout_generation=pending.layout_generation;
         println!("MELANIA_NATIVE_LIVE_KMS_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_ASYNC_FRAME_COMPLETED={}",pending.ordinal);
-        println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
-        println!("MELANIA_NATIVE_CLIENT_FRAME_INDEX={}",pending.ordinal);
-        println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
-        if self.frame_callbacks_probe {
-            let delivered=complete_presented_frame(
-                &pending.surface,pending.ordinal as u32*16
-            );
-            self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
-            println!("MELANIA_NATIVE_FRAME_CALLBACK_DONE={}",pending.ordinal);
-            println!("MELANIA_NATIVE_FRAME_CALLBACK_COUNT={}",self.frame_callback_count);
+        if let Some((surface,buffer))=pending.client {
+            println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
+            println!("MELANIA_NATIVE_CLIENT_FRAME_INDEX={}",pending.ordinal);
+            println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
+            if self.frame_callbacks_probe {
+                let delivered=complete_presented_frame(
+                    &surface,pending.ordinal as u32*16
+                );
+                self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
+                println!("MELANIA_NATIVE_FRAME_CALLBACK_DONE={}",pending.ordinal);
+                println!("MELANIA_NATIVE_FRAME_CALLBACK_COUNT={}",self.frame_callback_count);
+            }
+            buffer.release();
+        } else {
+            if pending.ordinal!=4 || !self.drag_redraw_mode {
+                return Err("unexpected compositor-only KMS frame".into());
+            }
+            println!("MELANIA_NATIVE_DRAG_FRAME_ACKED=4");
         }
-        pending.buffer.release();
         std::io::stdout().flush()?;
         Ok(())
     }
@@ -212,7 +256,8 @@ impl CompositorHandler for BridgeState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
     }
     fn commit(&mut self,surface:&WlSurface) {
-        if self.pixel_probe && self.pixel_frame_count<self.pixel_frame_target && self.xdg_toplevel_count>0 {
+        if self.pixel_probe && self.pixel_frame_count<self.pixel_frame_target &&
+           self.pixel_frame_count<3 && self.xdg_toplevel_count>0 {
             let assignment=with_states(surface,|states|{
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
@@ -295,7 +340,8 @@ impl CompositorHandler for BridgeState {
                                 return;
                             }
                             self.async_pending=Some(PendingAsyncFrame {
-                                surface:surface.clone(),buffer,ticket,ordinal:next,
+                                client:Some((surface.clone(),buffer)),ticket,ordinal:next,
+                                layout_generation:self.multi_scene.layout_generation(),
                             });
                             println!("MELANIA_NATIVE_ASYNC_FRAME_SUBMITTED={next}");
                             let _=std::io::stdout().flush();
@@ -623,7 +669,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         pixel_frame_count:0,
-        pixel_frame_target:if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM") {4} else if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
             .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
         live_stream:std::env::var("MELANIA_NATIVE_LIVE_STREAM")
@@ -636,6 +683,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
+        drag_redraw_mode:std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        presented_layout_generation:0,
         async_stream:None,async_pending:None,
         multi_scene:MultiWindowScene::default(),
         window_interaction:WindowInteraction::default(),
@@ -687,11 +737,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         return Err("frame presentation probe needs live VM Rust DRM stream".into());
     }
     if state.multi_window_mode &&
-       (!live_stream || !state.frame_callbacks_probe || state.pixel_frame_target!=3) {
+       (!live_stream || !state.frame_callbacks_probe ||
+        state.pixel_frame_target!=if state.drag_redraw_mode {4} else {3}) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
     if state.async_kms_mode && !state.multi_window_mode {
         return Err("nonblocking KMS probe only enabled for QEMU two-window mode".into());
+    }
+    if state.drag_redraw_mode &&
+       (!state.multi_window_mode || !state.async_kms_mode) {
+        return Err("native layout redraw only supported with QEMU async two-window mode".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -710,7 +765,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // The parent process enforces the opt-in, DMI and Linux VT gates.
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
-    let deadline=Instant::now()+Duration::from_secs(27);
+    let deadline=Instant::now()+Duration::from_secs(
+        if state.drag_redraw_mode {45} else {27}
+    );
     let mut both_shell_roles_seen_at=None;
     let mut pixel_ready_since=None;
     while Instant::now()<deadline {
@@ -751,7 +808,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 if state.multi_window_mode {6} else {3}
             ) {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
-                println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
+                println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count.min(3));
+                if state.drag_redraw_mode {
+                    if state.pixel_frame_count!=4 ||
+                       state.multi_scene.layout_generation()!=state.presented_layout_generation {
+                        return Err("QEMU drag scene not acknowledged by KMS".into());
+                    }
+                    println!("MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true");
+                }
                 if state.live_stream {
                     println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
                 }
@@ -762,7 +826,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
                 if state.frame_callbacks_probe {
-                    if state.frame_callback_count!=state.pixel_frame_target as u32 {
+                    if state.frame_callback_count!=if state.drag_redraw_mode {3} else {state.pixel_frame_target as u32} {
                         return Err("not all Wayland frame callbacks completed after KMS".into());
                     }
                     println!("MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true");

@@ -360,7 +360,8 @@ MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
 MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
 MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
-  timeout --signal=TERM --kill-after=3s 39s \
+MELANIA_NATIVE_DRAG_REDRAW=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 54s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
 # Expose the REAL compositor's markers on the QEMU serial console while
@@ -383,7 +384,8 @@ if [[ -z "$multi_socket" || ! -S /run/melania-native-qemu/frame-stream.sock ]]; 
 fi
 MELANIA_QEMU_RUST_LIVE_STREAM_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_TWO_WINDOWS=YES_QEMU_VM \
-  timeout --signal=TERM --kill-after=3s 38s \
+MELANIA_QEMU_DRAG_FRAME=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 53s \
   "$stream_binary" < /dev/tty1 2>&1 | tee "$multi_kms_log" &
 multi_kms_pid=$!
 for attempt in $(seq 1 100); do
@@ -422,6 +424,14 @@ for index in 1 2 3; do
 done
 grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$multi_server_log" ||
   fatal 'two_window_frame_callbacks_missing'
+grep -q '^MELANIA_NATIVE_DRAG_FRAME_SUBMITTED=4' "$multi_server_log" ||
+  fatal 'real_pointer_move_did_not_submit_KMS_redraw'
+grep -q '^MELANIA_NATIVE_DRAG_FRAME_ACKED=4' "$multi_server_log" ||
+  fatal 'drag_redraw_did_not_receive_KMS_ACK'
+grep -q '^MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true' "$multi_server_log" ||
+  fatal 'drag_redraw_not_retained_through_scene'
+grep -q '^MELANIA_RUST_COMPOSITOR_DRAG_FRAME4_PASS=true' "$multi_kms_log" ||
+  fatal 'Rust_KMS_fourth_frame_not_presented'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
   fatal 'two_window_KMS_original_CRTC_not_restored'
 for index in 1 2 3; do
