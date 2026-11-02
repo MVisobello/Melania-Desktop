@@ -34,10 +34,16 @@ struct Entry {
 #[derive(Debug, Default)]
 pub struct MultiWindowScene {
     windows: Vec<Entry>,
+    layout_generation:u64,
 }
 
 impl MultiWindowScene {
     pub fn window_count(&self) -> usize { self.windows.len() }
+
+    /// Incremented whenever a scene mutation requires a new output image.
+    /// A KMS presenter must not retire a generation before its own ACK.
+    pub fn layout_generation(&self)->u64 { self.layout_generation }
+    fn dirty(&mut self) { self.layout_generation=self.layout_generation.wrapping_add(1); }
 
     /// Keys are compositor-local, never client-provided filenames or paths.
     /// A first commit creates a slot; subsequent commits update that slot.
@@ -47,6 +53,7 @@ impl MultiWindowScene {
         }
         if let Some(window) = self.windows.iter_mut().find(|w| w.key == key) {
             window.pixels = pixels;
+            self.dirty();
             return Ok(());
         }
         if self.windows.len() == MAX_WINDOWS {
@@ -54,13 +61,16 @@ impl MultiWindowScene {
         }
         let (x,y)=POSITIONS[self.windows.len()];
         self.windows.push(Entry { key, x, y, pixels });
+        self.dirty();
         Ok(())
     }
 
     pub fn remove(&mut self, key: u64) -> bool {
         let previous = self.windows.len();
         self.windows.retain(|w| w.key != key);
-        self.windows.len() != previous
+        let changed=self.windows.len()!=previous;
+        if changed {self.dirty();}
+        changed
     }
 
     /// Coordinates are physical pixels of the single QEMU output.
@@ -72,8 +82,10 @@ impl MultiWindowScene {
         }
         let entry=self.windows.iter_mut().find(|w|w.key==key)
             .ok_or(MultiSceneError::UnknownWindow)?;
+        let changed=entry.x!=x || entry.y!=y;
         entry.x=x;
         entry.y=y;
+        if changed {self.dirty();}
         Ok(())
     }
 
@@ -98,6 +110,7 @@ impl MultiWindowScene {
         };
         let entry=self.windows.remove(index);
         self.windows.push(entry);
+        if index+1!=self.windows.len() {self.dirty();}
         true
     }
 
@@ -134,6 +147,28 @@ mod tests {
     fn sample(frame:&[u8],x:usize,y:usize)->[u8;3] {
         let p=(y*OUTPUT_W+x)*4;
         [frame[p+2],frame[p+1],frame[p]]
+    }
+
+    #[test]
+    fn layout_generation_changes_only_for_actual_scene_damage() {
+        let mut graph=MultiWindowScene::default();
+        assert_eq!(graph.layout_generation(),0);
+        graph.upsert(1,solid(1,2,3)).unwrap();
+        assert_eq!(graph.layout_generation(),1);
+        graph.move_to(1,160,120).unwrap();
+        assert_eq!(graph.layout_generation(),1);
+        graph.move_to(1,200,150).unwrap();
+        assert_eq!(graph.layout_generation(),2);
+        assert!(graph.raise(1));
+        assert_eq!(graph.layout_generation(),2);
+        graph.upsert(2,solid(4,5,6)).unwrap();
+        assert_eq!(graph.layout_generation(),3);
+        graph.raise(1);
+        assert_eq!(graph.layout_generation(),4);
+        assert!(!graph.remove(100));
+        assert_eq!(graph.layout_generation(),4);
+        assert!(graph.remove(1));
+        assert_eq!(graph.layout_generation(),5);
     }
 
     #[test]
