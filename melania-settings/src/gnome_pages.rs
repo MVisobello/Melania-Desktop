@@ -269,7 +269,6 @@ fn audio_device_controls(page:&GtkBox, title:&str, target:&'static str) {
     let slider=level.clone();
     let apply_button=apply.clone();
     let refresh_button=refresh.clone();
-    let mute_button=mute.clone();
     let state=reading.clone();
     let message=feedback.clone();
     mute.connect_clicked(move |button|{
@@ -301,7 +300,6 @@ fn audio_device_controls(page:&GtkBox, title:&str, target:&'static str) {
                 _=>feedback.set_text("Impossibile modificare lo stato audio."),
             }
         });
-        let _=&mute_button;
     });
 
     let slider=level.clone();
@@ -437,8 +435,9 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         "power" => {
         let power=page("Alimentazione","battery");
         group(&power,"Batteria");
-        let battery_reading=info_row("battery","Stato dell'alimentazione",
-            "Rilevamento batteria in corso…");
+        let battery_reading=GtkBox::new(Orientation::Vertical,0);
+        battery_reading.append(&info_row("battery","Stato dell'alimentazione",
+            "Rilevamento batteria in corso…"));
         power.append(&battery_reading);
         group(&power,"Profili energetici");
         let profiles_host=GtkBox::new(Orientation::Vertical,8);
