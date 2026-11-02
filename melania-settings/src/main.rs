@@ -1,5 +1,6 @@
 //! Melania GTK4 Settings: GNOME information architecture with real local preferences.
 mod gnome_pages;
+mod lazy_pages;
 mod connectivity_controls;
 mod display_controls;
 mod xfce_catalog;
@@ -14,7 +15,7 @@ mod sensors;
 mod window_controls;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar, Image, Label, Orientation, Scale, SpinButton, Stack, Switch};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc, time::{Duration, Instant}};
 use melania_config::{self, Preferences};
 
 fn text(label: &str, style: &str) -> Label {
@@ -143,6 +144,7 @@ fn build_ui(
     initial_page: &str,
     shared_stack: &Rc<RefCell<Option<Stack>>>,
 ) {
+    let first_window_start=Instant::now();
     setup_melania_icon_theme();
     let css = gtk::CssProvider::new();
     #[allow(deprecated)]
@@ -407,6 +409,33 @@ fn build_ui(
         }
         eprintln!("MELANIA_SETTINGS_PAGES_OK={pages}");
     }
+    // Build one selected page at a time, not all 17 expensive GTK/DBus
+    // categories before first window paint. Page IDs stay registered in
+    // the Stack so the 25 sidebar entries and CLI deep links never disappear.
+    let deferred:Rc<RefCell<HashSet<String>>>=Rc::new(RefCell::new(HashSet::new()));
+    let pending_pages=deferred.clone();
+    let catalog=stack.clone();
+    let activate_page:Rc<dyn Fn(&str)>=Rc::new(move |key:&str|{
+        let known=gnome_pages::LAZY_PAGE_NAMES.iter().any(|(page,_)|*page==key)
+            || xfce_pages::LAZY_PAGE_NAMES.iter().any(|(page,_)|*page==key);
+        if !known || !pending_pages.borrow_mut().insert(key.to_owned()) {return;}
+        let target=key.to_owned();
+        let stack=catalog.clone();
+        // Even when Settings was invoked with a heavy deep link, submit
+        // the real window and its navigation before running the page builder.
+        gtk::glib::timeout_add_local_once(Duration::from_millis(45),move ||{
+            let started=Instant::now();
+            let content=gnome_pages::build_page(&stack,&target)
+                .or_else(||xfce_pages::build_page(&target));
+            if let Some(page)=content {
+                lazy_pages::fill(&stack,&target,page);
+                if std::env::var_os("MELANIA_PROFILE_SETTINGS").is_some() {
+                    eprintln!("MELANIA_SETTINGS_PAGE_BUILD_MS={} page={}",
+                        started.elapsed().as_millis(),target);
+                }
+            }
+        });
+    });
     // Expose this live stack only to our own application's command handler,
     // so a second invocation can navigate the existing Settings window.
     *shared_stack.borrow_mut() = Some(stack.clone());
@@ -456,8 +485,10 @@ fn build_ui(
     }
     // Selected state must use the actual target, not SETTINGS_PAGES ordering.
     let buttons = navigation.clone();
+    let load_on_navigation=activate_page.clone();
     stack.connect_visible_child_name_notify(move |stack| {
         let current = stack.visible_child_name();
+        if let Some(ref name)=current {load_on_navigation(name.as_str());}
         if audit_settings {
             if let Some(ref page) = current {
                 eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={page}");
@@ -519,6 +550,10 @@ fn build_ui(
     root.append(&main_panel);
     window.set_child(Some(&root));
     window.present();
+    if std::env::var_os("MELANIA_PROFILE_SETTINGS").is_some() {
+        eprintln!("MELANIA_SETTINGS_FIRST_WINDOW_MS={}",first_window_start.elapsed().as_millis());
+    }
+    if let Some(name)=stack.visible_child_name() {activate_page(name.as_str());}
     if audit_settings {
         // The initial page may be selected before the signal handler is wired.
         eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",
