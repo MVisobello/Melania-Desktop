@@ -22,6 +22,15 @@ fn wallpaper_path(prefs:&melania_config::Preferences)->PathBuf {
                 path.is_file().then_some(path)
             }
         })
+        // Portable preview bundles do not contain the original Cargo
+        // checkout. Preserve the user's custom wallpaper precedence while
+        // allowing the default image to resolve from the extracted archive.
+        .or_else(|| {
+            std::env::var_os("MELANIA_BUNDLE_DATA_DIR")
+                .map(PathBuf::from)
+                .map(|dir| dir.join("wallpaper.png"))
+                .filter(|path| path.is_file())
+        })
         .unwrap_or_else(||PathBuf::from(WALLPAPER))
 }
 fn wallpaper_fit(value:&str)->gtk::ContentFit {
