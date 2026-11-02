@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene,async_kms_stream::{AsyncKmsWorker,FrameJob}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -69,6 +69,9 @@ struct BridgeState {
     frame_callback_count:u32,
     render_scheduler:RenderScheduler,
     multi_window_mode:bool,
+    async_kms_mode:bool,
+    async_stream:Option<AsyncKmsWorker>,
+    async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
     known_window_surfaces:Vec<WlSurface>,
     stream:Option<UnixStream>,
@@ -86,6 +89,13 @@ struct BridgeState {
     delivered_keys: u32,
     delivered_buttons: u32,
     delivered_motions: u32,
+}
+
+struct PendingAsyncFrame {
+    surface:WlSurface,
+    buffer:wl_buffer::WlBuffer,
+    ticket:FrameTicket,
+    ordinal:u8,
 }
 
 /// Send wl_surface.frame completions only after the KMS presenter has
@@ -106,6 +116,52 @@ fn complete_presented_frame(surface:&WlSurface,elapsed_ms:u32)->u32 {
         |_,_,&()|true,
     );
     delivered
+}
+
+impl BridgeState {
+    /// Poll the worker without blocking the Smithay/calloop dispatcher.
+    /// No callback, buffer.release(), or frame counter is issued before the
+    /// worker has read the genuine KMS ACK from the VM Rust DRM process.
+    fn poll_async_kms(&mut self) -> Result<(),Box<dyn Error>> {
+        if !self.async_kms_mode {return Ok(());}
+        let worker=self.async_stream.as_ref().ok_or("async KMS worker not connected")?;
+        let reply=match worker.try_result() {
+            Ok(Some(result))=>result,
+            Ok(None)=>return Ok(()),
+            Err(error)=>return Err(format!("async KMS worker disconnected: {error}").into()),
+        };
+        let pending=self.async_pending.take()
+            .ok_or("KMS worker returned an ACK without a pending Wayland frame")?;
+        if pending.ticket!=reply.ticket || pending.ordinal!=reply.ordinal {
+            return Err("async KMS ticket or frame ordinal mismatch".into());
+        }
+        if let Err(error)=reply.status {
+            self.render_scheduler.fail_present(pending.ticket);
+            return Err(format!("async Rust KMS presentation failed: {error}").into());
+        }
+        if !self.render_scheduler.complete_present(pending.ticket) {
+            return Err("async KMS ACK invalidated by seat pause or GPU change".into());
+        }
+        self.pixel_frame_count=pending.ordinal;
+        self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
+        println!("MELANIA_NATIVE_LIVE_KMS_FRAME_ACK={}",pending.ordinal);
+        println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK={}",pending.ordinal);
+        println!("MELANIA_NATIVE_ASYNC_FRAME_COMPLETED={}",pending.ordinal);
+        println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
+        println!("MELANIA_NATIVE_CLIENT_FRAME_INDEX={}",pending.ordinal);
+        println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
+        if self.frame_callbacks_probe {
+            let delivered=complete_presented_frame(
+                &pending.surface,pending.ordinal as u32*16
+            );
+            self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
+            println!("MELANIA_NATIVE_FRAME_CALLBACK_DONE={}",pending.ordinal);
+            println!("MELANIA_NATIVE_FRAME_CALLBACK_COUNT={}",self.frame_callback_count);
+        }
+        pending.buffer.release();
+        std::io::stdout().flush()?;
+        Ok(())
+    }
 }
 
 impl BufferHandler for BridgeState {
@@ -175,6 +231,39 @@ impl CompositorHandler for BridgeState {
                                 }
                             }
                         } else {None};
+                        if self.async_kms_mode {
+                            let ticket=scheduled.ok_or("scheduled KMS ticket missing");
+                            let ticket=match ticket {
+                                Ok(ticket)=>ticket,
+                                Err(error)=>{eprintln!("{error}");return;}
+                            };
+                            if self.async_pending.is_some() {
+                                eprintln!("second frame while asynchronous KMS is presenting");
+                                self.render_scheduler.fail_present(ticket);
+                                return;
+                            }
+                            let worker=match self.async_stream.as_ref() {
+                                Some(worker)=>worker,
+                                None=>{
+                                    eprintln!("async KMS transport not connected");
+                                    self.render_scheduler.fail_present(ticket);
+                                    return;
+                                }
+                            };
+                            if worker.submit(FrameJob{ticket,ordinal:next,pixels:frame}).is_err() {
+                                eprintln!("async KMS transport full or disconnected");
+                                self.render_scheduler.fail_present(ticket);
+                                return;
+                            }
+                            self.async_pending=Some(PendingAsyncFrame {
+                                surface:surface.clone(),buffer,ticket,ordinal:next,
+                            });
+                            println!("MELANIA_NATIVE_ASYNC_FRAME_SUBMITTED={next}");
+                            let _=std::io::stdout().flush();
+                            // Return to Smithay NOW. No KMS socket I/O or
+                            // waiting for a page-flip acknowledgement here.
+                            return;
+                        }
                         let handoff:Result<(),Box<dyn Error>>=if self.live_stream {
                             (||->Result<(),Box<dyn Error>>{
                                 let stream=self.stream.as_mut()
@@ -429,6 +518,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         render_scheduler:RenderScheduler::default(),
         multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM"),
+        async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        async_stream:None,async_pending:None,
         multi_scene:MultiWindowScene::default(),
         known_window_surfaces:Vec::new(),
         stream:None,
@@ -480,6 +572,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!live_stream || !state.frame_callbacks_probe || state.pixel_frame_target!=3) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
+    if state.async_kms_mode && !state.multi_window_mode {
+        return Err("nonblocking KMS probe only enabled for QEMU two-window mode".into());
+    }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
         let listener=UnixListener::bind(path)?;
@@ -503,13 +598,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     while Instant::now()<deadline {
         // Accept the Rust DRM consumer before processing client commits;
         // the socket is private to this disposable VM, not the host.
-        if state.live_stream && state.stream.is_none() {
+        if state.live_stream && state.stream.is_none() && state.async_stream.is_none() {
             if let Some(listener)=&frame_listener {
                 match listener.accept() {
                     Ok((stream,_))=>{
                         stream.set_write_timeout(Some(Duration::from_secs(7)))?;
                         stream.set_read_timeout(Some(Duration::from_secs(8)))?;
-                        state.stream=Some(stream);
+                        if state.async_kms_mode {
+                            state.async_stream=Some(AsyncKmsWorker::spawn(stream));
+                            println!("MELANIA_NATIVE_ASYNC_KMS_WORKER_STARTED=true");
+                        } else {
+                            state.stream=Some(stream);
+                        }
                         println!("MELANIA_NATIVE_FRAME_STREAM_CONNECTED=true");
                         let _=std::io::stdout().flush();
                     }
@@ -523,6 +623,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
+        if state.async_kms_mode && state.async_stream.is_some() {
+            state.poll_async_kms()?;
+        }
         display.flush_clients()?;
         if state.pixel_probe && state.pixel_ready {
             let since=pixel_ready_since.get_or_insert_with(Instant::now);
