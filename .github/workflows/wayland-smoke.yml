@@ -75,7 +75,7 @@ jobs:
       - name: Validate session launcher and rejection paths
         run: |
           bash -n scripts/run-melania-v018-nested.sh
-          python3 -m unittest discover -s scripts -p 'test-nested-session-preflight.py' -v
+          python3 scripts/test-nested-session-preflight.py -v
       - name: Build nested compositor, control CLI and GTK file manager
         run: |
           set -o pipefail
