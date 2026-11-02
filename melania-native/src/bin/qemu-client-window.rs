@@ -133,10 +133,30 @@ fn main()->Result<(),Box<dyn Error>> {
     if callback_probe && !three_frames {
         return Err("QEMU frame callback test needs three live commits".into());
     }
+    let two_windows=std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if two_windows && (!callback_probe || !three_frames) {
+        return Err("two-window test must use three verified KMS frame callbacks".into());
+    }
+    // A second genuine xdg_toplevel has its OWN wl_surface and wl_shm
+    // commits. Frame 2 changes only this surface; the first stays mapped.
+    let secondary=if two_windows {
+        let other=compositor.create_surface(&qh,());
+        let xdg_other=wm.get_xdg_surface(&other,&qh,());
+        let top_other=xdg_other.get_toplevel(&qh,());
+        top_other.set_title("Melania QEMU second real window".into());
+        other.commit();
+        for _ in 0..3 { queue.roundtrip(&mut state)?; }
+        println!("MELANIA_NATIVE_CLIENT_SECOND_XDG_CONFIGURED=true");
+        Some((other,xdg_other,top_other))
+    } else {None};
     let two_frames=std::env::var("MELANIA_NATIVE_TWO_FRAMES")
         .as_deref()==Ok("YES_QEMU_VM");
     let count=if three_frames {3} else if two_frames {2} else {1};
     for frame_index in 0..count {
+        let surface=if two_windows && frame_index==1 {
+            &secondary.as_ref().ok_or("second client window missing")?.0
+        } else {&surface};
         // Both frames originate from a real client's wl_shm pool. The
         // compositor never invents these colors or fills these pixels.
         let mut pixels=vec![0u8;W*H*4];
@@ -197,6 +217,9 @@ fn main()->Result<(),Box<dyn Error>> {
         }
         println!("MELANIA_NATIVE_CLIENT_WL_SHM_RELEASED=true");
         println!("MELANIA_NATIVE_CLIENT_FRAME_COMMITTED={}",frame_index+1);
+        if two_windows {
+            println!("MELANIA_NATIVE_CLIENT_FRAME_WINDOW_ID={}",if frame_index==1 {2} else {1});
+        }
         if callback_probe {
             println!("MELANIA_NATIVE_CLIENT_FRAME_PRESENTED={}",frame_index+1);
         }
@@ -211,6 +234,11 @@ fn main()->Result<(),Box<dyn Error>> {
     }
     println!("MELANIA_NATIVE_CLIENT_XDG_WINDOW_DRAWN=true");
     std::io::stdout().flush()?;
+    if let Some((other,xdg_other,top_other))=secondary {
+        top_other.destroy();
+        xdg_other.destroy();
+        other.destroy();
+    }
     toplevel.destroy();
     xdg.destroy();
     surface.destroy();
