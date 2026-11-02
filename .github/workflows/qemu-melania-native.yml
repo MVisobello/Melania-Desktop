@@ -10,6 +10,9 @@ on:
       - tests/test_native_fb2_stage21.py
       - scripts/melania-qemu-fb2-probe.c
       - scripts/melania-qemu-visible-frame.c
+      - scripts/melania-qemu-wayland-client.c
+      - scripts/inject-qemu-native-input.py
+      - tests/test_qemu_wayland_bridge.py
       - scripts/capture-qemu-visible-scanout.py
       - tests/test_qemu_visible_scanout.py
       - scripts/melania-vt-guest.py
@@ -25,6 +28,9 @@ on:
       - tests/test_native_fb2_stage21.py
       - scripts/melania-qemu-fb2-probe.c
       - scripts/melania-qemu-visible-frame.c
+      - scripts/melania-qemu-wayland-client.c
+      - scripts/inject-qemu-native-input.py
+      - tests/test_qemu_wayland_bridge.py
       - scripts/capture-qemu-visible-scanout.py
       - tests/test_qemu_visible_scanout.py
       - scripts/melania-vt-guest.py
@@ -59,6 +65,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_rollback_stage19.py' -v
           python3 -m unittest discover -s tests -p 'test_native_fb2_stage21.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_visible_scanout.py' -v
+          python3 -m unittest discover -s tests -p 'test_qemu_wayland_bridge.py' -v
+          python3 -m py_compile scripts/inject-qemu-native-input.py
           python3 -m py_compile scripts/capture-qemu-visible-scanout.py
       - name: Build actual Rust backend on same Ubuntu release as guest
         run: |
@@ -81,6 +89,10 @@ jobs:
             -I/usr/include/libdrm scripts/melania-qemu-visible-frame.c \
             -o target/debug/melania-qemu-visible-probe -ldrm
           test -x target/debug/melania-qemu-visible-probe
+          cc -O2 -Wall -Wextra -Werror -std=c11 \
+            scripts/melania-qemu-wayland-client.c \
+            -o target/debug/melania-qemu-wayland-client -lwayland-client
+          test -x target/debug/melania-qemu-wayland-client
           ldd target/debug/melania-native | tee native-runtime-libs.txt
           test -x target/debug/melania-native
       - name: Boot QEMU guest and execute REAL binary against virtual DRM card

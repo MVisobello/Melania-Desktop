@@ -19,6 +19,11 @@ visible_probe="$root/target/debug/melania-qemu-visible-probe"
   deny 'compile the QEMU-only visible-frame probe first'
 [[ -f "$root/scripts/capture-qemu-visible-scanout.py" ]] ||
   deny 'QEMU QMP screenshot verifier unavailable'
+client_probe="$root/target/debug/melania-qemu-wayland-client"
+[[ -f "$client_probe" && -x "$client_probe" ]] ||
+  deny 'build real libwayland guest client first'
+[[ -f "$root/scripts/inject-qemu-native-input.py" ]] ||
+  deny 'QMP virtual USB event injector missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -39,7 +44,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -78,6 +83,10 @@ python3 "$root/scripts/capture-qemu-visible-scanout.py" \
   --output "$report/visible-frame.ppm" --timeout 950 \
   > "$report/qmp-scanout.log" 2>&1 &
 capture_pid=$!
+python3 "$root/scripts/inject-qemu-native-input.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  > "$report/qmp-input.log" 2>&1 &
+input_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -98,9 +107,19 @@ timeout --signal=TERM --kill-after=10s 1020s \
 qemu_code=$?
 wait "$capture_pid"
 capture_code=$?
+wait "$input_pid"
+input_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_USB_INPUT_INJECTED=true' "$report/qmp-input.log" ||
+   ! grep -q '^MELANIA_NATIVE_WAYLAND_CLIENT_READY=true' "$serial" ||
+   ! grep -Eq '^MELANIA_NATIVE_WAYLAND_CLIENT_KEY_PRESSES=[1-9]' "$serial" ||
+   ! grep -Eq '^MELANIA_NATIVE_WAYLAND_CLIENT_POINTER_PRESSES=[1-9]' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_WAYLAND_CLIENT_INPUT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_WAYLAND_INPUT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_WAYLAND_RENDER_READY=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VISIBLE_PIXELS_VERIFIED=true' "$report/qmp-scanout.log" ||
    ! test -s "$report/visible-frame.ppm" ||
    ! grep -q '^MELANIA_QEMU_VISIBLE_SCANOUT_ACTIVE=true' "$serial" ||
@@ -130,8 +149,10 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 ]] ||
   printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
   tail -n 100 "$serial" || true
   tail -n 30 "$report/qmp-scanout.log" || true
+  tail -n 30 "$report/qmp-input.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_WAYLAND_REAL_INPUT_DELIVERY=true' >> "$report/result.txt"
