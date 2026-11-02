@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::NativeLifecycle;
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -67,6 +67,7 @@ struct BridgeState {
     live_stream:bool,
     frame_callbacks_probe:bool,
     frame_callback_count:u32,
+    render_scheduler:RenderScheduler,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
     pixel_frame_target:u8,
@@ -124,6 +125,22 @@ impl CompositorHandler for BridgeState {
                 match frame {
                     Ok(Ok(frame))=>{
                         let next=self.pixel_frame_count+1;
+                        // This still uses a bounded, synchronous QEMU stream.
+                        // Stage32 adds verified frame identity and coalesced
+                        // damage semantics, NOT an asynchronous renderer yet.
+                        let scheduled:Option<FrameTicket>=if self.live_stream {
+                            if !self.render_scheduler.damage() {
+                                eprintln!("native render scheduler rejected damage during seat pause");
+                                return;
+                            }
+                            match self.render_scheduler.begin_frame() {
+                                Some(ticket)=>Some(ticket),
+                                None=>{
+                                    eprintln!("native frame already outstanding or seat inactive");
+                                    return;
+                                }
+                            }
+                        } else {None};
                         let handoff:Result<(),Box<dyn Error>>=if self.live_stream {
                             (||->Result<(),Box<dyn Error>>{
                                 let stream=self.stream.as_mut()
@@ -145,6 +162,15 @@ impl CompositorHandler for BridgeState {
                         };
                         match handoff {
                             Ok(())=>{
+                                if let Some(ticket)=scheduled {
+                                    // Do not send a wl_surface.frame completion
+                                    // for an invalidated or duplicated ticket.
+                                    if !self.render_scheduler.complete_present(ticket) {
+                                        eprintln!("native KMS ACK rejected: stale frame ticket");
+                                        return;
+                                    }
+                                    println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK={next}");
+                                }
                                 self.pixel_frame_count=next;
                                 self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
                                 println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
@@ -164,6 +190,9 @@ impl CompositorHandler for BridgeState {
                                 let _=std::io::stdout().flush();
                             },
                             Err(error)=>{
+                                if let Some(ticket)=scheduled {
+                                    self.render_scheduler.fail_present(ticket);
+                                }
                                 eprintln!("Melania Wayland frame transfer failed: {error}");
                                 // Do not acknowledge/release an unpresented wl_buffer.
                                 return;
@@ -363,6 +392,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         frame_callbacks_probe:std::env::var("MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS")
             .as_deref()==Ok("YES_QEMU_VM"),
         frame_callback_count:0,
+        render_scheduler:RenderScheduler::default(),
         stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
@@ -371,7 +401,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         lifecycle:NativeLifecycle::default(),delivered_keys:0,
         delivered_buttons:0,delivered_motions:0,
     };
-    if session.is_active() {state.lifecycle.on_session(SessionEvent::ActivateSession);}
+    if session.is_active() {
+        state.lifecycle.on_session(SessionEvent::ActivateSession);
+        state.render_scheduler.set_seat_active(true);
+    }
     context.dispatch()?;
     for event in &mut context {
         if let libinput::Event::Device(libinput::event::DeviceEvent::Added(added))=event {
@@ -387,11 +420,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             SessionEvent::ActivateSession=>{
                 if context.resume().is_err() {
                     state.lifecycle.on_session(SessionEvent::PauseSession);
+                    state.render_scheduler.set_seat_active(false);
                     return;
                 }
             }
         }
+        let active=matches!(event,SessionEvent::ActivateSession);
         state.lifecycle.on_session(event);
+        state.render_scheduler.set_seat_active(active);
     })?;
 
     let live_stream=std::env::var("MELANIA_NATIVE_LIVE_STREAM")
