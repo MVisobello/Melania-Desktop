@@ -1475,6 +1475,21 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         if popup_is_open(&notify){hide_popup_surface(&notify);}else{present_popup_surface(&notify);}
     });
     trailing.append(&notification_button);
+    // Real GTK signal regression reproducing the user's failure: open the
+    // Wi-Fi/Bluetooth quick surface, then click the adjacent notifications
+    // button. Smithay must keep the panel layer mapped and alive.
+    if std::env::var_os("MELANIA_SMOKE_NOTIFICATION_SWITCH")
+        .as_deref() == Some(std::ffi::OsStr::new("1")) {
+        let q=quick.clone();
+        let click=notification_button.clone();
+        glib::timeout_add_local_once(Duration::from_millis(850),move || {
+            present_popup_surface(&q);
+            glib::timeout_add_local_once(Duration::from_millis(500),move || {
+                click.emit_by_name::<()>("clicked",&[]);
+                eprintln!("MELANIA_SMOKE_NOTIFICATION_CLICK_OK");
+            });
+        });
+    }
     // Replace the accidental double-blue notification stripe with one
     // intentional hairline before the Windows 11-style vertical clock.
     let clock_separator=gtk::Separator::new(Orientation::Vertical);
