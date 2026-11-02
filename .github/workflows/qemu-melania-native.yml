@@ -15,6 +15,7 @@ on:
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
       - tests/test_qemu_client_pixel_stage26.py
+      - tests/test_native_output_stage27.py
       - scripts/melania-qemu-client-window-scanout.c
       - scripts/capture-qemu-client-window.py
       - scripts/capture-qemu-visible-scanout.py
@@ -37,6 +38,7 @@ on:
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
       - tests/test_qemu_client_pixel_stage26.py
+      - tests/test_native_output_stage27.py
       - scripts/melania-qemu-client-window-scanout.c
       - scripts/capture-qemu-client-window.py
       - scripts/capture-qemu-visible-scanout.py
@@ -76,6 +78,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_wayland_bridge.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_shell_stage25.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_client_pixel_stage26.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_output_stage27.py' -v
           python3 -m py_compile scripts/capture-qemu-client-window.py
           python3 -m py_compile scripts/inject-qemu-native-input.py
           python3 -m py_compile scripts/capture-qemu-visible-scanout.py
