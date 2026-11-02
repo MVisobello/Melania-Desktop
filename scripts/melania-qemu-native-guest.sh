@@ -103,6 +103,49 @@ vt_probe=/mnt/melania-native/melania-vt-guest.py
 timeout --signal=TERM --kill-after=3s 25s python3 "$vt_probe" ||
   fatal 'post_KMS_linux_VT_recovery_failed'
 report 'MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true'
+# Stage24: real Rust Smithay wl_compositor/wl_seat on the dedicated VM VT.
+# This is a headless protocol/input bridge: no client framebuffer is scanned
+# out and it MUST NOT install a login session on the guest or host.
+client_probe=/mnt/melania-native/melania-wayland-client
+[[ -f "$client_probe" && -x "$client_probe" ]] ||
+  fatal 'real_libwayland_client_probe_missing'
+bridge_log="$(mktemp -t melania-wayland-bridge-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 32s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 > "$bridge_log" 2>&1 &
+bridge_pid=$!
+bridge_socket=''
+for attempt in $(seq 1 100); do
+  bridge_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$bridge_log" | head -n 1)"
+  [[ -n "$bridge_socket" ]] && break
+  kill -0 "$bridge_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$bridge_socket" ]]; then
+  cat "$bridge_log"
+  kill "$bridge_pid" 2>/dev/null || true
+  wait "$bridge_pid" 2>/dev/null || true
+  fatal 'native_Wayland_bridge_socket_unavailable'
+fi
+report 'MELANIA_QEMU_NATIVE_WAYLAND_BRIDGE_STARTED=true'
+if ! WAYLAND_DISPLAY="$bridge_socket" \
+  timeout --signal=TERM --kill-after=3s 19s "$client_probe"; then
+  cat "$bridge_log"
+  kill "$bridge_pid" 2>/dev/null || true
+  wait "$bridge_pid" 2>/dev/null || true
+  fatal 'real_Wayland_keyboard_pointer_delivery_failed'
+fi
+if ! wait "$bridge_pid"; then
+  cat "$bridge_log"
+  fatal 'native_Wayland_bridge_failed'
+fi
+cat "$bridge_log"
+grep -q '^MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true' "$bridge_log" ||
+  fatal 'libinput_events_not_forwarded_to_Smithay'
+rm -f "$bridge_log"
+report 'MELANIA_QEMU_NATIVE_WAYLAND_INPUT_PASS=true'
+report 'MELANIA_QEMU_NATIVE_WAYLAND_RENDER_READY=false'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
