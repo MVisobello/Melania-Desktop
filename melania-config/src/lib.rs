@@ -38,7 +38,7 @@ impl Default for Preferences {
         snap_windows: true, preview_windows: true,
         do_not_disturb: false, blur_strength: 70, workspace_count: 4,
         group_windows: false, reduce_motion: false, high_contrast: false,
-        icon_theme: "Melania-Light".into(),
+        icon_theme: "Melania-Light-darkPanel".into(),
         panel_height: 52, panel_position: "bottom".into(),
         panel_auto_hide: false, panel_opacity: 94,
         desktop_wallpaper: String::new(), desktop_wallpaper_fit: "cover".into(),
@@ -292,14 +292,14 @@ mod tests {
         assert!(!bad.group_windows && !bad.reduce_motion && !bad.high_contrast);
     }
     #[test] fn icon_themes_are_validated_and_backward_compatible() {
-        assert_eq!(Preferences::default().icon_theme,"Melania-Light");
+        assert_eq!(Preferences::default().icon_theme,"Melania-Light-darkPanel");
         for name in ICON_THEMES {
             let p=Preferences::from_text(&format!("icon_theme={name}"));
             assert_eq!(p.icon_theme,name);
             assert_eq!(Preferences::from_text(&p.to_text()),p);
         }
-        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Light");
-        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Light");
+        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Light-darkPanel");
+        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Light-darkPanel");
     }
     #[test] fn reads_and_writes_file() {
         let dir = std::env::temp_dir().join(format!("melania-test-{}-{:?}", std::process::id(), std::thread::current().id()));
