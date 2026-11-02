@@ -30,6 +30,82 @@ BINARIES = (
 )
 BUNDLE_NAME = "melania-nested-preview"
 
+# Original app SVGs are shipped rather than embedding icons via system theme:
+# the portable archive runs without the source repository.
+PREVIEW_APP_ICONS = (
+    "melania.svg",
+    "org.melaniadesktop.Files.svg",
+    "org.melaniadesktop.Settings.svg",
+)
+
+# Genuine SVG silhouettes rendered at 22px in the taskbar; unlike symbolic
+# masks, these preserve the intended Bluetooth/volume geometry on Mint.
+# All strokes are SVG standard shapes with no external resources.
+PREVIEW_TRAY_PATHS = {
+    "wifi": '<path d="M2.2 8.2c5.6-5.1 14-5.1 19.6 0" />'
+            '<path d="M5.6 11.8c3.6-3.3 9.2-3.3 12.8 0" />'
+            '<path d="M9 15.5c1.8-1.6 4.2-1.6 6 0" />'
+            '<circle cx="12" cy="19" r="1.1" fill="{color}" stroke="none"/>',
+    "bluetooth": '<path d="M12 2.2v19.6l6-5.3-12-10.9" />'
+                 '<path d="M12 2.2l6 5.3L6 18.4" />',
+    "volume": '<path d="M3 9h4l5-4v14l-5-4H3z" />'
+              '<path d="M16 9c1.8 1.6 1.8 4.4 0 6" />'
+              '<path d="M18.5 6.3c3.2 3.1 3.2 8.3 0 11.4" />',
+    "battery": '<rect x="2.2" y="6.8" width="17.8" height="10.4" rx="2.1"/>'
+               '<path d="M21 10v4" />'
+               '<rect x="5" y="9.4" width="9.4" height="5.2" rx=".8" stroke="none" fill="{color}"/>',
+    "notifications": '<path d="M18.4 8.7a6.4 6.4 0 0 0-12.8 0'
+                     'c0 6-2.7 6.5-2.7 8.4h18.2c0-1.9-2.7-2.4-2.7-8.4z" />'
+                     '<path d="M10 20.1c.9 1.6 3.1 1.6 4 0" />',
+}
+
+
+def build_preview_svg(kind: str, *, light: bool) -> str:
+    color = "#24455f" if light else "#edf6ff"
+    shapes = PREVIEW_TRAY_PATHS[kind].replace("{color}", color)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+            f'viewBox="0 0 24 24" fill="none" stroke="{color}" '
+            f'stroke-width="2.05" stroke-linecap="round" '
+            f'stroke-linejoin="round">{shapes}</svg>\\n')
+
+
+PREVIEW_ICON_INDEX = """[Icon Theme]
+Name=Melania Preview
+Comment=Standalone preview icons with native Melania taskbar silhouettes
+Inherits=Adwaita,hicolor
+Directories=scalable/apps,scalable/status
+
+[scalable/apps]
+Size=48
+Type=Scalable
+MinSize=16
+MaxSize=256
+Context=Applications
+
+[scalable/status]
+Size=24
+Type=Scalable
+MinSize=16
+MaxSize=64
+Context=Status
+"""
+
+
+def stage_preview_icons(theme_root: Path, apps: dict[str, Path]) -> None:
+    app_dir = theme_root / "scalable/apps"
+    status_dir = theme_root / "scalable/status"
+    app_dir.mkdir(parents=True)
+    status_dir.mkdir(parents=True)
+    (theme_root / "index.theme").write_text(PREVIEW_ICON_INDEX, encoding="utf-8")
+    for name, source in apps.items():
+        shutil.copyfile(source, app_dir / name)
+    for kind in PREVIEW_TRAY_PATHS:
+        for light in (False, True):
+            suffix = "-light" if light else ""
+            (status_dir / f"melania-tray-{kind}{suffix}.svg").write_text(
+                build_preview_svg(kind, light=light), encoding="utf-8"
+            )
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -58,6 +134,10 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
 
     # Validate all inputs before creating the output tree.
     sources = {name: input_file(bin_dir / name, executable=True) for name in BINARIES}
+    preview_apps = {
+        name: input_file(ROOT / "branding/Melania/scalable/apps" / name)
+        for name in PREVIEW_APP_ICONS
+    }
     # A Mint-compatible build may ship ONLY the GTK4 layer-shell bridge built
     # against Ubuntu 24.04. Never copy glibc, GTK4, Mesa or host GPU drivers.
     vendored = None
@@ -77,6 +157,7 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
     target = output_dir / BUNDLE_NAME
     (target / "bin").mkdir(parents=True)
     (target / "share").mkdir()
+    stage_preview_icons(target / "share/icons/Melania-Preview", preview_apps)
     if vendored is not None:
         (target / "lib").mkdir()
         destination = target / "lib/libgtk4-layer-shell.so.0"
@@ -100,6 +181,7 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
         "requires_existing_graphical_session": True,
         "requires_compatible_linux_runtime_libraries": True,
         "vendored_gtk4_layer_shell": vendored is not None,
+        "bundled_icon_theme": "Melania-Preview",
         "vendored_libraries": ["lib/libgtk4-layer-shell.so.0"] if vendored is not None else [],
         "files_sha256": {
             p.relative_to(target).as_posix(): sha256(p) for p in files
