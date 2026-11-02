@@ -56,6 +56,7 @@ export MELANIA_PROFILE_SETTINGS=1
 export MELANIA_SMOKE_SETTINGS_LAZY=1
 export MELANIA_SMOKE_SETTINGS_SERVICES=1
 export MELANIA_SMOKE_SETTINGS_HARDWARE=1
+export MELANIA_SMOKE_SETTINGS_STORAGE_DISPLAY=1
 MELANIA_PROFILE_COMPOSITOR=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
@@ -199,6 +200,24 @@ done
   exit 1
 }
 echo 'PASS: real GTK Audio and Power pages received bounded asynchronous device probes'
+# The real Settings process must navigate Storage and Display while the
+# hardware probes run in bounded workers. Services can legitimately be absent.
+HARDWARE_UI_READY=0
+for i in $(seq 1 110); do
+  if grep -q 'MELANIA_SETTINGS_STORAGE_DISPLAY_NAVIGATION_OK' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=storage-df outcome=' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=backlight-detect outcome=' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=display-sensor outcome=' "$TEMP/compositor.log"; then
+    HARDWARE_UI_READY=1; break
+  fi
+  sleep .1
+done
+[[ "$HARDWARE_UI_READY" == 1 ]] || {
+  echo 'FAIL: real GTK Storage/Display async hardware probes did not finish' >&2
+  grep 'MELANIA_SETTINGS_' "$TEMP/compositor.log" >&2 || true
+  exit 1
+}
+echo 'PASS: real Storage and Display GTK pages received bounded background hardware probes'
 # The actual GTK Files window should be submitted before the expensive
 # first browser tab, which in turn precedes the asynchronous GIO listing.
 python3 - "$TEMP/compositor.log" <<'PYFILESFIRST'
