@@ -5,7 +5,9 @@ use gtk::{prelude::*, Box as GtkBox, Label, Orientation, Stack};
 
 pub fn register(stack:&Stack,key:&str,title:&str){
     let placeholder=GtkBox::new(Orientation::Vertical,8);
-    placeholder.add_css_class("settings-body");
+    // The real page owns settings-body spacing; avoid double margins when
+    // its complete control tree is inserted into this stable Stack host.
+    placeholder.add_css_class("settings-lazy-host");
     let status=Label::new(Some("Caricamento impostazioni…"));
     status.add_css_class("settings-row-description");
     status.set_xalign(0.0);
