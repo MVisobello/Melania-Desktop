@@ -1586,6 +1586,7 @@ fn install_start_hotkey_listener(
     let open=start.clone();
     let quick=quick.clone();
     let notifications=notifications.clone();
+    let calendar=calendar.clone();
     glib::timeout_add_local(Duration::from_millis(30),move || {
         let mut packet=[0u8;32];
         // Bounded work per UI tick even if a sender floods the local socket.
@@ -1599,6 +1600,13 @@ fn install_start_hotkey_listener(
                     }
                 }
                 Ok(n) if &packet[..n]==b"CLOSE_START" => hide_start_surface(&open),
+                Ok(n) if &packet[..n]==b"CLOSE_OVERLAYS" => {
+                    // Keep each already-realized layer role alive: only conceal.
+                    hide_start_surface(&open);
+                    hide_popup_surface(&quick);
+                    hide_popup_surface(&notifications);
+                    hide_popup_surface(&calendar);
+                },
                 Ok(_)=>{},
                 Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
                 Err(error)=>{eprintln!("Melania Start hotkey receive: {error}");break;},
