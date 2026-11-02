@@ -104,7 +104,7 @@ class ClassicStartLayout(unittest.TestCase):
         self.assertIn('w.set_keyboard_mode(KeyboardMode::Exclusive)',PANEL)
         self.assertIn('w.connect_map(move |_| { let _=mapped_search.grab_focus(); });',PANEL)
         self.assertIn('glib::idle_add_local_once',PANEL)
-        self.assertIn('install_start_hotkey_listener(app,&start,&quick,&notifications);',PANEL)
+        self.assertIn('install_start_hotkey_listener(app,&start,&quick,&notifications,&calendar);',PANEL)
         self.assertIn('socket.recv(&mut packet)',PANEL)
         self.assertIn('b"TOGGLE_START"',PANEL)
         self.assertIn('KEY_Super_L',COMPOSITOR)
