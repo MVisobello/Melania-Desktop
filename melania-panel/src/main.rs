@@ -896,6 +896,7 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
     let group_enabled = settings.group_windows;
     let use_thumbnails = settings.preview_windows;
     let path = std::env::var_os(SOCKET_ENV).map(PathBuf::from);
+    let poll_path=path.clone();
     let refresh = {
         let target = box_running.clone();
         move |snapshot: Option<Vec<WindowInfo>>| {
@@ -1139,7 +1140,7 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
     let (sender,receiver)=std::sync::mpsc::sync_channel(1);
     thread::spawn(move || {
         loop {
-            let snapshot=path.as_ref().and_then(|endpoint|
+            let snapshot=poll_path.as_ref().and_then(|endpoint|
                 control_request(endpoint,WindowCommand::List).ok());
             if sender.send(snapshot).is_err(){break;}
             thread::sleep(Duration::from_millis(400));
