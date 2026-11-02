@@ -333,6 +333,11 @@ fn start_window(app:&Application)->ApplicationWindow {
     // the first Start presentation rather than delaying the taskbar.
     let installed_box=GtkBox::new(Orientation::Vertical,1);
     apps_box.append(&installed_box);
+    // Share a single verified Gio catalog between the installed-app list
+    // and the Recent section. A second AppInfo::all() on Start opening
+    // previously duplicated the slowest synchronous operation on the UI.
+    let installed_cache:Rc<RefCell<Vec<gio::AppInfo>>>=Rc::new(RefCell::new(Vec::new()));
+    let refresh_recent:Rc<RefCell<Option<Rc<dyn Fn()>>>>=Rc::new(RefCell::new(None));
     // GNOME/COSMIC-inspired unified search without background indexing or
     // filesystem traversal: only apps, known settings sections and XDG folders.
     for (name, page, keywords) in [
@@ -401,9 +406,12 @@ fn start_window(app:&Application)->ApplicationWindow {
     query.connect_activate(move |_| {
         let term=entry.text().trim().to_lowercase();
         if term.is_empty(){return;}
-        if let Some((button,_,_))=searchable_for_enter.borrow().iter().find(|(_,name,_)|name.contains(&term)) {
-            button.emit_clicked();
-        }
+        // Release the RefCell borrow before triggering a click: launching
+        // an app conceals Start and clears the search entry synchronously.
+        let first=searchable_for_enter.borrow().iter()
+            .find(|(_,name,_)|name.contains(&term))
+            .map(|(button,_,_)|button.clone());
+        if let Some(button)=first {button.emit_clicked();}
     });
     // Build app widgets only after Start becomes visible. Batch the work
     // to avoid a one-shot GTK stall when many .desktop launchers are installed.
@@ -412,6 +420,8 @@ fn start_window(app:&Application)->ApplicationWindow {
     let all_searchable=searchable.clone();
     let menu_for_apps=w.clone();
     let query_for_apps=query.clone();
+    let cache_for_apps=installed_cache.clone();
+    let recents_after_catalog=refresh_recent.clone();
     w.connect_notify_local(Some("visible"),move |surface,_|{
         if !surface.is_visible() || installed_once.replace(true){return;}
         let installed_box=apps_for_open.clone();
@@ -426,6 +436,11 @@ fn start_window(app:&Application)->ApplicationWindow {
                 normalized!="org.melaniadesktop.Files" && normalized!="org.melaniadesktop.Settings"
             }).collect::<Vec<_>>();
             apps.sort_by_key(|app|app.name().to_string().to_lowercase());
+            *cache_for_apps.borrow_mut()=apps.clone();
+            // The recent list now resolves IDs against the same snapshot.
+            if let Some(refresh)=recents_after_catalog.borrow().as_ref(){
+                refresh();
+            }
             let pending=Rc::new(RefCell::new(VecDeque::from(apps)));
             glib::timeout_add_local(Duration::from_millis(16),move ||{
                 for _ in 0..12 {
@@ -486,10 +501,10 @@ fn start_window(app:&Application)->ApplicationWindow {
     recent_list.set_visible(false);
     left.append(&recent_list);
     let menu_for_recent=w.clone();
-    w.connect_notify_local(Some("visible"), move |surface,_| {
-        if !surface.is_visible(){return;}
+    let installed_for_recent=installed_cache.clone();
+    let refresh_recents:Rc<dyn Fn()>=Rc::new(move || {
         while let Some(child)=recent_list.first_child(){recent_list.remove(&child);}
-        let installed=gio::AppInfo::all();
+        let installed=installed_for_recent.borrow();
         let mut count=0;
         for id in start_history::recent() {
             if count>=4 {break;}
@@ -537,6 +552,17 @@ fn start_window(app:&Application)->ApplicationWindow {
         }
         recent_heading.set_visible(count>0);
         recent_list.set_visible(count>0);
+    });
+    *refresh_recent.borrow_mut()=Some(refresh_recents.clone());
+    // The GTK layer-shell surface remains mapped while concealed. Opacity
+    // changes, not the visible property, mark subsequent Start openings.
+    let recent_visible=refresh_recents.clone();
+    w.connect_notify_local(Some("visible"),move |surface,_|{
+        if surface.is_visible(){recent_visible();}
+    });
+    let recent_reopened=refresh_recents.clone();
+    w.connect_notify_local(Some("opacity"),move |surface,_|{
+        if surface.is_visible() && surface.opacity()>0.5 {recent_reopened();}
     });
     // Recent launches belong with applications on the left, not among the
     // stable system locations on the right.
