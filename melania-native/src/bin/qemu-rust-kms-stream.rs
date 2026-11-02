@@ -172,7 +172,9 @@ fn run()->Result<(),Box<dyn Error>> {
     let layout_repaint=std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
         .as_deref()==Ok("YES_QEMU_VM") &&
         std::env::var("MELANIA_QEMU_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM");
-    let frame_target=if layout_repaint {4u8} else {3u8};
+    let resized=layout_repaint &&
+        std::env::var("MELANIA_NATIVE_RESIZED_BUFFER").as_deref()==Ok("YES_QEMU_VM");
+    let frame_target=if resized {5u8} else if layout_repaint {4u8} else {3u8};
     let attempt=(||->Result<(),Box<dyn Error>> {
         for index in 0..frame_target {
             // Bounded payload prevents arbitrary allocation or partial frames.
@@ -238,6 +240,7 @@ fn run()->Result<(),Box<dyn Error>> {
         println!("MELANIA_RUST_STREAM_THREE_CLIENT_FRAMES_PASS=true");
         if layout_repaint {
             println!("MELANIA_RUST_LAYOUT_REPAINT_FOUR_FRAMES_PASS=true");
+            if resized {println!("MELANIA_RUST_RESIZED_WAYLAND_FIVE_FRAMES_PASS=true");}
         }
         println!("MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false");
         println!("MELANIA_NATIVE_SESSION_READY=false");
