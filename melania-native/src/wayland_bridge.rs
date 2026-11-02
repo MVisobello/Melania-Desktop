@@ -58,6 +58,8 @@ struct BridgeState {
     output_manager:OutputManagerState,
     pixel_probe:bool,
     pixel_ready:bool,
+    pixel_frame_count:u8,
+    pixel_frame_target:u8,
     xdg_shell: XdgShellState,
     layer_shell: WlrLayerShellState,
     xdg_toplevel_count: u32,
@@ -81,7 +83,7 @@ impl CompositorHandler for BridgeState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
     }
     fn commit(&mut self,surface:&WlSurface) {
-        if self.pixel_probe && !self.pixel_ready && self.xdg_toplevel_count>0 {
+        if self.pixel_probe && self.pixel_frame_count<self.pixel_frame_target && self.xdg_toplevel_count>0 {
             let assignment=with_states(surface,|states|{
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
@@ -91,10 +93,12 @@ impl CompositorHandler for BridgeState {
                 });
                 match frame {
                     Ok(Ok(frame))=>{
-                        match native_client_frame::write_frame(&frame) {
+                        match native_client_frame::write_frame_index(&frame,self.pixel_frame_count) {
                             Ok(())=>{
-                                self.pixel_ready=true;
+                                self.pixel_frame_count+=1;
+                                self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
                                 println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
+                                println!("MELANIA_NATIVE_CLIENT_FRAME_INDEX={}",self.pixel_frame_count);
                                 println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
                                 let _=std::io::stdout().flush();
                             },
@@ -285,6 +289,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         output,
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
+        pixel_frame_count:0,
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
+            .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
         xdg_toplevel_count:0,layer_surface_count:0,
@@ -339,6 +346,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             let since=pixel_ready_since.get_or_insert_with(Instant::now);
             if since.elapsed()>=Duration::from_secs(3) {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
+                println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
                 println!("MELANIA_NATIVE_LIVE_KMS_RENDERING=false");
                 println!("MELANIA_NATIVE_SESSION_READY=false");
                 return Ok(());

@@ -67,9 +67,18 @@ pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)
     Ok(frame)
 }
 
-pub fn write_frame(frame:&[u8])->Result<(),Box<dyn std::error::Error>> {
+pub const FRAME2_PATH:&str="/run/melania-native-qemu/client-frame-2.bgra";
+
+pub fn write_frame_index(frame:&[u8],index:u8)
+    ->Result<(),Box<dyn std::error::Error>>
+{
     if frame.len()!=OUT_W*OUT_H*4 {return Err("invalid composed frame size".into());}
-    let file=Path::new(FRAME_PATH);
+    let name=match index {
+        0=>FRAME_PATH,
+        1=>FRAME2_PATH,
+        _=>return Err("QEMU frame sequence exceeds two buffers".into()),
+    };
+    let file=Path::new(name);
     let temp=file.with_extension("bgra.part");
     {
         let mut out=fs::OpenOptions::new().create_new(true).write(true).open(&temp)?;
@@ -78,6 +87,10 @@ pub fn write_frame(frame:&[u8])->Result<(),Box<dyn std::error::Error>> {
     }
     fs::rename(temp,file)?;
     Ok(())
+}
+
+pub fn write_frame(frame:&[u8])->Result<(),Box<dyn std::error::Error>> {
+    write_frame_index(frame,0)
 }
 
 #[cfg(test)]

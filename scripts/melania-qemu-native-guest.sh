@@ -196,11 +196,14 @@ report 'MELANIA_QEMU_NATIVE_SHELL_PROBE_PASS=true'
 # This is not a live Rust KMS compositor or a GTK application session.
 pixel_client=/mnt/melania-native/melania-pixel-client
 pixel_scanout=/mnt/melania-native/melania-pixel-scanout
+rust_kms=/mnt/melania-native/melania-rust-kms
+[[ -x "$rust_kms" ]] || fatal 'QEMU_Rust_two_frame_KMS_binary_missing'
 [[ -x "$pixel_client" && -x "$pixel_scanout" ]] ||
   fatal 'QEMU_real_client_window_probes_missing'
 pixel_log="$(mktemp -t melania-pixel-bridge-XXXXXX)"
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_UPDATES=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 32s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$pixel_log" 2>&1 &
 pixel_pid=$!
@@ -217,7 +220,7 @@ if [[ -z "$pixel_socket" ]]; then
   wait "$pixel_pid" 2>/dev/null || true
   fatal 'QEMU_real_client_socket_unavailable'
 fi
-if ! WAYLAND_DISPLAY="$pixel_socket" \
+if ! MELANIA_NATIVE_TWO_FRAMES=YES_QEMU_VM WAYLAND_DISPLAY="$pixel_socket" \
   timeout --signal=TERM --kill-after=3s 19s "$pixel_client"; then
   cat "$pixel_log"
   kill "$pixel_pid" 2>/dev/null || true
@@ -238,8 +241,20 @@ grep -q '^MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true' "$pixel_log" ||
   fatal 'Rust_client_frame_composition_missing'
 [[ -f /run/melania-native-qemu/client-frame.bgra ]] ||
   fatal 'Rust_composed_frame_missing'
+[[ -f /run/melania-native-qemu/client-frame-2.bgra ]] ||
+  fatal 'Rust_second_client_frame_missing'
+grep -q '^MELANIA_NATIVE_CLIENT_FRAME_COUNT=2' "$pixel_log" ||
+  fatal 'Rust_did_not_compose_two_distinct_client_commits'
 rm -f "$pixel_log"
 report 'MELANIA_QEMU_NATIVE_RUST_CLIENT_FRAME_COMPOSED=true'
+
+# Stage28: Rust drm-rs directly scans out the TWO real client-owned buffers,
+# including one page_flip, and verifies original CRTC restore. This runs
+# independently from the earlier C/libdrm Stage26 regression probe.
+MELANIA_QEMU_RUST_TWO_FRAME_KMS=YES_DISPOSABLE_QEMU \
+  timeout --signal=TERM --kill-after=3s 27s "$rust_kms" < /dev/tty1 ||
+  fatal 'QEMU_Rust_drm_two_frame_page_flip_or_restore_failed'
+report 'MELANIA_QEMU_NATIVE_RUST_DIRECT_KMS_PASS=true'
 
 MELANIA_QEMU_CLIENT_WINDOW_FRAME=YES_DISPOSABLE_QEMU \
   timeout --signal=TERM --kill-after=3s 22s "$pixel_scanout" < /dev/tty1 ||
