@@ -173,6 +173,7 @@ mod tests {
         assert!(!scheduler.complete_present(stale));
         assert_eq!(scheduler.begin_frame(), None);
         scheduler.damage();
-        assert!(scheduler.complete_present(scheduler.begin_frame().unwrap()));
+        let final_ticket = scheduler.begin_frame().unwrap();
+        assert!(scheduler.complete_present(final_ticket));
     }
 }
