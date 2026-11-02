@@ -437,7 +437,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_keys+=1;
         }
         InputEvent::PointerMotion {event} => {
-            if state.focused.is_none() ||
+            if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
@@ -457,7 +457,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_motions+=1;
         }
         InputEvent::PointerMotionAbsolute {event} => {
-            if state.focused.is_none() ||
+            if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
@@ -476,7 +476,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_motions+=1;
         }
         InputEvent::PointerButton {event} => {
-            if state.focused.is_none() ||
+            if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
