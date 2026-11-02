@@ -359,6 +359,7 @@ MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
 MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
 MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
 MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 39s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
@@ -404,6 +405,14 @@ wait "$multi_server_pid" || fatal 'two_window_Smithay_failed'
 cat "$multi_server_log"
 grep -q '^MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true' "$multi_server_log" ||
   fatal 'two_windows_not_retained_in_scene'
+grep -q '^MELANIA_NATIVE_ASYNC_KMS_WORKER_STARTED=true' "$multi_server_log" ||
+  fatal 'async_KMS_worker_not_started'
+for index in 1 2 3; do
+  grep -q "^MELANIA_NATIVE_ASYNC_FRAME_SUBMITTED=$index$" "$multi_server_log" ||
+    fatal "async_frame_$index_not_submitted"
+  grep -q "^MELANIA_NATIVE_ASYNC_FRAME_COMPLETED=$index$" "$multi_server_log" ||
+    fatal "async_frame_$index_not_completed"
+done
 grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$multi_server_log" ||
   fatal 'two_window_frame_callbacks_missing'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
@@ -414,6 +423,7 @@ for index in 1 2 3; do
 done
 rm -f "$multi_server_log" "$multi_kms_log"
 report 'MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true'
+report 'MELANIA_QEMU_NONBLOCKING_KMS_WORKER_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'
