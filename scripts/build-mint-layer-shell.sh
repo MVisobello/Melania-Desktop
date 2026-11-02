@@ -39,7 +39,7 @@ meson setup "$temp/build" "$temp/source" \
   -Dsmoke-tests=false -Dintrospection=false -Dvapi=false
 ninja -C "$temp/build"
 meson install -C "$temp/build" --no-rebuild
-test -s "$PREFIX/lib/libgtk4-layer-shell.so.0.0.0"
+test -s "$PREFIX/lib/libgtk4-layer-shell.so.1.0.4"
 test -s "$PREFIX/lib/pkgconfig/gtk4-layer-shell-0.pc"
 echo "MELANIA_MINT_LAYER_SHELL_READY=$PREFIX"
 echo "UPSTREAM_GTK4_LAYER_SHELL_SHA=$UPSTREAM_COMMIT"
