@@ -1,0 +1,156 @@
+name: Melania Linux Mint 22 compatibility preview
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mint22-preview.yml
+      - scripts/build-mint-layer-shell.sh
+      - scripts/package-nested-preview.py
+      - scripts/run-melania-bundle.sh
+      - scripts/smoke-portable-bundle.sh
+      - docs/MINT22-RUNTIME.md
+      - tests/test_preview_bundle.py
+      - melania-compositor/**
+      - melania-desktop-surface/**
+      - melania-panel/**
+      - melania-files/**
+      - melania-settings/**
+      - melania-control/**
+      - melania-notifyd/**
+      - melania-notifyctl/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mint22-preview.yml
+      - scripts/build-mint-layer-shell.sh
+      - scripts/package-nested-preview.py
+      - scripts/run-melania-bundle.sh
+      - scripts/smoke-portable-bundle.sh
+      - docs/MINT22-RUNTIME.md
+      - tests/test_preview_bundle.py
+      - melania-compositor/**
+      - melania-desktop-surface/**
+      - melania-panel/**
+      - melania-files/**
+      - melania-settings/**
+      - melania-control/**
+      - melania-notifyd/**
+      - melania-notifyctl/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mint22-preview:
+    name: Ubuntu 24.04 ABI + private GTK4 layer shell + real nested GUI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Ubuntu 24.04 build tools (no system GTK4 layer-shell)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential binutils pkg-config git meson ninja-build \
+            libgtk-4-dev libwayland-dev wayland-protocols libxkbcommon-dev \
+            libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev \
+            libdbus-1-dev libinput-dev libseat-dev libdrm-dev libgbm-dev \
+            mesa-utils libgl1-mesa-dri xvfb xauth scrot \
+            python3-pil dbus-user-session dbus-x11
+          pkg-config --atleast-version=4.8 gtk4
+          getconf GNU_LIBC_VERSION
+          test "$(dpkg --print-architecture)" = amd64
+      - name: Compile pinned GTK4 layer-shell without sudo into private directory
+        run: |
+          set -euo pipefail
+          bash scripts/build-mint-layer-shell.sh "$GITHUB_WORKSPACE/target/mint-runtime"
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/target/mint-runtime/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/target/mint-runtime/lib" >> "$GITHUB_ENV"
+      - name: Check local GTK4 layer-shell link and packaging unit tests
+        run: |
+          set -euo pipefail
+          pkg-config --modversion gtk4 gtk4-layer-shell-0
+          python3 -m unittest discover -s tests -p test_preview_bundle.py -v
+          bash -n scripts/run-melania-bundle.sh
+          bash -n scripts/smoke-portable-bundle.sh
+      - name: Compile the real Melania Linux binaries against Ubuntu 24.04
+        run: |
+          set -euo pipefail
+          cargo build -p melania-compositor -p melania-desktop-surface \
+            -p melania-panel -p melania-files -p melania-settings \
+            -p melania-control -p melania-notifyd -p melania-notifyctl
+      - name: Enforce GLIBC 2.39 maximum and bundle only private layer-shell
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          import subprocess
+          from pathlib import Path
+          binaries = (
+              "melania-compositor", "melania-desktop-surface", "melania-panel",
+              "melania-files", "melania-settings", "melania-winctl",
+              "melania-notifyd", "melania-notifyctl",
+          )
+          paths = [Path("target/debug") / n for n in binaries]
+          paths += [Path("target/mint-runtime/lib/libgtk4-layer-shell.so.0.0.0")]
+          for p in paths:
+              result = subprocess.run(["readelf", "-W", "--version-info", str(p)],
+                                      check=True, capture_output=True, text=True)
+              versions = [(int(a), int(b)) for a, b in
+                          re.findall(r"GLIBC_(\d+)\.(\d+)", result.stdout)]
+              assert all(v <= (2, 39) for v in versions), (p, max(versions))
+          print("PASS: all shipped ELF objects use GLIBC <= 2.39")
+          PY
+          python3 scripts/package-nested-preview.py \
+            --bin-dir target/debug \
+            --output-dir target/melania-mint22-release \
+            --commit "$GITHUB_SHA" \
+            --gtk-layer-shell-lib target/mint-runtime/lib/libgtk4-layer-shell.so.0.0.0
+          cd target/melania-mint22-release
+          sha256sum -c SHA256SUMS
+          tar -tzf melania-nested-preview.tar.gz > archive-members.txt
+          grep -Fxq 'melania-nested-preview/lib/libgtk4-layer-shell.so.0' archive-members.txt
+          grep -Fxq 'melania-nested-preview/manifest.json' archive-members.txt
+      - name: Launch extracted Mint-compatible bundle on isolated Xvfb
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          set -euo pipefail
+          mkdir -p target/melania-preview-release reports
+          cp -a target/melania-mint22-release/melania-nested-preview \
+            target/melania-preview-release/
+          xvfb-run -a -s '-screen 0 1280x800x24' \
+            bash scripts/smoke-portable-bundle.sh 2>&1 | tee reports/mint22-bundle-smoke.log
+          grep -q 'PASS: extracted portable bundle launched real nested GTK desktop and exited cleanly' \
+            reports/mint22-bundle-smoke.log
+          test -s reports/bundle-nested-desktop.png
+      - name: Publish Mint-compatible archive and SHA256 checksum
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: melania-nested-preview-mint22-linux-x86_64
+          path: |
+            target/melania-mint22-release/melania-nested-preview.tar.gz
+            target/melania-mint22-release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish Mint compatibility test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: melania-mint22-compatibility-evidence
+          path: |
+            reports/mint22-bundle-smoke.log
+            reports/bundle-nested-desktop.png
+            reports/bundle-nested-desktop.log
+          if-no-files-found: warn
+          retention-days: 14
