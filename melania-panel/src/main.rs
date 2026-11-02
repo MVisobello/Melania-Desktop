@@ -69,15 +69,42 @@ fn present_start_surface(w:&ApplicationWindow) {
         }
     }
 }
+// Smithay retains a layer-role validator across GTK surface unmaps. Hiding
+// any auxiliary layer with set_visible(false) after it has been presented can
+// disconnect the *entire panel client*, including the taskbar. Keep the role
+// mapped, move the popup entirely beyond the output, and suppress its focus.
+const POPUP_HIDE_RIGHT_MARGIN: i32 = -4000;
+const POPUP_RIGHT_MARGIN: i32 = 12;
+fn popup_is_open(w:&ApplicationWindow) -> bool {
+    w.is_visible() && !w.has_css_class("melania-popup-concealed")
+}
+fn hide_popup_surface(w:&ApplicationWindow) {
+    if !popup_is_open(w) { return; }
+    w.add_css_class("melania-popup-concealed");
+    w.set_keyboard_mode(KeyboardMode::None);
+    w.set_margin(Edge::Right, POPUP_HIDE_RIGHT_MARGIN);
+    w.set_opacity(0.0);
+}
+fn present_popup_surface(w:&ApplicationWindow) {
+    w.remove_css_class("melania-popup-concealed");
+    w.set_margin(Edge::Right, POPUP_RIGHT_MARGIN);
+    w.set_opacity(1.0);
+    w.set_keyboard_mode(KeyboardMode::OnDemand);
+    if !w.is_visible() { w.present(); }
+}
 fn toggle_surface(w:&ApplicationWindow,other:&ApplicationWindow) {
     if other.has_css_class("melania-start-surface") {
         hide_start_surface(other);
-    } else { other.set_visible(false); }
+    } else { hide_popup_surface(other); }
     if w.has_css_class("melania-start-surface") {
         if w.is_visible() && !w.has_css_class("melania-start-concealed") {
             hide_start_surface(w);
         } else {present_start_surface(w);}
-    } else if w.is_visible() { w.set_visible(false); } else { w.present(); }
+    } else if popup_is_open(w) {
+        hide_popup_surface(w);
+    } else {
+        present_popup_surface(w);
+    }
 }
 /// XDG user dirs are normally stored in user-dirs.dirs, not exported as
 /// XDG_DOCUMENTS_DIR environment variables. Ask the desktop service first,
@@ -668,7 +695,7 @@ fn quick_window(app:&Application, notifications:&ApplicationWindow)->Application
     current.add_css_class("melania-tab-selected");
     current.set_sensitive(false);
     let other=notifications.clone();let myself=w.clone();
-    notifications_button.connect_clicked(move |_| {myself.set_visible(false);other.present();});
+    notifications_button.connect_clicked(move |_| {hide_popup_surface(&myself);present_popup_surface(&other);});
     tabs.append(&notifications_button);tabs.append(&current);root.append(&tabs);
     root.append(&label("Rete e dispositivi", "melania-sub"));
     let row=GtkBox::new(Orientation::Horizontal,8);
@@ -1338,7 +1365,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let logo=Image::from_icon_name("melania");logo.set_pixel_size(30);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
     menu.set_size_request(43,43); // only Start is circular; other task buttons stay rectangular.
     let sm=start.clone();let qs=quick.clone();let nt=notifications.clone();
-    menu.connect_clicked(move |_|{nt.set_visible(false);toggle_surface(&sm,&qs);});
+    menu.connect_clicked(move |_|{hide_popup_surface(&nt);toggle_surface(&sm,&qs);});
     let start_button=menu.clone();
     start.connect_notify_local(Some("visible"),move |surface,_| {
         if surface.is_visible(){start_button.add_css_class("melania-start-open");}
@@ -1411,7 +1438,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     }
     status.set_child(Some(&status_row));
     let qs=quick.clone();let sm=start.clone();let nt=notifications.clone();
-    status.connect_clicked(move |_|{nt.set_visible(false);toggle_surface(&qs,&sm);});trailing.append(&status);
+    status.connect_clicked(move |_|{hide_popup_surface(&nt);toggle_surface(&qs,&sm);});trailing.append(&status);
     let notification_button=Button::new();
     notification_button.set_tooltip_text(Some("Centro notifiche"));
     notification_button.add_css_class("melania-tray-button");
@@ -1444,8 +1471,8 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notification_button.add_css_class("melania-system");
     let notify=notifications.clone();let sm=start.clone();let qs=quick.clone();
     notification_button.connect_clicked(move |_|{
-        hide_start_surface(&sm);qs.set_visible(false);
-        if notify.is_visible(){notify.set_visible(false);}else{notify.present();}
+        hide_start_surface(&sm);hide_popup_surface(&qs);
+        if popup_is_open(&notify){hide_popup_surface(&notify);}else{present_popup_surface(&notify);}
     });
     trailing.append(&notification_button);
     // Replace the accidental double-blue notification stripe with one
@@ -1495,8 +1522,8 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     glib::timeout_add_seconds_local(20,move ||{update();glib::ControlFlow::Continue});
     let cal=calendar.clone();let qs=quick.clone();let sm=start.clone();let nt=notifications.clone();
     clock.connect_clicked(move |_|{
-        qs.set_visible(false);hide_start_surface(&sm);nt.set_visible(false);
-        if cal.is_visible(){cal.set_visible(false);}else{cal.present();}
+        hide_popup_surface(&qs);hide_start_surface(&sm);hide_popup_surface(&nt);
+        if popup_is_open(&cal){hide_popup_surface(&cal);}else{present_popup_surface(&cal);}
     });
     trailing.append(&clock);
     w.set_child(Some(&bar));w
@@ -1550,7 +1577,7 @@ fn install_start_hotkey_listener(
         for _ in 0..8 {
             match socket.recv(&mut packet) {
                 Ok(n) if &packet[..n]==b"TOGGLE_START"=>{
-                    notifications.set_visible(false);
+                    hide_popup_surface(&notifications);
                     toggle_surface(&open,&quick);
                     if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
                         eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible() && !open.has_css_class("melania-start-concealed"));
