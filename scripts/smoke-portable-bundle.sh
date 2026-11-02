@@ -5,7 +5,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BUNDLE="$ROOT/target/melania-preview-release/melania-nested-preview"
+# GitHub runners cache target/, so smoke the fresh archive generated in RUNNER_TEMP.
+BUNDLE="${MELANIA_BUNDLE_TEST_ROOT:-$ROOT/target/melania-preview-release/melania-nested-preview}"
 [[ -n "${DISPLAY:-}" ]] || { echo 'BLOCKED: bundle smoke requires isolated Xvfb DISPLAY' >&2; exit 3; }
 [[ -x "$BUNDLE/run.sh" ]] || { echo 'BLOCKED: no packaged launcher' >&2; exit 3; }
 command -v scrot >/dev/null || { echo 'BLOCKED: scrot required for actual pixel capture' >&2;exit 3; }
