@@ -33,6 +33,33 @@ preflight() {
     echo 'BLOCKED: missing bundled wallpaper' >&2
     return 78
   }
+  # Executable bits are not enough: e.g. Mint 22 and Ubuntu 24.04 may lack
+  # libgtk4-layer-shell.so.0. Without this check the compositor continues
+  # running while the panel and desktop surface fail immediately.
+  command -v ldd >/dev/null || {
+    echo 'BLOCKED: ldd is required to verify Linux runtime libraries' >&2
+    return 78
+  }
+  local linked missing=0
+  for binary in melania-compositor melania-desktop-surface melania-panel \
+                melania-files melania-settings melania-winctl \
+                melania-notifyd melania-notifyctl; do
+    if ! linked="$(ldd "$BIN/$binary" 2>&1)"; then
+      printf 'BLOCKED: runtime linker failed for %s:\n%s\n' "$binary" "$linked" >&2
+      return 78
+    fi
+    if grep -Eq 'not found' <<<"$linked"; then
+      printf 'BLOCKED: unresolved shared libraries for %s:\n' "$binary" >&2
+      grep -E 'not found' <<<"$linked" >&2
+      missing=1
+    fi
+  done
+  if (( missing )); then
+    echo 'HINT: install compatible Linux runtime packages before starting Melania.' >&2
+    echo 'HINT: missing libgtk4-layer-shell.so.0 requires libgtk4-layer-shell0 (when packaged).' >&2
+    echo 'HINT: on older Ubuntu/Mint, see README.md for a local build and LD_LIBRARY_PATH.' >&2
+    return 78
+  fi
   echo 'MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true'
   echo 'MELANIA_NATIVE_LOGIN_SESSION_READY=false'
 }
