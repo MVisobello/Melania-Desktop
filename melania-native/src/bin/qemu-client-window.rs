@@ -293,7 +293,7 @@ fn main()->Result<(),Box<dyn Error>> {
                         px.copy_from_slice(&color);
                     }
                     let mut file=OpenOptions::new().create_new(true)
-                        .read(true).write(true()
+                        .read(true).write(true)
                         .open("/run/melania-native-qemu/resized-client-shm.bin")?;
                     file.write_all(&pixels)?;
                     file.sync_all()?;
