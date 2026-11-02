@@ -52,7 +52,7 @@ class RustKmsTwoFrames(unittest.TestCase):
     def test_separate_client_commits_and_smithay_buffer_releases(self):
         for needle in (
             "MELANIA_NATIVE_TWO_FRAMES",
-            "for frame_index in 0..if two_frames {2} else {1}",
+            "for frame_index in 0..count",
             "surface.attach(Some(&buffer)",
             "surface.commit()",
             "MELANIA_NATIVE_CLIENT_FRAME_COMMITTED={}",

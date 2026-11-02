@@ -115,9 +115,12 @@ fn main()->Result<(),Box<dyn Error>> {
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("server failed to configure xdg_toplevel".into());}
+    let three_frames=std::env::var("MELANIA_NATIVE_THREE_FRAMES")
+        .as_deref()==Ok("YES_QEMU_VM");
     let two_frames=std::env::var("MELANIA_NATIVE_TWO_FRAMES")
         .as_deref()==Ok("YES_QEMU_VM");
-    for frame_index in 0..if two_frames {2} else {1} {
+    let count=if three_frames {3} else if two_frames {2} else {1};
+    for frame_index in 0..count {
         // Both frames originate from a real client's wl_shm pool. The
         // compositor never invents these colors or fills these pixels.
         let mut pixels=vec![0u8;W*H*4];
@@ -128,11 +131,21 @@ fn main()->Result<(),Box<dyn Error>> {
                 (0,false)=>(16u8,205u8,155u8),   // teal
                 (1,true)=>(73u8,126u8,237u8),    // blue
                 (1,false)=>(247u8,211u8,48u8),  // yellow
+                (2,true)=>(222u8,64u8,118u8),   // rose
+                (2,false)=>(117u8,238u8,90u8), // lime
                 _=>unreachable!(),
             };
             p.copy_from_slice(&[b,g,r,0]);
         }
-        let path=if frame_index==0 {
+        // The Stage28 test uses the default filenames earlier in this same
+        // guest boot; the concurrent Stage29 run must not reuse them.
+        let path=if three_frames {
+            match frame_index {
+                0=>"/run/melania-native-qemu/client-live-1.bin",
+                1=>"/run/melania-native-qemu/client-live-2.bin",
+                _=>"/run/melania-native-qemu/client-live-3.bin",
+            }
+        } else if frame_index==0 {
             "/run/melania-native-qemu/client-window-shm.bin"
         } else {
             "/run/melania-native-qemu/client-window-shm-2.bin"

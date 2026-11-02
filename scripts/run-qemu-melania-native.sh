@@ -23,6 +23,10 @@ shell_probe="$root/target/debug/qemu-shell-client"
 [[ -x "$shell_probe" ]] || deny 'build Rust xdg/layer-shell QEMU client first'
 pixel_client="$root/target/debug/qemu-client-window"
 [[ -x "$pixel_client" ]] || deny 'build Rust Wayland wl_shm window client first'
+stream_kms="$root/target/debug/qemu-rust-kms-stream"
+[[ -x "$stream_kms" ]] || deny 'build live Rust KMS consumer first'
+[[ -f "$root/scripts/capture-qemu-live-kms-stream.py" ]] ||
+  deny 'QMP live stream screenshot verifier missing'
 rust_kms="$root/target/debug/qemu-rust-kms-frames"
 [[ -x "$rust_kms" ]] || deny 'build Rust DRM KMS page-flip executable first'
 [[ -f "$root/scripts/capture-qemu-rust-kms-frames.py" ]] ||
@@ -56,7 +60,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -110,6 +114,13 @@ python3 "$root/scripts/capture-qemu-rust-kms-frames.py" \
   --second "$report/rust-client-frame2.ppm" --timeout 950 \
   > "$report/qmp-rust-frames.log" 2>&1 &
 rust_capture_pid=$!
+python3 "$root/scripts/capture-qemu-live-kms-stream.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --first "$report/live-client-frame1.ppm" \
+  --second "$report/live-client-frame2.ppm" \
+  --third "$report/live-client-frame3.ppm" --timeout 950 \
+  > "$report/qmp-live-stream.log" 2>&1 &
+live_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -136,9 +147,27 @@ wait "$client_capture_pid"
 client_capture_code=$?
 wait "$rust_capture_pid"
 rust_capture_code=$?
+wait "$live_capture_pid"
+live_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_LIVE_KMS_THREE_CAPTURE_PASS=true' "$report/qmp-live-stream.log" ||
+   ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME1_PIXELS=true' "$report/qmp-live-stream.log" ||
+   ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME2_PIXELS=true' "$report/qmp-live-stream.log" ||
+   ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME3_PIXELS=true' "$report/qmp-live-stream.log" ||
+   ! test -s "$report/live-client-frame1.ppm" ||
+   ! test -s "$report/live-client-frame2.ppm" ||
+   ! test -s "$report/live-client-frame3.ppm" ||
+   ! grep -q '^MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_FRAME_STREAM_CONNECTED=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_CLIENT_FRAME_COUNT=3' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true' "$serial" ||
+   ! grep -q '^MELANIA_RUST_STREAM_FRAME1_ACTIVE=true' "$serial" ||
+   ! grep -q '^MELANIA_RUST_STREAM_FRAME2_ACTIVE=true' "$serial" ||
+   ! grep -q '^MELANIA_RUST_STREAM_FRAME3_ACTIVE=true' "$serial" ||
+   ! grep -q '^MELANIA_RUST_STREAM_THREE_CLIENT_FRAMES_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_LIVE_WAYLAND_KMS_STREAM_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_RUST_KMS_TWO_CAPTURE_PASS=true' "$report/qmp-rust-frames.log" ||
    ! grep -q '^MELANIA_QEMU_RUST_KMS_FRAME1_PIXELS=true' "$report/qmp-rust-frames.log" ||
    ! grep -q '^MELANIA_QEMU_RUST_KMS_FRAME2_PIXELS=true' "$report/qmp-rust-frames.log" ||
@@ -212,6 +241,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-input.log" || true
   tail -n 30 "$report/qmp-client-window.log" || true
   tail -n 30 "$report/qmp-rust-frames.log" || true
+  tail -n 30 "$report/qmp-live-stream.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -222,3 +252,4 @@ printf '%s\n' 'MELANIA_VM_XDG_LAYER_SHELL_HANDSHAKE=true' >> "$report/result.txt
 printf '%s\n' 'MELANIA_VM_CLIENT_PIXELS_RUST_COMPOSED_C_SCANOUT=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_WL_OUTPUT_MODE_VERIFIED=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_RUST_DIRECT_KMS_TWO_CLIENT_FRAMES=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_LIVE_WAYLAND_STREAM_THREE_FRAMES=true' >> "$report/result.txt"
