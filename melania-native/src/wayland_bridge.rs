@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene,async_kms_stream::{AsyncKmsWorker,FrameJob}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -73,6 +73,7 @@ struct BridgeState {
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
+    window_interaction:WindowInteraction,
     known_window_surfaces:Vec<WlSurface>,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
@@ -130,6 +131,31 @@ impl BridgeState {
         let surface=self.known_window_surfaces.get((key-1) as usize)?.clone();
         let (x,y)=self.multi_scene.position(key)?;
         Some((surface,(f64::from(x),f64::from(y)).into()))
+    }
+
+    /// Changes to model geometry are bounded and require an active real
+    /// pointer grab. A compositor-only change is not proof of repaint; the
+    /// current KMS stream still presents only on subsequent client commits.
+    fn apply_window_motion(&mut self,point:Point<f64,Logical>) {
+        if !self.multi_window_mode {return;}
+        let Some((key,rect))=self.window_interaction.motion(point.x,point.y) else {
+            return;
+        };
+        match self.window_interaction.active_kind() {
+            Some(InteractionKind::Move)=>{
+                if self.multi_scene.move_to(key,rect.x,rect.y).is_ok() {
+                    println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
+                             key,rect.x,rect.y);
+                }
+            },
+            Some(InteractionKind::ResizeBottomRight)=>{
+                // A real xdg.configure + client ACK must precede actual
+                // resize/scanout. For now this is a non-destructive preview.
+                println!("MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW={} w={} h={}",
+                         key,rect.width,rect.height);
+            },
+            None=>{},
+        }
     }
 
     /// Poll the worker without blocking the Smithay/calloop dispatcher.
@@ -448,6 +474,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     .clamp(0.0,if state.multi_window_mode {799.0} else {479.0})
             ).into();
             state.pointer_position=point;
+            state.apply_window_motion(point);
             if state.multi_window_mode {
                 println!("MELANIA_NATIVE_WINDOW_POINTER_REL=({:.1},{:.1}) target={:?}",
                     point.x,point.y,state.multi_scene.hit_test(point.x,point.y));
@@ -472,6 +499,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 event.position_transformed((640,480).into())
             };
             state.pointer_position=point;
+            state.apply_window_motion(point);
             if state.multi_window_mode {
                 println!("MELANIA_NATIVE_WINDOW_POINTER_ABS=({:.1},{:.1}) target={:?}",
                     point.x,point.y,state.multi_scene.hit_test(point.x,point.y));
@@ -508,6 +536,29 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     if let Some((surface,_))=target {
                         if let Some(id)=state.multi_scene.hit_test(point.x,point.y) {
                             state.multi_scene.raise(id);
+                            if event.button_code()==0x110 {
+                                if let Some((x,y))=state.multi_scene.position(id) {
+                                    let right=f64::from(x+360);
+                                    let bottom=f64::from(y+224);
+                                    let kind=if point.x>=right-16.0 &&
+                                                point.y>=bottom-16.0 {
+                                        Some(InteractionKind::ResizeBottomRight)
+                                    } else if point.y>=f64::from(y) &&
+                                              point.y<f64::from(y+26) {
+                                        Some(InteractionKind::Move)
+                                    } else {None};
+                                    if let Some(kind)=kind {
+                                        let original=WindowRect {
+                                            x,y,width:360,height:224
+                                        };
+                                        if state.window_interaction.begin(
+                                            id,original,point.x,point.y,kind
+                                        ) {
+                                            println!("MELANIA_NATIVE_WINDOW_INTERACTION_BEGIN={id} kind={kind:?}");
+                                        }
+                                    }
+                                }
+                            }
                             let keyboard=state.seat.get_keyboard().expect("keyboard");
                             keyboard.set_focus(state,Some(surface.clone()),
                                 SERIAL_COUNTER.next_serial());
@@ -522,6 +573,12 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 serial:SERIAL_COUNTER.next_serial(),time:event.time_msec(),
             });
             pointer.frame(state);
+            if state.multi_window_mode && event.button_code()==0x110 &&
+               event.state()==ButtonState::Released {
+                if let Some(id)=state.window_interaction.end() {
+                    println!("MELANIA_NATIVE_WINDOW_INTERACTION_END={id}");
+                }
+            }
             state.delivered_buttons+=1;
         }
         _=>{}
@@ -577,6 +634,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         async_stream:None,async_pending:None,
         multi_scene:MultiWindowScene::default(),
+        window_interaction:WindowInteraction::default(),
         known_window_surfaces:Vec::new(),
         stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
@@ -613,6 +671,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         let active=matches!(event,SessionEvent::ActivateSession);
         state.lifecycle.on_session(event);
         state.render_scheduler.set_seat_active(active);
+        if !active {state.window_interaction.cancel();}
     })?;
 
     let live_stream=std::env::var("MELANIA_NATIVE_LIVE_STREAM")
