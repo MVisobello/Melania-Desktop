@@ -1,0 +1,22 @@
+name: Nested session preflight
+on:
+  push:
+    paths:
+      - 'scripts/run-melania-v018-nested.sh'
+      - 'scripts/test-nested-session-preflight.py'
+      - '.github/workflows/nested-session-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/run-melania-v018-nested.sh'
+      - 'scripts/test-nested-session-preflight.py'
+      - '.github/workflows/nested-session-preflight.yml'
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: bash -n scripts/run-melania-v018-nested.sh
+      - name: Test rejection paths without a display
+        run: python3 -m unittest discover -s scripts -p 'test-nested-session-preflight.py' -v
