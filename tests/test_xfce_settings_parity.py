@@ -49,13 +49,22 @@ class XfceSettingsParity(unittest.TestCase):
         registered = set(re.findall(
             r'stack\.add_titled\([^;]*?Some\("([^"]+)"\)', all_sources, re.S
         ))
+        # Lazy pages still register the same real GTK Stack destinations;
+        # the functional widgets themselves are instantiated on navigation.
+        registered.update(re.findall(
+            r'lazy_pages::register\((?:&stack|stack),\s*"([^"]+)"', all_sources
+        ))
+        registered.update(re.findall(
+            r'^\s*\("(xfce-[^"]+)",\s*"[^"]+"\),', PAGES, re.M
+        ))
         self.assertEqual(set(navigation), registered)
         self.assertNotIn("Non ancora operativo", PAGES)
         self.assertNotIn('Some("xfce")', PAGES)
         for target in ("xfce-desktop", "xfce-panel", "xfce-session",
                        "xfce-preferred", "xfce-mime"):
             self.assertIn(target, navigation)
-            self.assertIn(f'Some("{target}")', PAGES)
+            self.assertIn(f'("{target}",', PAGES)
+        self.assertIn("pub fn build_page(key:&str)", PAGES)
 
         # Preserve old CLI URLs while steering duplicates to a real page.
         self.assertIn('page.strip_prefix("xfce-") == Some(spec.slug)', PAGES)
