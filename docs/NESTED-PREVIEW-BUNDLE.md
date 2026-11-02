@@ -7,16 +7,24 @@ X11/Wayland desktop, in a separate window. It never installs a
 
 ## Intended platform
 
-The CI artifact is built on **Ubuntu 26.04 x86_64** and depends on compatible
-Linux GTK4, gtk4-layer-shell, Wayland, Mesa, X11, libinput and D-Bus runtime
-libraries. It is not an AppImage or fully statically linked executable.
-Prefer a disposable Ubuntu 26.04 VM with a working graphical desktop.
-Other Linux distributions may require different libraries and are not certified.
+Two distinct CI artifacts are available:
+
+- **melania-nested-preview-linux-x86_64**: built on Ubuntu 26.04, for
+  compatible Ubuntu 26.04+ systems.
+- **melania-nested-preview-mint22-linux-x86_64**: built on Ubuntu 24.04,
+  specifically targeting the Linux Mint 22.x ABI. It ships a private
+  `libgtk4-layer-shell.so.0` under `lib/` and loads it only for the nested
+  Melania preview. See `docs/MINT22-RUNTIME.md` in the repository.
+
+Both still require compatible Linux GTK4, Wayland, Mesa, X11, libinput and
+D-Bus runtime libraries from the host. Neither is a fully static AppImage.
+Older Linux Mint 21.x systems are not supported by these builds.
 
 ## Download, verify and run (inside a Linux graphical session)
 
-Download the `melania-nested-preview` artifact from the GitHub Actions
-"Melania nested preview bundle" workflow. GitHub artifacts are ZIP wrappers
+Download the artifact matching your distribution from GitHub Actions:
+"Melania nested preview bundle" for Ubuntu 26.04 or "Melania Linux Mint 22
+compatibility preview" for Mint 22.x. GitHub artifacts are ZIP wrappers
 containing the files listed here.
 
 ```sh

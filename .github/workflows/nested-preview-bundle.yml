@@ -79,9 +79,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/package-nested-preview.py \
-            --bin-dir target/debug --output-dir target/melania-preview-release \
+            --bin-dir target/debug --output-dir "$RUNNER_TEMP/melania-preview-release" \
             --commit "$GITHUB_SHA"
-          cd target/melania-preview-release
+          cd "$RUNNER_TEMP/melania-preview-release"
           sha256sum -c SHA256SUMS
           tar -tzf melania-nested-preview.tar.gz > bundle-members.txt
           grep -Fxq 'melania-nested-preview/manifest.json' bundle-members.txt
@@ -90,6 +90,7 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
+          MELANIA_BUNDLE_TEST_ROOT: ${{ runner.temp }}/melania-preview-release/melania-nested-preview
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -104,8 +105,8 @@ jobs:
         with:
           name: melania-nested-preview-linux-x86_64
           path: |
-            target/melania-preview-release/melania-nested-preview.tar.gz
-            target/melania-preview-release/SHA256SUMS
+            ${{ runner.temp }}/melania-preview-release/melania-nested-preview.tar.gz
+            ${{ runner.temp }}/melania-preview-release/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
       - name: Upload portable bundle smoke evidence

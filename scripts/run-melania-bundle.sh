@@ -33,6 +33,34 @@ preflight() {
     echo 'BLOCKED: missing bundled wallpaper' >&2
     return 78
   }
+  # Mint 22.x builds may contain one privately compiled GTK4 layer-shell
+  # bridge. Never overwrite or install GTK/glibc/Mesa into the host OS.
+  if [[ -d "$ROOT/lib" ]]; then
+    [[ -f "$ROOT/lib/libgtk4-layer-shell.so.0" &&
+       ! -L "$ROOT/lib/libgtk4-layer-shell.so.0" ]] || {
+      echo 'BLOCKED: bundled GTK4 layer-shell runtime missing or unsafe' >&2
+      return 78
+    }
+    export LD_LIBRARY_PATH="$ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+  if command -v ldd >/dev/null 2>&1; then
+    local diagnostic
+    for binary in melania-compositor melania-desktop-surface melania-panel \
+                  melania-files melania-settings melania-winctl \
+                  melania-notifyd melania-notifyctl; do
+      diagnostic="$(ldd "$BIN/$binary" 2>&1)" || {
+        echo "BLOCKED: incompatible binary or dynamic loader: $binary" >&2
+        echo "$diagnostic" >&2
+        return 78
+      }
+      if grep -Eq 'not found|version .* not found' <<<"$diagnostic"; then
+        echo "BLOCKED: missing/incompatible Linux runtime for $binary" >&2
+        grep -E 'not found|version .* not found' <<<"$diagnostic" >&2
+        echo 'On Linux Mint install the missing system runtime packages; never replace glibc.' >&2
+        return 78
+      fi
+    done
+  fi
   echo 'MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true'
   echo 'MELANIA_NATIVE_LOGIN_SESSION_READY=false'
 }

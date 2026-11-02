@@ -49,7 +49,8 @@ def input_file(path: Path, *, executable: bool = False) -> Path:
     return path
 
 
-def stage(bin_dir: Path, output_dir: Path, commit: str) -> dict:
+def stage(bin_dir: Path, output_dir: Path, commit: str, *,
+          gtk_layer_shell_lib: Path | None = None) -> dict:
     if not re.fullmatch(r"[0-9a-fA-F]{40}|unknown", commit):
         raise ValueError("commit must be a complete 40-digit Git SHA or unknown")
     if output_dir.is_symlink() or output_dir.exists():
@@ -57,6 +58,15 @@ def stage(bin_dir: Path, output_dir: Path, commit: str) -> dict:
 
     # Validate all inputs before creating the output tree.
     sources = {name: input_file(bin_dir / name, executable=True) for name in BINARIES}
+    # A Mint-compatible build may ship ONLY the GTK4 layer-shell bridge built
+    # against Ubuntu 24.04. Never copy glibc, GTK4, Mesa or host GPU drivers.
+    vendored = None
+    if gtk_layer_shell_lib is not None:
+        vendored = input_file(gtk_layer_shell_lib)
+        with vendored.open("rb") as library_stream:
+            magic = library_stream.read(4)
+        if magic != b"\x7fELF":
+            raise ValueError("Bundled GTK4 layer-shell is not an ELF shared library")
     inputs = {
         "run.sh": input_file(ROOT / "scripts/run-melania-bundle.sh"),
         "share/wallpaper.png": input_file(ROOT / "melania-desktop-surface/assets/wallpaper.png"),
@@ -67,6 +77,11 @@ def stage(bin_dir: Path, output_dir: Path, commit: str) -> dict:
     target = output_dir / BUNDLE_NAME
     (target / "bin").mkdir(parents=True)
     (target / "share").mkdir()
+    if vendored is not None:
+        (target / "lib").mkdir()
+        destination = target / "lib/libgtk4-layer-shell.so.0"
+        shutil.copyfile(vendored, destination)
+        destination.chmod(0o644)
     for name, source in sources.items():
         dest = target / "bin" / name
         shutil.copyfile(source, dest)
@@ -84,6 +99,8 @@ def stage(bin_dir: Path, output_dir: Path, commit: str) -> dict:
         "native_session_installable": False,
         "requires_existing_graphical_session": True,
         "requires_compatible_linux_runtime_libraries": True,
+        "vendored_gtk4_layer_shell": vendored is not None,
+        "vendored_libraries": ["lib/libgtk4-layer-shell.so.0"] if vendored is not None else [],
         "files_sha256": {
             p.relative_to(target).as_posix(): sha256(p) for p in files
         },
@@ -120,8 +137,11 @@ def main() -> None:
     parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/debug")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "target/melania-preview-release")
     parser.add_argument("--commit", default="unknown")
+    parser.add_argument("--gtk-layer-shell-lib", type=Path,
+                        help="Optional private GTK4 layer-shell ELF, built on the target ABI baseline")
     args = parser.parse_args()
-    stage(args.bin_dir, args.output_dir, args.commit)
+    stage(args.bin_dir, args.output_dir, args.commit,
+          gtk_layer_shell_lib=args.gtk_layer_shell_lib)
 
 
 if __name__ == "__main__":

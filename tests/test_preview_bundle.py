@@ -108,6 +108,56 @@ class PortablePreviewBundle(unittest.TestCase):
                 packager.stage(bin_dir, root / "output", "abc")
             self.assertFalse((root / "output").exists())
 
+    def test_vendored_mint_runtime_is_packaged_without_glibc_or_drivers(self):
+        with tempfile.TemporaryDirectory(prefix="melania-mint-runtime-") as tmp:
+            root = Path(tmp)
+            binaries = self.make_binaries(root)
+            library = root / "libgtk4-layer-shell.so.0.0.0"
+            library.write_bytes(b"\x7fELF" + b"private-gtk4-layer-shell-fixture")
+            output = root / "output"
+            manifest = packager.stage(binaries, output, "b" * 40,
+                                      gtk_layer_shell_lib=library)
+            self.assertTrue(manifest["vendored_gtk4_layer_shell"])
+            self.assertEqual(manifest["vendored_libraries"],
+                             ["lib/libgtk4-layer-shell.so.0"])
+            self.assertNotIn("libc.so.6", manifest["files_sha256"])
+            bundled = output / packager.BUNDLE_NAME / "lib/libgtk4-layer-shell.so.0"
+            self.assertEqual(bundled.read_bytes(), library.read_bytes())
+            self.assertEqual(manifest["files_sha256"]["lib/libgtk4-layer-shell.so.0"],
+                             packager.sha256(bundled))
+            with tarfile.open(output / (packager.BUNDLE_NAME + ".tar.gz"),
+                              "r:gz") as archive:
+                paths = set(archive.getnames())
+                self.assertIn(packager.BUNDLE_NAME + "/lib/libgtk4-layer-shell.so.0",
+                              paths)
+
+    def test_invalid_vendored_runtime_fails_without_output(self):
+        with tempfile.TemporaryDirectory(prefix="melania-mint-bad-lib-") as tmp:
+            root = Path(tmp)
+            binaries = self.make_binaries(root)
+            library = root / "not-an-elf"
+            library.write_bytes(b"invalid")
+            output = root / "output"
+            with self.assertRaises(ValueError):
+                packager.stage(binaries, output, "unknown",
+                               gtk_layer_shell_lib=library)
+            self.assertFalse(output.exists())
+
+    def test_mint_launcher_isolated_library_and_system_glibc(self):
+        launcher = (ROOT / "scripts/run-melania-bundle.sh").read_text()
+        builder = (ROOT / "scripts/build-mint-layer-shell.sh").read_text()
+        self.assertIn("LD_LIBRARY_PATH", launcher)
+        self.assertIn("libgtk4-layer-shell.so.0", launcher)
+        self.assertIn("BLOCKED: missing/incompatible Linux runtime", launcher)
+        self.assertIn("536ff516ed68b9bb34afc4c07f942a54b2b4b03f", builder)
+        self.assertIn("--prefix", builder)
+        self.assertNotIn("sudo ", builder)
+        for script in ("scripts/run-melania-bundle.sh",
+                       "scripts/build-mint-layer-shell.sh"):
+            result = subprocess.run(["bash", "-n", str(ROOT / script)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_portable_wallpaper_respects_user_preference(self):
         text = (ROOT / "melania-desktop-surface/src/main.rs").read_text()
         self.assertIn('std::env::var_os("MELANIA_WALLPAPER")', text)
