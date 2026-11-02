@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/package-nested-preview.py"
@@ -66,6 +67,41 @@ class PortablePreviewBundle(unittest.TestCase):
                 capture_output=True, text=True
             )
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+    def test_original_panel_icons_are_in_extracted_archive_and_svg_valid(self):
+        with tempfile.TemporaryDirectory(prefix="melania-preview-icons-") as tmp:
+            root = Path(tmp)
+            binaries = self.make_binaries(root)
+            output = root / "output"
+            manifest = packager.stage(binaries, output, "c" * 40)
+            prefix = "share/icons/Melania-Preview/"
+            self.assertEqual(manifest["bundled_icon_theme"], "Melania-Preview")
+            files = manifest["files_sha256"]
+            self.assertIn(prefix + "index.theme", files)
+            for name in packager.PREVIEW_APP_ICONS:
+                self.assertIn(prefix + "scalable/apps/" + name, files)
+            for kind in ("wifi", "bluetooth", "volume",
+                         "battery", "notifications"):
+                for suffix in ("", "-light"):
+                    filename = prefix + "scalable/status/melania-tray-" + kind + suffix + ".svg"
+                    self.assertIn(filename, files)
+                    file = output / packager.BUNDLE_NAME / filename
+                    root_node = ElementTree.parse(file).getroot()
+                    self.assertEqual(root_node.tag, "{http://www.w3.org/2000/svg}svg")
+                    self.assertGreater(len(root_node), 0)
+                    self.assertEqual(packager.sha256(file), files[filename])
+            with tarfile.open(output / (packager.BUNDLE_NAME + ".tar.gz"),
+                              "r:gz") as archive:
+                archived = set(archive.getnames())
+                for name in files:
+                    self.assertIn(packager.BUNDLE_NAME + "/" + name, archived)
+
+    def test_icon_fallback_only_changes_melania_bundle_apps(self):
+        cfg = (ROOT / "melania-config/src/lib.rs").read_text()
+        self.assertIn('std::env::var_os("MELANIA_BUNDLE_DATA_DIR")', cfg)
+        self.assertIn('dir.join("Melania-Preview/index.theme").is_file()', cfg)
+        self.assertIn('"Melania-Preview"', cfg)
+        self.assertIn('else {"Adwaita"}', cfg)
 
     def test_missing_binary_fails_without_creating_output(self):
         with tempfile.TemporaryDirectory(prefix="melania-bundle-fail-") as tmp:

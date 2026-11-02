@@ -89,8 +89,8 @@ pub fn attach_live_preferences(
     let panel_open=|start:&ApplicationWindow,quick:&ApplicationWindow,
                     notifications:&ApplicationWindow,calendar:&ApplicationWindow| {
         (start.is_visible() && !start.has_css_class("melania-start-concealed")) ||
-        quick.is_visible() ||
-        notifications.is_visible() || calendar.is_visible()
+        [quick,notifications,calendar].iter().any(|w|
+            w.is_visible() && !w.has_css_class("melania-popup-concealed"))
     };
     let cfg=active.borrow().clone();
     apply_preferences(panel,bar,start,quick,notifications,calendar,
@@ -124,8 +124,8 @@ pub fn attach_live_preferences(
         glib::timeout_add_local_once(Duration::from_millis(650),move ||{
             if hover.get() ||
                (sm.is_visible() && !sm.has_css_class("melania-start-concealed")) ||
-               qs.is_visible() ||
-               nt.is_visible() || cal.is_visible() {return;}
+               [&qs,&nt,&cal].iter().any(|w|
+                   w.is_visible() && !w.has_css_class("melania-popup-concealed")) {return;}
             let p=prefs.borrow();
             if p.panel_auto_hide {set_revealed(&w,&p,false);}
         });

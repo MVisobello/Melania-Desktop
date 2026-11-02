@@ -63,11 +63,20 @@ pub const ICON_THEMES: [&str; 6] = [
 /// Installed user icon themes remain discoverable in ~/.local/share/icons.
 pub fn bundled_icon_paths() -> Vec<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    vec![
+    let mut paths = Vec::new();
+    // Portable archives are relocatable and do not have the Cargo checkout
+    // at CARGO_MANIFEST_DIR. Search the bundled XDG icon directory first.
+    if let Some(data) = std::env::var_os("MELANIA_BUNDLE_DATA_DIR")
+        .filter(|v| !v.is_empty()) {
+        let icons = PathBuf::from(data).join("icons");
+        if icons.is_dir() { paths.push(icons); }
+    }
+    paths.extend([
         root.join("dist/melania-icon-themes"),
         root.join("dist/melania-fluent-icons"),
         root.join("branding"),
-    ]
+    ]);
+    paths
 }
 pub fn icon_theme_available(name: &str) -> bool {
     if !ICON_THEMES.contains(&name) {return false;}
@@ -84,6 +93,12 @@ pub fn resolved_icon_theme(prefs:&Preferences) -> &str {
     // Never silently fall back to the previous glossy Aero family when the
     // selected Fluent theme has not yet been installed. Adwaita is a coherent
     // standard GTK fallback; explicit legacy icon choices remain available.
+    else if bundled_icon_paths().iter().any(|dir|
+        dir.join("Melania-Preview/index.theme").is_file()) {
+        // The compiled artifact carries the original Start, Files, Settings
+        // and tray icons. Use this *only* when a preferred full theme is absent.
+        "Melania-Preview"
+    }
     else {"Adwaita"}
 }
 impl Preferences {

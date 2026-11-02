@@ -8,6 +8,9 @@ on:
       - scripts/run-melania-bundle.sh
       - scripts/smoke-portable-bundle.sh
       - tests/test_preview_bundle.py
+      - tests/test_panel_popups.py
+      - melania-config/**
+      - branding/Melania/scalable/apps/**
       - docs/NESTED-PREVIEW-BUNDLE.md
       - melania-desktop-surface/**
       - melania-panel/**
@@ -25,6 +28,9 @@ on:
       - scripts/run-melania-bundle.sh
       - scripts/smoke-portable-bundle.sh
       - tests/test_preview_bundle.py
+      - tests/test_panel_popups.py
+      - melania-config/**
+      - branding/Melania/scalable/apps/**
       - docs/NESTED-PREVIEW-BUNDLE.md
       - melania-desktop-surface/**
       - melania-panel/**
@@ -67,6 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_preview_bundle.py -v
+          python3 -m unittest discover -s tests -p test_panel_popups.py -v
           bash -n scripts/run-melania-bundle.sh
           bash -n scripts/smoke-portable-bundle.sh
       - name: Compile all actual preview binaries (not mocks)
@@ -84,6 +91,8 @@ jobs:
           cd "$RUNNER_TEMP/melania-preview-release"
           sha256sum -c SHA256SUMS
           tar -tzf melania-nested-preview.tar.gz > bundle-members.txt
+          grep -Fxq 'melania-nested-preview/share/icons/Melania-Preview/index.theme' bundle-members.txt
+          grep -Fxq 'melania-nested-preview/share/icons/Melania-Preview/scalable/status/melania-tray-notifications.svg' bundle-members.txt
           grep -Fxq 'melania-nested-preview/manifest.json' bundle-members.txt
           grep -Fxq 'melania-nested-preview/run.sh' bundle-members.txt
       - name: Real packaged desktop under isolated graphical host
@@ -99,6 +108,8 @@ jobs:
           grep -q 'PASS: extracted portable bundle launched real nested GTK desktop and exited cleanly' \
             reports/bundle-smoke.log
           test -s reports/bundle-nested-desktop.png
+          grep -q 'PASS: quick controls to notifications click preserves the panel client' \
+            reports/bundle-smoke.log
       - name: Upload portable preview archive and SHA256SUMS
         uses: actions/upload-artifact@v4
         if: success()
