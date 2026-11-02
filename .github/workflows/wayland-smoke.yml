@@ -23,6 +23,8 @@ on:
       - 'melania-desktop-surface/**'
       - 'scripts/smoke-nested-wayland.sh'
       - 'scripts/smoke-full-desktop-wayland.sh'
+      - 'scripts/run-melania-v018-nested.sh'
+      - 'scripts/test-nested-session-preflight.py'
       - '.github/workflows/wayland-smoke.yml'
   pull_request:
     paths:
@@ -44,6 +46,8 @@ on:
       - 'melania-desktop-surface/**'
       - 'scripts/smoke-nested-wayland.sh'
       - 'scripts/smoke-full-desktop-wayland.sh'
+      - 'scripts/run-melania-v018-nested.sh'
+      - 'scripts/test-nested-session-preflight.py'
       - '.github/workflows/wayland-smoke.yml'
   workflow_dispatch:
 
@@ -68,6 +72,10 @@ jobs:
             libegl1-mesa-dev libgles2-mesa-dev libx11-dev libudev-dev \
             libseat-dev libdrm-dev libgbm-dev libdbus-1-dev libgtk-4-dev \
             libgl1-mesa-dri mesa-utils scrot xdotool python3-pil procps dbus dbus-user-session dbus-x11
+      - name: Validate session launcher and rejection paths
+        run: |
+          bash -n scripts/run-melania-v018-nested.sh
+          python3 scripts/test-nested-session-preflight.py -v
       - name: Build nested compositor, control CLI and GTK file manager
         run: |
           set -o pipefail
