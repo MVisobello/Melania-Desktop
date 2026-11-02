@@ -242,6 +242,16 @@ fn main()->Result<(),Box<dyn Error>> {
         buffer.destroy();
         pool.destroy();
     }
+    // Keep both genuine xdg clients alive briefly after the third ACK.
+    // The QMP focus injector sends B→A while the compositor is still
+    // dispatching input; a destroyed surface cannot acquire real focus.
+    if two_windows {
+        for _ in 0..20 {
+            queue.roundtrip(&mut state)?;
+            thread::sleep(Duration::from_millis(200));
+        }
+        println!("MELANIA_NATIVE_CLIENT_FOCUS_INPUT_HOLD=true");
+    }
     if callback_probe {
         if state.frame_done_count!=3 {
             return Err("not all three frame callbacks arrived from native renderer".into());
