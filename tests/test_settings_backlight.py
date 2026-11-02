@@ -12,14 +12,18 @@ class ScreenBrightness(unittest.TestCase):
     def test_control_is_reachable_and_never_faked(self):
         self.assertIn("mod display_controls;",MAIN)
         self.assertIn("crate::display_controls::append_backlight(&display);",PAGES)
-        self.assertIn('let Some(percent)=backlight_percent() else {',DISPLAY)
+        self.assertIn('crate::settings_async::run("backlight-detect",backlight_percent',DISPLAY)
+        self.assertIn('controls.set_visible(false)',DISPLAY)
+        self.assertIn('ready_controls.set_visible(true)',DISPLAY)
         self.assertIn('"settings-row-description"',DISPLAY)
 
     def test_uses_backlight_class_only_on_explicit_click(self):
         self.assertIn('["-c","backlight",operation]',DISPLAY)
         self.assertIn('["-c","backlight","set",requested.as_str()]',DISPLAY)
-        self.assertIn('apply.connect_clicked(move |_|',DISPLAY)
-        self.assertLess(DISPLAY.index('apply.connect_clicked(move |_|'),
+        self.assertIn('apply.connect_clicked(move |button|',DISPLAY)
+        self.assertIn('crate::settings_async::run("backlight-set"',DISPLAY)
+        self.assertIn('crate::settings_async::run("backlight-refresh"',DISPLAY)
+        self.assertLess(DISPLAY.index('apply.connect_clicked(move |button|'),
                         DISPLAY.index('["-c","backlight","set",requested.as_str()]'))
         self.assertIn('Scale::with_range(Orientation::Horizontal,5.0,100.0,1.0)',DISPLAY)
         self.assertIn('parse_percent(1,0),None',DISPLAY)
