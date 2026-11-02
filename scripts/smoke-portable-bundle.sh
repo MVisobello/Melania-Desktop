@@ -112,6 +112,12 @@ done
   exit 1
 }
 echo 'PASS: real taskbar top-layer pixels submitted by nested Wayland compositor'
+if ! grep -q 'MELANIA_PANEL_ICON_THEME_SELECTED=Melania-Preview' "$TMP/bundle.log"; then
+  echo 'FAIL: portable panel did not load its own bundled icon theme' >&2
+  grep -E 'ICON_THEME|melania-panel|icon-theme' "$TMP/bundle.log" >&2 || true
+  exit 1
+fi
+echo 'PASS: panel is using its bundled original Melania icon theme'
 # Real GTK signal: open quick controls then activate the notifications button,
 # the same sequence which disconnected the whole taskbar in VirtualBox.
 SWITCHED=0
