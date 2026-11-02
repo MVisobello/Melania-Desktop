@@ -111,6 +111,15 @@ done
   exit 1
 }
 echo 'PASS: real taskbar top-layer pixels submitted by nested Wayland compositor'
+grep -Eq 'MELANIA_CLIENT_STARTED program=.*melania-panel' "$TMP/bundle.log" || {
+  echo 'FAIL: bundled panel was never started' >&2
+  exit 1
+}
+if grep -Eq 'MELANIA_CLIENT_EXIT program=.*melania-panel' "$TMP/bundle.log"; then
+  echo 'FAIL: bundled panel exited while the desktop was starting' >&2
+  grep 'MELANIA_CLIENT_EXIT' "$TMP/bundle.log" >&2
+  exit 1
+fi
 
 sleep .8
 scrot -z -o reports/bundle-nested-desktop.png
