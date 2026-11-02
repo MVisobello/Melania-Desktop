@@ -54,6 +54,7 @@ trap cleanup EXIT
 export MELANIA_PROFILE_FILES=1
 export MELANIA_PROFILE_SETTINGS=1
 export MELANIA_SMOKE_SETTINGS_LAZY=1
+export MELANIA_SMOKE_SETTINGS_SERVICES=1
 MELANIA_PROFILE_COMPOSITOR=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
@@ -161,6 +162,24 @@ grep -q 'MELANIA_SETTINGS_FIRST_WINDOW_MS=' "$TEMP/compositor.log" || {
   echo 'FAIL: Settings first window evidence missing' >&2; exit 1
 }
 echo 'PASS: Settings first window appeared before deferred XFCE panel controls were built'
+# Exercise real background NetworkManager and BlueZ service probes. They
+# may report absent controllers in CI; neither should hold GTK's event loop.
+SERVICE_READY=0
+for i in $(seq 1 110); do
+  if grep -q 'MELANIA_SETTINGS_ASYNC_NAVIGATION_OK' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=network-status outcome=' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=wifi-detect outcome=' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=bluetooth-detect outcome=' "$TEMP/compositor.log"; then
+    SERVICE_READY=1; break
+  fi
+  sleep .1
+done
+[[ "$SERVICE_READY" == 1 ]] || {
+  echo 'FAIL: Settings background network/Bluetooth probes did not finish or time out' >&2
+  grep 'MELANIA_SETTINGS_' "$TEMP/compositor.log" >&2 || true
+  exit 1
+}
+echo 'PASS: Settings navigated Network/Bluetooth and received bounded background probes'
 # The actual GTK Files window should be submitted before the expensive
 # first browser tab, which in turn precedes the asynchronous GIO listing.
 python3 - "$TEMP/compositor.log" <<'PYFILESFIRST'
