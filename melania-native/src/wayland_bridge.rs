@@ -70,6 +70,9 @@ struct BridgeState {
     render_scheduler:RenderScheduler,
     multi_window_mode:bool,
     async_kms_mode:bool,
+    layout_repaint_mode:bool,
+    layout_dirty:bool,
+    async_layout_pending:Option<PendingLayoutFrame>,
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
@@ -90,6 +93,11 @@ struct BridgeState {
     delivered_keys: u32,
     delivered_buttons: u32,
     delivered_motions: u32,
+}
+
+struct PendingLayoutFrame {
+    ticket:FrameTicket,
+    ordinal:u8,
 }
 
 struct PendingAsyncFrame {
@@ -143,7 +151,12 @@ impl BridgeState {
         };
         match self.window_interaction.active_kind() {
             Some(InteractionKind::Move)=>{
-                if self.multi_scene.move_to(key,rect.x,rect.y).is_ok() {
+                let changed=self.multi_scene.position(key)!=Some((rect.x,rect.y));
+                if changed && self.multi_scene.move_to(key,rect.x,rect.y).is_ok() {
+                    if self.layout_repaint_mode {
+                        self.layout_dirty=true;
+                        self.render_scheduler.damage();
+                    }
                     println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
                              key,rect.x,rect.y);
                 }
@@ -158,6 +171,34 @@ impl BridgeState {
         }
     }
 
+    /// Submit scene-only damage *without* inventing a fourth wl_shm commit.
+    /// The owned snapshots are already imported from real client buffers.
+    /// The worker is nonblocking and frame 4 is gated by frame 3's ACK.
+    fn submit_layout_repaint(&mut self)->Result<(),Box<dyn Error>> {
+        if !self.layout_repaint_mode || !self.layout_dirty ||
+           self.pixel_frame_count!=3 || self.async_pending.is_some() ||
+           self.async_layout_pending.is_some() {
+            return Ok(());
+        }
+        if !self.render_scheduler.needs_redraw() {
+            return Err("dirty scene lost its render scheduler ticket".into());
+        }
+        let ticket=self.render_scheduler.begin_frame()
+            .ok_or("unable to begin bounded layout-only KMS frame")?;
+        let pixels=self.multi_scene.composite()
+            .map_err(|e|format!("layout frame composition failed: {e:?}"))?;
+        let worker=self.async_stream.as_ref().ok_or("async worker absent")?;
+        if worker.submit(FrameJob{ticket,ordinal:4,pixels}).is_err() {
+            self.render_scheduler.fail_present(ticket);
+            return Err("layout frame worker busy or disconnected".into());
+        }
+        self.async_layout_pending=Some(PendingLayoutFrame{ticket,ordinal:4});
+        self.layout_dirty=false;
+        println!("MELANIA_NATIVE_LAYOUT_REPAINT_SUBMITTED=4");
+        std::io::stdout().flush()?;
+        Ok(())
+    }
+
     /// Poll the worker without blocking the Smithay/calloop dispatcher.
     /// No callback, buffer.release(), or frame counter is issued before the
     /// worker has read the genuine KMS ACK from the VM Rust DRM process.
@@ -169,6 +210,24 @@ impl BridgeState {
             Ok(None)=>return Ok(()),
             Err(error)=>return Err(format!("async KMS worker disconnected: {error}").into()),
         };
+        if let Some(pending)=self.async_layout_pending.take() {
+            if pending.ticket!=reply.ticket || pending.ordinal!=reply.ordinal {
+                return Err("stale or mismatched layout-only frame ACK".into());
+            }
+            if let Err(error)=reply.status {
+                self.render_scheduler.fail_present(pending.ticket);
+                return Err(format!("layout-only KMS presentation failed: {error}").into());
+            }
+            if !self.render_scheduler.complete_present(pending.ticket) {
+                return Err("layout-only KMS ACK invalidated by seat pause".into());
+            }
+            self.pixel_frame_count=pending.ordinal;
+            self.pixel_ready=true;
+            println!("MELANIA_NATIVE_LAYOUT_REPAINT_ACK=4");
+            println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK=4");
+            std::io::stdout().flush()?;
+            return Ok(());
+        }
         let pending=self.async_pending.take()
             .ok_or("KMS worker returned an ACK without a pending Wayland frame")?;
         if pending.ticket!=reply.ticket || pending.ordinal!=reply.ordinal {
@@ -619,7 +678,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         pixel_frame_count:0,
-        pixel_frame_target:if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
+            .as_deref()==Ok("YES_QEMU_VM") {4} else if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
             .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
         live_stream:std::env::var("MELANIA_NATIVE_LIVE_STREAM")
@@ -630,6 +690,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         render_scheduler:RenderScheduler::default(),
         multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM"),
+        layout_repaint_mode:std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        layout_dirty:false,async_layout_pending:None,
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
         async_stream:None,async_pending:None,
@@ -683,11 +746,17 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         return Err("frame presentation probe needs live VM Rust DRM stream".into());
     }
     if state.multi_window_mode &&
-       (!live_stream || !state.frame_callbacks_probe || state.pixel_frame_target!=3) {
+       (!live_stream || !state.frame_callbacks_probe ||
+        !(3..=4).contains(&state.pixel_frame_target)) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
     if state.async_kms_mode && !state.multi_window_mode {
         return Err("nonblocking KMS probe only enabled for QEMU two-window mode".into());
+    }
+    if state.layout_repaint_mode &&
+       (!state.multi_window_mode || !state.async_kms_mode ||
+        state.pixel_frame_target!=4) {
+        return Err("layout repaint requires bounded QEMU two-window async KMS".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -739,6 +808,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         display.dispatch_clients(&mut state)?;
         if state.async_kms_mode && state.async_stream.is_some() {
             state.poll_async_kms()?;
+            state.submit_layout_repaint()?;
         }
         display.flush_clients()?;
         if state.pixel_probe && state.pixel_ready {
@@ -756,7 +826,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
                 if state.frame_callbacks_probe {
-                    if state.frame_callback_count!=state.pixel_frame_target as u32 {
+                    if state.frame_callback_count!=if state.layout_repaint_mode {3} else {state.pixel_frame_target as u32} {
                         return Err("not all Wayland frame callbacks completed after KMS".into());
                     }
                     println!("MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true");
