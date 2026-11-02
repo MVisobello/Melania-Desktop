@@ -52,6 +52,8 @@ trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
 export MELANIA_PROFILE_FILES=1
+export MELANIA_PROFILE_SETTINGS=1
+export MELANIA_SMOKE_SETTINGS_LAZY=1
 MELANIA_PROFILE_COMPOSITOR=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
@@ -141,6 +143,24 @@ for i in $(seq 1 100); do
 done
 [[ "$FILES_LISTED" == 1 ]] || { echo 'FAIL: no async Melania Files list completion';exit 1; }
 echo 'PASS: asynchronous filesystem listing reached real GTK Files window'
+# Settings must first present its window, then construct real XFCE panel
+# controls on explicit navigation. The marker is emitted after fill.
+SETTINGS_LAZY_READY=0
+for i in $(seq 1 100); do
+  if grep -Eq 'MELANIA_SETTINGS_PAGE_BUILD_MS=[0-9]+ page=xfce-panel' "$TEMP/compositor.log"; then
+    SETTINGS_LAZY_READY=1; break
+  fi
+  sleep .1
+done
+[[ "$SETTINGS_LAZY_READY" == 1 ]] || {
+  echo 'FAIL: real Settings lazy functional category was not materialized' >&2
+  grep 'MELANIA_SETTINGS_' "$TEMP/compositor.log" >&2 || true
+  exit 1
+}
+grep -q 'MELANIA_SETTINGS_FIRST_WINDOW_MS=' "$TEMP/compositor.log" || {
+  echo 'FAIL: Settings first window evidence missing' >&2; exit 1
+}
+echo 'PASS: Settings first window appeared before deferred XFCE panel controls were built'
 # The actual GTK Files window should be submitted before the expensive
 # first browser tab, which in turn precedes the asynchronous GIO listing.
 python3 - "$TEMP/compositor.log" <<'PYFILESFIRST'

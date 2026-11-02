@@ -20,8 +20,9 @@ class PanelFunctionalSettings(unittest.TestCase):
         self.assertIn('fn panel_controls_validate_and_keep_approved_defaults()',CONFIG)
 
     def test_settings_are_operational_and_offer_reset(self):
-        self.assertIn('stack.add_titled(&crate::xfce_panel::page(),',PAGES)
-        self.assertIn('Some("xfce-panel")',PAGES)
+        self.assertIn('("xfce-panel","Pannello")',PAGES)
+        self.assertIn('"xfce-panel"=>Some(crate::xfce_panel::page())',PAGES)
+        self.assertIn('crate::lazy_pages::register(stack,key,title);',PAGES)
         self.assertIn('("Pannello e barra", "xfce-panel"', (ROOT/"melania-settings/src/main.rs").read_text())
         for feature in ('"Altezza del pannello"','"Posizione dello schermo"',
                         '"Nascondi automaticamente"','"Opacità del pannello"'):

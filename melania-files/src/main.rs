@@ -1255,13 +1255,19 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         ));
     }
     browser.status.set_text(&format!("{count} elementi visibili · Melania Files"));
+    // Renderer diagnostics share a redirected stderr with compositor logs.
+    // Format a whole line and issue one write to prevent torn metrics.
     if files_profile_enabled() {
-        eprintln!("MELANIA_FILES_RENDER_MS={} entries={} thumbnails_queued={} software_budget={}",
+        use std::io::Write as _;
+        let line=format!("MELANIA_FILES_RENDER_MS={} entries={} thumbnails_queued={} software_budget={}\n",
             rendering_started.elapsed().as_millis(),entry_count,queued_thumbnails,max_thumbnails);
+        let _=std::io::stderr().write_all(line.as_bytes());
     }
     // CI-only proof that a real worker result reached the GTK renderer.
     if std::env::var_os("MELANIA_SMOKE_FILES_LISTING").is_some() {
-        eprintln!("MELANIA_FILES_LISTING_READY count={count}");
+        use std::io::Write as _;
+        let line=format!("MELANIA_FILES_LISTING_READY count={count}\n");
+        let _=std::io::stderr().write_all(line.as_bytes());
     }
 }
 
