@@ -6,7 +6,13 @@
  //! KMS scanout of client buffers and native login remain OFF. A separate
 //! QEMU-only shell mode checks real xdg_toplevel and layer-surface configure
 //! roundtrips without claiming these clients are displayed.
-use std::{error::Error, io::Write, sync::Arc, time::{Duration,Instant}};
+use std::{
+    error::Error,
+    io::{Read,Write},
+    os::unix::net::{UnixListener,UnixStream},
+    sync::Arc,
+    time::{Duration,Instant},
+};
 use smithay::{
     backend::{
         input::{InputEvent, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
@@ -58,6 +64,8 @@ struct BridgeState {
     output_manager:OutputManagerState,
     pixel_probe:bool,
     pixel_ready:bool,
+    live_stream:bool,
+    stream:Option<UnixStream>,
     pixel_frame_count:u8,
     pixel_frame_target:u8,
     xdg_shell: XdgShellState,
@@ -93,16 +101,42 @@ impl CompositorHandler for BridgeState {
                 });
                 match frame {
                     Ok(Ok(frame))=>{
-                        match native_client_frame::write_frame_index(&frame,self.pixel_frame_count) {
+                        let next=self.pixel_frame_count+1;
+                        let handoff:Result<(),Box<dyn Error>>=if self.live_stream {
+                            (||{
+                                let stream=self.stream.as_mut()
+                                    .ok_or("native DRM stream not connected")?;
+                                let length=u32::try_from(frame.len())?;
+                                stream.write_all(&length.to_le_bytes())?;
+                                stream.write_all(&frame)?;
+                                stream.flush()?;
+                                let mut ack=[0u8;1];
+                                stream.read_exact(&mut ack)?;
+                                if ack[0]!=next {
+                                    return Err("Rust KMS did not acknowledge the displayed frame".into());
+                                }
+                                println!("MELANIA_NATIVE_LIVE_KMS_FRAME_ACK={next}");
+                                Ok(())
+                            })()
+                        } else {
+                            native_client_frame::write_frame_index(
+                                &frame,self.pixel_frame_count
+                            )
+                        };
+                        match handoff {
                             Ok(())=>{
-                                self.pixel_frame_count+=1;
+                                self.pixel_frame_count=next;
                                 self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
                                 println!("MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true");
                                 println!("MELANIA_NATIVE_CLIENT_FRAME_INDEX={}",self.pixel_frame_count);
                                 println!("MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true");
                                 let _=std::io::stdout().flush();
                             },
-                            Err(error)=>eprintln!("Melania client frame write: {error}"),
+                            Err(error)=>{
+                                eprintln!("Melania Wayland frame transfer failed: {error}");
+                                // Do not acknowledge/release an unpresented wl_buffer.
+                                return;
+                            },
                         }
                     },
                     Ok(Err(error))=>eprintln!("Melania invalid client pixels: {error}"),
@@ -290,8 +324,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         pixel_frame_count:0,
-        pixel_frame_target:if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
+            .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
+        live_stream:std::env::var("MELANIA_NATIVE_LIVE_STREAM")
+            .as_deref()==Ok("YES_QEMU_VM"),stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
         xdg_toplevel_count:0,layer_surface_count:0,
@@ -322,6 +359,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         state.lifecycle.on_session(event);
     })?;
 
+    let live_stream=std::env::var("MELANIA_NATIVE_LIVE_STREAM")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if live_stream && !state.pixel_probe {
+        return Err("live KMS stream needs explicit QEMU client-pixel probe".into());
+    }
+    let frame_listener=if live_stream {
+        let path="/run/melania-native-qemu/frame-stream.sock";
+        let listener=UnixListener::bind(path)?;
+        listener.set_nonblocking(true)?;
+        println!("MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true");
+        Some(listener)
+    } else {None};
     let listener=ListeningSocket::bind_auto("melania-native-seat",1..=8)?;
     let socket=listener.socket_name().ok_or("Missing native Wayland socket name")?;
     println!("MELANIA_NATIVE_WAYLAND_SOCKET_READY={}",socket.to_string_lossy());
@@ -336,6 +385,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let mut both_shell_roles_seen_at=None;
     let mut pixel_ready_since=None;
     while Instant::now()<deadline {
+        // Accept the Rust DRM consumer before processing client commits;
+        // the socket is private to this disposable VM, not the host.
+        if state.live_stream && state.stream.is_none() {
+            if let Some(listener)=&frame_listener {
+                match listener.accept() {
+                    Ok((stream,_))=>{
+                        stream.set_write_timeout(Some(Duration::from_secs(7)))?;
+                        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
+                        state.stream=Some(stream);
+                        println!("MELANIA_NATIVE_FRAME_STREAM_CONNECTED=true");
+                        let _=std::io::stdout().flush();
+                    }
+                    Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>{},
+                    Err(error)=>return Err(error.into()),
+                }
+            }
+        }
         events.dispatch(Some(Duration::from_millis(12)),&mut state)?;
         while let Some(stream)=listener.accept()? {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
@@ -347,6 +413,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             if since.elapsed()>=Duration::from_secs(3) {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
+                if state.live_stream {
+                    println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
+                }
                 println!("MELANIA_NATIVE_LIVE_KMS_RENDERING=false");
                 println!("MELANIA_NATIVE_SESSION_READY=false");
                 return Ok(());
