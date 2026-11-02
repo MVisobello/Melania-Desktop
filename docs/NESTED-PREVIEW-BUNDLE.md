@@ -33,6 +33,52 @@ hashes of each shipped binary/resource. The archive's `SHA256SUMS` file
 verifies the compressed archive. Verify you trust the release's commit and
 the GitHub Actions source before executing downloaded programs.
 
+## Linux Mint 22 / Ubuntu 24.04: missing GTK4 layer-shell runtime
+
+If \`run.sh --check\` reports \`libgtk4-layer-shell.so.0 => not found\`,
+the compositor can start while its desktop and panel cannot. Unlike the
+similarly named GTK3 library \`libgtk-layer-shell0\`, Melania requires the
+**GTK4** library.
+
+First check whether your distribution offers the runtime:
+
+\`\`\`sh
+apt-cache policy libgtk4-layer-shell0
+sudo apt install libgtk4-layer-shell0  # only when APT shows an available candidate
+\`\`\`
+
+Ubuntu 24.04 and Linux Mint 22 often lack that package in standard
+repositories. Avoid mixing system repositories from newer Ubuntu releases.
+Instead, build the upstream GTK4 layer-shell v1.0.4 locally:
+
+\`\`\`sh
+sudo apt install git meson ninja-build build-essential pkg-config \
+    libgtk-4-dev libwayland-dev wayland-protocols
+cd "$HOME"
+git clone --depth 1 --branch v1.0.4 \
+    https://github.com/wmww/gtk4-layer-shell.git
+cd gtk4-layer-shell
+meson setup build --prefix="$HOME/.local/melania-deps" --libdir=lib \
+    -Dexamples=false -Ddocs=false -Dtests=false \
+    -Dintrospection=false -Dvapi=false
+meson compile -C build
+meson install -C build
+\`\`\`
+
+Return to the unpacked Melania preview directory. For both \`--check\`
+and normal launch, make the local runtime visible only to that process:
+
+\`\`\`sh
+LD_LIBRARY_PATH="$HOME/.local/melania-deps/lib\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./run.sh --check
+LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
+  LD_LIBRARY_PATH="$HOME/.local/melania-deps/lib\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ./run.sh
+\`\`\`
+
+No \`sudo\`, \`ldconfig\` or system-wide \`LD_LIBRARY_PATH\` change is
+needed for this local build. The VirtualBox \`libEGL\`/DRI3/ZINK messages
+are separate GPU acceleration diagnostics; a software rendering override
+may help, at the cost of reduced graphics performance.
+
 ## What works and what is still experimental
 
 The nested compositor launches the desktop surface, taskbar, Melania Files,
