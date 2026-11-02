@@ -145,6 +145,27 @@ MELANIA_DEBUG_RENDER=1 ./run.sh --software 2>&1 | tee "$HOME/melania-panel.log"
 La preview è sempre annidata e sperimentale: test CI verdi non sostituiscono
 il collaudo manuale sul VirtualBox dell'utente.
 
+## Fluidità Melania Files su VirtualBox
+
+Con rendering software (Cairo oppure `LIBGL_ALWAYS_SOFTWARE=1`) Files ora
+elabora al massimo 16 miniature nella prima scansione di una cartella, anziché
+48. Nelle sessioni grafiche accelerate resta il limite precedente di 48.
+Non viene eliminato o modificato alcun file personale.
+
+Per distinguere un rallentamento del lettore GIO da uno del disegno GTK o della
+generazione delle miniature, avvia la **nuova build** con diagnostica facoltativa:
+
+```bash
+MELANIA_PROFILE_FILES=1 ./run.sh --software 2>&1 | tee "$HOME/melania-files-performance.log"
+```
+
+Il log contiene `MELANIA_FILES_SCAN_MS` (lettura),
+`MELANIA_FILES_RENDER_MS` (creazione delle tessere GTK),
+`MELANIA_FILES_THUMBNAILS_MS` (decodifica in background) ed eventualmente
+`MELANIA_FILES_UI_STALL_MS` (intervalli dell'event loop superiori a 250 ms).
+La diagnostica non è attiva per impostazione predefinita. Il log può riportare
+nomi e percorsi di cartelle: controllalo prima di condividerlo.
+
 ## Disinstallazione
 
 Chiudi la finestra Melania ed elimina la directory estratta. Non
