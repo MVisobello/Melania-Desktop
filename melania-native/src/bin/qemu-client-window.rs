@@ -115,37 +115,55 @@ fn main()->Result<(),Box<dyn Error>> {
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("server failed to configure xdg_toplevel".into());}
-    let mut pixels=vec![0u8;W*H*4];
-    for (index,p) in pixels.chunks_exact_mut(4).enumerate() {
-        let x=index%W;
-        // Distinctive client-owned orange and teal halves. Rust compositor
-        // must not synthesize either color, only copy these wl_shm pixels.
-        let (r,g,b)=if x<W/2 {(245u8,108u8,34u8)} else {(16u8,205u8,155u8)};
-        p.copy_from_slice(&[b,g,r,0]);
+    let two_frames=std::env::var("MELANIA_NATIVE_TWO_FRAMES")
+        .as_deref()==Ok("YES_QEMU_VM");
+    for frame_index in 0..if two_frames {2} else {1} {
+        // Both frames originate from a real client's wl_shm pool. The
+        // compositor never invents these colors or fills these pixels.
+        let mut pixels=vec![0u8;W*H*4];
+        for (index,p) in pixels.chunks_exact_mut(4).enumerate() {
+            let left=index%W<W/2;
+            let (r,g,b)=match (frame_index,left) {
+                (0,true)=>(245u8,108u8,34u8),    // orange
+                (0,false)=>(16u8,205u8,155u8),   // teal
+                (1,true)=>(73u8,126u8,237u8),    // blue
+                (1,false)=>(247u8,211u8,48u8),  // yellow
+                _=>unreachable!(),
+            };
+            p.copy_from_slice(&[b,g,r,0]);
+        }
+        let path=if frame_index==0 {
+            "/run/melania-native-qemu/client-window-shm.bin"
+        } else {
+            "/run/melania-native-qemu/client-window-shm-2.bin"
+        };
+        let mut file=OpenOptions::new().create_new(true).read(true).write(true)
+            .open(path)?;
+        file.write_all(&pixels)?;
+        file.sync_all()?;
+        let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
+        let buffer=pool.create_buffer(
+            0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
+        );
+        state.buffer_released=false;
+        surface.attach(Some(&buffer),0,0);
+        surface.damage_buffer(0,0,W as i32,H as i32);
+        surface.commit();
+        for _ in 0..5 {
+            queue.roundtrip(&mut state)?;
+            if state.buffer_released {break;}
+        }
+        if !state.buffer_released {
+            return Err(format!("compositor did not release client frame {}",
+                               frame_index+1).into());
+        }
+        println!("MELANIA_NATIVE_CLIENT_WL_SHM_RELEASED=true");
+        println!("MELANIA_NATIVE_CLIENT_FRAME_COMMITTED={}",frame_index+1);
+        buffer.destroy();
+        pool.destroy();
     }
-    let mut file=OpenOptions::new().create_new(true).read(true).write(true)
-        .open("/run/melania-native-qemu/client-window-shm.bin")?;
-    file.write_all(&pixels)?;
-    file.sync_all()?;
-    let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
-    let buffer=pool.create_buffer(
-        0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
-    );
-    surface.attach(Some(&buffer),0,0);
-    surface.damage_buffer(0,0,W as i32,H as i32);
-    surface.commit();
-    for _ in 0..5 {
-        queue.roundtrip(&mut state)?;
-        if state.buffer_released {break;}
-    }
-    if !state.buffer_released {
-        return Err("compositor did not copy and release actual wl_shm pixels".into());
-    }
-    println!("MELANIA_NATIVE_CLIENT_WL_SHM_RELEASED=true");
     println!("MELANIA_NATIVE_CLIENT_XDG_WINDOW_DRAWN=true");
     std::io::stdout().flush()?;
-    buffer.destroy();
-    pool.destroy();
     toplevel.destroy();
     xdg.destroy();
     surface.destroy();
