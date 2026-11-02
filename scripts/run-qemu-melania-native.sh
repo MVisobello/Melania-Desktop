@@ -42,6 +42,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'build real libwayland guest client first'
 [[ -f "$root/scripts/inject-qemu-native-input.py" ]] ||
   deny 'QMP virtual USB event injector missing'
+[[ -f "$root/scripts/inject-qemu-two-window-focus.py" ]] ||
+  deny 'QMP two-window real focus injector missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -130,6 +132,10 @@ python3 "$root/scripts/capture-qemu-two-windows.py" \
   --third "$report/two-window-frame3.ppm" --timeout 950 \
   > "$report/qmp-two-windows.log" 2>&1 &
 multi_capture_pid=$!
+python3 "$root/scripts/inject-qemu-two-window-focus.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  > "$report/qmp-two-window-focus.log" 2>&1 &
+focus_inject_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -160,9 +166,14 @@ wait "$live_capture_pid"
 live_capture_code=$?
 wait "$multi_capture_pid"
 multi_capture_code=$?
+wait "$focus_inject_pid"
+focus_inject_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_TWO_WINDOW_REAL_INPUT_PASS=true' "$report/qmp-two-window-focus.log" ||
+   ! grep -q '^MELANIA_QEMU_WINDOW2_POINTER_FOCUS=true' "$report/qmp-two-window-focus.log" ||
+   ! grep -q '^MELANIA_QEMU_WINDOW1_POINTER_FOCUS=true' "$report/qmp-two-window-focus.log" ||
    ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_THREE_CAPTURE_PASS=true' "$report/qmp-two-windows.log" ||
    ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_FRAME1_PIXELS=true' "$report/qmp-two-windows.log" ||
    ! grep -q '^MELANIA_QEMU_TWO_WINDOWS_FRAME2_PIXELS=true' "$report/qmp-two-windows.log" ||
@@ -268,6 +279,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-rust-frames.log" || true
   tail -n 30 "$report/qmp-live-stream.log" || true
   tail -n 30 "$report/qmp-two-windows.log" || true
+  tail -n 30 "$report/qmp-two-window-focus.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -282,3 +294,5 @@ printf '%s\n' 'MELANIA_VM_LIVE_WAYLAND_STREAM_THREE_FRAMES=true' >> "$report/res
 printf '%s\n' 'MELANIA_VM_NATIVE_POST_KMS_FRAME_CALLBACKS_VERIFIED=true' >> "$report/result.txt"
 
 printf '%s\n' 'MELANIA_VM_TWO_REAL_WAYLAND_WINDOWS_QMP_PRESENTED=true' >> "$report/result.txt"
+
+printf '%s\n' 'MELANIA_VM_TWO_WINDOWS_REAL_FOCUS_INPUT=true' >> "$report/result.txt"
