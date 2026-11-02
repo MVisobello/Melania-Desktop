@@ -1551,6 +1551,7 @@ fn install_start_hotkey_listener(
     start: &ApplicationWindow,
     quick: &ApplicationWindow,
     notifications: &ApplicationWindow,
+    calendar: &ApplicationWindow,
 ) {
     let Some(control)=std::env::var_os(SOCKET_ENV).filter(|v|!v.is_empty()) else { return; };
     let path=start_toggle_socket_path(&PathBuf::from(control));
@@ -1634,7 +1635,7 @@ fn build(app:&Application){
     let notifications=notifications_window(app);
     let quick=quick_window(app,&notifications);
     let calendar=calendar_window(app);
-    install_start_hotkey_listener(app,&start,&quick,&notifications);
+    install_start_hotkey_listener(app,&start,&quick,&notifications,&calendar);
     // Do not present popup windows until the user clicks.
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);
     if let Some(content)=bar.child().and_then(|child|child.downcast::<GtkBox>().ok()) {
