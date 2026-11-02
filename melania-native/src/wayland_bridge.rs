@@ -29,7 +29,7 @@ use smithay::{
         compositor::{CompositorClientState,CompositorHandler,CompositorState},
     },
 };
-use crate::{NativeLifecycle, DeviceChange};
+use melania_native::NativeLifecycle;
 use smithay::backend::input::Device as InputDevice;
 
 #[derive(Default)]
@@ -87,7 +87,7 @@ delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
 
 fn register(state:&mut BridgeState,device:libinput::Device) {
-    let caps=crate::input_registry::InputCapabilities{
+    let caps=melania_native::input_registry::InputCapabilities{
         keyboard:device.has_capability(DeviceCapability::Keyboard),
         pointer:device.has_capability(DeviceCapability::Pointer),
         touch:device.has_capability(DeviceCapability::Touch),
@@ -175,7 +175,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     context.udev_assign_seat(&seat_name)
         .map_err(|_|"Cannot bind libinput to QEMU libseat")?;
     let mut display=Display::<BridgeState>::new()?;
-    let handle=display.handle();
+    let mut handle=display.handle();
     let mut seats=SeatState::new();
     let mut seat=seats.new_wl_seat(&handle,"melania-native-seat0");
     seat.add_keyboard(Default::default(),250,40)?;
