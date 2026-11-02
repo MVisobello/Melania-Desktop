@@ -361,6 +361,7 @@ MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
 MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_LAYOUT_REPAINT=YES_QEMU_VM \
+MELANIA_NATIVE_RESIZE_CONFIGURE=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 39s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
@@ -396,7 +397,8 @@ fi
 if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
   MELANIA_NATIVE_WAIT_PRESENT_CALLBACK=YES_QEMU_VM \
   MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
-  MELANIA_NATIVE_LAYOUT_REPAINT=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
+  MELANIA_NATIVE_LAYOUT_REPAINT=YES_QEMU_VM \
+  MELANIA_NATIVE_RESIZE_CONFIGURE=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
   timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
   cat "$multi_server_log"
   kill "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
@@ -434,6 +436,7 @@ rm -f "$multi_server_log" "$multi_kms_log"
 report 'MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true'
 report 'MELANIA_QEMU_NONBLOCKING_KMS_WORKER_PASS=true'
 report 'MELANIA_QEMU_LAYOUT_ONLY_KMS_REPAINT_PASS=true'
+report 'MELANIA_QEMU_XDG_RESIZE_PROBE_ENABLED=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'
