@@ -44,7 +44,7 @@ class NativeWindowInputStage35(unittest.TestCase):
 
     def test_old_vm_safety_and_actual_rust_tests_remain_in_place(self):
         self.assertIn("MELANIA_RUST_MULTI_FRAME2_ACTIVE=true",INJECT)
-        self.assertIn("MELANIA_RUST_MULTI_FRAME3_ACTIVE=true",INJECT)
+        self.assertNotIn("wait_for(args.serial,MARKER3,end)",INJECT)
         self.assertIn("MELANIA_NATIVE_WINDOW_POINTER_FOCUS=2",INJECT)
         self.assertIn("MELANIA_NATIVE_WINDOW_POINTER_FOCUS=1",INJECT)
         self.assertIn('"type":typ,"data":data',INJECT)
