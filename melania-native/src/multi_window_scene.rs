@@ -186,9 +186,12 @@ mod tests {
         assert_eq!(graph.hit_test(-1.0,0.0),None);
         assert_eq!(graph.hit_test(f64::NAN,10.0),None);
         assert_eq!(graph.move_to(11,700,230),Ok(()));
-        assert_eq!(graph.hit_test(750.0,300.0),Some(11));
+        assert_eq!(graph.hit_test(750.0,300.0),Some(12));
         assert_eq!(graph.position(11),Some((700,230)));
         assert_eq!(graph.hit_test(200.0,200.0),None);
+        // Moving a window must NOT silently raise it: the newer B stays on top.
+        assert_eq!(graph.hit_test(900.0,270.0),Some(12));
+        assert!(graph.raise(11));
         assert_eq!(graph.hit_test(900.0,270.0),Some(11));
         let overlap=graph.composite().unwrap();
         assert_eq!(sample(&overlap,900,270),[245,108,34]);
