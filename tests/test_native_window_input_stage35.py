@@ -13,6 +13,8 @@ SCENE=(ROOT/"melania-native/src/multi_window_scene.rs").read_text()
 BRIDGE=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
 GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
 CI=(ROOT/".github/workflows/qemu-melania-native.yml").read_text()
+HOST=(ROOT/"scripts/run-qemu-melania-native.sh").read_text()
+INJECT=(ROOT/"scripts/inject-qemu-two-window-focus.py").read_text()
 
 class NativeWindowInputStage35(unittest.TestCase):
     def test_scene_has_stable_geometry_and_bounded_hit_test(self):
@@ -41,6 +43,13 @@ class NativeWindowInputStage35(unittest.TestCase):
         self.assertIn("state.focused.is_none() && !state.multi_window_mode",BRIDGE)
 
     def test_old_vm_safety_and_actual_rust_tests_remain_in_place(self):
+        self.assertIn("MELANIA_RUST_MULTI_FRAME2_ACTIVE=true",INJECT)
+        self.assertIn("MELANIA_RUST_MULTI_FRAME3_ACTIVE=true",INJECT)
+        self.assertIn("MELANIA_NATIVE_WINDOW_POINTER_FOCUS=2",INJECT)
+        self.assertIn("MELANIA_NATIVE_WINDOW_POINTER_FOCUS=1",INJECT)
+        self.assertIn('"type":typ,"data":data',INJECT)
+        self.assertIn("qmp-two-window-focus.log",HOST)
+        self.assertIn("MELANIA_QEMU_TWO_WINDOW_REAL_INPUT_PASS=true",HOST)
         self.assertIn("test_native_window_input_stage35.py",CI)
         self.assertIn("cargo test -p melania-native --all-targets",CI)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
