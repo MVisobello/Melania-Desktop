@@ -25,9 +25,8 @@ spec.loader.exec_module(capture)
 W,H=1280,800
 
 def frame(phase):
-    pixels=bytearray([58,33,27] * (W*H))
+    pixels=bytearray([27,33,58] * (W*H))
     def fill(x,y,w,h,color):
-        bgr=bytes(color[::-1])
         rgb=bytes(color)
         for row in range(y,y+h):
             for col in range(x,x+w):
