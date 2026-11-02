@@ -137,12 +137,18 @@ fn main()->Result<(),Box<dyn Error>> {
             };
             p.copy_from_slice(&[b,g,r,0]);
         }
-        let path=if frame_index==0 {
+        // The Stage28 test uses the default filenames earlier in this same
+        // guest boot; the concurrent Stage29 run must not reuse them.
+        let path=if three_frames {
+            match frame_index {
+                0=>"/run/melania-native-qemu/client-live-1.bin",
+                1=>"/run/melania-native-qemu/client-live-2.bin",
+                _=>"/run/melania-native-qemu/client-live-3.bin",
+            }
+        } else if frame_index==0 {
             "/run/melania-native-qemu/client-window-shm.bin"
-        } else if frame_index==1 {
-            "/run/melania-native-qemu/client-window-shm-2.bin"
         } else {
-            "/run/melania-native-qemu/client-window-shm-3.bin"
+            "/run/melania-native-qemu/client-window-shm-2.bin"
         };
         let mut file=OpenOptions::new().create_new(true).read(true).write(true)
             .open(path)?;
