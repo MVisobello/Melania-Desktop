@@ -213,7 +213,7 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
             if path.is_symlink():
                 # Allow icon aliases only within the self-contained bundle.
                 resolved = path.resolve()
-                if not resolved.is_relative_to(target.resolve()) or not resolved.is_file():
+                if not resolved.is_relative_to(target.resolve()) or not resolved.exists():
                     raise ValueError(f"Unsafe icon alias: {path}")
             rel = Path(BUNDLE_NAME) / path.relative_to(target)
             info = tar.gettarinfo(str(path), arcname=rel.as_posix())
