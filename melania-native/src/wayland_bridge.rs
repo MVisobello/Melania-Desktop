@@ -15,7 +15,7 @@ use std::{
 };
 use smithay::{
     backend::{
-        input::{InputEvent, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
+        input::{InputEvent, ButtonState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
                 AbsolutePositionEvent, Event},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
@@ -119,6 +119,19 @@ fn complete_presented_frame(surface:&WlSurface,elapsed_ms:u32)->u32 {
 }
 
 impl BridgeState {
+    /// Resolve QEMU physical output coordinates to a retained client surface.
+    fn pointer_target(&self,point:Point<f64,Logical>)
+        ->Option<(WlSurface,Point<f64,Logical>)>
+    {
+        if !self.multi_window_mode {
+            return self.focused.clone().map(|s|(s,(0.0,0.0).into()));
+        }
+        let key=self.multi_scene.hit_test(point.x,point.y)?;
+        let surface=self.known_window_surfaces.get((key-1) as usize)?.clone();
+        let (x,y)=self.multi_scene.position(key)?;
+        Some((surface,(f64::from(x),f64::from(y)).into()))
+    }
+
     /// Poll the worker without blocking the Smithay/calloop dispatcher.
     /// No callback, buffer.release(), or frame counter is issued before the
     /// worker has read the genuine KMS ACK from the VM Rust DRM process.
@@ -424,17 +437,24 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_keys+=1;
         }
         InputEvent::PointerMotion {event} => {
-            if state.focused.is_none() ||
+            if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             let point:Point<f64,Logical>=(
-                (state.pointer_position.x+event.delta_x()).clamp(0.0,639.0),
-                (state.pointer_position.y+event.delta_y()).clamp(0.0,479.0)
+                (state.pointer_position.x+event.delta_x())
+                    .clamp(0.0,if state.multi_window_mode {1279.0} else {639.0}),
+                (state.pointer_position.y+event.delta_y())
+                    .clamp(0.0,if state.multi_window_mode {799.0} else {479.0})
             ).into();
             state.pointer_position=point;
+            if state.multi_window_mode {
+                println!("MELANIA_NATIVE_WINDOW_POINTER_REL=({:.1},{:.1}) target={:?}",
+                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y));
+                let _=std::io::stdout().flush();
+            }
             let pointer=state.seat.get_pointer().expect("pointer");
-            let target=state.focused.clone().map(|s|(s,(0.0,0.0).into()));
+            let target=state.pointer_target(point);
             pointer.motion(state,target,
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
@@ -442,14 +462,23 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_motions+=1;
         }
         InputEvent::PointerMotionAbsolute {event} => {
-            if state.focused.is_none() ||
+            if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
-            let point=event.position_transformed((640,480).into());
+            let point=if state.multi_window_mode {
+                event.position_transformed((1280,800).into())
+            } else {
+                event.position_transformed((640,480).into())
+            };
             state.pointer_position=point;
+            if state.multi_window_mode {
+                println!("MELANIA_NATIVE_WINDOW_POINTER_ABS=({:.1},{:.1}) target={:?}",
+                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y));
+                let _=std::io::stdout().flush();
+            }
             let pointer=state.seat.get_pointer().expect("pointer");
-            let target=state.focused.clone().map(|s|(s,(0.0,0.0).into()));
+            let target=state.pointer_target(point);
             pointer.motion(state,target,
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
@@ -457,11 +486,41 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_motions+=1;
         }
         InputEvent::PointerButton {event} => {
-            if state.focused.is_none() ||
+            if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
+            let point=state.pointer_position;
+            if state.multi_window_mode {
+                println!("MELANIA_NATIVE_WINDOW_BUTTON=({:.1},{:.1}) target={:?} state={:?}",
+                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y),event.state());
+                let _=std::io::stdout().flush();
+            }
             let pointer=state.seat.get_pointer().expect("pointer");
+            if state.multi_window_mode {
+                let target=state.pointer_target(point);
+                pointer.motion(state,target.clone(),
+                    &MotionEvent{location:point,
+                        serial:SERIAL_COUNTER.next_serial(),time:event.time_msec()});
+                // A click, unlike motion, raises a client and grants
+                // keyboard focus to its actual wl_surface.
+                if event.state()==ButtonState::Pressed {
+                    if let Some((surface,_))=target {
+                        if let Some(id)=state.multi_scene.hit_test(point.x,point.y) {
+                            state.multi_scene.raise(id);
+                            let keyboard=state.seat.get_keyboard().expect("keyboard");
+                            keyboard.set_focus(state,Some(surface.clone()),
+                                SERIAL_COUNTER.next_serial());
+                            state.focused=Some(surface);
+                            println!("MELANIA_NATIVE_WINDOW_POINTER_FOCUS={id}");
+                            // The QEMU injector observes this event via
+                            // the redirected guest serial log. Flush NOW,
+                            // not after the next multi-second DRM ACK.
+                            let _=std::io::stdout().flush();
+                        }
+                    }
+                }
+            }
             pointer.button(state,&ButtonEvent{
                 button:event.button_code(),state:event.state(),
                 serial:SERIAL_COUNTER.next_serial(),time:event.time_msec(),
@@ -629,7 +688,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         display.flush_clients()?;
         if state.pixel_probe && state.pixel_ready {
             let since=pixel_ready_since.get_or_insert_with(Instant::now);
-            if since.elapsed()>=Duration::from_secs(3) {
+            if since.elapsed()>=Duration::from_secs(
+                if state.multi_window_mode {6} else {3}
+            ) {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
                 if state.live_stream {
