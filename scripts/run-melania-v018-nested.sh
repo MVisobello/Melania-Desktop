@@ -1,22 +1,49 @@
 #!/usr/bin/env bash
-# Melania 0.18 nested desktop: background, taskbar, files, settings and notifications; isolated D-Bus prevents fighting with the
-# host session's notification daemon. Never replaces your existing desktop.
+# Nested preview only: never replaces the host desktop or installs a login session.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-for bin in cargo dbus-run-session; do
-  command -v "$bin" >/dev/null || { echo "Missing $bin" >&2; exit 3; }
-done
-if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-  echo "Run from an existing graphical session (or xvfb-run)." >&2; exit 3
-fi
+
+preflight() {
+  local missing=0 bin
+  for bin in cargo dbus-run-session bash; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      echo "MISSING_DEPENDENCY: $bin" >&2
+      missing=1
+    fi
+  done
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    echo "NO_HOST_DISPLAY: nested preview requires an existing graphical session." >&2
+    missing=1
+  fi
+  if [[ ! -f "$ROOT/Cargo.toml" ]]; then
+    echo "MISSING_WORKSPACE: $ROOT/Cargo.toml" >&2
+    missing=1
+  fi
+  if (( missing )); then return 3; fi
+  echo "NESTED_PREFLIGHT_OK: host display and prerequisites detected (not a native session)"
+}
+
+case "${1:-}" in
+  --preflight) [[ $# -eq 1 ]] || exit 2; preflight; exit $? ;;
+  "") ;;
+  *) echo "Usage: $0 [--preflight]" >&2; exit 2 ;;
+esac
+preflight
 cargo build -p melania-compositor -p melania-panel -p melania-desktop-surface -p melania-files -p melania-settings -p melania-notifyd -p melania-notifyctl
 export MELANIA_ROOT="$ROOT"
 export PATH="$ROOT/target/debug:$PATH"
+# Keep the notification daemon inside an isolated D-Bus session. Kill and reap
+# it when the compositor exits, including on an interrupted preview.
 dbus-run-session -- bash -euo pipefail -c '
   "$MELANIA_ROOT/target/debug/melania-notifyd" &
   NOTIFY_PID=$!
-  trap '\''kill "$NOTIFY_PID" 2>/dev/null || true'\'' EXIT
+  cleanup() {
+    trap - EXIT
+    kill "$NOTIFY_PID" 2>/dev/null || true
+    wait "$NOTIFY_PID" 2>/dev/null || true
+  }
+  trap cleanup EXIT
   "$MELANIA_ROOT/target/debug/melania-compositor" \
     --command "$MELANIA_ROOT/target/debug/melania-desktop-surface" \
     --command "$MELANIA_ROOT/target/debug/melania-panel" \
