@@ -23,6 +23,7 @@ export GALLIUM_DRIVER=llvmpipe
 export MELANIA_DEBUG_RENDER=1
 export MELANIA_SMOKE_FILES_LISTING=1
 export MELANIA_SMOKE_OPEN_START=1
+export MELANIA_SMOKE_NOTIFICATION_SWITCH=1
 PID=''
 cleanup() {
   if [[ -n "$PID" ]]; then
@@ -111,6 +112,31 @@ done
   exit 1
 }
 echo 'PASS: real taskbar top-layer pixels submitted by nested Wayland compositor'
+# Real GTK signal: open quick controls then activate the notifications button,
+# the same sequence which disconnected the whole taskbar in VirtualBox.
+SWITCHED=0
+for i in $(seq 1 140); do
+  if grep -q 'MELANIA_SMOKE_NOTIFICATION_CLICK_OK' "$TMP/bundle.log"; then
+    SWITCHED=1
+    break
+  fi
+  kill -0 "$PID" 2>/dev/null || break
+  sleep .2
+done
+[[ "$SWITCHED" == 1 ]] || {
+  echo 'FAIL: notification click regression sequence did not complete' >&2
+  tail -100 "$TMP/bundle.log" >&2
+  exit 1
+}
+# The notification click must not destroy/re-create a Wayland role or kill
+# the client owning the taskbar. A genuine compositor layer must stay mapped.
+sleep .4
+if grep -Eq 'MELANIA_CLIENT_EXIT program=.*melania-panel' "$TMP/bundle.log"; then
+  echo 'FAIL: taskbar exited when switching from quick controls to notifications' >&2
+  grep 'MELANIA_CLIENT_EXIT' "$TMP/bundle.log" >&2
+  exit 1
+fi
+echo 'PASS: quick controls to notifications click preserves the panel client'
 grep -Eq 'MELANIA_CLIENT_STARTED program=.*melania-panel' "$TMP/bundle.log" || {
   echo 'FAIL: bundled panel was never started' >&2
   exit 1
