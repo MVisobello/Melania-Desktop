@@ -9,7 +9,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, time::Duration};
+use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::{Path, PathBuf}, process::Command, rc::Rc, thread, time::Duration};
 use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -718,6 +718,11 @@ fn quick_window(app:&Application, notifications:&ApplicationWindow)->Application
     let setting=Button::with_label("Apri Impostazioni");setting.connect_clicked(|_|run("melania-settings"));root.append(&setting);
     w.set_child(Some(&root));w
 }
+/// Metadata-only change detection keeps installed-app enumeration off the
+/// periodic UI tick. Atomic XDG file replacement changes the inode.
+fn file_stamp(path:&Path)->Option<(u64,u64,i64,i64)> {
+    fs::metadata(path).ok().map(|m|(m.ino(),m.len(),m.mtime(),m.mtime_nsec()))
+}
 fn pins_path()->Option<PathBuf> {
     let dir=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
         .or_else(||std::env::var_os("HOME").map(|h|PathBuf::from(h).join(".config")))?;
@@ -896,11 +901,11 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
     let group_enabled = settings.group_windows;
     let use_thumbnails = settings.preview_windows;
     let path = std::env::var_os(SOCKET_ENV).map(PathBuf::from);
+    let poll_path=path.clone();
     let refresh = {
         let target = box_running.clone();
-        move || {
-            let result = path.as_ref().map(|p| control_request(p, WindowCommand::List));
-            let Ok(windows) = result.unwrap_or_else(||Err(melania_control::ControlError::Protocol("socket non disponibile"))) else {
+        move |snapshot: Option<Vec<WindowInfo>>| {
+            let Some(windows) = snapshot else {
                 if last.borrow().is_some() {
                     for (_, button) in pinned_buttons.borrow().iter() {
                         button.set_visible(true);
@@ -1012,20 +1017,49 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                     let hover = gtk::EventControllerMotion::new();
                     let menu_for_hover = menu.clone();
                     let screenshot_endpoint = path.clone();
+                    let preview_inflight=Rc::new(Cell::new(false));
                     hover.connect_enter(move |_,_,_| {
                         menu_for_hover.popup();
-                        // Captures only the selected compositor-owned window
-                        // subtree, never screen pixels behind another app.
-                        // Six captures max per hover; failure retains icon/title.
-                        if !use_thumbnails {return;}
-                        let Some(socket)=screenshot_endpoint.as_ref() else {return;};
-                        for (id,icon,picture) in preview_targets.iter().take(6) {
-                            if let Ok(image_path)=melania_control::request_preview(socket,*id) {
-                                picture.set_filename(Some(&image_path));
-                                picture.set_visible(true);
-                                icon.set_visible(false);
+                        // Never block GTK's event loop on synchronous compositor
+                        // readback; a hover can request up to six previews.
+                        if !use_thumbnails || preview_inflight.replace(true) {return;}
+                        let Some(socket)=screenshot_endpoint.as_ref() else {
+                            preview_inflight.set(false);
+                            return;
+                        };
+                        // Only paths/IDs cross the worker boundary. GTK widgets
+                        // always stay on the main thread.
+                        let socket=socket.clone();
+                        let ids:Vec<u64>=preview_targets.iter().take(6)
+                            .map(|(id,_,_)|*id).collect();
+                        let widgets:Vec<(Image,Picture)>=preview_targets.iter().take(6)
+                            .map(|(_,icon,picture)|(icon.clone(),picture.clone())).collect();
+                        let (sender,receiver)=std::sync::mpsc::channel::<(usize,PathBuf)>();
+                        thread::spawn(move || {
+                            for (index,id) in ids.into_iter().enumerate() {
+                                if let Ok(image_path)=melania_control::request_preview(&socket,id) {
+                                    if sender.send((index,image_path)).is_err(){break;}
+                                }
                             }
-                        }
+                        });
+                        let busy=preview_inflight.clone();
+                        glib::timeout_add_local(Duration::from_millis(40),move ||{
+                            match receiver.try_recv() {
+                                Ok((index,image_path))=>{
+                                    if let Some((icon,picture))=widgets.get(index) {
+                                        picture.set_filename(Some(&image_path));
+                                        picture.set_visible(true);
+                                        icon.set_visible(false);
+                                    }
+                                    glib::ControlFlow::Continue
+                                },
+                                Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+                                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                                    busy.set(false);
+                                    glib::ControlFlow::Break
+                                }
+                            }
+                        });
                     });
                     menu.add_controller(hover);
                     // Preserve safe hover activation when dragging files over a
@@ -1106,9 +1140,23 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
             *last.borrow_mut()=Some(windows);
         }
     };
-    refresh();
-    glib::timeout_add_local(Duration::from_millis(500),move ||{
-        refresh();glib::ControlFlow::Continue
+    // IPC can block while the compositor captures a window preview. Poll
+    // on a bounded background worker: GTK only receives owned WindowInfo.
+    let (sender,receiver)=std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        loop {
+            let snapshot=poll_path.as_ref().and_then(|endpoint|
+                control_request(endpoint,WindowCommand::List).ok());
+            if sender.send(snapshot).is_err(){break;}
+            thread::sleep(Duration::from_millis(400));
+        }
+    });
+    glib::timeout_add_local(Duration::from_millis(75),move ||{
+        match receiver.try_recv() {
+            Ok(windows)=>{refresh(windows);glib::ControlFlow::Continue},
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>glib::ControlFlow::Break,
+        }
     });
     box_running
 }
@@ -1381,9 +1429,15 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     let pinned_area=pinned.clone();
     let pinned_widgets=pinned_buttons.clone();
     let pinned_ids=pinned_order.clone();
+    let pins_file=pins_path();
+    let mut pins_stamp=pins_file.as_deref().and_then(file_stamp);
     glib::timeout_add_local(Duration::from_millis(800),move ||{
-        if load_pins()!=*pinned_ids.borrow(){
-            populate_pins(&pinned_area,&pinned_widgets,&pinned_ids);
+        let updated=pins_file.as_deref().and_then(file_stamp);
+        if updated!=pins_stamp {
+            pins_stamp=updated;
+            if load_pins()!=*pinned_ids.borrow(){
+                populate_pins(&pinned_area,&pinned_widgets,&pinned_ids);
+            }
         }
         glib::ControlFlow::Continue
     });

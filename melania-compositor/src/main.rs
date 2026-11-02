@@ -8,7 +8,7 @@
 //! The compositing and protocol APIs follow Smithay 0.7.0. Run nested only.
 mod window_preview;
 
-use std::{error::Error, ffi::{OsStr, OsString}, fs, io::{self, Write}, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::{Path, PathBuf}, process::{Child, Command}, sync::Arc, time::{Duration, Instant}};
+use std::{error::Error, ffi::{OsStr, OsString}, fs, io::{self, Write}, os::{fd::OwnedFd, unix::{fs::PermissionsExt, net::{UnixListener, UnixDatagram}}}, path::{Path, PathBuf}, process::{Child, Command}, sync::Arc, thread, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -720,6 +720,13 @@ fn spawn_nested_client(program: OsString, socket: &OsStr, control_path: &Path) -
     Ok((program, child))
 }
 
+/// Cap full-frame nested redraws to the advertised 60 Hz output. Unlike an
+/// uncapped busy loop, this leaves CPU/GPU time for GTK clients on llvmpipe.
+/// When rendering itself exceeds the budget, never add extra latency.
+fn frame_idle_budget(frame_elapsed: Duration) -> Duration {
+    Duration::from_nanos(16_666_667).saturating_sub(frame_elapsed)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut display = Display::<Melania>::new()?;
     let mut handle = display.handle();
@@ -790,6 +797,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Opt-in instrumentation for nested software-rendering CI diagnostics.
     let debug_render = std::env::var_os("MELANIA_DEBUG_RENDER").is_some();
     let mut last_render_report = Instant::now();
+    let profile_frames = std::env::var_os("MELANIA_PROFILE_COMPOSITOR").is_some();
+    let mut sample_started = Instant::now();
+    let mut sampled_frames = 0u64;
+    let mut sampled_busy_us = 0u128;
 
     // Launch the shell first: desktop background and taskbar get the first
     // real Wayland frame before expensive application GTK windows are spawned.
@@ -828,6 +839,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // must not toggle it (e.g. Super+E continues opening Melania Files).
     let mut super_pressed_alone=false;
     loop {
+        let frame_started=Instant::now();
         let status = host.dispatch_new_events(|event| match event {
             WinitEvent::Resized { size, .. } => {
                 output.change_current_state(Some(Mode { size, refresh: 60_000 }), None, None, None);
@@ -1156,6 +1168,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         });
         state.space.refresh();
+        let busy=frame_started.elapsed();
+        if profile_frames {
+            sampled_frames+=1;
+            sampled_busy_us+=busy.as_micros();
+        }
+        let budget=frame_idle_budget(busy);
+        if !budget.is_zero() {thread::sleep(budget);}
+        if profile_frames && sample_started.elapsed()>=Duration::from_secs(2) {
+            let elapsed=sample_started.elapsed().as_secs_f64();
+            let average=sampled_busy_us as f64/sampled_frames.max(1) as f64/1000.0;
+            eprintln!("MELANIA_COMPOSITOR_FPS={:.1} busy_ms_avg={:.2} samples={}",
+                sampled_frames as f64/elapsed,average,sampled_frames);
+            sampled_frames=0;
+            sampled_busy_us=0;
+            sample_started=Instant::now();
+        }
     }
     // Child clients belong to the nested compositor, not the host session.
     // Do not leave stray panel/files/settings processes after QUIT.
@@ -1164,4 +1192,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         let _=child.wait();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod frame_pacing_tests {
+    use super::frame_idle_budget;
+    use std::time::Duration;
+
+    #[test]
+    fn full_speed_nested_frame_is_paced_to_sixty_hertz() {
+        assert!(frame_idle_budget(Duration::ZERO) >= Duration::from_millis(16));
+        assert!(frame_idle_budget(Duration::from_millis(8)) <= Duration::from_millis(9));
+    }
+
+    #[test]
+    fn overloaded_software_frame_never_waits_more() {
+        assert_eq!(frame_idle_budget(Duration::from_millis(20)),Duration::ZERO);
+    }
 }

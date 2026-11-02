@@ -2190,7 +2190,18 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         refresh(&state);
     });
     let state = browser.clone();
-    browser.search.connect_changed(move |_| refresh(&state));
+    // Search-as-you-type must not tear down and rebuild the entire FlowBox
+    // on every single keystroke. Only the latest edit runs after a short pause.
+    let search_revision=Rc::new(Cell::new(0u64));
+    browser.search.connect_changed(move |_| {
+        let ticket=search_revision.get().wrapping_add(1);
+        search_revision.set(ticket);
+        let current_revision=search_revision.clone();
+        let tab=state.clone();
+        glib::timeout_add_local_once(Duration::from_millis(150),move || {
+            if current_revision.get()==ticket {refresh(&tab);}
+        });
+    });
     let state=browser.clone();
     properties_button.connect_clicked(move |_| {
         if let Some(path) = state.selected.borrow().as_ref() { show_properties(path); }
