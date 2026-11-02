@@ -585,6 +585,20 @@ fn build_ui(
             audit_stack.set_visible_child_name("xfce-panel");
         });
     }
+    // Isolated end-to-end check exercises both background service queries.
+    // Ordinary sessions never auto-navigate or toggle system radios.
+    if std::env::var_os("MELANIA_SMOKE_SETTINGS_SERVICES").as_deref()
+        ==Some(std::ffi::OsStr::new("1")) {
+        let network_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(750),move ||{
+            network_stack.set_visible_child_name("network");
+        });
+        let bluetooth_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(1250),move ||{
+            bluetooth_stack.set_visible_child_name("bluetooth");
+            eprintln!("MELANIA_SETTINGS_ASYNC_NAVIGATION_OK");
+        });
+    }
     if audit_settings {
         // The initial page may be selected before the signal handler is wired.
         eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",
