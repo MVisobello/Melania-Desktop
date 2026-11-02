@@ -69,7 +69,7 @@ def stage(archive: Path, destination: Path = TARGET) -> None:
         for path in staged.rglob("*"):
             if path.is_symlink() and (
                 not path.resolve().is_relative_to(staged.resolve())
-                or not path.resolve().is_file()
+                or not path.resolve().exists()
             ):
                 raise ValueError(f"Collegamento simbolico non valido: {path}")
         if destination.is_symlink():
