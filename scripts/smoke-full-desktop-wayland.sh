@@ -216,6 +216,17 @@ if command -v xdotool >/dev/null; then
   fi
   echo 'PASS: lone Super toggles Start closed/open, text reaches search without mouse click'
 fi
+# Publish a copy of the ACTUAL running Melania screenshot with provenance.
+# Source pixels are never redrawn or synthesized. A second screenshot proves
+# the Start search visibly changed after the real keyboard injection.
+if command -v scrot >/dev/null && command -v xdotool >/dev/null; then
+  python3 scripts/check-real-desktop-preview.py \
+    --screenshot reports/nested-wayland-full-desktop.png \
+    --search reports/nested-wayland-start-search.png \
+    --windows "$TEMP/windows.log" \
+    --output reports/melania-real-desktop-preview.png \
+    --manifest reports/melania-real-desktop-preview.json
+fi
 # Verify a REAL running Melania taskbar accepts a changed user config and
 # moves from the bottom to the top edge without a restart or compositor exit.
 # The setting is isolated under the temporary CI XDG_CONFIG_HOME.
