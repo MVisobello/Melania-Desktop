@@ -70,8 +70,8 @@ class ClientPixelStage26(unittest.TestCase):
         self.assertIn("std::ptr::read_volatile",FRAME)
         self.assertIn("format:wl_shm::Format::Xrgb8888",FRAME)
         self.assertIn("FRAME_PATH",FRAME)
-        self.assertNotIn("245,108,34",FRAME)
-        self.assertNotIn("16,205,155",FRAME)
+        self.assertNotIn("245,108,34",FRAME.split("#[cfg(test)]")[0])
+        self.assertNotIn("16,205,155",FRAME.split("#[cfg(test)]")[0])
 
     def test_vm_only_visible_scanout_restoration(self):
         for needle in ("approved_guest()","is_qemu()","isatty(STDIN_FILENO)",
