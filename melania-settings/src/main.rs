@@ -560,6 +560,15 @@ fn build_ui(
         eprintln!("MELANIA_SETTINGS_FIRST_WINDOW_MS={}",first_window_start.elapsed().as_millis());
     }
     if let Some(name)=stack.visible_child_name() {activate_page(name.as_str());}
+    // Isolated real-Wayland CI explicitly visits a functional, lazy category.
+    // Normal user sessions never auto-navigate or modify any preference.
+    if std::env::var_os("MELANIA_SMOKE_SETTINGS_LAZY").as_deref()
+        ==Some(std::ffi::OsStr::new("1")) {
+        let audit_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(350),move ||{
+            audit_stack.set_visible_child_name("xfce-panel");
+        });
+    }
     if audit_settings {
         // The initial page may be selected before the signal handler is wired.
         eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",
