@@ -564,6 +564,10 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                                 SERIAL_COUNTER.next_serial());
                             state.focused=Some(surface);
                             println!("MELANIA_NATIVE_WINDOW_POINTER_FOCUS={id}");
+                            // The QEMU injector observes this event via
+                            // the redirected guest serial log. Flush NOW,
+                            // not after the next multi-second DRM ACK.
+                            let _=std::io::stdout().flush();
                         }
                     }
                 }
