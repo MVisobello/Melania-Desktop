@@ -38,8 +38,26 @@ mkdir -p reports
   cat "$TMP/check.log" >&2; exit 1;
 }
 grep -q 'MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true' "$TMP/check.log"
-"$BUNDLE/run.sh" >"$TMP/bundle.log" 2>&1 &
+# Exercise the same renderer fallback VirtualBox users will select. Keep
+# the normal host path in the generic Ubuntu smoke as a separate gate.
+if [[ "${MELANIA_BUNDLE_SOFTWARE_SMOKE:-0}" == 1 ]]; then
+  "$BUNDLE/run.sh" --software >"$TMP/bundle.log" 2>&1 &
+else
+  "$BUNDLE/run.sh" >"$TMP/bundle.log" 2>&1 &
+fi
 PID=$!
+if [[ "${MELANIA_BUNDLE_SOFTWARE_SMOKE:-0}" == 1 ]]; then
+  for i in $(seq 1 60); do
+    grep -q 'MELANIA_RENDERING_BACKEND=software' "$TMP/bundle.log" && break
+    kill -0 "$PID" 2>/dev/null || break
+    sleep .1
+  done
+  grep -q 'MELANIA_RENDERING_BACKEND=software' "$TMP/bundle.log" || {
+    echo 'FAIL: VirtualBox software graphics fallback was not activated' >&2
+    cat "$TMP/bundle.log" >&2
+    exit 1
+  }
+fi
 
 CONTROL_SOCKET=''
 for i in $(seq 1 120); do
