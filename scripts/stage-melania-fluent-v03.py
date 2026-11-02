@@ -38,7 +38,8 @@ def stage(archive: Path, destination: Path = TARGET) -> None:
                 if member.isdir() or member.isfile() or member.issym():
                     if member.issym():
                         link = PurePosixPath(member.linkname)
-                        if link.is_absolute() or ".." in link.parts:
+                        linked_target = (staged / path.parent.as_posix() / member.linkname).resolve()
+                        if link.is_absolute() or not linked_target.is_relative_to(staged.resolve()):
                             raise ValueError(f"Collegamento non sicuro: {member.name}")
                 else:
                     raise ValueError(f"Tipo di archivio non consentito: {member.name}")
