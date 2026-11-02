@@ -4,7 +4,10 @@ from pathlib import Path
 import importlib.util
 import tempfile
 import unittest
-from PIL import Image, ImageDraw
+try:
+    from PIL import Image, ImageDraw
+except ImportError:
+    Image = ImageDraw = None
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = (ROOT / "melania-native/src/wayland_bridge.rs").read_text()
@@ -14,11 +17,6 @@ GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
 NESTED = (ROOT / "scripts/smoke-full-desktop-wayland.sh").read_text()
 WORKFLOW = (ROOT / ".github/workflows/wayland-smoke.yml").read_text()
 
-spec = importlib.util.spec_from_file_location(
-    "real_desktop", ROOT / "scripts/check-real-desktop-preview.py"
-)
-preview = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(preview)
 
 
 class NativeOutputStage27(unittest.TestCase):
@@ -61,7 +59,13 @@ class NativeOutputStage27(unittest.TestCase):
         self.assertIn("reports/melania-real-desktop-preview.png", WORKFLOW)
         self.assertIn("real_nested_wayland_xvfb", (ROOT / "scripts/check-real-desktop-preview.py").read_text())
 
+    @unittest.skipIf(Image is None, "Pillow installed in actual nested screenshot CI")
     def test_real_capture_copy_is_byte_identical(self):
+        spec = importlib.util.spec_from_file_location(
+            "real_desktop", ROOT / "scripts/check-real-desktop-preview.py"
+        )
+        preview = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(preview)
         with tempfile.TemporaryDirectory() as d:
             temp = Path(d)
             original = temp / "desktop.png"
