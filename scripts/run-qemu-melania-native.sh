@@ -171,6 +171,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! test -s "$report/two-window-frame2.ppm" ||
    ! test -s "$report/two-window-frame3.ppm" ||
    ! grep -q '^MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NONBLOCKING_KMS_WORKER_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_LIVE_KMS_THREE_CAPTURE_PASS=true' "$report/qmp-live-stream.log" ||
    ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME1_PIXELS=true' "$report/qmp-live-stream.log" ||
    ! grep -q '^MELANIA_QEMU_LIVE_KMS_FRAME2_PIXELS=true' "$report/qmp-live-stream.log" ||
