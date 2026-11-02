@@ -775,7 +775,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // The parent process enforces the opt-in, DMI and Linux VT gates.
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
-    let deadline=Instant::now()+Duration::from_secs(27);
+    let deadline=Instant::now()+Duration::from_secs(
+        if state.layout_repaint_mode {34} else {27}
+    );
     let mut both_shell_roles_seen_at=None;
     let mut pixel_ready_since=None;
     while Instant::now()<deadline {
