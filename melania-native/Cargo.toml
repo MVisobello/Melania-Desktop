@@ -1,10 +1,11 @@
 [package]
 name = "melania-native"
+default-run = "melania-native"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Stage 1 is intentionally NOT a Wayland compositor or login session.
+# The VM-only Wayland seat/shell bridge is still NOT a native login session.
 # Smithay native feature flags compile alongside (not instead of) winit.
 [dependencies]
 smithay = { version = "0.7.0", default-features = false, features = [
