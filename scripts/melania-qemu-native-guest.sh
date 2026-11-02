@@ -262,6 +262,77 @@ MELANIA_QEMU_CLIENT_WINDOW_FRAME=YES_DISPOSABLE_QEMU \
 report 'MELANIA_QEMU_NATIVE_CLIENT_WINDOW_SCANOUT_PASS=true'
 report 'MELANIA_NATIVE_LIVE_KMS_RENDERING=false'
 
+# Stage 29: the Smithay server stays ALIVE while a separate Rust drm-rs
+# process presents THREE real client commits. Each wl_shm release waits for
+# the DRM process to acknowledge that frame; the third ack follows restore.
+# This is a bounded integration test, not a continuous native desktop.
+stream_binary=/mnt/melania-native/melania-rust-stream
+[[ -x "$stream_binary" ]] || fatal 'Rust_live_stream_KMS_binary_missing'
+stream_server_log="$(mktemp -t melania-live-smithay-XXXXXX)"
+stream_kms_log="$(mktemp -t melania-live-kms-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 39s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 > "$stream_server_log" 2>&1 &
+stream_server_pid=$!
+live_socket=''
+for attempt in $(seq 1 100); do
+  live_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$stream_server_log" | head -n 1)"
+  [[ -n "$live_socket" ]] && grep -q '^MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true' "$stream_server_log" && break
+  kill -0 "$stream_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$live_socket" || ! -S /run/melania-native-qemu/frame-stream.sock ]]; then
+  cat "$stream_server_log"
+  kill "$stream_server_pid" 2>/dev/null || true
+  wait "$stream_server_pid" 2>/dev/null || true
+  fatal 'Smithay_guest_live_frame_stream_unavailable'
+fi
+
+MELANIA_QEMU_RUST_LIVE_STREAM_KMS=YES_DISPOSABLE_QEMU \
+  timeout --signal=TERM --kill-after=3s 38s \
+  "$stream_binary" < /dev/tty1 2>&1 | tee "$stream_kms_log" &
+stream_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_STREAM_KMS_CONNECTED=true' "$stream_kms_log" && break
+  kill -0 "$stream_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_STREAM_KMS_CONNECTED=true' "$stream_kms_log"; then
+  cat "$stream_server_log"
+  kill "$stream_server_pid" "$stream_kms_pid" 2>/dev/null || true
+  wait "$stream_server_pid" "$stream_kms_pid" 2>/dev/null || true
+  fatal 'Rust_KMS_did_not_connect_to_live_Smithay_stream'
+fi
+if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM WAYLAND_DISPLAY="$live_socket" \
+  timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
+  cat "$stream_server_log"
+  kill "$stream_server_pid" "$stream_kms_pid" 2>/dev/null || true
+  wait "$stream_server_pid" "$stream_kms_pid" 2>/dev/null || true
+  fatal 'real_Wayland_client_three_live_commits_failed'
+fi
+if ! wait "$stream_kms_pid"; then
+  cat "$stream_server_log"
+  fatal 'Rust_live_stream_page_flips_or_CRTC_restore_failed'
+fi
+if ! wait "$stream_server_pid"; then
+  cat "$stream_server_log"
+  fatal 'Smithay_live_stream_session_failed'
+fi
+cat "$stream_server_log"
+grep -q '^MELANIA_RUST_STREAM_THREE_CLIENT_FRAMES_PASS=true' "$stream_kms_log" ||
+  fatal 'Rust_live_KMS_three_presentations_missing'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$stream_kms_log" ||
+  fatal 'Rust_live_stream_original_CRTC_not_restored'
+grep -q '^MELANIA_NATIVE_CLIENT_FRAME_COUNT=3' "$stream_server_log" ||
+  fatal 'Smithay_did_not_deliver_three_real_client_buffers'
+grep -q '^MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true' "$stream_server_log" ||
+  fatal 'Smithay_native_live_stream_not_acknowledged'
+rm -f "$stream_server_log" "$stream_kms_log"
+report 'MELANIA_QEMU_NATIVE_LIVE_WAYLAND_KMS_STREAM_PASS=true'
+report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
