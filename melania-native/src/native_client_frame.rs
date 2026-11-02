@@ -180,4 +180,30 @@ mod tests {
         assert!(compose_from_shm(data.as_ptr(),data.len(),
             BufferData{format:wl_shm::Format::Argb8888,..meta}).is_err());
     }
+    #[test]
+    fn imports_client_resized_xrgb8888_with_strides_and_rejects_bad_mapping() {
+        let (w,h)=(386usize,246usize);
+        let stride=w*4+16;
+        let mut source=vec![0u8;h*stride];
+        for y in 0..h {
+            for x in 0..w {
+                let start=y*stride+x*4;
+                source[start..start+4].copy_from_slice(&[11,22,33,0]);
+            }
+        }
+        let meta=BufferData{
+            offset:0,width:w as i32,height:h as i32,
+            stride:stride as i32,format:wl_shm::Format::Xrgb8888,
+        };
+        let copy=copy_client_shm_sized(source.as_ptr(),source.len(),meta).unwrap();
+        assert_eq!(copy.len(),w*h*4);
+        assert_eq!(&copy[0..4],&[11,22,33,0]);
+        assert_eq!(&copy[copy.len()-4..],&[11,22,33,0]);
+        assert!(copy_client_shm_sized(source.as_ptr(),source.len()-17,meta).is_err());
+        assert!(copy_client_shm_sized(source.as_ptr(),source.len(),
+            BufferData{format:wl_shm::Format::Argb8888,..meta}).is_err());
+        assert!(copy_client_shm_sized(source.as_ptr(),source.len(),
+            BufferData{width:1000,..meta}).is_err());
+    }
+
 }
