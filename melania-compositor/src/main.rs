@@ -791,12 +791,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err(format!("Unknown option {:?}; use --command /path/to/program", flag).into());
         }
         let program = arguments.next().ok_or("--command requires a program")?;
-        children.push(Command::new(program).env("WAYLAND_DISPLAY", &socket)
+        let child = Command::new(&program).env("WAYLAND_DISPLAY", &socket)
             .env(SOCKET_ENV, &control_path)
             .env("XDG_SESSION_TYPE", "wayland")
             .env("XDG_CURRENT_DESKTOP", "Melania")
             .env("MELANIA_NESTED_SESSION", "1")
-            .env("GDK_BACKEND", "wayland").spawn()?);
+            .env("GDK_BACKEND", "wayland").spawn()?;
+        eprintln!("MELANIA_CLIENT_STARTED program={} pid={}",
+            program.to_string_lossy(), child.id());
+        children.push((program, child));
     }
     loop {
         let status = host.dispatch_new_events(|event| match event {
@@ -1078,12 +1081,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         state.refresh_start_focus();
         display.flush_clients()?;
         backend.submit(Some(&[damage]))?;
-        children.retain_mut(|c| c.try_wait().ok().flatten().is_none());
+        // A GTK client can quit after a Vulkan/EGL initialization failure.
+        // Log *which* application exited; a Wayland ConnectionClosed event
+        // alone is not enough to distinguish panel from Files or Settings.
+        children.retain_mut(|(program, child)| match child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                eprintln!("MELANIA_CLIENT_EXIT program={} pid={} status={}",
+                    program.to_string_lossy(), child.id(), status);
+                false
+            }
+            Err(error) => {
+                eprintln!("MELANIA_CLIENT_WAIT_FAILED program={} pid={} error={}",
+                    program.to_string_lossy(), child.id(), error);
+                false
+            }
+        });
         state.space.refresh();
     }
     // Child clients belong to the nested compositor, not the host session.
     // Do not leave stray panel/files/settings processes after QUIT.
-    for mut child in children {
+    for (_, mut child) in children {
         let _=child.kill();
         let _=child.wait();
     }

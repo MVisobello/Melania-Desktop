@@ -38,8 +38,26 @@ mkdir -p reports
   cat "$TMP/check.log" >&2; exit 1;
 }
 grep -q 'MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true' "$TMP/check.log"
-"$BUNDLE/run.sh" >"$TMP/bundle.log" 2>&1 &
+# Exercise the same renderer fallback VirtualBox users will select. Keep
+# the normal host path in the generic Ubuntu smoke as a separate gate.
+if [[ "${MELANIA_BUNDLE_SOFTWARE_SMOKE:-0}" == 1 ]]; then
+  "$BUNDLE/run.sh" --software >"$TMP/bundle.log" 2>&1 &
+else
+  "$BUNDLE/run.sh" >"$TMP/bundle.log" 2>&1 &
+fi
 PID=$!
+if [[ "${MELANIA_BUNDLE_SOFTWARE_SMOKE:-0}" == 1 ]]; then
+  for i in $(seq 1 60); do
+    grep -q 'MELANIA_RENDERING_BACKEND=software' "$TMP/bundle.log" && break
+    kill -0 "$PID" 2>/dev/null || break
+    sleep .1
+  done
+  grep -q 'MELANIA_RENDERING_BACKEND=software' "$TMP/bundle.log" || {
+    echo 'FAIL: VirtualBox software graphics fallback was not activated' >&2
+    cat "$TMP/bundle.log" >&2
+    exit 1
+  }
+fi
 
 CONTROL_SOCKET=''
 for i in $(seq 1 120); do
@@ -76,6 +94,32 @@ for i in $(seq 1 140); do
   sleep .25
 done
 [[ "$RENDERED" == 1 ]] || { echo 'FAIL: no GTK window submitted a real Wayland buffer' >&2;exit 1; }
+# A toplevel-only screenshot can look like "just Melania Files over a
+# background". Assert an actual painted top/overlay layer from the panel.
+TOP_LAYER_RENDERED=0
+for i in $(seq 1 80); do
+  if grep -Eq 'MELANIA_RENDER .*top=[1-9][0-9]*' "$TMP/bundle.log"; then
+    TOP_LAYER_RENDERED=1
+    break
+  fi
+  kill -0 "$PID" 2>/dev/null || break
+  sleep .25
+done
+[[ "$TOP_LAYER_RENDERED" == 1 ]] || {
+  echo 'FAIL: top/overlay panel layer never rendered (Files alone is not a desktop)' >&2
+  grep -E 'MELANIA_RENDER|MELANIA_CLIENT_|GSK|EGL|MESA' "$TMP/bundle.log" >&2 || true
+  exit 1
+}
+echo 'PASS: real taskbar top-layer pixels submitted by nested Wayland compositor'
+grep -Eq 'MELANIA_CLIENT_STARTED program=.*melania-panel' "$TMP/bundle.log" || {
+  echo 'FAIL: bundled panel was never started' >&2
+  exit 1
+}
+if grep -Eq 'MELANIA_CLIENT_EXIT program=.*melania-panel' "$TMP/bundle.log"; then
+  echo 'FAIL: bundled panel exited while the desktop was starting' >&2
+  grep 'MELANIA_CLIENT_EXIT' "$TMP/bundle.log" >&2
+  exit 1
+fi
 
 sleep .8
 scrot -z -o reports/bundle-nested-desktop.png

@@ -10,6 +10,7 @@ on:
       - scripts/smoke-portable-bundle.sh
       - docs/MINT22-RUNTIME.md
       - tests/test_preview_bundle.py
+      - tests/test_virtualbox_preview.py
       - melania-compositor/**
       - melania-desktop-surface/**
       - melania-panel/**
@@ -28,6 +29,7 @@ on:
       - scripts/smoke-portable-bundle.sh
       - docs/MINT22-RUNTIME.md
       - tests/test_preview_bundle.py
+      - tests/test_virtualbox_preview.py
       - melania-compositor/**
       - melania-desktop-surface/**
       - melania-panel/**
@@ -79,6 +81,7 @@ jobs:
           set -euo pipefail
           pkg-config --modversion gtk4 gtk4-layer-shell-0
           python3 -m unittest discover -s tests -p test_preview_bundle.py -v
+          python3 -m unittest discover -s tests -p test_virtualbox_preview.py -v
           bash -n scripts/run-melania-bundle.sh
           bash -n scripts/smoke-portable-bundle.sh
       - name: Compile the real Melania Linux binaries against Ubuntu 24.04
@@ -124,6 +127,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           MELANIA_BUNDLE_TEST_ROOT: ${{ runner.temp }}/melania-mint22-release/melania-nested-preview
+          MELANIA_BUNDLE_SOFTWARE_SMOKE: "1"
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -131,6 +135,7 @@ jobs:
             bash scripts/smoke-portable-bundle.sh 2>&1 | tee reports/mint22-bundle-smoke.log
           grep -q 'PASS: extracted portable bundle launched real nested GTK desktop and exited cleanly' \
             reports/mint22-bundle-smoke.log
+          grep -q 'MELANIA_RENDERING_BACKEND=software' reports/bundle-nested-desktop.log
           test -s reports/bundle-nested-desktop.png
       - name: Publish Mint-compatible archive and SHA256 checksum
         if: success()
