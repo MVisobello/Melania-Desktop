@@ -2538,6 +2538,7 @@ fn files_initial_size(screen_width: i32, screen_height: i32) -> (i32, i32) {
 }
 
 fn build_ui(app: &Application) {
+    let startup_clock=Instant::now();
     install_files_ui_stall_probe();
     setup_melania_icon_theme();
     let css = gtk::CssProvider::new();
@@ -2605,6 +2606,11 @@ fn build_ui(app: &Application) {
     tabs.set_vexpand(true);
     tabs.set_show_border(false);
     tabs.add_css_class("files-notebook");
+    // Present a lightweight real Files window before constructing the full
+    // GIO browser tab; GTK can paint its chrome while the first folder loads.
+    let loading=Label::new(Some("Caricamento cartella…"));
+    loading.add_css_class("files-loading");
+    tabs.append_page(&loading,None::<&gtk::Widget>);
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
@@ -2624,20 +2630,7 @@ fn build_ui(app: &Application) {
     });
     let open_network=open_remote.clone();
     network_button.connect_clicked(move |_|open_network("network:///".to_owned()));
-    let requested_uri=std::env::args_os().nth(1).and_then(|s|s.into_string().ok())
-        .filter(|s|s.contains("://"));
-    let starting = std::env::args_os().nth(1).map(PathBuf::from)
-        .filter(|p| p.is_dir()).unwrap_or_else(home);
     let shared_pending: Rc<RefCell<Option<PendingTransfer>>> = Rc::new(RefCell::new(None));
-    let initial_title = starting.file_name().map(|s|s.to_string_lossy().into_owned())
-        .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_string());
-    append_browser_tab(&tabs, &tab_strip, &tab_headers, &window, starting,
-        shared_pending.clone(), &initial_title, open_remote.clone());
-    if let Some(uri)=requested_uri {open_remote(uri); }
-    // Real GUI/Wayland smoke: use an isolated file:/// GVfs backend.
-    if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
-        if uri.starts_with("file:///") {open_remote(uri);}
-    }
     let notebook = tabs.clone();
     let pending_for_add = shared_pending.clone();
     let header_for_add = tab_headers.clone();
@@ -2695,6 +2688,37 @@ fn build_ui(app: &Application) {
     window.add_controller(keys);
     window.set_child(Some(&frame));
     window.present();
+    if files_profile_enabled() {
+        eprintln!("MELANIA_FILES_FIRST_WINDOW_MS={}",startup_clock.elapsed().as_millis());
+    }
+    let first_tabs=tabs.clone();
+    let first_strip=tab_strip.clone();
+    let first_headers=tab_headers.clone();
+    let first_window=window.clone();
+    let first_pending=shared_pending.clone();
+    let first_remote=open_remote.clone();
+    glib::timeout_add_local_once(Duration::from_millis(55),move || {
+        // Only now perform path probes and instantiate the complete browser
+        // widget tree. Initial async listing and thumbnails remain separate.
+        let requested_uri=std::env::args_os().nth(1)
+            .and_then(|s|s.into_string().ok())
+            .filter(|s|s.contains("://"));
+        let starting=std::env::args_os().nth(1).map(PathBuf::from)
+            .filter(|p|p.is_dir()).unwrap_or_else(home);
+        let title=starting.file_name().map(|s|s.to_string_lossy().into_owned())
+            .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_owned());
+        append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
+            starting,first_pending,&title,first_remote.clone());
+        // Drop only the temporary loading page; all genuine tabs remain.
+        first_tabs.remove_page(Some(0));
+        if let Some(uri)=requested_uri {first_remote(uri);}
+        if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
+            if uri.starts_with("file:///") {first_remote(uri);}
+        }
+        if files_profile_enabled() {
+            eprintln!("MELANIA_FILES_FIRST_TAB_MS={}",startup_clock.elapsed().as_millis());
+        }
+    });
 }
 
 
