@@ -1,0 +1,121 @@
+name: Melania nested preview bundle
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/nested-preview-bundle.yml
+      - scripts/package-nested-preview.py
+      - scripts/run-melania-bundle.sh
+      - scripts/smoke-portable-bundle.sh
+      - tests/test_preview_bundle.py
+      - docs/NESTED-PREVIEW-BUNDLE.md
+      - melania-desktop-surface/**
+      - melania-panel/**
+      - melania-compositor/**
+      - melania-files/**
+      - melania-settings/**
+      - melania-control/**
+      - melania-notifyd/**
+      - melania-notifyctl/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/nested-preview-bundle.yml
+      - scripts/package-nested-preview.py
+      - scripts/run-melania-bundle.sh
+      - scripts/smoke-portable-bundle.sh
+      - tests/test_preview_bundle.py
+      - docs/NESTED-PREVIEW-BUNDLE.md
+      - melania-desktop-surface/**
+      - melania-panel/**
+      - melania-compositor/**
+      - melania-files/**
+      - melania-settings/**
+      - melania-control/**
+      - melania-notifyd/**
+      - melania-notifyctl/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-nested:
+    name: Build, package and launch extracted preview under Xvfb
+    runs-on: ubuntu-26.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install compiler and real Wayland/GTK dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libgtk4-layer-shell-dev \
+            libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libx11-dev libudev-dev libdbus-1-dev libinput-dev \
+            libseat-dev libdrm-dev libgbm-dev \
+            mesa-utils libgl1-mesa-dri xvfb xauth scrot \
+            python3-pil dbus-user-session dbus-x11
+      - name: Run packaging security tests and launcher shell check
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_preview_bundle.py -v
+          bash -n scripts/run-melania-bundle.sh
+          bash -n scripts/smoke-portable-bundle.sh
+      - name: Compile all actual preview binaries (not mocks)
+        run: |
+          set -euo pipefail
+          cargo build -p melania-compositor -p melania-desktop-surface \
+            -p melania-panel -p melania-files -p melania-settings \
+            -p melania-control -p melania-notifyd -p melania-notifyctl
+      - name: Stage archive and checksums tied to this commit
+        run: |
+          set -euo pipefail
+          python3 scripts/package-nested-preview.py \
+            --bin-dir target/debug --output-dir target/melania-preview-release \
+            --commit "$GITHUB_SHA"
+          cd target/melania-preview-release
+          sha256sum -c SHA256SUMS
+          tar -tzf melania-nested-preview.tar.gz > bundle-members.txt
+          grep -Fxq 'melania-nested-preview/manifest.json' bundle-members.txt
+          grep -Fxq 'melania-nested-preview/run.sh' bundle-members.txt
+      - name: Real packaged desktop under isolated graphical host
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          xvfb-run -a -s '-screen 0 1280x800x24' \
+            bash scripts/smoke-portable-bundle.sh 2>&1 | tee reports/bundle-smoke.log
+          grep -q 'PASS: extracted portable bundle launched real nested GTK desktop and exited cleanly' \
+            reports/bundle-smoke.log
+          test -s reports/bundle-nested-desktop.png
+      - name: Upload portable preview archive and SHA256SUMS
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: melania-nested-preview-linux-x86_64
+          path: |
+            target/melania-preview-release/melania-nested-preview.tar.gz
+            target/melania-preview-release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload portable bundle smoke evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melania-nested-preview-smoke-evidence
+          path: |
+            reports/bundle-smoke.log
+            reports/bundle-nested-desktop.log
+            reports/bundle-nested-desktop.png
+          if-no-files-found: warn
+          retention-days: 14
