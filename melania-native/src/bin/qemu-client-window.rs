@@ -4,7 +4,7 @@
 use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd};
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
-    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer},
+    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output},
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_wm_base,xdg_surface,xdg_toplevel,
@@ -18,6 +18,8 @@ struct Client {
     compositor:Option<wl_compositor::WlCompositor>,
     wm:Option<xdg_wm_base::XdgWmBase>,
     shm:Option<wl_shm::WlShm>,
+    output:Option<wl_output::WlOutput>,
+    output_mode_received:bool,
     xdg_acked:bool,
     buffer_released:bool,
 }
@@ -30,6 +32,7 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "wl_compositor"=>state.compositor=Some(registry.bind(name,version.min(4),qh,())),
                 "xdg_wm_base"=>state.wm=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_shm"=>state.shm=Some(registry.bind(name,version.min(1),qh,())),
+                "wl_output"=>state.output=Some(registry.bind(name,version.min(3),qh,())),
                 _=>{}
             }
         }
@@ -62,6 +65,16 @@ impl Dispatch<wl_surface::WlSurface,()> for Client {
     fn event(_: &mut Self,_:&wl_surface::WlSurface,_:wl_surface::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
+impl Dispatch<wl_output::WlOutput,()> for Client {
+    fn event(state:&mut Self,_:&wl_output::WlOutput,event:wl_output::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let wl_output::Event::Mode{width,height,refresh,..}=event {
+            if width==1280 && height==800 && refresh>0 {
+                state.output_mode_received=true;
+            }
+        }
+    }
+}
 impl Dispatch<wl_shm::WlShm,()> for Client {
     fn event(_: &mut Self,_:&wl_shm::WlShm,_:wl_shm::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>){}
@@ -84,6 +97,11 @@ fn main()->Result<(),Box<dyn Error>> {
     let _registry=connection.display().get_registry(&qh,());
     let mut state=Client::default();
     queue.roundtrip(&mut state)?;
+    queue.roundtrip(&mut state)?;
+    if state.output.is_none() || !state.output_mode_received {
+        return Err("native wl_output 1280x800 mode missing on real client".into());
+    }
+    println!("MELANIA_NATIVE_CLIENT_WL_OUTPUT_MODE=1280x800");
     let compositor=state.compositor.take().ok_or("wl_compositor absent")?;
     let wm=state.wm.take().ok_or("xdg_wm_base absent")?;
     let shm=state.shm.take().ok_or("wl_shm absent")?;
@@ -133,6 +151,7 @@ fn main()->Result<(),Box<dyn Error>> {
     surface.destroy();
     wm.destroy();
     drop(shm);
+    drop(state.output.take());
     connection.flush()?;
     Ok(())
 }
