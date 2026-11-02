@@ -927,6 +927,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 || map.layer_under(WlrLayer::Top,pointer.current_location()).is_some()
                         };
                         if !layer_intercepts {
+                            // Clicking a normal window or the desktop dismisses all
+                            // transient Panel overlays. Use the existing private
+                            // socket rather than unmapping GTK layer-shell surfaces:
+                            // unmapping can invalidate Smithay's retained layer role.
+                            let destination=start_toggle_socket_path(&control_path);
+                            if let Err(error)=UnixDatagram::unbound()
+                                .and_then(|socket|socket.send_to(b"CLOSE_OVERLAYS",&destination)) {
+                                if error.kind()!=std::io::ErrorKind::NotFound {
+                                    eprintln!("Melania dismiss overlays: {error}");
+                                }
+                            }
                             if let Some((window, _)) = state.space.element_under(pointer.current_location()) {
                                 let window = window.clone();
                                 state.space.raise_element(&window, true);

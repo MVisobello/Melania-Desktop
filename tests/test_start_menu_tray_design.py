@@ -90,7 +90,7 @@ class StartTrayDesignContracts(unittest.TestCase):
     def test_qa_shows_actual_start_only_in_ci(self):
         shell=(ROOT/"scripts/smoke-full-desktop-wayland.sh").read_text()
         panel=(ROOT/"melania-panel/src/main.rs").read_text()
-        self.assertIn('MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor',shell)
+        self.assertIn('MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor',shell)
         self.assertIn('start.present();',panel)
         self.assertIn('std::env::var_os("MELANIA_SMOKE_OPEN_START")',panel)
 

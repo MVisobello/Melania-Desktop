@@ -1551,6 +1551,7 @@ fn install_start_hotkey_listener(
     start: &ApplicationWindow,
     quick: &ApplicationWindow,
     notifications: &ApplicationWindow,
+    calendar: &ApplicationWindow,
 ) {
     let Some(control)=std::env::var_os(SOCKET_ENV).filter(|v|!v.is_empty()) else { return; };
     let path=start_toggle_socket_path(&PathBuf::from(control));
@@ -1586,6 +1587,7 @@ fn install_start_hotkey_listener(
     let open=start.clone();
     let quick=quick.clone();
     let notifications=notifications.clone();
+    let calendar=calendar.clone();
     glib::timeout_add_local(Duration::from_millis(30),move || {
         let mut packet=[0u8;32];
         // Bounded work per UI tick even if a sender floods the local socket.
@@ -1599,6 +1601,21 @@ fn install_start_hotkey_listener(
                     }
                 }
                 Ok(n) if &packet[..n]==b"CLOSE_START" => hide_start_surface(&open),
+                Ok(n) if &packet[..n]==b"CLOSE_OVERLAYS" => {
+                    let was_open=open.is_visible() && !open.has_css_class("melania-start-concealed") ||
+                        [&quick,&notifications,&calendar].iter().any(|window|popup_is_open(window));
+                    // Keep each already-realized layer role alive: only conceal.
+                    hide_start_surface(&open);
+                    hide_popup_surface(&quick);
+                    hide_popup_surface(&notifications);
+                    hide_popup_surface(&calendar);
+                    if std::env::var_os("MELANIA_SMOKE_OUTSIDE_CLICK").as_deref() ==
+                        Some(std::ffi::OsStr::new("1")) {
+                        let still_open=open.is_visible() && !open.has_css_class("melania-start-concealed") ||
+                            [&quick,&notifications,&calendar].iter().any(|window|popup_is_open(window));
+                        eprintln!("MELANIA_OUTSIDE_CLICK_DISMISSED previously_open={was_open} now_open={still_open}");
+                    }
+                },
                 Ok(_)=>{},
                 Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
                 Err(error)=>{eprintln!("Melania Start hotkey receive: {error}");break;},
@@ -1626,7 +1643,7 @@ fn build(app:&Application){
     let notifications=notifications_window(app);
     let quick=quick_window(app,&notifications);
     let calendar=calendar_window(app);
-    install_start_hotkey_listener(app,&start,&quick,&notifications);
+    install_start_hotkey_listener(app,&start,&quick,&notifications,&calendar);
     // Do not present popup windows until the user clicks.
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);
     if let Some(content)=bar.child().and_then(|child|child.downcast::<GtkBox>().ok()) {
