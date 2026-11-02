@@ -9,7 +9,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, time::Duration};
+use std::{cell::{Cell, RefCell}, fs, io::Write, os::unix::{fs::{FileTypeExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::PathBuf, process::Command, rc::Rc, thread, time::Duration};
 use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -898,9 +898,8 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
     let path = std::env::var_os(SOCKET_ENV).map(PathBuf::from);
     let refresh = {
         let target = box_running.clone();
-        move || {
-            let result = path.as_ref().map(|p| control_request(p, WindowCommand::List));
-            let Ok(windows) = result.unwrap_or_else(||Err(melania_control::ControlError::Protocol("socket non disponibile"))) else {
+        move |snapshot: Option<Vec<WindowInfo>>| {
+            let Some(windows) = snapshot else {
                 if last.borrow().is_some() {
                     for (_, button) in pinned_buttons.borrow().iter() {
                         button.set_visible(true);
@@ -1012,20 +1011,49 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                     let hover = gtk::EventControllerMotion::new();
                     let menu_for_hover = menu.clone();
                     let screenshot_endpoint = path.clone();
+                    let preview_inflight=Rc::new(Cell::new(false));
                     hover.connect_enter(move |_,_,_| {
                         menu_for_hover.popup();
-                        // Captures only the selected compositor-owned window
-                        // subtree, never screen pixels behind another app.
-                        // Six captures max per hover; failure retains icon/title.
-                        if !use_thumbnails {return;}
-                        let Some(socket)=screenshot_endpoint.as_ref() else {return;};
-                        for (id,icon,picture) in preview_targets.iter().take(6) {
-                            if let Ok(image_path)=melania_control::request_preview(socket,*id) {
-                                picture.set_filename(Some(&image_path));
-                                picture.set_visible(true);
-                                icon.set_visible(false);
+                        // Never block GTK's event loop on synchronous compositor
+                        // readback; a hover can request up to six previews.
+                        if !use_thumbnails || preview_inflight.replace(true) {return;}
+                        let Some(socket)=screenshot_endpoint.as_ref() else {
+                            preview_inflight.set(false);
+                            return;
+                        };
+                        // Only paths/IDs cross the worker boundary. GTK widgets
+                        // always stay on the main thread.
+                        let socket=socket.clone();
+                        let ids:Vec<u64>=preview_targets.iter().take(6)
+                            .map(|(id,_,_)|*id).collect();
+                        let widgets:Vec<(Image,Picture)>=preview_targets.iter().take(6)
+                            .map(|(_,icon,picture)|(icon.clone(),picture.clone())).collect();
+                        let (sender,receiver)=std::sync::mpsc::channel::<(usize,PathBuf)>();
+                        thread::spawn(move || {
+                            for (index,id) in ids.into_iter().enumerate() {
+                                if let Ok(image_path)=melania_control::request_preview(&socket,id) {
+                                    if sender.send((index,image_path)).is_err(){break;}
+                                }
                             }
-                        }
+                        });
+                        let busy=preview_inflight.clone();
+                        glib::timeout_add_local(Duration::from_millis(40),move ||{
+                            match receiver.try_recv() {
+                                Ok((index,image_path))=>{
+                                    if let Some((icon,picture))=widgets.get(index) {
+                                        picture.set_filename(Some(&image_path));
+                                        picture.set_visible(true);
+                                        icon.set_visible(false);
+                                    }
+                                    glib::ControlFlow::Continue
+                                },
+                                Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+                                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                                    busy.set(false);
+                                    glib::ControlFlow::Break
+                                }
+                            }
+                        });
                     });
                     menu.add_controller(hover);
                     // Preserve safe hover activation when dragging files over a
@@ -1106,9 +1134,23 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
             *last.borrow_mut()=Some(windows);
         }
     };
-    refresh();
-    glib::timeout_add_local(Duration::from_millis(500),move ||{
-        refresh();glib::ControlFlow::Continue
+    // IPC can block while the compositor captures a window preview. Poll
+    // on a bounded background worker: GTK only receives owned WindowInfo.
+    let (sender,receiver)=std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        loop {
+            let snapshot=path.as_ref().and_then(|endpoint|
+                control_request(endpoint,WindowCommand::List).ok());
+            if sender.send(snapshot).is_err(){break;}
+            thread::sleep(Duration::from_millis(400));
+        }
+    });
+    glib::timeout_add_local(Duration::from_millis(75),move ||{
+        match receiver.try_recv() {
+            Ok(windows)=>{refresh(windows);glib::ControlFlow::Continue},
+            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>glib::ControlFlow::Break,
+        }
     });
     box_running
 }
