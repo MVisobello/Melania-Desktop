@@ -207,6 +207,9 @@ fn run()->Result<(),Box<dyn Error>> {
             }
             wait_for_fb(&card,crtc_handle,framebuffer)?;
             println!("MELANIA_RUST_STREAM_FRAME{}_ACTIVE=true",index+1);
+            if std::env::var("MELANIA_QEMU_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM") {
+                println!("MELANIA_RUST_MULTI_FRAME{}_ACTIVE=true",index+1);
+            }
             previous=Some(pixels);
             // QMP observes actual virtual display bytes while this FB is live.
             thread::sleep(Duration::from_secs(5));
