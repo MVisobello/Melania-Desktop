@@ -65,13 +65,52 @@ preflight() {
   echo 'MELANIA_NATIVE_LOGIN_SESSION_READY=false'
 }
 
+# A software graphics fallback is useful in VirtualBox guests whose virtual
+# GL/EGL driver fails to initialize. Never change the host's GPU configuration.
+# Automatic selection can be explicitly overridden by MELANIA_SOFTWARE_RENDER=0.
+detect_virtualbox() {
+  local product=''
+  if [[ -r /sys/class/dmi/id/product_name ]]; then
+    IFS= read -r product < /sys/class/dmi/id/product_name || true
+  fi
+  case "${product,,}" in
+    *virtualbox*) return 0 ;;
+  esac
+  if command -v systemd-detect-virt >/dev/null 2>&1; then
+    [[ "$(systemd-detect-virt --vm 2>/dev/null || true)" == oracle ]] && return 0
+  fi
+  return 1
+}
+
+configure_renderer() {
+  local software="${MELANIA_SOFTWARE_RENDER:-auto}"
+  case "$software" in
+    auto) if detect_virtualbox; then software=1; else software=0; fi ;;
+    1|0) ;;
+    *) echo 'BLOCKED: MELANIA_SOFTWARE_RENDER must be 0, 1 or auto' >&2; return 2 ;;
+  esac
+  if [[ "$software" == 1 ]]; then
+    # GTK4 cairo avoids guest Vulkan/Zink; llvmpipe provides GLES to Smithay.
+    # These variables affect Melania children only, never system-wide libraries.
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export GALLIUM_DRIVER=llvmpipe
+    export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+    export GSK_RENDERER=cairo
+    echo 'MELANIA_RENDERING_BACKEND=software (GTK cairo + Mesa llvmpipe)'
+  else
+    echo 'MELANIA_RENDERING_BACKEND=host'
+  fi
+}
+
 case "${1:-}" in
-  --check) [[ $# -eq 1 ]] || exit 2; preflight; exit $? ;;
+  --check) [[ $# -eq 1 ]] || exit 2; preflight; configure_renderer; exit $? ;;
+  --software) [[ $# -eq 1 ]] || exit 2; export MELANIA_SOFTWARE_RENDER=1 ;;
   "") [[ $# -eq 0 ]] || exit 2 ;;
-  *) echo 'Usage: ./run.sh [--check]' >&2; exit 2 ;;
+  *) echo 'Usage: ./run.sh [--check|--software]' >&2; exit 2 ;;
 esac
 
 preflight
+configure_renderer
 export MELANIA_BUNDLE_ROOT="$ROOT"
 export MELANIA_BUNDLE_DATA_DIR="$ROOT/share"
 export PATH="$BIN:$PATH"
