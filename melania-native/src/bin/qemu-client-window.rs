@@ -242,6 +242,17 @@ fn main()->Result<(),Box<dyn Error>> {
         buffer.destroy();
         pool.destroy();
     }
+    // A layout-only fourth KMS frame is initiated by REAL VM tablet drag
+    // rather than by a new client commit. Retain both xdg_toplevels long
+    // enough for the compositor to repaint their retained wl_shm snapshots.
+    if two_windows && std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
+        .as_deref()==Ok("YES_QEMU_VM") {
+        for _ in 0..48 {
+            queue.roundtrip(&mut state)?;
+            thread::sleep(Duration::from_millis(150));
+        }
+        println!("MELANIA_NATIVE_CLIENT_LAYOUT_REPAINT_HOLD=true");
+    }
     if callback_probe {
         if state.frame_done_count!=3 {
             return Err("not all three frame callbacks arrived from native renderer".into());
