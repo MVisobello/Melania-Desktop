@@ -76,7 +76,7 @@ class NativeShellProtocolStage25(unittest.TestCase):
         self.assertNotIn("vfio",HOST)
 
     def test_no_login_or_untested_kms_display_advertised(self):
-        self.assertIn("MELANIA_NATIVE_WAYLAND_RENDER_READY=false",GUEST)
+        self.assertIn("MELANIA_QEMU_NATIVE_WAYLAND_RENDER_READY=false",GUEST)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
         self.assertIn("MELANIA_NATIVE_VISIBLE_SCANOUT=false",GUEST)
         self.assertIn("MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false",GUEST)
