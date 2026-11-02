@@ -23,6 +23,7 @@ struct Client {
     xdg_acked:bool,
     buffer_released:bool,
     frame_done_count:u32,
+    resize_requested:Option<(i32,i32)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Client {
@@ -51,12 +52,28 @@ impl Dispatch<xdg_surface::XdgSurface,()> for Client {
         if let xdg_surface::Event::Configure{serial}=event {
             surface.ack_configure(serial);
             state.xdg_acked=true;
+            if let Some((width,height))=state.resize_requested.take() {
+                println!("MELANIA_NATIVE_CLIENT_RESIZE_CONFIGURE_ACK={}x{}",
+                    width,height);
+                let _=std::io::stdout().flush();
+            }
         }
     }
 }
 impl Dispatch<xdg_toplevel::XdgToplevel,()> for Client {
-    fn event(_: &mut Self,_:&xdg_toplevel::XdgToplevel,_:xdg_toplevel::Event,
-             _:&(),_:&Connection,_:&QueueHandle<Self>){}
+    fn event(state: &mut Self,_:&xdg_toplevel::XdgToplevel,event:xdg_toplevel::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let xdg_toplevel::Event::Configure{width,height,..}=event {
+            if std::env::var("MELANIA_NATIVE_RESIZE_CONFIGURE")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+                width>0 && height>0 && (width!=W as i32 || height!=H as i32) {
+                state.resize_requested=Some((width,height));
+                println!("MELANIA_NATIVE_CLIENT_RESIZE_CONFIGURE_RECEIVED={}x{}",
+                    width,height);
+                let _=std::io::stdout().flush();
+            }
+        }
+    }
 }
 impl Dispatch<wl_compositor::WlCompositor,()> for Client {
     fn event(_: &mut Self,_:&wl_compositor::WlCompositor,_:wl_compositor::Event,
