@@ -1019,19 +1019,38 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
         });
         if matches!(status, PumpStatus::Exit(_)) { break; }
-        // Process control sockets on every tick, even when no pixels
-        // changed. An IPC request forces the capture-capable render path;
-        // otherwise a quiet desktop never binds EGL or swaps host buffers.
-        let mut pending_control=Vec::new();
+        // Handle LIST/STATUS without GPU work: the panel polls these while
+        // idle. Only actual offscreen PREVIEW requests need an EGL context.
+        let mut pending_previews=Vec::new();
         for _ in 0..8 {
             match control_listener.accept() {
-                Ok((client,_))=>pending_control.push(client),
+                Ok((mut client,_))=>{
+                    let _=client.set_read_timeout(Some(Duration::from_millis(40)));
+                    let _=client.set_write_timeout(Some(Duration::from_millis(120)));
+                    match read_command(&mut client) {
+                        Ok(Some(ControlCommand::Preview(id)))=>
+                            pending_previews.push((client,id)),
+                        Ok(Some(command))=>{
+                            if !matches!(command,ControlCommand::List|ControlCommand::Status) {
+                                state.visual_dirty=true;
+                            }
+                            let response=state.control(command);
+                            let _=client.write_all(response.as_bytes());
+                        },
+                        Ok(None)=>{
+                            let _=client.write_all(respond_error("Comando IPC incompleto o non valido").as_bytes());
+                        },
+                        Err(error)=>{
+                            let _=client.write_all(respond_error(&format!("Lettura IPC fallita: {error}")).as_bytes());
+                        },
+                    }
+                },
                 Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
                 Err(error)=>{eprintln!("Melania control accept: {error}");break;},
             }
         }
         let render_needed = should_render_scene(state.visual_dirty,
-            !pending_control.is_empty(),last_present.elapsed());
+            !pending_previews.is_empty(),last_present.elapsed());
         let size = backend.window_size();
         let damage = Rectangle::from_size(size);
         if render_needed {
@@ -1099,11 +1118,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             // Per-window offscreen capture. Never read composed desktop pixels.
             let mut captures_this_frame=0u8;
-            for mut client in pending_control {
-                        let _=client.set_read_timeout(Some(Duration::from_millis(40)));
-                        let _=client.set_write_timeout(Some(Duration::from_millis(120)));
-                        let response=match read_command(&mut client) {
-                            Ok(Some(ControlCommand::Preview(id))) => {
+            for (mut client,id) in pending_previews {
+                        let response={
                                 if !previews_enabled || captures_this_frame>=2 {
                                     respond_error("Anteprima temporaneamente non disponibile")
                                 } else if let Some(window)=state.managed.iter().find(|w|w.id==id) {
@@ -1146,10 +1162,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                     }
                                 } else {respond_error("Finestra non trovata")}
-                            }
-                            Ok(Some(command)) => state.control(command),
-                            Ok(None) => respond_error("Comando IPC incompleto o non valido"),
-                            Err(e) => respond_error(&format!("Lettura IPC fallita: {e}")),
                         };
                         let _=client.write_all(response.as_bytes());
             }
