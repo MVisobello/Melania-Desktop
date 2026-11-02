@@ -39,8 +39,9 @@ class ResizeHandshakeStage38(unittest.TestCase):
 
     def test_private_qmp_real_usb_input_is_verified_in_ci(self):
         self.assertIn("MELANIA_RUST_MULTI_FRAME4_ACTIVE=true",DRAG)
-        self.assertIn('"button":"left","down":True',DRAG)
-        self.assertIn('"button":"left","down":False',DRAG)
+        self.assertIn('"button":"left","down":down',DRAG)
+        self.assertIn('("PRESS",btn(True))',DRAG)
+        self.assertIn('("RELEASE",btn(False))',DRAG)
         self.assertIn("MELANIA_NATIVE_CLIENT_RESIZE_CONFIGURE_ACK=",DRAG)
         self.assertIn("inject-qemu-resize-configure.py",HOST)
         self.assertIn("MELANIA_QEMU_REAL_XDG_RESIZE_ACK_PASS=true",HOST)
