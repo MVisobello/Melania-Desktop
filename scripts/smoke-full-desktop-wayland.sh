@@ -55,6 +55,7 @@ export MELANIA_PROFILE_FILES=1
 export MELANIA_PROFILE_SETTINGS=1
 export MELANIA_SMOKE_SETTINGS_LAZY=1
 export MELANIA_SMOKE_SETTINGS_SERVICES=1
+export MELANIA_SMOKE_SETTINGS_HARDWARE=1
 MELANIA_PROFILE_COMPOSITOR=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 MELANIA_SMOKE_OUTSIDE_CLICK=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
@@ -180,6 +181,24 @@ done
   exit 1
 }
 echo 'PASS: Settings navigated Network/Bluetooth and received bounded background probes'
+# Isolated follow-on test opens the *real* PipeWire and power profiles pages.
+# Service availability is not assumed (headless runners may lack both), but
+# the GLib loop must remain responsive and report bounded worker completion.
+HARDWARE_READY=0
+for i in $(seq 1 110); do
+  if grep -q 'MELANIA_SETTINGS_AUDIO_POWER_NAVIGATION_OK' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=audio-detect outcome=' "$TEMP/compositor.log" && \
+     grep -Eq 'MELANIA_SETTINGS_SERVICE_MS=[0-9]+ service=power-detect outcome=' "$TEMP/compositor.log"; then
+    HARDWARE_READY=1; break
+  fi
+  sleep .1
+done
+[[ "$HARDWARE_READY" == 1 ]] || {
+  echo 'FAIL: Settings PipeWire/power profile workers did not complete' >&2
+  grep 'MELANIA_SETTINGS_' "$TEMP/compositor.log" >&2 || true
+  exit 1
+}
+echo 'PASS: real GTK Audio and Power pages received bounded asynchronous device probes'
 # The actual GTK Files window should be submitted before the expensive
 # first browser tab, which in turn precedes the asynchronous GIO listing.
 python3 - "$TEMP/compositor.log" <<'PYFILESFIRST'
