@@ -13,6 +13,8 @@ on:
       - scripts/melania-qemu-wayland-client.c
       - scripts/inject-qemu-native-input.py
       - scripts/inject-qemu-two-window-focus.py
+      - scripts/inject-qemu-layout-drag.py
+      - scripts/capture-qemu-layout-repaint.py
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
       - tests/test_qemu_client_pixel_stage26.py
@@ -26,6 +28,7 @@ on:
       - tests/test_native_async_kms_stage34.py
       - tests/test_native_window_input_stage35.py
       - tests/test_native_window_interactions_stage36.py
+      - tests/test_native_layout_repaint_stage37.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -49,6 +52,8 @@ on:
       - scripts/melania-qemu-wayland-client.c
       - scripts/inject-qemu-native-input.py
       - scripts/inject-qemu-two-window-focus.py
+      - scripts/inject-qemu-layout-drag.py
+      - scripts/capture-qemu-layout-repaint.py
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
       - tests/test_qemu_client_pixel_stage26.py
@@ -62,6 +67,7 @@ on:
       - tests/test_native_async_kms_stage34.py
       - tests/test_native_window_input_stage35.py
       - tests/test_native_window_interactions_stage36.py
+      - tests/test_native_layout_repaint_stage37.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -114,12 +120,15 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_async_kms_stage34.py' -v
           python3 -m unittest discover -s tests -p 'test_native_window_input_stage35.py' -v
           python3 -m unittest discover -s tests -p 'test_native_window_interactions_stage36.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_layout_repaint_stage37.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
           python3 -m py_compile scripts/capture-qemu-rust-kms-frames.py
           python3 -m py_compile scripts/capture-qemu-client-window.py
           python3 -m py_compile scripts/inject-qemu-native-input.py
           python3 -m py_compile scripts/inject-qemu-two-window-focus.py
+          python3 -m py_compile scripts/inject-qemu-layout-drag.py
+          python3 -m py_compile scripts/capture-qemu-layout-repaint.py
           python3 -m py_compile scripts/capture-qemu-visible-scanout.py
       - name: Build actual Rust backend on same Ubuntu release as guest
         run: |
