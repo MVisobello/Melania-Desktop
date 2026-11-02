@@ -25,6 +25,12 @@ class NonblockingSettingsServiceTests(unittest.TestCase):
         self.assertIn("refresh_network.connect_clicked(move |button|",MAIN)
         self.assertIn("first_button.set_sensitive(true);",MAIN)
 
+    def test_visual_ci_really_retries_gtk_screenshots(self):
+        workflow=(ROOT/".github/workflows/settings-visual.yml").read_text()
+        self.assertIn('scrot -o -q 92 "$path"',workflow)
+        self.assertIn('scrot -o -q 92 "reports/settings-theme-',workflow)
+        self.assertIn("ImageStat.Stat(im).stddev[0]>7",workflow)
+
     def test_wifi_and_bluetooth_discovery_is_async_not_synthetic(self):
         for name,command in (("wifi","wifi_radio"),("bluetooth","bluetooth_power")):
             start=CONTROLS.index("pub fn append_"+name+"(")
