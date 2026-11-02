@@ -51,7 +51,8 @@ cleanup(){
 trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
-MELANIA_PROFILE_FILES=1 MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
+export MELANIA_PROFILE_FILES=1
+MELANIA_SMOKE_FILES_LISTING=1 MELANIA_SMOKE_OPEN_START=1 target/debug/melania-compositor \
   --command "$ROOT/target/debug/melania-desktop-surface" \
   --command "$ROOT/target/debug/melania-panel" \
   --command "$ROOT/target/debug/melania-files" \
