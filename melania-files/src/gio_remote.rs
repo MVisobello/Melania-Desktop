@@ -107,7 +107,7 @@ fn start_listing_worker(remote:&Remote) {
                                 // stdout/stderr from nested clients share a pipe.
                                 // Write one whole proof line so Wayland diagnostics
                                 // cannot interleave in the middle of its count.
-                                let marker=format!("MELANIA_GIO_LISTING_READY count={count}\\n");
+                                let marker=format!("MELANIA_GIO_LISTING_READY count={count}\n");
                                 let _=std::io::Write::write_all(&mut std::io::stderr(),marker.as_bytes());
                             }
                         },
