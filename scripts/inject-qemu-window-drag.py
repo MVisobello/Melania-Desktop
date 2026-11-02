@@ -70,8 +70,9 @@ def main()->int:
     # Keep the left button held. This second move arrives while KMS still
     # presents frame4. No frame5 may be scheduled until the verified ACK4.
     pointer(args.qmp,910,320)
-    wait_marker(args.serial,"MELANIA_NATIVE_WINDOW_DRAG_MODEL=2 x=800 y=310",deadline)
+    time.sleep(.2)
     pointer(args.qmp,910,320,"release")
+    wait_marker(args.serial,"MELANIA_NATIVE_WINDOW_DRAG_MODEL=2 x=800 y=310",deadline)
     wait_marker(args.serial,"MELANIA_NATIVE_DRAG_FRAME_ACKED=4",deadline)
     wait_marker(args.serial,"MELANIA_NATIVE_DRAG_FRAME_SUBMITTED=5",deadline)
     wait_marker(args.serial,"MELANIA_NATIVE_DRAG_FRAME_ACKED=5",deadline)
