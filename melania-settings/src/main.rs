@@ -613,6 +613,20 @@ fn build_ui(
             eprintln!("MELANIA_SETTINGS_AUDIO_POWER_NAVIGATION_OK");
         });
     }
+    // Real isolated Wayland integration visits Storage and Display without
+    // touching brightness or host compositor output configuration.
+    if std::env::var_os("MELANIA_SMOKE_SETTINGS_STORAGE_DISPLAY").as_deref()
+        ==Some(std::ffi::OsStr::new("1")) {
+        let storage_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(3100),move ||{
+            storage_stack.set_visible_child_name("storage");
+        });
+        let display_stack=stack.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(3800),move ||{
+            display_stack.set_visible_child_name("display");
+            eprintln!("MELANIA_SETTINGS_STORAGE_DISPLAY_NAVIGATION_OK");
+        });
+    }
     if audit_settings {
         // The initial page may be selected before the signal handler is wired.
         eprintln!("MELANIA_SETTINGS_ACTIVE_PAGE={}",

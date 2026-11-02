@@ -53,7 +53,8 @@ class StartSessionPrivacyContracts(unittest.TestCase):
         self.assertIn('net.hadess.SensorProxy',self.sensors)
         self.assertIn('HasAccelerometer',self.sensors)
         self.assertIn('parse_busctl_boolean',self.sensors)
-        self.assertIn('sensors::accelerometer()',self.settings)
+        self.assertIn('crate::settings_async::run("display-sensor",sensors::accelerometer',self.settings)
+        self.assertIn('crate::settings_async::run("display-sensor-refresh",sensors::accelerometer',self.settings)
         self.assertIn('Rotazione manuale e blocco',self.settings)
         self.assertNotIn('systemctl',self.sensors)
 

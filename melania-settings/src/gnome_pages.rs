@@ -409,15 +409,28 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         group(&display, "Rotazione dello schermo");
         display.append(&info_row("video-display", "Sensore di orientamento",
             "Disponibilità del sensore interrogata tramite iio-sensor-proxy."));
-        let sensor_status=label(sensors::explanation(sensors::accelerometer()),"settings-row-description");
+        let sensor_status=label("Rilevamento accelerometro in corso…","settings-row-description");
         sensor_status.add_css_class("settings-card");
         display.append(&sensor_status);
+        let initial_status=sensor_status.clone();
+        crate::settings_async::run("display-sensor",sensors::accelerometer,move |result|{
+            initial_status.set_text(sensors::explanation(
+                result.unwrap_or(sensors::Accelerometer::Unknown)));
+        });
         let sensor_refresh=Button::with_label("Rileva nuovamente i sensori");
         sensor_refresh.add_css_class("settings-save");
         sensor_refresh.set_halign(Align::Start);
         let sensor_description=sensor_status.clone();
-        sensor_refresh.connect_clicked(move |_| {
-            sensor_description.set_text(sensors::explanation(sensors::accelerometer()));
+        sensor_refresh.connect_clicked(move |button| {
+            button.set_sensitive(false);
+            sensor_description.set_text("Rilevamento accelerometro in corso…");
+            let label=sensor_description.clone();
+            let refresh=button.clone();
+            crate::settings_async::run("display-sensor-refresh",sensors::accelerometer,move |result|{
+                label.set_text(sensors::explanation(
+                    result.unwrap_or(sensors::Accelerometer::Unknown)));
+                refresh.set_sensitive(true);
+            });
         });
         display.append(&sensor_refresh);
         display.append(&info_row("dialog-information", "Rotazione manuale e blocco",
@@ -529,8 +542,30 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         "storage" => {
         let storage = page("Archiviazione", "drive-harddisk");
         group(&storage, "Dischi");
-        let space = root_storage();
-        storage.append(&info_row("drive-harddisk", "Filesystem principale", &space));
+        let space=label("Lettura filesystem principale in corso…","settings-row-description");
+        space.add_css_class("settings-card");
+        storage.append(&space);
+        let initial_space=space.clone();
+        crate::settings_async::run("storage-df",root_storage,move |result|{
+            initial_space.set_text(&format!("Filesystem principale · {}",
+                result.as_deref().unwrap_or("Impossibile leggere lo spazio disponibile.")));
+        });
+        let refresh=Button::with_label("Aggiorna spazio disponibile");
+        refresh.add_css_class("settings-save");
+        refresh.set_halign(Align::Start);
+        let space_label=space.clone();
+        refresh.connect_clicked(move |button|{
+            button.set_sensitive(false);
+            space_label.set_text("Aggiornamento spazio disponibile in corso…");
+            let display=space_label.clone();
+            let action=button.clone();
+            crate::settings_async::run("storage-refresh",root_storage,move |result|{
+                display.set_text(&format!("Filesystem principale · {}",
+                    result.as_deref().unwrap_or("Impossibile leggere lo spazio disponibile.")));
+                action.set_sensitive(true);
+            });
+        });
+        storage.append(&refresh);
         storage.append(&info_row("dialog-information", "Gestione delle unità",
             "Le operazioni sui dischi rimangono affidate alle utility del sistema operativo."));
         Some(storage)
@@ -539,8 +574,16 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         let bluetooth = page("Bluetooth", "bluetooth");
         crate::connectivity_controls::append_bluetooth(&bluetooth);
         group(&bluetooth, "Stato del controller");
-        bluetooth.append(&info_row("bluetooth", "Controller Bluetooth",
-            &read_command("bluetoothctl", &["show"]).unwrap_or_else(|| "Controller non disponibile o servizio BlueZ non attivo.".into())));
+        let controller=label("Rilevamento controller in corso…","settings-row-description");
+        controller.add_css_class("settings-card");
+        bluetooth.append(&controller);
+        let info=controller.clone();
+        crate::settings_async::run("bluetooth-info",move ||{
+            read_command("bluetoothctl",&["show"])
+        },move |result|{
+            info.set_text(&format!("Controller Bluetooth · {}",result.flatten()
+                .unwrap_or_else(||"Controller non disponibile o servizio BlueZ non attivo.".into())));
+        });
         Some(bluetooth)
         },
         "applications" => {

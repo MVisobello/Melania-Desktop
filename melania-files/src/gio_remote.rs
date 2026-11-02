@@ -104,7 +104,11 @@ fn start_listing_worker(remote:&Remote) {
                             ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
                                 if listing.truncated{" (limite visualizzazione raggiunto)"}else{""}));
                             if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some(){
-                                eprintln!("MELANIA_GIO_LISTING_READY count={count}");
+                                // stdout/stderr from nested clients share a pipe.
+                                // Write one whole proof line so Wayland diagnostics
+                                // cannot interleave in the middle of its count.
+                                let marker=format!("MELANIA_GIO_LISTING_READY count={count}\n");
+                                let _=std::io::Write::write_all(&mut std::io::stderr(),marker.as_bytes());
                             }
                         },
                         Err(error)=>ui.status.set_text(&error),
