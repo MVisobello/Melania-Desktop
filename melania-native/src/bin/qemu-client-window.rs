@@ -24,6 +24,7 @@ struct Client {
     buffer_released:bool,
     frame_done_count:u32,
     resize_requested:Option<(i32,i32)>,
+    resize_acked_size:Option<(i32,i32)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Client {
@@ -53,6 +54,7 @@ impl Dispatch<xdg_surface::XdgSurface,()> for Client {
             surface.ack_configure(serial);
             state.xdg_acked=true;
             if let Some((width,height))=state.resize_requested.take() {
+                state.resize_acked_size=Some((width,height));
                 println!("MELANIA_NATIVE_CLIENT_RESIZE_CONFIGURE_ACK={}x{}",
                     width,height);
                 let _=std::io::stdout().flush();
@@ -264,15 +266,76 @@ fn main()->Result<(),Box<dyn Error>> {
     // enough for the compositor to repaint their retained wl_shm snapshots.
     if two_windows && std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT")
         .as_deref()==Ok("YES_QEMU_VM") {
-        for _ in 0..48 {
+        let resized_probe=std::env::var("MELANIA_NATIVE_RESIZED_BUFFER")
+            .as_deref()==Ok("YES_QEMU_VM");
+        let mut resize_committed=false;
+        for _ in 0..if resized_probe {85} else {48} {
             queue.roundtrip(&mut state)?;
+            if resized_probe && !resize_committed &&
+               std::path::Path::new(
+                   "/run/melania-native-qemu/layout-ready-for-resize.flag"
+               ).is_file() {
+                if let Some((new_w,new_h))=state.resize_acked_size {
+                    if !(96..=600).contains(&new_w) ||
+                       !(72..=420).contains(&new_h) ||
+                       (new_w==W as i32 && new_h==H as i32) {
+                        return Err("resized xdg dimensions are invalid or unchanged".into());
+                    }
+                    let w=new_w as usize;
+                    let h=new_h as usize;
+                    let mut pixels=vec![0u8;w*h*4];
+                    for (index,px) in pixels.chunks_exact_mut(4).enumerate() {
+                        let color=if index%w<w/2 {
+                            [118u8,64u8,222u8,0u8] // rose in BGRA
+                        } else {
+                            [90u8,238u8,117u8,0u8] // lime in BGRA
+                        };
+                        px.copy_from_slice(&color);
+                    }
+                    let mut file=OpenOptions::new().create_new(true)
+                        .read(true).write(true)
+                        .open("/run/melania-native-qemu/resized-client-shm.bin")?;
+                    file.write_all(&pixels)?;
+                    file.sync_all()?;
+                    let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
+                    let buffer=pool.create_buffer(
+                        0,new_w,new_h,(w*4) as i32,
+                        wl_shm::Format::Xrgb8888,&qh,()
+                    );
+                    state.buffer_released=false;
+                    let _frame_callback=surface.frame(&qh,());
+                    surface.attach(Some(&buffer),0,0);
+                    surface.damage_buffer(0,0,new_w,new_h);
+                    surface.commit();
+                    println!("MELANIA_NATIVE_RESIZED_CLIENT_COMMIT={}x{}",new_w,new_h);
+                    let deadline=Instant::now()+Duration::from_secs(9);
+                    loop {
+                        queue.roundtrip(&mut state)?;
+                        if state.buffer_released && state.frame_done_count==4 {break;}
+                        if Instant::now()>=deadline {
+                            return Err("resized client buffer was not KMS-presented".into());
+                        }
+                        thread::sleep(Duration::from_millis(60));
+                    }
+                    buffer.destroy();
+                    pool.destroy();
+                    println!("MELANIA_NATIVE_CLIENT_RESIZED_BUFFER_PRESENTED=true");
+                    resize_committed=true;
+                    break;
+                }
+            }
             thread::sleep(Duration::from_millis(150));
+        }
+        if resized_probe && !resize_committed {
+            return Err("no negotiated resized wl_shm commit was presented".into());
         }
         println!("MELANIA_NATIVE_CLIENT_LAYOUT_REPAINT_HOLD=true");
     }
     if callback_probe {
-        if state.frame_done_count!=3 {
-            return Err("not all three frame callbacks arrived from native renderer".into());
+        let expected=if std::env::var("MELANIA_NATIVE_RESIZED_BUFFER")
+            .as_deref()==Ok("YES_QEMU_VM") {4} else {3};
+        if state.frame_done_count!=expected {
+            return Err("not all real client frame callbacks arrived after KMS".into());
         }
         println!("MELANIA_NATIVE_CLIENT_FRAME_CALLBACKS_PRESENTED_PASS=true");
     }

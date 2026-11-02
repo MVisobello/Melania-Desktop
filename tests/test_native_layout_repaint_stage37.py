@@ -60,7 +60,10 @@ class Stage37(unittest.TestCase):
             self.assertIn(item,BRIDGE)
         self.assertIn("self.render_scheduler.damage()",BRIDGE)
         self.assertIn("!(1..=if std::env::var(",WORKER)
-        self.assertIn("frame_target=if layout_repaint {4u8} else {3u8}",KMS)
+        self.assertTrue(
+            "frame_target=if layout_repaint {4u8} else {3u8}" in KMS or
+            "frame_target=if resized {5u8} else if layout_repaint {4u8} else {3u8}" in KMS
+        )
         self.assertIn("MELANIA_RUST_LAYOUT_REPAINT_FOUR_FRAMES_PASS=true",KMS)
         self.assertIn("rollback.restore()?",KMS)
         self.assertIn("if state.layout_repaint_mode {3} else",BRIDGE)

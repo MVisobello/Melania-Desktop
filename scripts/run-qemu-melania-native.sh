@@ -35,6 +35,8 @@ rust_kms="$root/target/debug/qemu-rust-kms-frames"
   deny 'real two-window QMP capture verifier missing'
 [[ -f "$root/scripts/capture-qemu-layout-repaint.py" ]] ||
   deny 'real layout repaint GPU verifier missing'
+[[ -f "$root/scripts/capture-qemu-resized-window.py" ]] ||
+  deny 'real resized client GPU verifier missing'
 pixel_scanout="$root/target/debug/melania-qemu-client-window-scanout"
 [[ -x "$pixel_scanout" ]] || deny 'build QEMU-only real-client scanout program first'
 [[ -f "$root/scripts/capture-qemu-client-window.py" ]] ||
@@ -155,6 +157,11 @@ python3 "$root/scripts/inject-qemu-resize-configure.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
   > "$report/qmp-resize-configure.log" 2>&1 &
 resize_inject_pid=$!
+python3 "$root/scripts/capture-qemu-resized-window.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/resized-client-frame5.ppm" --timeout 950 \
+  > "$report/qmp-resized-window.log" 2>&1 &
+resize_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -193,9 +200,15 @@ wait "$layout_capture_pid"
 layout_capture_code=$?
 wait "$resize_inject_pid"
 resize_inject_code=$?
+wait "$resize_capture_pid"
+resize_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$layout_drag_code" -ne 0 || "$layout_capture_code" -ne 0 || "$resize_inject_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$layout_drag_code" -ne 0 || "$layout_capture_code" -ne 0 || "$resize_inject_code" -ne 0 || "$resize_capture_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_REAL_RESIZE_VISIBLE_GPU_PASS=true' "$report/qmp-resized-window.log" ||
+   ! grep -q '^MELANIA_QEMU_RESIZED_FRAME5_PIXELS=true' "$report/qmp-resized-window.log" ||
+   ! grep -q '^MELANIA_QEMU_REAL_RESIZED_BUFFER_KMS_PASS=true' "$serial" ||
+   ! test -s "$report/resized-client-frame5.ppm" ||
    ! grep -q '^MELANIA_QEMU_REAL_XDG_RESIZE_ACK_PASS=true' "$report/qmp-resize-configure.log" ||
    ! grep -q '^MELANIA_QEMU_XDG_RESIZE_PROBE_ENABLED=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_DRAG_VISIBLE_GPU_PASS=true' "$report/qmp-layout-repaint.log" ||
@@ -316,6 +329,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-layout-drag.log" || true
   tail -n 30 "$report/qmp-layout-repaint.log" || true
   tail -n 30 "$report/qmp-resize-configure.log" || true
+  tail -n 30 "$report/qmp-resized-window.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -336,3 +350,5 @@ printf '%s\n' 'MELANIA_VM_TWO_WINDOWS_REAL_FOCUS_INPUT=true' >> "$report/result.
 printf '%s\n' 'MELANIA_VM_DRAG_LAYOUT_VISIBLE_IN_FOURTH_KMS_FRAME=true' >> "$report/result.txt"
 
 printf '%s\n' 'MELANIA_VM_REAL_XDG_RESIZE_CONFIGURE_ACK=true' >> "$report/result.txt"
+
+printf '%s\n' 'MELANIA_VM_GENUINE_RESIZED_CLIENT_FIFTH_KMS_FRAME=true' >> "$report/result.txt"

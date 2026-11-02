@@ -362,6 +362,7 @@ MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_LAYOUT_REPAINT=YES_QEMU_VM \
 MELANIA_NATIVE_RESIZE_CONFIGURE=YES_QEMU_VM \
+MELANIA_NATIVE_RESIZED_BUFFER=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 39s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
@@ -386,6 +387,7 @@ fi
 MELANIA_QEMU_RUST_LIVE_STREAM_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_LAYOUT_REPAINT=YES_QEMU_VM \
+MELANIA_NATIVE_RESIZED_BUFFER=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 38s \
   "$stream_binary" < /dev/tty1 2>&1 | tee "$multi_kms_log" &
 multi_kms_pid=$!
@@ -403,7 +405,8 @@ if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
   MELANIA_NATIVE_WAIT_PRESENT_CALLBACK=YES_QEMU_VM \
   MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
   MELANIA_NATIVE_LAYOUT_REPAINT=YES_QEMU_VM \
-  MELANIA_NATIVE_RESIZE_CONFIGURE=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
+  MELANIA_NATIVE_RESIZE_CONFIGURE=YES_QEMU_VM \
+  MELANIA_NATIVE_RESIZED_BUFFER=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
   timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
   cat "$multi_server_log"
   kill "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
@@ -425,8 +428,16 @@ for index in 1 2 3; do
   grep -q "^MELANIA_NATIVE_ASYNC_FRAME_COMPLETED=$index$" "$multi_server_log" ||
     fatal "async_frame_$index_not_completed"
 done
-grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=3' "$multi_server_log" ||
-  fatal 'two_window_frame_callbacks_missing'
+grep -q '^MELANIA_NATIVE_FRAME_CALLBACK_COUNT=4' "$multi_server_log" ||
+  fatal 'resized_window_four_real_client_callbacks_missing'
+grep -q '^MELANIA_NATIVE_REAL_RESIZED_WL_SHM_IMPORTED=' "$multi_server_log" ||
+  fatal 'resized_client_wl_shm_not_imported'
+grep -q '^MELANIA_RUST_RESIZED_WAYLAND_FIVE_FRAMES_PASS=true' "$multi_kms_log" ||
+  fatal 'resized_window_fifth_KMS_frame_missing'
+grep -q '^MELANIA_NATIVE_ASYNC_FRAME_SUBMITTED=5' "$multi_server_log" ||
+  fatal 'resized_window_fifth_frame_not_submitted'
+grep -q '^MELANIA_NATIVE_ASYNC_FRAME_COMPLETED=5' "$multi_server_log" ||
+  fatal 'resized_window_fifth_frame_not_acked'
 grep -q '^MELANIA_NATIVE_LAYOUT_REPAINT_SUBMITTED=4' "$multi_server_log" ||
   fatal 'drag_scene_did_not_submit_fourth_KMS_frame'
 grep -q '^MELANIA_NATIVE_LAYOUT_REPAINT_ACK=4' "$multi_server_log" ||
@@ -435,7 +446,7 @@ grep -q '^MELANIA_RUST_LAYOUT_REPAINT_FOUR_FRAMES_PASS=true' "$multi_kms_log" ||
   fatal 'DRM_never_presented_fourth_dragged_scene_frame'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
   fatal 'two_window_KMS_original_CRTC_not_restored'
-for index in 1 2 3 4; do
+for index in 1 2 3 4 5; do
   grep -q "^MELANIA_NATIVE_SCHEDULED_FRAME_ACK=$index$" "$multi_server_log" ||
     fatal "two_window_frame_ticket_$index_not_retired"
 done
@@ -444,6 +455,7 @@ report 'MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true'
 report 'MELANIA_QEMU_NONBLOCKING_KMS_WORKER_PASS=true'
 report 'MELANIA_QEMU_LAYOUT_ONLY_KMS_REPAINT_PASS=true'
 report 'MELANIA_QEMU_XDG_RESIZE_PROBE_ENABLED=true'
+report 'MELANIA_QEMU_REAL_RESIZED_BUFFER_KMS_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'

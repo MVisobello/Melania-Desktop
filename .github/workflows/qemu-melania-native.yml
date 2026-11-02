@@ -16,6 +16,7 @@ on:
       - scripts/inject-qemu-layout-drag.py
       - scripts/inject-qemu-resize-configure.py
       - scripts/capture-qemu-layout-repaint.py
+      - scripts/capture-qemu-resized-window.py
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
       - tests/test_qemu_client_pixel_stage26.py
@@ -31,6 +32,7 @@ on:
       - tests/test_native_window_interactions_stage36.py
       - tests/test_native_layout_repaint_stage37.py
       - tests/test_native_resize_configure_stage38.py
+      - tests/test_native_resized_buffer_stage39.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -57,6 +59,7 @@ on:
       - scripts/inject-qemu-layout-drag.py
       - scripts/inject-qemu-resize-configure.py
       - scripts/capture-qemu-layout-repaint.py
+      - scripts/capture-qemu-resized-window.py
       - tests/test_qemu_wayland_bridge.py
       - tests/test_qemu_shell_stage25.py
       - tests/test_qemu_client_pixel_stage26.py
@@ -72,6 +75,7 @@ on:
       - tests/test_native_window_interactions_stage36.py
       - tests/test_native_layout_repaint_stage37.py
       - tests/test_native_resize_configure_stage38.py
+      - tests/test_native_resized_buffer_stage39.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -126,6 +130,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_window_interactions_stage36.py' -v
           python3 -m unittest discover -s tests -p 'test_native_layout_repaint_stage37.py' -v
           python3 -m unittest discover -s tests -p 'test_native_resize_configure_stage38.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_resized_buffer_stage39.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
           python3 -m py_compile scripts/capture-qemu-rust-kms-frames.py
@@ -135,6 +140,7 @@ jobs:
           python3 -m py_compile scripts/inject-qemu-layout-drag.py
           python3 -m py_compile scripts/inject-qemu-resize-configure.py
           python3 -m py_compile scripts/capture-qemu-layout-repaint.py
+          python3 -m py_compile scripts/capture-qemu-resized-window.py
           python3 -m py_compile scripts/capture-qemu-visible-scanout.py
       - name: Build actual Rust backend on same Ubuntu release as guest
         run: |

@@ -41,7 +41,7 @@ impl AsyncKmsWorker {
         thread::spawn(move || {
             while let Ok(job)=jobs.recv() {
                 let result=(||->Result<(),String> {
-                    if job.pixels.len()!=MAX_IMAGE_BYTES || !(1..=if std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT").as_deref()==Ok("YES_QEMU_VM") {4} else {3}).contains(&job.ordinal) {
+                    if job.pixels.len()!=MAX_IMAGE_BYTES || !(1..=if std::env::var("MELANIA_NATIVE_RESIZED_BUFFER").as_deref()==Ok("YES_QEMU_VM") {5} else if std::env::var("MELANIA_NATIVE_LAYOUT_REPAINT").as_deref()==Ok("YES_QEMU_VM") {4} else {3}).contains(&job.ordinal) {
                         return Err("invalid bounded QEMU frame dimensions or ordinal".into());
                     }
                     let size=u32::try_from(job.pixels.len())

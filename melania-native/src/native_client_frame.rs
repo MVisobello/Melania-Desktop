@@ -58,6 +58,46 @@ pub fn copy_client_shm(ptr:*const u8,len:usize,meta:BufferData)
     Ok(client)
 }
 
+/// VM-only dimension-aware copy for *genuine* resized client wl_shm.
+/// This does not guess client image dimensions or retain the mapped pointer.
+pub fn copy_client_shm_sized(ptr:*const u8,len:usize,meta:BufferData)
+    ->Result<Vec<u8>,String>
+{
+    if meta.format!=wl_shm::Format::Xrgb8888 ||
+       !(96..=600).contains(&meta.width) ||
+       !(72..=420).contains(&meta.height) ||
+       meta.offset<0 {
+        return Err("invalid resized client buffer format or dimensions".into());
+    }
+    let width=meta.width as usize;
+    let height=meta.height as usize;
+    let stride=usize::try_from(meta.stride)
+        .map_err(|_|"negative wl_shm stride")?;
+    if stride<width*4 || stride>width*8 || ptr.is_null() {
+        return Err("invalid resized client buffer stride or mapping".into());
+    }
+    let start=meta.offset as usize;
+    let last=start.checked_add((height-1)*stride)
+        .and_then(|pos|pos.checked_add(width*4))
+        .ok_or("resized wl_shm offset overflow")?;
+    if last>len {return Err("resized wl_shm outside verified mapping".into());}
+    let mut owned=vec![0u8;width*height*4];
+    for y in 0..height {
+        for x in 0..width {
+            let source=start+y*stride+x*4;
+            let target=(y*width+x)*4;
+            // SAFETY: the complete last row has been checked against
+            // Smithay's mapped wl_shm length; the callback owns the borrow.
+            for channel in 0..3 {
+                owned[target+channel]=unsafe {
+                    std::ptr::read_volatile(ptr.add(source+channel))
+                };
+            }
+        }
+    }
+    Ok(owned)
+}
+
 pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)
     ->Result<Vec<u8>,String>
 {
@@ -140,4 +180,30 @@ mod tests {
         assert!(compose_from_shm(data.as_ptr(),data.len(),
             BufferData{format:wl_shm::Format::Argb8888,..meta}).is_err());
     }
+    #[test]
+    fn imports_client_resized_xrgb8888_with_strides_and_rejects_bad_mapping() {
+        let (w,h)=(386usize,246usize);
+        let stride=w*4+16;
+        let mut source=vec![0u8;h*stride];
+        for y in 0..h {
+            for x in 0..w {
+                let start=y*stride+x*4;
+                source[start..start+4].copy_from_slice(&[11,22,33,0]);
+            }
+        }
+        let meta=BufferData{
+            offset:0,width:w as i32,height:h as i32,
+            stride:stride as i32,format:wl_shm::Format::Xrgb8888,
+        };
+        let copy=copy_client_shm_sized(source.as_ptr(),source.len(),meta).unwrap();
+        assert_eq!(copy.len(),w*h*4);
+        assert_eq!(&copy[0..4],&[11,22,33,0]);
+        assert_eq!(&copy[copy.len()-4..],&[11,22,33,0]);
+        assert!(copy_client_shm_sized(source.as_ptr(),source.len()-17,meta).is_err());
+        assert!(copy_client_shm_sized(source.as_ptr(),source.len(),
+            BufferData{format:wl_shm::Format::Argb8888,..meta}).is_err());
+        assert!(copy_client_shm_sized(source.as_ptr(),source.len(),
+            BufferData{width:1000,..meta}).is_err());
+    }
+
 }
