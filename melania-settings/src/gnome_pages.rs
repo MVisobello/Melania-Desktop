@@ -166,87 +166,163 @@ fn audio_status(target: &str) -> Option<(f64,bool)> {
     let volume=parse_volume(&response)?;
     Some((volume,response.contains("[MUTED]")))
 }
-fn refresh_audio_status(target: &str, slider: &Scale, mute: &Button,
-                        reading: &Label) -> bool {
-    let Some((volume,muted))=audio_status(target) else {return false;};
+/// Apply a verified PipeWire snapshot on GTK's owning thread.
+fn apply_audio_snapshot(target:&str, snapshot:(f64,bool), slider:&Scale,
+                        mute:&Button, reading:&Label) {
+    let (volume,muted)=snapshot;
     slider.set_value(volume);
     mute.set_label(audio_mute_label(target,muted));
     reading.set_text(&format!("Volume attuale: {volume:.0}%{}",
-        if muted {" · disattivato"} else {""}));
-    true
+        if muted {" · disattivato"}else{""}));
 }
-fn audio_device_controls(page: &GtkBox, title: &str, target: &'static str) {
+
+/// PipeWire can be slow or unavailable on software-rendered VMs. All status
+/// queries and explicit writes run through a bounded worker. Widgets are
+/// built immediately but remain hidden until a real device is confirmed.
+fn audio_device_controls(page:&GtkBox, title:&str, target:&'static str) {
     group(page,title);
-    let Some((volume,muted))=audio_status(target) else {
-        page.append(&info_row("dialog-information",title,
-            "Dispositivo PipeWire/WirePlumber non disponibile: nessun controllo fittizio."));
-        return;
-    };
+    let status=label("Rilevamento dispositivo audio…","settings-row-description");
+    page.append(&status);
     let level=Scale::with_range(Orientation::Horizontal,0.0,100.0,1.0);
-    level.set_value(volume);
     level.set_hexpand(true);
     level.set_tooltip_text(Some("Volume del dispositivo in percentuale"));
     let apply=Button::with_label("Applica volume");
     apply.add_css_class("settings-save");
-    let mute=Button::with_label(audio_mute_label(target,muted));
+    let mute=Button::with_label("Disattiva audio");
     mute.add_css_class("settings-save");
     let refresh=Button::with_label("Aggiorna");
     refresh.add_css_class("settings-save");
-    let reading=label(&format!("Volume attuale: {volume:.0}%{}",
-        if muted {" · disattivato"} else {""}),"settings-row-description");
+    let reading=label("","settings-row-description");
     let feedback=label("","settings-action-feedback");
-    let controls=GtkBox::new(Orientation::Horizontal,8);
-    controls.add_css_class("settings-action-row");
-    controls.append(&level);
-    controls.append(&apply);
-    controls.append(&mute);
-    controls.append(&refresh);
-    page.append(&reading);
+    let buttons=GtkBox::new(Orientation::Horizontal,8);
+    buttons.add_css_class("settings-action-row");
+    buttons.append(&level);
+    buttons.append(&apply);
+    buttons.append(&mute);
+    buttons.append(&refresh);
+    let controls=GtkBox::new(Orientation::Vertical,8);
+    controls.append(&reading);
+    controls.append(&buttons);
+    controls.append(&feedback);
+    controls.set_visible(false);
     page.append(&controls);
-    page.append(&feedback);
+
+    let ready_controls=controls.clone();
+    let ready_status=status.clone();
+    let ready_level=level.clone();
+    let ready_mute=mute.clone();
+    let ready_reading=reading.clone();
+    let unavailable=title.to_owned();
+    crate::settings_async::run("audio-detect",move ||audio_status(target),move |result|{
+        match result.flatten(){
+            Some(snapshot)=>{
+                apply_audio_snapshot(target,snapshot,&ready_level,&ready_mute,&ready_reading);
+                ready_controls.set_visible(true);
+                ready_status.set_visible(false);
+            },
+            None=>ready_status.set_text(&format!(
+                "{unavailable}: dispositivo PipeWire/WirePlumber non disponibile; nessun controllo fittizio.")),
+        }
+    });
+
+    let slider=level.clone();
+    let mute_button=mute.clone();
+    let refresh_button=refresh.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    apply.connect_clicked(move |button|{
+        // Only the user's explicit click may change host mixer state.
+        let requested=format!("{:.2}",slider.value().clamp(0.0,100.0)/100.0);
+        button.set_sensitive(false);
+        mute_button.set_sensitive(false);
+        refresh_button.set_sensitive(false);
+        message.set_text("Applicazione volume in corso…");
+        let action=button.clone();
+        let other=mute_button.clone();
+        let reload=refresh_button.clone();
+        let slider=slider.clone();
+        let mute=other.clone();
+        let reading=state.clone();
+        let feedback=message.clone();
+        crate::settings_async::run("audio-volume",move ||{
+            let result=Command::new("wpctl")
+                .args(["set-volume",target,requested.as_str()]).status();
+            let ok=result.is_ok_and(|status|status.success());
+            (ok,if ok {audio_status(target)}else{None})
+        },move |response|{
+            action.set_sensitive(true);
+            other.set_sensitive(true);
+            reload.set_sensitive(true);
+            match response{
+                Some((true,Some(snapshot)))=>{
+                    apply_audio_snapshot(target,snapshot,&slider,&mute,&reading);
+                    feedback.set_text("Volume applicato.");
+                },
+                Some((true,None))=>feedback.set_text(
+                    "Comando eseguito, ma non è possibile verificare il volume."),
+                _=>feedback.set_text(
+                    "Impossibile applicare il volume. Verifica WirePlumber."),
+            }
+        });
+    });
+
+    let slider=level.clone();
+    let apply_button=apply.clone();
+    let refresh_button=refresh.clone();
+    let mute_button=mute.clone();
+    let state=reading.clone();
+    let message=feedback.clone();
+    mute.connect_clicked(move |button|{
+        button.set_sensitive(false);
+        apply_button.set_sensitive(false);
+        refresh_button.set_sensitive(false);
+        message.set_text("Aggiornamento audio in corso…");
+        let action=button.clone();
+        let other=apply_button.clone();
+        let reload=refresh_button.clone();
+        let slider=slider.clone();
+        let reading=state.clone();
+        let feedback=message.clone();
+        crate::settings_async::run("audio-mute",move ||{
+            let result=Command::new("wpctl").args(["set-mute",target,"toggle"]).status();
+            let ok=result.is_ok_and(|status|status.success());
+            (ok,if ok {audio_status(target)}else{None})
+        },move |response|{
+            action.set_sensitive(true);
+            other.set_sensitive(true);
+            reload.set_sensitive(true);
+            match response{
+                Some((true,Some(snapshot)))=>{
+                    apply_audio_snapshot(target,snapshot,&slider,&action,&reading);
+                    feedback.set_text("Stato audio aggiornato.");
+                },
+                Some((true,None))=>feedback.set_text(
+                    "Comando eseguito, ma il dispositivo non risponde."),
+                _=>feedback.set_text("Impossibile modificare lo stato audio."),
+            }
+        });
+        let _=&mute_button;
+    });
 
     let slider=level.clone();
     let mute_button=mute.clone();
     let state=reading.clone();
     let message=feedback.clone();
-    apply.connect_clicked(move |_| {
-        // Only an explicit click changes a system PipeWire volume. The target
-        // is a compile-time selected sink/source, never a user command.
-        let requested=format!("{:.2}",slider.value().clamp(0.0,100.0)/100.0);
-        let result=Command::new("wpctl")
-            .args(["set-volume",target,requested.as_str()]).status();
-        if !result.is_ok_and(|status|status.success()) {
-            message.set_text("Impossibile applicare il volume. Verifica WirePlumber.");
-        } else if refresh_audio_status(target,&slider,&mute_button,&state) {
-            message.set_text("Volume applicato.");
-        } else {
-            message.set_text("Comando eseguito, ma non è possibile verificare il volume.");
-        }
-    });
-    let slider=level.clone();
-    let mute_button=mute.clone();
-    let state=reading.clone();
-    let message=feedback.clone();
-    mute.connect_clicked(move |_| {
-        let result=Command::new("wpctl").args(["set-mute",target,"toggle"]).status();
-        if !result.is_ok_and(|status|status.success()) {
-            message.set_text("Impossibile modificare lo stato audio.");
-        } else if refresh_audio_status(target,&slider,&mute_button,&state) {
-            message.set_text("Stato audio aggiornato.");
-        } else {
-            message.set_text("Comando eseguito, ma il dispositivo non risponde.");
-        }
-    });
-    let slider=level.clone();
-    let mute_button=mute.clone();
-    let state=reading.clone();
-    let message=feedback.clone();
-    refresh.connect_clicked(move |_| {
-        if refresh_audio_status(target,&slider,&mute_button,&state) {
-            message.set_text("");
-        } else {
-            message.set_text("Impossibile leggere il dispositivo audio.");
-        }
+    refresh.connect_clicked(move |_|{
+        message.set_text("Lettura dispositivo in corso…");
+        let slider=slider.clone();
+        let mute=mute_button.clone();
+        let reading=state.clone();
+        let feedback=message.clone();
+        crate::settings_async::run("audio-refresh",move ||audio_status(target),move |response|{
+            match response.flatten(){
+                Some(snapshot)=>{
+                    apply_audio_snapshot(target,snapshot,&slider,&mute,&reading);
+                    feedback.set_text("");
+                },
+                None=>feedback.set_text("Impossibile leggere il dispositivo audio."),
+            }
+        });
     });
 }
 
