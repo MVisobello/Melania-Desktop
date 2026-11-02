@@ -38,7 +38,7 @@ impl Default for Preferences {
         snap_windows: true, preview_windows: true,
         do_not_disturb: false, blur_strength: 70, workspace_count: 4,
         group_windows: false, reduce_motion: false, high_contrast: false,
-        icon_theme: "Melania-Fluent-Light".into(),
+        icon_theme: "Melania-Light".into(),
         panel_height: 52, panel_position: "bottom".into(),
         panel_auto_hide: false, panel_opacity: 94,
         desktop_wallpaper: String::new(), desktop_wallpaper_fit: "cover".into(),
@@ -55,9 +55,11 @@ pub fn recent_apps_path() -> Option<PathBuf> {
     Some(root.join("melania").join("recent-applications"))
 }
 
-pub const ICON_THEMES: [&str; 6] = [
+pub const ICON_THEMES: [&str; 7] = [
+    // Melania Fluent v0.3 is the default; explicit older themes still load.
+    "Melania-Light", "Melania-Dark", "Melania-Light-darkPanel",
     "Melania-Fluent-Light", "Melania-Fluent-Dark", "Melania-Fluent-Light-on-Dark-Panel",
-    "Melania-Light", "Melania-Dark", "Melania-Light-on-Dark-Panel"
+    "Melania-Light-on-Dark-Panel",
 ];
 /// The bundled theme is added to GTK's per-process icon search paths.
 /// Installed user icon themes remain discoverable in ~/.local/share/icons.
@@ -72,6 +74,7 @@ pub fn bundled_icon_paths() -> Vec<PathBuf> {
         if icons.is_dir() { paths.push(icons); }
     }
     paths.extend([
+        root.join("dist/melania-fluent-v03"),
         root.join("dist/melania-icon-themes"),
         root.join("dist/melania-fluent-icons"),
         root.join("branding"),
@@ -289,14 +292,14 @@ mod tests {
         assert!(!bad.group_windows && !bad.reduce_motion && !bad.high_contrast);
     }
     #[test] fn icon_themes_are_validated_and_backward_compatible() {
-        assert_eq!(Preferences::default().icon_theme,"Melania-Fluent-Light");
+        assert_eq!(Preferences::default().icon_theme,"Melania-Light");
         for name in ICON_THEMES {
             let p=Preferences::from_text(&format!("icon_theme={name}"));
             assert_eq!(p.icon_theme,name);
             assert_eq!(Preferences::from_text(&p.to_text()),p);
         }
-        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Fluent-Light");
-        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Fluent-Light");
+        assert_eq!(Preferences::from_text("icon_theme=../../hijack").icon_theme,"Melania-Light");
+        assert_eq!(Preferences::from_text("aero_glass=true").icon_theme,"Melania-Light");
     }
     #[test] fn reads_and_writes_file() {
         let dir = std::env::temp_dir().join(format!("melania-test-{}-{:?}", std::process::id(), std::thread::current().id()));
