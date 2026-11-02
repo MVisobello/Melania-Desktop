@@ -64,8 +64,12 @@ class NativeLiveStage29(unittest.TestCase):
             "pixel_frame_target:if std::env::var",
         ):
             self.assertIn(fragment,BRIDGE)
-        self.assertLess(BRIDGE.index("stream.read_exact(&mut ack)"),
-                        BRIDGE.index("buffer.release();"))
+        # The legacy synchronous probe still releases only after its ACK.
+        # The new asynchronous branch has its own earlier *pending* buffer
+        # release, which is guarded independently by Stage34 tests.
+        read_at=BRIDGE.index("stream.read_exact(&mut ack)")
+        release_at=BRIDGE.index("                buffer.release();",read_at)
+        self.assertLess(read_at,release_at)
         self.assertIn('MELANIA_NATIVE_THREE_FRAMES',CLIENT)
         self.assertIn('for frame_index in 0..count',CLIENT)
         self.assertIn('MELANIA_NATIVE_CLIENT_FRAME_COMMITTED={}',CLIENT)
