@@ -94,6 +94,23 @@ for i in $(seq 1 140); do
   sleep .25
 done
 [[ "$RENDERED" == 1 ]] || { echo 'FAIL: no GTK window submitted a real Wayland buffer' >&2;exit 1; }
+# A toplevel-only screenshot can look like "just Melania Files over a
+# background". Assert an actual painted top/overlay layer from the panel.
+TOP_LAYER_RENDERED=0
+for i in $(seq 1 80); do
+  if grep -Eq 'MELANIA_RENDER .*top=[1-9][0-9]*' "$TMP/bundle.log"; then
+    TOP_LAYER_RENDERED=1
+    break
+  fi
+  kill -0 "$PID" 2>/dev/null || break
+  sleep .25
+done
+[[ "$TOP_LAYER_RENDERED" == 1 ]] || {
+  echo 'FAIL: top/overlay panel layer never rendered (Files alone is not a desktop)' >&2
+  grep -E 'MELANIA_RENDER|MELANIA_CLIENT_|GSK|EGL|MESA' "$TMP/bundle.log" >&2 || true
+  exit 1
+}
+echo 'PASS: real taskbar top-layer pixels submitted by nested Wayland compositor'
 
 sleep .8
 scrot -z -o reports/bundle-nested-desktop.png
