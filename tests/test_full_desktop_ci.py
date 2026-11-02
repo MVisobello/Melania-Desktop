@@ -47,5 +47,25 @@ class RealNestedUI(unittest.TestCase):
         self.assertIn("XDG_RUNTIME_DIR",SMOKE)
         self.assertIn("XDG_CONFIG_HOME",SMOKE)
 
+    def test_visual_and_keyboard_proofs_are_mandatory(self):
+        # A green E2E workflow must prove that input was injected and that
+        # genuine screenshot pixels were captured; never skip these silently.
+        for tool in ("scrot", "xdotool", "python3"):
+            self.assertIn("for executable in scrot xdotool python3", SMOKE)
+        self.assertIn("required full-desktop visual/input tool missing", SMOKE)
+        self.assertIn("from PIL import Image, ImageChops", SMOKE)
+        self.assertIn("missing mandatory visual evidence", SMOKE)
+        self.assertIn("reports/melania-real-desktop-preview.json", SMOKE)
+        self.assertIn("data['native_kms_desktop'] is False", SMOKE)
+        self.assertIn("data['start_search_visual_change']", SMOKE)
+        for entry in ("scripts/check-real-desktop-preview.py",
+                      "tests/test_full_desktop_ci.py",
+                      "reports/melania-real-desktop-preview.png",
+                      "reports/melania-real-desktop-preview.json",
+                      "MELANIA_REAL_NESTED_DESKTOP_PREVIEW=PASS",
+                      "test -s reports/nested-wayland-start-search.png"):
+            self.assertIn(entry, CI)
+
+
 if __name__=="__main__":
     unittest.main()
