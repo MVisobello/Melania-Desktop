@@ -100,7 +100,7 @@ jobs:
               "melania-notifyd", "melania-notifyctl",
           )
           paths = [Path("target/debug") / n for n in binaries]
-          paths += [Path("target/mint-runtime/lib/libgtk4-layer-shell.so.0.0.0")]
+          paths += [Path("target/mint-runtime/lib/libgtk4-layer-shell.so.1.0.4")]
           for p in paths:
               result = subprocess.run(["readelf", "-W", "--version-info", str(p)],
                                       check=True, capture_output=True, text=True)
@@ -113,7 +113,7 @@ jobs:
             --bin-dir target/debug \
             --output-dir target/melania-mint22-release \
             --commit "$GITHUB_SHA" \
-            --gtk-layer-shell-lib target/mint-runtime/lib/libgtk4-layer-shell.so.0.0.0
+            --gtk-layer-shell-lib target/mint-runtime/lib/libgtk4-layer-shell.so.1.0.4
           cd target/melania-mint22-release
           sha256sum -c SHA256SUMS
           tar -tzf melania-nested-preview.tar.gz > archive-members.txt
