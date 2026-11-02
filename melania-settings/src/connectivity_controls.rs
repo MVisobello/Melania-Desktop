@@ -60,78 +60,119 @@ fn bluetooth_power() -> Option<bool> {
     parse_bluetooth_power(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Controls are offered only when NetworkManager exposes its Wi-Fi radio.
-/// Reading the page does not enable Wi-Fi or disconnect a running connection.
+/// Wi-Fi detection and button operations are asynchronous. No service
+/// command can block GTK first paint or navigation to the Network page.
 pub fn append_wifi(page: &GtkBox) {
-    let Some(enabled)=wifi_radio() else {
-        page.append(&label("Controllo Wi-Fi non disponibile tramite NetworkManager.",
-            "settings-row-description"));
-        return;
-    };
-    let button=Button::with_label(if enabled {"Disattiva Wi-Fi"} else {"Attiva Wi-Fi"});
+    let status=label("Rilevamento Wi-Fi…","settings-row-description");
+    let button=Button::with_label("Wi-Fi");
+    button.set_sensitive(false);
     button.set_tooltip_text(Some(
         "Modifica la radio Wi-Fi di Linux; disattivarla può interrompere la connessione."
     ));
     let row=control_row("Wi-Fi",
         "Attiva o disattiva la radio Wi-Fi del sistema. Una disattivazione interrompe le connessioni wireless.",
         &button);
+    row.set_visible(false);
+    let feedback=label("","settings-action-feedback");
+    page.append(&status);
     page.append(&row);
-    let feedback=label("", "settings-action-feedback");
     page.append(&feedback);
-    button.connect_clicked(move |button| {
-        let Some(current)=wifi_radio() else {
-            feedback.set_text("Impossibile leggere lo stato Wi-Fi.");
-            return;
-        };
-        let next=if current {"off"} else {"on"};
-        match Command::new("nmcli").args(["radio","wifi",next]).status() {
-            Ok(status) if status.success() => {
-                match wifi_radio() {
-                    Some(actual) => {
-                        button.set_label(if actual {"Disattiva Wi-Fi"} else {"Attiva Wi-Fi"});
-                        feedback.set_text(if actual {"Wi-Fi attivo."} else {"Wi-Fi disattivato."});
-                    }
-                    None => feedback.set_text("Comando inviato, ma lo stato Wi-Fi non è verificabile."),
-                }
-            }
-            _ => feedback.set_text("Impossibile cambiare il Wi-Fi. Verifica NetworkManager e i permessi."),
+    let ready_button=button.clone();
+    let ready_row=row.clone();
+    let ready_status=status.clone();
+    crate::settings_async::run(wifi_radio,move |result|{
+        match result.flatten(){
+            Some(enabled)=>{
+                ready_button.set_label(if enabled {"Disattiva Wi-Fi"}else{"Attiva Wi-Fi"});
+                ready_button.set_sensitive(true);
+                ready_row.set_visible(true);
+                ready_status.set_visible(false);
+            },
+            None=>ready_status.set_text(
+                "Controllo Wi-Fi non disponibile tramite NetworkManager."),
         }
+    });
+    button.connect_clicked(move |button|{
+        button.set_sensitive(false);
+        feedback.set_text("Aggiornamento Wi-Fi in corso…");
+        let ui_button=button.clone();
+        let ui_feedback=feedback.clone();
+        crate::settings_async::run(move ||{
+            // Verify current state only after an explicit user click.
+            let Some(current)=wifi_radio() else{return (false,None);};
+            let next=if current {"off"}else{"on"};
+            let successful=Command::new("nmcli").args(["radio","wifi",next])
+                .status().is_ok_and(|status|status.success());
+            (successful,if successful {wifi_radio()}else{None})
+        },move |result|{
+            ui_button.set_sensitive(true);
+            match result {
+                Some((true,Some(actual)))=>{
+                    ui_button.set_label(if actual {"Disattiva Wi-Fi"}else{"Attiva Wi-Fi"});
+                    ui_feedback.set_text(if actual {"Wi-Fi attivo."}else{"Wi-Fi disattivato."});
+                },
+                Some((true,None))=>ui_feedback.set_text(
+                    "Comando inviato, ma lo stato Wi-Fi non è verificabile."),
+                _=>ui_feedback.set_text(
+                    "Impossibile cambiare il Wi-Fi. Verifica NetworkManager e i permessi."),
+            }
+        });
     });
 }
 
-/// Use BlueZ to control the current default adapter. This is an explicit
-/// user action, never an automatic side effect of opening Settings.
+/// Bluetooth adapter detection and explicit power operations stay off GTK.
 pub fn append_bluetooth(page: &GtkBox) {
-    let Some(enabled)=bluetooth_power() else {
-        page.append(&label("Nessun controller Bluetooth gestibile tramite BlueZ.",
-            "settings-row-description"));
-        return;
-    };
-    let button=Button::with_label(if enabled {"Disattiva Bluetooth"} else {"Attiva Bluetooth"});
+    let status=label("Rilevamento Bluetooth…","settings-row-description");
+    let button=Button::with_label("Bluetooth");
+    button.set_sensitive(false);
     button.set_tooltip_text(Some("Accende o spegne l'adattatore Bluetooth predefinito di Linux."));
-    page.append(&control_row("Bluetooth",
+    let row=control_row("Bluetooth",
         "Controlla l'adattatore predefinito. Spegnerlo disconnette i dispositivi associati.",
-        &button));
-    let feedback=label("", "settings-action-feedback");
+        &button);
+    row.set_visible(false);
+    let feedback=label("","settings-action-feedback");
+    page.append(&status);
+    page.append(&row);
     page.append(&feedback);
-    button.connect_clicked(move |button| {
-        let Some(current)=bluetooth_power() else {
-            feedback.set_text("Impossibile leggere lo stato dell'adattatore Bluetooth.");
-            return;
-        };
-        let next=if current {"off"} else {"on"};
-        match Command::new("bluetoothctl").args(["power",next]).status() {
-            Ok(status) if status.success() => {
-                match bluetooth_power() {
-                    Some(actual) => {
-                        button.set_label(if actual {"Disattiva Bluetooth"} else {"Attiva Bluetooth"});
-                        feedback.set_text(if actual {"Bluetooth attivo."} else {"Bluetooth disattivato."});
-                    }
-                    None => feedback.set_text("Comando inviato, ma il controller non risponde."),
-                }
-            }
-            _ => feedback.set_text("Impossibile cambiare il Bluetooth. Verifica BlueZ e i permessi."),
+    let ready_button=button.clone();
+    let ready_row=row.clone();
+    let ready_status=status.clone();
+    crate::settings_async::run(bluetooth_power,move |result|{
+        match result.flatten(){
+            Some(enabled)=>{
+                ready_button.set_label(if enabled {"Disattiva Bluetooth"}else{"Attiva Bluetooth"});
+                ready_button.set_sensitive(true);
+                ready_row.set_visible(true);
+                ready_status.set_visible(false);
+            },
+            None=>ready_status.set_text(
+                "Nessun controller Bluetooth gestibile tramite BlueZ."),
         }
+    });
+    button.connect_clicked(move |button|{
+        button.set_sensitive(false);
+        feedback.set_text("Aggiornamento Bluetooth in corso…");
+        let ui_button=button.clone();
+        let ui_feedback=feedback.clone();
+        crate::settings_async::run(move ||{
+            let Some(current)=bluetooth_power() else{return (false,None);};
+            let next=if current {"off"}else{"on"};
+            let successful=Command::new("bluetoothctl").args(["power",next])
+                .status().is_ok_and(|status|status.success());
+            (successful,if successful {bluetooth_power()}else{None})
+        },move |result|{
+            ui_button.set_sensitive(true);
+            match result{
+                Some((true,Some(actual)))=>{
+                    ui_button.set_label(if actual {"Disattiva Bluetooth"}else{"Attiva Bluetooth"});
+                    ui_feedback.set_text(if actual {"Bluetooth attivo."}else{"Bluetooth disattivato."});
+                },
+                Some((true,None))=>ui_feedback.set_text(
+                    "Comando inviato, ma il controller non risponde."),
+                _=>ui_feedback.set_text(
+                    "Impossibile cambiare il Bluetooth. Verifica BlueZ e i permessi."),
+            }
+        });
     });
 }
 
