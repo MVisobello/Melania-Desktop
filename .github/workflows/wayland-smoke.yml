@@ -23,6 +23,8 @@ on:
       - 'melania-desktop-surface/**'
       - 'scripts/smoke-nested-wayland.sh'
       - 'scripts/smoke-full-desktop-wayland.sh'
+      - 'scripts/check-real-desktop-preview.py'
+      - 'tests/test_native_output_stage27.py'
       - 'scripts/run-melania-v018-nested.sh'
       - 'scripts/test-nested-session-preflight.py'
       - '.github/workflows/wayland-smoke.yml'
@@ -46,6 +48,8 @@ on:
       - 'melania-desktop-surface/**'
       - 'scripts/smoke-nested-wayland.sh'
       - 'scripts/smoke-full-desktop-wayland.sh'
+      - 'scripts/check-real-desktop-preview.py'
+      - 'tests/test_native_output_stage27.py'
       - 'scripts/run-melania-v018-nested.sh'
       - 'scripts/test-nested-session-preflight.py'
       - '.github/workflows/wayland-smoke.yml'
@@ -76,6 +80,7 @@ jobs:
         run: |
           bash -n scripts/run-melania-v018-nested.sh
           python3 scripts/test-nested-session-preflight.py -v
+          python3 -m unittest discover -s tests -p 'test_native_output_stage27.py' -v
       - name: Build nested compositor, control CLI and GTK file manager
         run: |
           set -o pipefail
@@ -128,6 +133,8 @@ jobs:
             reports/wayland-smoke.log
             reports/wayland-full-*.log
             reports/nested-wayland-full-desktop.png
+            reports/melania-real-desktop-preview.png
+            reports/melania-real-desktop-preview.json
             reports/nested-wayland-start-search.png
             reports/nested-wayland-panel-top.png
             reports/nested-wayland-wallpaper-live.png

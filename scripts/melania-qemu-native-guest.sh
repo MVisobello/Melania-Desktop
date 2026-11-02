@@ -224,11 +224,14 @@ if ! WAYLAND_DISPLAY="$pixel_socket" \
   wait "$pixel_pid" 2>/dev/null || true
   fatal 'QEMU_real_xdg_client_wl_shm_failed'
 fi
+report 'MELANIA_QEMU_NATIVE_WL_OUTPUT_PASS=true'
 if ! wait "$pixel_pid"; then
   cat "$pixel_log"
   fatal 'Rust_compositor_did_not_capture_client_buffer'
 fi
 cat "$pixel_log"
+grep -q '^MELANIA_NATIVE_WL_OUTPUT_ADVERTISED=1280x800' "$pixel_log" ||
+  fatal 'native_output_not_advertised'
 grep -q '^MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true' "$pixel_log" ||
   fatal 'wl_shm_pixels_not_imported'
 grep -q '^MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true' "$pixel_log" ||
