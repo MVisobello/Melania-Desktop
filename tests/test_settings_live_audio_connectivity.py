@@ -16,9 +16,13 @@ class LiveSystemSettings(unittest.TestCase):
         self.assertIn('Command::new("wpctl")', PAGES)
         self.assertIn('"set-volume",target,requested.as_str()', PAGES)
         self.assertIn('"set-mute",target,"toggle"', PAGES)
-        self.assertIn('refresh_audio_status(', PAGES)
-        self.assertIn('mute.connect_clicked(move |_|', PAGES)
-        self.assertIn('apply.connect_clicked(move |_|', PAGES)
+        self.assertIn('apply_audio_snapshot(', PAGES)
+        self.assertIn('crate::settings_async::run("audio-detect"', PAGES)
+        self.assertIn('crate::settings_async::run("audio-volume"', PAGES)
+        self.assertIn('crate::settings_async::run("audio-mute"', PAGES)
+        self.assertIn('crate::settings_async::run("audio-refresh"', PAGES)
+        self.assertIn('mute.connect_clicked(move |button|', PAGES)
+        self.assertIn('apply.connect_clicked(move |button|', PAGES)
         self.assertIn('refresh.connect_clicked(move |_|', PAGES)
         self.assertIn('fn audio_mute_label(target: &str, muted: bool)', PAGES)
         self.assertIn('"Attiva microfono"', PAGES)
@@ -49,7 +53,7 @@ class LiveSystemSettings(unittest.TestCase):
         # Controls use explicit clicked events; UI constructor may only read.
         self.assertLess(CONNECTIVITY.index('button.connect_clicked(move |button|'),
                         CONNECTIVITY.index('["radio","wifi",next]'))
-        self.assertLess(PAGES.index('apply.connect_clicked(move |_|'),
+        self.assertLess(PAGES.index('apply.connect_clicked(move |button|'),
                         PAGES.index('"set-volume",target,requested.as_str()'))
 
 
