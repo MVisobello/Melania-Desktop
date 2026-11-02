@@ -4,7 +4,7 @@
 Send absolute coordinates to the disposable VM USB tablet via its PRIVATE QMP
 socket during Rust KMS frame holds. The server must deliver real libinput
 pointer presses to the hit-tested wl_surface and switch keyboard focus:
-frame2 -> window B; frame3 -> window A. Never touch host input devices.
+while the renderer is still active: first window B, then window A. Never touch host input devices.
 """
 from __future__ import annotations
 
@@ -76,7 +76,9 @@ def main()->int:
     send_click(args.qmp,750,280)
     wait_for(args.serial,"MELANIA_NATIVE_WINDOW_POINTER_FOCUS=2",end)
     print("MELANIA_QEMU_WINDOW2_POINTER_FOCUS=true",flush=True)
-    wait_for(args.serial,MARKER3,end)
+    # Both clicks must happen in the SAME still-active display epoch.
+    # Waiting for frame 3 is racy: Smithay is allowed to close as soon
+    # as the final post-KMS callback has been delivered.
     send_click(args.qmp,250,230)
     wait_for(args.serial,"MELANIA_NATIVE_WINDOW_POINTER_FOCUS=1",end)
     print("MELANIA_QEMU_WINDOW1_POINTER_FOCUS=true",flush=True)
