@@ -688,7 +688,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         display.flush_clients()?;
         if state.pixel_probe && state.pixel_ready {
             let since=pixel_ready_since.get_or_insert_with(Instant::now);
-            if since.elapsed()>=Duration::from_secs(3) {
+            if since.elapsed()>=Duration::from_secs(
+                if state.multi_window_mode {6} else {3}
+            ) {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count);
                 if state.live_stream {
