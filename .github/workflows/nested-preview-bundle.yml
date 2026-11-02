@@ -83,7 +83,9 @@ jobs:
             --commit "$GITHUB_SHA"
           cd target/melania-preview-release
           sha256sum -c SHA256SUMS
-          tar -tzf melania-nested-preview.tar.gz | grep -q 'melania-nested-preview/manifest.json'
+          tar -tzf melania-nested-preview.tar.gz > bundle-members.txt
+          grep -Fxq 'melania-nested-preview/manifest.json' bundle-members.txt
+          grep -Fxq 'melania-nested-preview/run.sh' bundle-members.txt
       - name: Real packaged desktop under isolated graphical host
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
