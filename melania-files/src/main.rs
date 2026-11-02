@@ -28,13 +28,13 @@ const MAX_LOCAL_THUMBNAILS: usize = 48;
 /// Software-rendered previews spend CPU time drawing GTK as well as decoding
 /// thumbnails. Keep the normal 48-image limit on accelerated sessions; use a
 /// smaller, bounded first batch with Cairo/llvmpipe (VirtualBox preview).
+fn thumbnail_budget_for(renderer:Option<&str>,software:bool) -> usize {
+    if renderer==Some("cairo") || software {16} else {MAX_LOCAL_THUMBNAILS}
+}
 fn thumbnail_budget() -> usize {
-    if std::env::var("GSK_RENDERER").ok().as_deref()==Some("cairo") ||
-       std::env::var("LIBGL_ALWAYS_SOFTWARE").ok().as_deref()==Some("1") {
-        16
-    } else {
-        MAX_LOCAL_THUMBNAILS
-    }
+    thumbnail_budget_for(
+        std::env::var("GSK_RENDERER").ok().as_deref(),
+        std::env::var("LIBGL_ALWAYS_SOFTWARE").ok().as_deref()==Some("1"))
 }
 
 fn files_profile_enabled() -> bool {
@@ -2703,6 +2703,23 @@ fn setup_melania_icon_theme() {
     if let Some(settings)=gtk::Settings::default() {
         settings.set_property("gtk-icon-theme-name",
             melania_config::resolved_icon_theme(&prefs));
+    }
+}
+
+#[cfg(test)]
+mod software_preview_performance_tests {
+    use super::thumbnail_budget_for;
+
+    #[test]
+    fn preserve_full_thumbnails_on_accelerated_sessions() {
+        assert_eq!(thumbnail_budget_for(None,false),48);
+        assert_eq!(thumbnail_budget_for(Some("ngl"),false),48);
+    }
+
+    #[test]
+    fn bound_thumbnail_decoding_on_software_renderers() {
+        assert_eq!(thumbnail_budget_for(Some("cairo"),false),16);
+        assert_eq!(thumbnail_budget_for(None,true),16);
     }
 }
 
