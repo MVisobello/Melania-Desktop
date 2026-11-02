@@ -363,6 +363,11 @@ MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 39s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
+# Expose the REAL compositor's markers on the QEMU serial console while
+# it is running. A final cat after wait() is far too late for the tablet
+# injector's second click. Follow only this guest-private temporary log.
+tail -n +1 -f -s 0.2 "$multi_server_log" > /dev/ttyS0 &
+multi_tail_pid=$!
 multi_socket=''
 for attempt in $(seq 1 100); do
   multi_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$multi_server_log" | head -n 1)"
@@ -402,6 +407,8 @@ if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
 fi
 wait "$multi_kms_pid" || fatal 'two_window_KMS_three_presentations_failed'
 wait "$multi_server_pid" || fatal 'two_window_Smithay_failed'
+kill "$multi_tail_pid" 2>/dev/null || true
+wait "$multi_tail_pid" 2>/dev/null || true
 cat "$multi_server_log"
 grep -q '^MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true' "$multi_server_log" ||
   fatal 'two_windows_not_retained_in_scene'
