@@ -19,6 +19,8 @@ visible_probe="$root/target/debug/melania-qemu-visible-probe"
   deny 'compile the QEMU-only visible-frame probe first'
 [[ -f "$root/scripts/capture-qemu-visible-scanout.py" ]] ||
   deny 'QEMU QMP screenshot verifier unavailable'
+shell_probe="$root/target/debug/qemu-shell-client"
+[[ -x "$shell_probe" ]] || deny 'build Rust xdg/layer-shell QEMU client first'
 client_probe="$root/target/debug/melania-qemu-wayland-client"
 [[ -f "$client_probe" && -x "$client_probe" ]] ||
   deny 'build real libwayland guest client first'
@@ -44,7 +46,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -119,6 +121,12 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_NATIVE_WAYLAND_CLIENT_INPUT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_WAYLAND_INPUT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_XDG_CONFIGURE_ACK=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_LAYER_CONFIGURE_ACK=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_SHELL_PROTOCOL_CLIENT_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_SHELL_PROTOCOLS_READY=true' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_SHELL_RENDERED=false' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_SHELL_PROBE_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_WAYLAND_RENDER_READY=false' "$serial" ||
    ! grep -q '^MELANIA_QEMU_VISIBLE_PIXELS_VERIFIED=true' "$report/qmp-scanout.log" ||
    ! test -s "$report/visible-frame.ppm" ||
@@ -156,3 +164,4 @@ printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_WAYLAND_REAL_INPUT_DELIVERY=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_XDG_LAYER_SHELL_HANDSHAKE=true' >> "$report/result.txt"

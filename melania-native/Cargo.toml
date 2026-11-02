@@ -1,10 +1,11 @@
 [package]
 name = "melania-native"
+default-run = "melania-native"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Stage 1 is intentionally NOT a Wayland compositor or login session.
+# The VM-only Wayland seat/shell bridge is still NOT a native login session.
 # Smithay native feature flags compile alongside (not instead of) winit.
 [dependencies]
 smithay = { version = "0.7.0", default-features = false, features = [
@@ -13,6 +14,11 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "wayland_frontend"
 ] }
 calloop = "0.14"
+# Use the same protocol crates as the nested compositor: native role callbacks
+# are exposed but rendering client buffers is deliberately still disabled.
+wayland-protocols = { version = "0.32", features = ["client", "server"] }
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # Read-only KMS connector/mode inventory; same drm-rs version as Smithay 0.7.
 drm = "0.14"
