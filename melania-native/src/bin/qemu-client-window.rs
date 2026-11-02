@@ -1,7 +1,7 @@
 //! QEMU-only real wl_shm xdg_toplevel client (Stage 26).
 //! Client pixels come from this executable. The native Rust bridge must
 //! acquire them through Wayland, then compose them to a separate snapshot.
-use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd};
+use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd,thread,time::{Duration,Instant}};
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
@@ -209,12 +209,22 @@ fn main()->Result<(),Box<dyn Error>> {
         surface.attach(Some(&buffer),0,0);
         surface.damage_buffer(0,0,W as i32,H as i32);
         surface.commit();
-        for _ in 0..7 {
+        // A real asynchronous KMS presenter does not block Smithay's
+        // display.sync roundtrips. Keep the client responsive while waiting
+        // for the actual KMS ACK and wl_callback.done, never treat the
+        // first few successful syncs as proof of presentation.
+        let present_deadline=Instant::now()+Duration::from_secs(9);
+        loop {
             queue.roundtrip(&mut state)?;
             if state.buffer_released &&
                (!callback_probe || state.frame_done_count==frame_index as u32+1) {
                 break;
             }
+            if Instant::now()>=present_deadline {
+                return Err(format!("KMS presentation deadline exceeded for client frame {}",
+                                   frame_index+1).into());
+            }
+            thread::sleep(Duration::from_millis(35));
         }
         if !state.buffer_released ||
            (callback_probe && state.frame_done_count!=frame_index as u32+1) {
