@@ -26,6 +26,9 @@ on:
       - tests/test_native_async_kms_stage34.py
       - tests/test_native_window_input_stage35.py
       - tests/test_native_window_interactions_stage36.py
+      - tests/test_native_drag_kms_stage38.py
+      - scripts/inject-qemu-window-drag.py
+      - scripts/capture-qemu-drag-frame.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -62,6 +65,9 @@ on:
       - tests/test_native_async_kms_stage34.py
       - tests/test_native_window_input_stage35.py
       - tests/test_native_window_interactions_stage36.py
+      - tests/test_native_drag_kms_stage38.py
+      - scripts/inject-qemu-window-drag.py
+      - scripts/capture-qemu-drag-frame.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -114,6 +120,9 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_async_kms_stage34.py' -v
           python3 -m unittest discover -s tests -p 'test_native_window_input_stage35.py' -v
           python3 -m unittest discover -s tests -p 'test_native_window_interactions_stage36.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_drag_kms_stage38.py' -v
+          python3 -m py_compile scripts/inject-qemu-window-drag.py
+          python3 -m py_compile scripts/capture-qemu-drag-frame.py
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
           python3 -m py_compile scripts/capture-qemu-rust-kms-frames.py
