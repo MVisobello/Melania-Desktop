@@ -23,6 +23,7 @@ on:
       - tests/test_native_render_scheduler_stage32.py
       - tests/test_qemu_two_windows_stage33.py
       - tests/test_native_async_kms_stage34.py
+      - tests/test_native_window_input_stage35.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -56,6 +57,7 @@ on:
       - tests/test_native_render_scheduler_stage32.py
       - tests/test_qemu_two_windows_stage33.py
       - tests/test_native_async_kms_stage34.py
+      - tests/test_native_window_input_stage35.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -106,6 +108,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_render_scheduler_stage32.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_two_windows_stage33.py' -v
           python3 -m unittest discover -s tests -p 'test_native_async_kms_stage34.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_window_input_stage35.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
           python3 -m py_compile scripts/capture-qemu-rust-kms-frames.py
