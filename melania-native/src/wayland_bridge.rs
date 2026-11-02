@@ -120,10 +120,10 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
-            let point:Point<f64,Logical>=((
-                state.pointer_position.x+event.delta_x()).clamp(0.0,639.0),
+            let point:Point<f64,Logical>=(
+                (state.pointer_position.x+event.delta_x()).clamp(0.0,639.0),
                 (state.pointer_position.y+event.delta_y()).clamp(0.0,479.0)
-            )).into();
+            ).into();
             state.pointer_position=point;
             let pointer=state.seat.get_pointer().expect("pointer");
             let target=state.focused.clone().map(|s|(s,(0.0,0.0).into()));
