@@ -2,7 +2,7 @@
 //!
 //! The compositor owns COPIES of client pixels; it never keeps a mapped
 //! wl_shm pointer after Smithay returns. This scene is strictly the QEMU
-//! demonstration: two fixed-size windows and deterministic positions, not
+//! demonstration: two initially positioned windows with bounded move, focus and hit-testing, not
 //! an unbounded native window manager or a replacement for xdg-shell policy.
 use crate::scene::{self, Layer, Pixels, Surface};
 
@@ -19,12 +19,15 @@ pub enum MultiSceneError {
     InvalidPixelBuffer,
     TooManyWindows,
     UnknownWindow,
+    InvalidPosition,
     CompositionFailed,
 }
 
 #[derive(Debug)]
 struct Entry {
     key: u64,
+    x: i32,
+    y: i32,
     pixels: Vec<u8>,
 }
 
@@ -49,7 +52,8 @@ impl MultiWindowScene {
         if self.windows.len() == MAX_WINDOWS {
             return Err(MultiSceneError::TooManyWindows);
         }
-        self.windows.push(Entry { key, pixels });
+        let (x,y)=POSITIONS[self.windows.len()];
+        self.windows.push(Entry { key, x, y, pixels });
         Ok(())
     }
 
@@ -59,12 +63,50 @@ impl MultiWindowScene {
         self.windows.len() != previous
     }
 
+    /// Coordinates are physical pixels of the single QEMU output.
+    /// Reject off-screen moves rather than relying on integer wrap/clipping.
+    pub fn move_to(&mut self, key:u64, x:i32, y:i32) -> Result<(),MultiSceneError> {
+        if x<0 || y<0 || x as usize>OUTPUT_W-WIN_W ||
+           y as usize>OUTPUT_H-WIN_H {
+            return Err(MultiSceneError::InvalidPosition);
+        }
+        let entry=self.windows.iter_mut().find(|w|w.key==key)
+            .ok_or(MultiSceneError::UnknownWindow)?;
+        entry.x=x;
+        entry.y=y;
+        Ok(())
+    }
+
+    pub fn position(&self,key:u64)->Option<(i32,i32)> {
+        self.windows.iter().find(|w|w.key==key).map(|w|(w.x,w.y))
+    }
+
+    /// The last mapped/raised surface is topmost; borders are not hit targets.
+    pub fn hit_test(&self,x:f64,y:f64)->Option<u64> {
+        if !x.is_finite() || !y.is_finite() {return None;}
+        self.windows.iter().rev().find(|w| {
+            x>=f64::from(w.x) && y>=f64::from(w.y) &&
+            x<f64::from(w.x)+WIN_W as f64 &&
+            y<f64::from(w.y)+WIN_H as f64
+        }).map(|w|w.key)
+    }
+
+    /// Raising a window preserves its stable key and geometry.
+    pub fn raise(&mut self,key:u64)->bool {
+        let Some(index)=self.windows.iter().position(|w|w.key==key) else {
+            return false;
+        };
+        let entry=self.windows.remove(index);
+        self.windows.push(entry);
+        true
+    }
+
     /// The scene compositor paints BOTH retained windows on every update:
     /// window 1's pixels survive window 2's independent wl_surface commit.
     pub fn composite(&self) -> Result<Vec<u8>, MultiSceneError> {
         let mut surfaces=Vec::with_capacity(self.windows.len()*2);
-        for (index,window) in self.windows.iter().enumerate() {
-            let (x,y)=POSITIONS[index];
+        for window in self.windows.iter() {
+            let (x,y)=(window.x,window.y);
             surfaces.push(Surface {
                 x:x-6,y:y-6,width:WIN_W+12,height:WIN_H+12,
                 layer:Layer::Bottom,
@@ -131,6 +173,43 @@ mod tests {
         assert!(!graph.remove(90));
         assert!(graph.remove(1));
         assert_eq!(graph.window_count(),1);
-        assert_eq!(sample(&graph.composite().unwrap(),200,200),[4,5,6]);
+        assert_eq!(sample(&graph.composite().unwrap(),200,200),[27,33,58]);
+        assert_eq!(sample(&graph.composite().unwrap(),700,250),[4,5,6]);
     }
+    #[test]
+    fn move_hit_test_and_raise_preserve_stable_id() {
+        let mut graph=MultiWindowScene::default();
+        graph.upsert(11,solid(245,108,34)).unwrap();
+        graph.upsert(12,solid(73,126,237)).unwrap();
+        assert_eq!(graph.hit_test(200.0,200.0),Some(11));
+        assert_eq!(graph.hit_test(800.0,250.0),Some(12));
+        assert_eq!(graph.hit_test(-1.0,0.0),None);
+        assert_eq!(graph.hit_test(f64::NAN,10.0),None);
+        assert_eq!(graph.move_to(11,700,230),Ok(()));
+        assert_eq!(graph.hit_test(750.0,300.0),Some(11));
+        assert_eq!(graph.position(11),Some((700,230)));
+        assert_eq!(graph.hit_test(200.0,200.0),None);
+        assert_eq!(graph.hit_test(900.0,270.0),Some(11));
+        let overlap=graph.composite().unwrap();
+        assert_eq!(sample(&overlap,900,270),[245,108,34]);
+        assert!(graph.raise(12));
+        assert_eq!(graph.hit_test(900.0,270.0),Some(12));
+        let overlap=graph.composite().unwrap();
+        assert_eq!(sample(&overlap,900,270),[73,126,237]);
+        assert_eq!(graph.position(11),Some((700,230)));
+    }
+
+    #[test]
+    fn invalid_geometry_and_unknown_window_fail_without_mutation() {
+        let mut graph=MultiWindowScene::default();
+        graph.upsert(101,solid(1,2,3)).unwrap();
+        let old=graph.position(101);
+        assert_eq!(graph.move_to(101,-1,20),Err(MultiSceneError::InvalidPosition));
+        assert_eq!(graph.move_to(101,9999,20),Err(MultiSceneError::InvalidPosition));
+        assert_eq!(graph.move_to(101,20,9999),Err(MultiSceneError::InvalidPosition));
+        assert_eq!(graph.move_to(500,100,100),Err(MultiSceneError::UnknownWindow));
+        assert!(!graph.raise(500));
+        assert_eq!(graph.position(101),old);
+    }
+
 }
