@@ -142,7 +142,9 @@ int main(void) {
             row[x]=(x<dumb.width/2) ? 0x00f020b0u : 0x0010e8e0u;
         }
     }
-    if (msync(pixels,dumb.size,MS_SYNC)<0) {perror("msync");goto done;}
+    /* GEM dumb-buffer mmap is not a regular file mapping: msync may return
+       EINVAL on virtio_gpu. The KMS set-crtc follows these CPU writes. */
+    __sync_synchronize();
     if (stop) goto done;
 
     /* Uses the existing mode/CRTC/connector, no host or other output. */
