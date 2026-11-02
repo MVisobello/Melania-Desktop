@@ -16,6 +16,14 @@ colpita e la porta in primo piano. Gli eventi puntatore sono gestiti
 anche prima che una finestra abbia il focus, preservando il percorso
 legacy 640×480 utilizzato dalla prova input precedente.
 
+Una prova dedicata in GitHub Actions invia inoltre **clic veri tramite il
+tablet USB virtuale QEMU**, durante il secondo e terzo frame KMS. Verifica
+che il focus Wayland passi alla finestra B e poi alla finestra A, dopo
+l'hit-test. La verifica fallisce se i messaggi di focus non arrivano: non
+si tratta di simulare il risultato con dati Python, ma di osservare la
+catena QMP → libinput → Smithay. Rimangono obbligatori gli screenshot QMP
+dei frame reali e il ripristino CRTC.
+
 I test Rust includono modifica della posizione, hit-testing di finestre
 sovrapposte, cambio d'ordine, conservazione degli ID, rimozione e rifiuto
 di coordinate fuori schermo. CI esegue i test Rust e la prova QEMU
