@@ -44,6 +44,12 @@ class StorageAndHardwareResponsiveness(unittest.TestCase):
         self.assertIn('crate::settings_async::run("bluetooth-info"',section)
         self.assertIn('read_command("bluetoothctl",&["show"])',section)
 
+    def test_gvfs_smoke_marker_is_one_atomic_pipe_write(self):
+        source=(ROOT/"melania-files/src/gio_remote.rs").read_text()
+        self.assertIn('let marker=format!("MELANIA_GIO_LISTING_READY count={count}',source)
+        self.assertIn('std::io::Write::write_all(&mut std::io::stderr(),marker.as_bytes())',source)
+        self.assertNotIn('eprintln!("MELANIA_GIO_LISTING_READY',source)
+
     def test_actual_nested_wayland_and_probes_covered(self):
         self.assertIn('MELANIA_SETTINGS_STORAGE_DISPLAY_NAVIGATION_OK',MAIN)
         for service in ('storage-df','backlight-detect','display-sensor'):
