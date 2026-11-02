@@ -129,6 +129,9 @@ printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
 if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_CLIENT_PIXELS_VERIFIED=true' "$report/qmp-client-window.log" ||
    ! test -s "$report/client-window.ppm" ||
+   ! grep -q '^MELANIA_NATIVE_WL_OUTPUT_ADVERTISED=1280x800' "$serial" ||
+   ! grep -q '^MELANIA_NATIVE_CLIENT_WL_OUTPUT_MODE=1280x800' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_WL_OUTPUT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_CLIENT_WL_SHM_RELEASED=true' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_CLIENT_XDG_WINDOW_DRAWN=true' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_CLIENT_SHM_IMPORTED=true' "$serial" ||
@@ -193,3 +196,4 @@ printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/
 printf '%s\n' 'MELANIA_VM_WAYLAND_REAL_INPUT_DELIVERY=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_XDG_LAYER_SHELL_HANDSHAKE=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_CLIENT_PIXELS_RUST_COMPOSED_C_SCANOUT=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_NATIVE_WL_OUTPUT_MODE_VERIFIED=true' >> "$report/result.txt"
