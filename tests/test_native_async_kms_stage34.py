@@ -11,6 +11,7 @@ GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
 HOST=(ROOT/"scripts/run-qemu-melania-native.sh").read_text()
 CI=(ROOT/".github/workflows/qemu-melania-native.yml").read_text()
 LIB=(ROOT/"melania-native/src/lib.rs").read_text()
+CLIENT=(ROOT/"melania-native/src/bin/qemu-client-window.rs").read_text()
 
 class NativeAsyncKmsStage34(unittest.TestCase):
     def test_worker_bounded_and_socket_io_off_event_loop(self):
@@ -44,6 +45,13 @@ class NativeAsyncKmsStage34(unittest.TestCase):
         self.assertLess(callback,release)
         self.assertIn("state.poll_async_kms()?",BRIDGE)
         self.assertIn("MELANIA_NATIVE_ASYNC_FRAME_COMPLETED={}",BRIDGE)
+
+    def test_client_does_not_assume_sync_roundtrip_equals_kms_presentation(self):
+        self.assertIn("let present_deadline=Instant::now()+Duration::from_secs(9)",CLIENT)
+        self.assertIn("queue.roundtrip(&mut state)?",CLIENT)
+        self.assertIn("thread::sleep(Duration::from_millis(35))",CLIENT)
+        self.assertIn("KMS presentation deadline exceeded for client frame",CLIENT)
+        self.assertNotIn("for _ in 0..7",CLIENT)
 
     def test_guest_and_host_require_actual_async_vm_capture(self):
         for needle in ("MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM",
