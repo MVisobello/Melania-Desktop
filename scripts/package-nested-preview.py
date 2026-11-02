@@ -173,6 +173,12 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
                 target / "share/icons" / theme_name,
                 symlinks=True,
             )
+        for alias, actual in {
+            "Melania-Fluent-Light": "Melania-Light",
+            "Melania-Fluent-Dark": "Melania-Dark",
+            "Melania-Fluent-Light-on-Dark-Panel": "Melania-Light-darkPanel",
+        }.items():
+            (target / "share/icons" / alias).symlink_to(actual, target_is_directory=True)
     if vendored is not None:
         (target / "lib").mkdir()
         destination = target / "lib/libgtk4-layer-shell.so.0"
