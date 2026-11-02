@@ -428,6 +428,8 @@ fn start_window(app:&Application)->ApplicationWindow {
         let searchable=all_searchable.clone();
         let menu=menu_for_apps.clone();
         let query=query_for_apps.clone();
+        let cache_for_apps=cache_for_apps.clone();
+        let recents_after_catalog=recents_after_catalog.clone();
         glib::timeout_add_local_once(Duration::from_millis(75),move ||{
             let scan_started=Instant::now();
             let mut apps=gio::AppInfo::all().into_iter().filter(|app|{
