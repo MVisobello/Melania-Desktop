@@ -7,6 +7,7 @@ use std::{sync::mpsc::{self,TryRecvError},time::{Duration,Instant}};
 /// When a service hangs, stop waiting on the UI after four seconds; the
 /// bounded worker continues independently but cannot later mutate widgets.
 pub fn run<T:Send+'static>(
+    service:&'static str,
     operation:impl FnOnce()->T+Send+'static,
     completed:impl FnOnce(Option<T>)+'static,
 ) {
@@ -19,6 +20,10 @@ pub fn run<T:Send+'static>(
     glib::timeout_add_local(Duration::from_millis(40),move ||{
         match rx.try_recv() {
             Ok(value)=>{
+                if std::env::var_os("MELANIA_PROFILE_SETTINGS").is_some() {
+                    eprintln!("MELANIA_SETTINGS_SERVICE_MS={} service={service} outcome=ok",
+                        started.elapsed().as_millis());
+                }
                 if let Some(callback)=completed.take(){callback(Some(value));}
                 glib::ControlFlow::Break
             },
@@ -27,6 +32,10 @@ pub fn run<T:Send+'static>(
                 glib::ControlFlow::Break
             },
             Err(TryRecvError::Empty) if started.elapsed()>=Duration::from_secs(4)=>{
+                if std::env::var_os("MELANIA_PROFILE_SETTINGS").is_some() {
+                    eprintln!("MELANIA_SETTINGS_SERVICE_MS={} service={service} outcome=timeout",
+                        started.elapsed().as_millis());
+                }
                 if let Some(callback)=completed.take(){callback(None);}
                 glib::ControlFlow::Break
             },
