@@ -109,5 +109,40 @@ class SessionGate(unittest.TestCase):
             self.assertTrue(launcher.is_symlink())
 
 
+    def test_install_refuses_unrelated_desktop_entry_before_writing_launcher(self):
+        with tempfile.TemporaryDirectory(prefix="melania-install-collision-") as tmp:
+            home=Path(tmp)
+            env=os.environ.copy()
+            env["HOME"]=str(home)
+            env["XDG_DATA_HOME"]=str(home/"XDG Data")
+            desktop=home/"XDG Data/applications/org.melaniadesktop.Nested.desktop"
+            desktop.parent.mkdir(parents=True)
+            desktop.write_text("[Desktop Entry]\\nName=Unrelated application\\n")
+            result=subprocess.run(["bash",str(INSTALL)],env=env,
+                                  capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,4,result.stderr)
+            self.assertEqual(desktop.read_text(),"[Desktop Entry]\\nName=Unrelated application\\n")
+            self.assertFalse((home/".local/bin/melania-session").exists())
+
+    def test_install_refuses_symlinks_without_touching_the_target(self):
+        with tempfile.TemporaryDirectory(prefix="melania-install-link-") as tmp:
+            home=Path(tmp)
+            env=os.environ.copy()
+            env["HOME"]=str(home)
+            env["XDG_DATA_HOME"]=str(home/"XDG Data")
+            bin_dir=home/".local/bin"
+            bin_dir.mkdir(parents=True)
+            outside=home/"important-file"
+            outside.write_text("keep this")
+            launcher=bin_dir/"melania-session"
+            launcher.symlink_to(outside)
+            result=subprocess.run(["bash",str(INSTALL)],env=env,
+                                  capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,4,result.stderr)
+            self.assertEqual(outside.read_text(),"keep this")
+            self.assertTrue(launcher.is_symlink())
+            self.assertFalse((home/"XDG Data/applications/org.melaniadesktop.Nested.desktop").exists())
+
+
 if __name__=="__main__":
     unittest.main(verbosity=2)
