@@ -16,7 +16,6 @@ import sys
 import time
 
 MARKER2="MELANIA_RUST_MULTI_FRAME2_ACTIVE=true"
-MARKER3="MELANIA_RUST_MULTI_FRAME3_ACTIVE=true"
 GUEST_EXIT="MELANIA_QEMU_NATIVE_GUEST_EXIT="
 
 def wait_for(serial:Path,marker:str,end:float)->None:
