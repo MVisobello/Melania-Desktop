@@ -30,7 +30,7 @@ class LiveSystemSettings(unittest.TestCase):
         self.assertIn('["radio","wifi"]', CONNECTIVITY)
         self.assertIn('["radio","wifi",next]', CONNECTIVITY)
         self.assertIn('button.connect_clicked(move |button|', CONNECTIVITY)
-        self.assertIn('if current {"off"} else {"on"}', CONNECTIVITY)
+        self.assertRegex(CONNECTIVITY, r'if current \{"off"\}\s*else\s*\{"on"\}')
         self.assertIn('Una disattivazione interrompe le connessioni wireless', CONNECTIVITY)
         self.assertIn('parse_wifi_radio("enabled', CONNECTIVITY)
 
