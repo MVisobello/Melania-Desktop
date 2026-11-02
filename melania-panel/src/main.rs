@@ -9,7 +9,7 @@ use gtk::{self, gdk, gio, glib, prelude::*};
 use gtk::{Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, Orientation, Picture};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use melania_services as services;
-use std::{cell::{Cell, RefCell}, collections::VecDeque, fs, io::Write, os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::{Path, PathBuf}, process::Command, rc::Rc, thread, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::VecDeque, fs, io::Write, os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::UnixDatagram}, path::{Path, PathBuf}, process::Command, rc::Rc, thread, time::{Duration, Instant}};
 use melania_control::{request as control_request, current_workspace, start_toggle_socket_path, Command as WindowCommand, WindowInfo, SOCKET_ENV};
 
 const APP_ID: &str = "org.melaniadesktop.Panel";
@@ -429,6 +429,7 @@ fn start_window(app:&Application)->ApplicationWindow {
         let menu=menu_for_apps.clone();
         let query=query_for_apps.clone();
         glib::timeout_add_local_once(Duration::from_millis(75),move ||{
+            let scan_started=Instant::now();
             let mut apps=gio::AppInfo::all().into_iter().filter(|app|{
                 if !app.should_show(){return false;}
                 let identifier=app.id().map(|id|id.to_string()).unwrap_or_default();
@@ -436,6 +437,12 @@ fn start_window(app:&Application)->ApplicationWindow {
                 normalized!="org.melaniadesktop.Files" && normalized!="org.melaniadesktop.Settings"
             }).collect::<Vec<_>>();
             apps.sort_by_key(|app|app.name().to_string().to_lowercase());
+            if std::env::var_os("MELANIA_PROFILE_START").is_some() {
+                eprintln!("MELANIA_START_CATALOG_MS={} installed={}",
+                    scan_started.elapsed().as_millis(),apps.len());
+            }
+            let widget_started=Instant::now();
+            let widget_count=apps.len();
             *cache_for_apps.borrow_mut()=apps.clone();
             // The recent list now resolves IDs against the same snapshot.
             if let Some(refresh)=recents_after_catalog.borrow().as_ref(){
@@ -484,6 +491,10 @@ fn start_window(app:&Application)->ApplicationWindow {
                     searchable.borrow_mut().push((button,name_lower,false));
                 }
                 if pending.borrow().is_empty(){
+                    if std::env::var_os("MELANIA_PROFILE_START").is_some() {
+                        eprintln!("MELANIA_START_ROWS_MS={} count={}",
+                            widget_started.elapsed().as_millis(),widget_count);
+                    }
                     glib::ControlFlow::Break
                 }else{glib::ControlFlow::Continue}
             });
