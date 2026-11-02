@@ -66,7 +66,7 @@ def build_preview_svg(kind: str, *, light: bool) -> str:
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
             f'viewBox="0 0 24 24" fill="none" stroke="{color}" '
             f'stroke-width="2.05" stroke-linecap="round" '
-            f'stroke-linejoin="round">{shapes}</svg>\\n')
+            f'stroke-linejoin="round">{shapes}</svg>\n')
 
 
 PREVIEW_ICON_INDEX = """[Icon Theme]
