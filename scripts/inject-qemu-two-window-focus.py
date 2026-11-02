@@ -47,19 +47,23 @@ def send_click(qmp:Path,x:int,y:int)->None:
         greeting=json.loads(stream.readline())
         if "QMP" not in greeting:
             raise RuntimeError("QEMU QMP greeting missing")
-        for payload in (
-            {"execute":"qmp_capabilities"},
-            {"execute":"input-send-event","arguments":{"events":events}},
-        ):
+        def execute(payload:dict)->None:
             stream.write((json.dumps(payload)+"\n").encode())
             for _ in range(40):
                 reply=json.loads(stream.readline())
                 if "error" in reply:
                     raise RuntimeError(f"QMP input rejected: {reply['error']}")
                 if "return" in reply:
-                    break
-            else:
-                raise RuntimeError("QMP input reply missing")
+                    return
+            raise RuntimeError("QMP input reply missing")
+        execute({"execute":"qmp_capabilities"})
+        # Mouse motion and button events MUST be distinct QMP dispatches;
+        # otherwise two absolute coordinates and a click can be coalesced
+        # by the tablet driver before libinput receives a movement event.
+        for stage,part in (("MOVE",events[:2]),("PRESS",[events[2]]),("RELEASE",[events[3]])):
+            execute({"execute":"input-send-event","arguments":{"events":part}})
+            print(f"MELANIA_QEMU_WINDOW_QMP_{stage}=true x={x} y={y}",flush=True)
+            time.sleep(.12)
 
 def main()->int:
     p=argparse.ArgumentParser()
