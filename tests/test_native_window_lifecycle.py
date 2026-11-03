@@ -32,7 +32,7 @@ class NativeWindowLifetime(unittest.TestCase):
         )[1].split("\n    fn grab(",1)[0]
         for marker in (
             "self.known_window_surfaces.remove(&surface)",
-            "self.multi_scene.remove(key);",
+            "self.multi_scene.remove(key)",
             "self.window_interaction.active_key()==Some(key)",
             "self.window_interaction.cancel();",
             "self.focused.as_ref()==Some(&surface)",
@@ -42,24 +42,24 @@ class NativeWindowLifetime(unittest.TestCase):
             "pointer.motion(self,target,&MotionEvent{",
         ):
             self.assertIn(marker,code)
-        self.assertLess(code.index("self.multi_scene.remove(key);"),
+        self.assertLess(code.index("self.multi_scene.remove(key)"),
                         code.index("self.pointer_target(self.pointer_position)"))
         self.assertIn("pub fn remove(&mut self, key: u64) -> bool",SCENE)
 
     def test_kms_proof_survives_destroyed_toplevel_without_stale_scene_assertions(self):
         # QEMU's client destroys its roles after ACK 3 and while ACK 4 is
-        # outstanding. The live scene is intentionally empty at the end.
+        # outstanding. A separate QEMU close-redraw stage may retain a second live window.
         self.assertIn("self.two_window_frame_presented=true;",BRIDGE)
         self.assertIn("self.drag_frame_presented=true;",BRIDGE)
         self.assertIn("if !state.two_window_frame_presented {",BRIDGE)
-        self.assertIn("if state.pixel_frame_count!=4 || !state.drag_frame_presented {",BRIDGE)
+        self.assertIn("if state.pixel_frame_count<4 || !state.drag_frame_presented {",BRIDGE)
         self.assertNotIn("state.multi_scene.layout_generation()!=state.presented_layout_generation",BRIDGE)
         self.assertNotIn("if state.multi_scene.window_count()!=2 {",BRIDGE)
         ack=BRIDGE.index("if !self.render_scheduler.complete_present(pending.ticket) {")
         flag=BRIDGE.index("self.drag_frame_presented=true;",ack)
         self.assertGreater(flag,BRIDGE.index("self.presented_layout_generation=pending.layout_generation;",ack))
         destroy=BRIDGE.index("fn toplevel_destroyed(&mut self,top:ToplevelSurface){")
-        self.assertIn("self.multi_scene.remove(key);",BRIDGE[destroy:])
+        self.assertIn("self.multi_scene.remove(key)",BRIDGE[destroy:])
         self.assertIn('MELANIA_NATIVE_SESSION_READY=false',BRIDGE)
 
     def test_session_still_cannot_advertise_native_desktop(self):

@@ -138,6 +138,11 @@ fn main()->Result<(),Box<dyn Error>> {
     if two_windows && (!callback_probe || !three_frames) {
         return Err("two-window test must use three verified KMS frame callbacks".into());
     }
+    let close_redraw=std::env::var("MELANIA_NATIVE_CLOSE_REDRAW")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if close_redraw && !two_windows {
+        return Err("QEMU close-redraw probe requires two real xdg windows".into());
+    }
     // A second genuine xdg_toplevel has its OWN wl_surface and wl_shm
     // commits. Frame 2 changes only this surface; the first stays mapped.
     let secondary=if two_windows {
@@ -260,6 +265,40 @@ fn main()->Result<(),Box<dyn Error>> {
     }
     println!("MELANIA_NATIVE_CLIENT_XDG_WINDOW_DRAWN=true");
     std::io::stdout().flush()?;
+    if close_redraw {
+        // Request a real frame callback on B before the first toplevel is
+        // destroyed. Unlike a guessed delay, that callback is delivered
+        // ONLY after the fifth DRM framebuffer has been presented.
+        let survivor=&secondary.as_ref().ok_or("second client window missing")?.0;
+        let _close_callback=survivor.frame(&qh,());
+        survivor.commit();
+        toplevel.destroy();
+        xdg.destroy();
+        surface.destroy();
+        connection.flush()?;
+        println!("MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(16);
+        while state.frame_done_count<4 {
+            queue.roundtrip(&mut state)?;
+            if Instant::now()>=deadline {
+                return Err("fifth native KMS frame did not complete the surviving client callback".into());
+            }
+            thread::sleep(Duration::from_millis(35));
+        }
+        println!("MELANIA_NATIVE_CLIENT_CLOSE_CALLBACK_AFTER_KMS=true");
+        println!("MELANIA_NATIVE_CLIENT_SECOND_WINDOW_HELD=true");
+        if let Some((other,xdg_other,top_other))=secondary {
+            top_other.destroy();
+            xdg_other.destroy();
+            other.destroy();
+        }
+        wm.destroy();
+        drop(shm);
+        drop(state.output.take());
+        connection.flush()?;
+        return Ok(());
+    }
     if let Some((other,xdg_other,top_other))=secondary {
         top_other.destroy();
         xdg_other.destroy();
