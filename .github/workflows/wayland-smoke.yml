@@ -137,6 +137,7 @@ jobs:
             reports/melania-real-desktop-preview.json
             reports/nested-wayland-start-search.png
             reports/nested-wayland-files-tabs.png
+            reports/nested-wayland-files-before-tab-drag.png
             reports/nested-wayland-panel-top.png
             reports/nested-wayland-wallpaper-live.png
             reports/nested-wayland-file-preview.bmp

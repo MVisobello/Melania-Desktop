@@ -601,6 +601,49 @@ done
   exit 1
 }
 echo 'PASS: real GTK Ctrl+Shift+T reopened a closed tab and Ctrl+N created a second mapped Files window'
+# Real Xvfb mouse drag proof: wait for the second Files window's first tab.
+ready=0
+for i in $(seq 1 45); do
+  count=$(grep -cF 'MELANIA_FILES_TAB_COUNT=1' "$TEMP/compositor.log" || true)
+  if (( count >= 2 )); then ready=1; break; fi
+  sleep .1
+done
+if (( ready != 1 )); then echo 'FAIL: new Files tab not ready for GTK drag' >&2; exit 1; fi
+NEW_FILES_ID=$(target/debug/melania-winctl list | grep 'Melania Files' | tail -n1 | cut -f1)
+if [[ -z "$NEW_FILES_ID" ]]; then echo 'FAIL: second Files window has no IPC id' >&2; exit 1; fi
+target/debug/melania-winctl activate "$NEW_FILES_ID" >/dev/null
+xdotool windowfocus --sync "$HOST_WINDOW"
+sleep .6
+scrot -z -o reports/nested-wayland-files-before-tab-drag.png
+prior=$(grep -cF 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)
+# The visible single-tab titlebar starts near x=80 and y=72.
+xdotool mousemove --window "$HOST_WINDOW" 143 85
+sleep .1
+xdotool mousedown 1
+sleep .14
+xdotool mousemove --sync --window "$HOST_WINDOW" 169 89
+sleep .12
+xdotool mousemove --sync --window "$HOST_WINDOW" 203 95
+sleep .12
+xdotool mousemove --sync --window "$HOST_WINDOW" 110 165
+sleep .12
+xdotool mousemove --sync --window "$HOST_WINDOW" 30 320
+sleep .2
+xdotool mouseup 1
+passed=0
+for i in $(seq 1 50); do
+  current=$(grep -cF 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)
+  if (( current > prior )); then passed=1; break; fi
+  sleep .1
+done
+if (( passed != 1 )); then
+  echo 'FAIL: GTK mouse drag ended without creating a detached Files window' >&2
+  grep -E 'MELANIA_FILES_TAB_(DRAG|TEAROFF|COUNT)' "$TEMP/compositor.log" | tail -24 >&2 || true
+  exit 1
+fi
+count=$(target/debug/melania-winctl list | grep -cF 'Melania Files' || true)
+if (( count < 3 )); then echo 'FAIL: detached Files window not mapped in compositor' >&2; exit 1; fi
+echo 'PASS: actual GTK pointer release on the desktop detached a tab into a third Files window'
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
 for i in $(seq 1 60); do
@@ -611,4 +654,4 @@ if kill -0 "$PID" 2>/dev/null; then echo 'FAIL: quit did not close compositor' >
 wait "$PID" || { echo 'FAIL: compositor exited with error' >&2; exit 1; }
 PID=''
 echo 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit'
-echo 'NOT TESTED: hardware DRM/seat, XWayland, HiDPI, drag-and-drop or production Aero.'
+echo 'NOT TESTED: hardware DRM/seat, XWayland, HiDPI, cross-window physical tab drop, file drag-and-drop or production Aero.'

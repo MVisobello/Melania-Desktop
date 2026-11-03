@@ -2638,6 +2638,105 @@ fn remember_closed_files_tab(
     push_closed_file_tab(&mut recently_closed.borrow_mut(),location);
 }
 
+/// A drag ticket is kept only for the duration of one active GTK gesture.
+/// The process-local registry prevents external text/URI drops from spoofing
+/// a tab move and keeps the file drag-and-drop protocol COPY-only.
+#[derive(Clone)]
+struct FilesTabDrag {
+    token: String,
+    location: ClosedFilesTab,
+    source_window: glib::WeakRef<ApplicationWindow>,
+    source_page: glib::WeakRef<GtkBox>,
+    source_notebook: glib::WeakRef<gtk::Notebook>,
+    finish_move: Rc<dyn Fn()>,
+}
+impl FilesTabDrag {
+    fn source_is_alive(&self) -> bool {
+        let (Some(page),Some(notebook),Some(_window))=(
+            self.source_page.upgrade(),
+            self.source_notebook.upgrade(),
+            self.source_window.upgrade(),
+        ) else{return false;};
+        notebook.page_num(&page).is_some()
+    }
+}
+thread_local! {
+    static ACTIVE_FILES_TAB_DRAG: RefCell<Option<FilesTabDrag>> = const { RefCell::new(None) };
+}
+
+fn active_files_tab_drag(token: &str) -> Option<FilesTabDrag> {
+    ACTIVE_FILES_TAB_DRAG.with(|state|
+        state.borrow().as_ref()
+            .filter(|drag|drag.token==token && drag.source_is_alive())
+            .cloned())
+}
+fn clear_files_tab_drag(token: &str) {
+    ACTIVE_FILES_TAB_DRAG.with(|state| {
+        if state.borrow().as_ref().is_some_and(|drag|drag.token==token) {
+            state.borrow_mut().take();
+        }
+    });
+}
+fn detach_files_tab_on_cancel(reason: gdk::DragCancelReason,outside_app:bool) -> bool {
+    // GTK Wayland may classify a release on the desktop as Error after the
+    // compositor sends wl_data_source.cancelled, rather than NoTarget.
+    // Only accept that classification when GDK confirms the pointer left
+    // every surface of this application. Escape and in-app errors never tear
+    // a tab off.
+    matches!(reason,gdk::DragCancelReason::NoTarget)
+        || (matches!(reason,gdk::DragCancelReason::Error) && outside_app)
+}
+
+/// A successful destination tab must exist before the source is closed.
+/// This copies only the navigated location, not a GTK widget or file content.
+fn import_dragged_files_tab(
+    token: &str,
+    target_window: &ApplicationWindow,
+    target_notebook: &gtk::Notebook,
+    target_add: &Button,
+    target_next: &Rc<RefCell<Option<ClosedFilesTab>>>,
+) -> bool {
+    let Some(drag)=active_files_tab_drag(token) else{return false;};
+    if drag.source_window.upgrade().as_ref()==Some(target_window){return false;}
+    let before=target_notebook.n_pages();
+    *target_next.borrow_mut()=Some(drag.location.clone());
+    target_add.emit_clicked();
+    if target_notebook.n_pages()<=before {
+        target_next.borrow_mut().take();
+        return false;
+    }
+    clear_files_tab_drag(token);
+    (drag.finish_move)();
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_CROSS_WINDOW_TAB_MOVE=success");
+    }
+    true
+}
+
+/// GTK may classify a desktop release as NoTarget or (on Wayland) Error.
+/// Escape is always ignored, and an Error is accepted only when the pointer
+/// is outside every surface of the Files process.
+fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason,
+                              outside_app:bool) -> bool {
+    if !detach_files_tab_on_cancel(reason,outside_app) {
+        clear_files_tab_drag(token);
+        return false;
+    }
+    let Some(drag)=active_files_tab_drag(token) else{return false;};
+    let Some(window)=drag.source_window.upgrade() else{return false;};
+    let Some(app)=window.application().and_then(|app|app.downcast::<Application>().ok())
+        else{return false;};
+    let before=app.windows().len();
+    create_files_window(&app,Some(drag.location.location()));
+    if app.windows().len()<=before{return false;}
+    clear_files_tab_drag(token);
+    (drag.finish_move)();
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_TAB_TEAROFF=success");
+    }
+    true
+}
+
 /// A closed tab is restored by opening its URI again. No GTK resources or
 /// running transfer workers survive the previous page's lifetime.
 fn reopen_closed_files_tab(history:&Rc<RefCell<Vec<ClosedFilesTab>>>,
@@ -2967,6 +3066,65 @@ fn append_file_page(
     drag_source.connect_prepare(move |_,_,_|{
         Some(gdk::ContentProvider::for_value(&drag_token.to_value()))
     });
+    // The source window retains no strong GTK widget refs in a live drag:
+    // even when its last tab is moved, the destination stays independently
+    // mapped and monitor/worker cleanup follows the usual close path.
+    let weak_source_pages=notebook.downgrade();
+    let weak_source_strip=tab_strip.downgrade();
+    let weak_source_page=child.downgrade();
+    let weak_source_window=window.downgrade();
+    let weak_source_headers=Rc::downgrade(headers);
+    let weak_source_history=Rc::downgrade(recently_closed);
+    let finish_move:Rc<dyn Fn()>=Rc::new(move ||{
+        let (Some(pages),Some(strip),Some(page),Some(window),Some(headers),Some(history))=(
+            weak_source_pages.upgrade(),weak_source_strip.upgrade(),
+            weak_source_page.upgrade(),weak_source_window.upgrade(),
+            weak_source_headers.upgrade(),weak_source_history.upgrade()) else{return;};
+        if pages.page_num(&page).is_none(){return;}
+        if pages.n_pages()>1 {
+            close_files_tab(&pages,&strip,&headers,&window,&page,&history,false);
+        }else{
+            window.close();
+        }
+    });
+    let weak_drag_title=text.downgrade();
+    let weak_drag_window=window.downgrade();
+    let weak_drag_page=child.downgrade();
+    let weak_drag_notebook=notebook.downgrade();
+    let token_for_begin=tab.widget_name().to_string();
+    drag_source.connect_drag_begin(move |_,_|{
+        let Some(location)=weak_drag_title.upgrade()
+            .and_then(|label|label.tooltip_text())
+            .and_then(|text|ClosedFilesTab::from_location(&text)) else{return;};
+        if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+            eprintln!("MELANIA_FILES_TAB_DRAG_BEGIN token={}",token_for_begin);
+        }
+        ACTIVE_FILES_TAB_DRAG.with(|state| *state.borrow_mut()=Some(FilesTabDrag {
+            token:token_for_begin.clone(),
+            location,
+            source_window:weak_drag_window.clone(),
+            source_page:weak_drag_page.clone(),
+            source_notebook:weak_drag_notebook.clone(),
+            finish_move:finish_move.clone(),
+        }));
+    });
+    let token_for_cancel=tab.widget_name().to_string();
+    drag_source.connect_drag_cancel(move |_,drag,reason|{
+        let (hover,x,y)=drag.device().surface_at_position();
+        let outside_app=hover.is_none();
+        if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+            eprintln!("MELANIA_FILES_TAB_DRAG_CANCEL token={} reason={reason:?} surface_known={} x={x:.1} y={y:.1}",
+                      token_for_cancel,hover.is_some());
+        }
+        detach_dragged_files_tab(&token_for_cancel,reason,outside_app)
+    });
+    let token_for_end=tab.widget_name().to_string();
+    drag_source.connect_drag_end(move |_,_,delete_data|{
+        if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+            eprintln!("MELANIA_FILES_TAB_DRAG_END token={} delete={delete_data}",token_for_end);
+        }
+        clear_files_tab_drag(&token_for_end);
+    });
     tab.add_controller(drag_source);
     let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
     let weak_pages=notebook.downgrade();
@@ -2975,19 +3133,36 @@ fn append_file_page(
     let weak_page=child.downgrade();
     let weak_tab=tab.downgrade();
     let weak_headers=Rc::downgrade(headers);
+    let weak_target_add=new_button.downgrade();
+    let target_next=next_tab_location.clone();
     drop.connect_drop(move |_,value,x,_|{
         let Ok(token)=value.get::<String>() else{return false;};
         if !token.starts_with("melania-tab-"){return false;}
         let (Some(pages),Some(strip),Some(window),Some(page),Some(tab),Some(headers))=(
             weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
             weak_page.upgrade(),weak_tab.upgrade(),weak_headers.upgrade()) else{return false;};
+        let Some(active)=active_files_tab_drag(&token) else{return false;};
+        let right_half=x>f64::from(tab.width())/2.0;
+        if active.source_window.upgrade().as_ref()!=Some(&window) {
+            let Some(add)=weak_target_add.upgrade() else{return false;};
+            if !import_dragged_files_tab(&token,&window,&pages,&add,&target_next) {
+                return false;
+            }
+            // The imported tab is now the active page. Insert it immediately
+            // before/after the tab on which the user released the pointer.
+            let Some(imported)=pages.current_page().and_then(|index|pages.nth_page(Some(index)))
+                .and_then(|widget|widget.downcast::<GtkBox>().ok()) else{return true;};
+            let Some(target)=pages.page_num(&page) else{return true;};
+            let destination=target.saturating_add(u32::from(right_half));
+            reorder_files_tab(&pages,&strip,&headers,&window,&imported,destination);
+            return true;
+        }
         let source=headers.borrow().iter()
             .find(|(_,heading,_)|heading.widget_name().as_str()==token)
             .map(|(source,_,_)|source.clone());
         let Some(source)=source else{return false;};
         let (Some(from),Some(target))=(pages.page_num(&source),pages.page_num(&page))
             else{return false;};
-        let right_half=x>f64::from(tab.width())/2.0;
         let destination=tab_drop_destination(from,target,right_half);
         reorder_files_tab(&pages,&strip,&headers,&window,&source,destination)
     });
@@ -3085,6 +3260,33 @@ fn create_files_window(app: &Application, explicitly_requested: Option<String>) 
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
     let recently_closed: Rc<RefCell<Vec<ClosedFilesTab>>> = Rc::new(RefCell::new(Vec::new()));
     let next_tab_location: Rc<RefCell<Option<ClosedFilesTab>>> = Rc::new(RefCell::new(None));
+    // Accept tab drops on empty titlebar space as well as directly on a tab.
+    // The same process-local ticket prevents file-copy drags and external
+    // strings from being interpreted as movable tab handles.
+    let rail_drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
+    let rail_pages=tabs.downgrade();
+    let rail_strip=tab_strip.downgrade();
+    let rail_window=window.downgrade();
+    let rail_add=add_button.downgrade();
+    let rail_headers=tab_headers.clone();
+    let rail_next=next_tab_location.clone();
+    rail_drop.connect_drop(move |_,value,_,_| {
+        let Ok(token)=value.get::<String>() else{return false;};
+        let (Some(pages),Some(strip),Some(window),Some(add))=(
+            rail_pages.upgrade(),rail_strip.upgrade(),rail_window.upgrade(),rail_add.upgrade())
+            else{return false;};
+        let Some(drag)=active_files_tab_drag(&token) else{return false;};
+        if drag.source_window.upgrade().as_ref()==Some(&window) {
+            let source=rail_headers.borrow().iter()
+                .find(|(_,heading,_)|heading.widget_name().as_str()==token)
+                .map(|(source,_,_)|source.clone());
+            let Some(source)=source else{return false;};
+            return reorder_files_tab(&pages,&strip,&rail_headers,&window,
+                                     &source,pages.n_pages().saturating_sub(1));
+        }
+        import_dragged_files_tab(&token,&window,&pages,&add,&rail_next)
+    });
+    tab_rail.add_controller(rail_drop);
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
     let scroll_for_switch = tab_scroll.clone();
@@ -3352,6 +3554,29 @@ mod software_preview_performance_tests {
     fn bound_thumbnail_decoding_on_software_renderers() {
         assert_eq!(thumbnail_budget_for(Some("cairo"),false),16);
         assert_eq!(thumbnail_budget_for(None,true),16);
+    }
+}
+
+#[cfg(test)]
+mod files_tab_drag_safety_tests {
+    use super::{detach_files_tab_on_cancel,active_files_tab_drag,clear_files_tab_drag};
+    use gtk::gdk::DragCancelReason;
+
+    #[test]
+    fn escape_and_in_app_errors_do_not_tear_off_or_create_windows() {
+        assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget,true));
+        assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget,false));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled,true));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled,false));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::Error,false));
+        assert!(detach_files_tab_on_cancel(DragCancelReason::Error,true));
+    }
+    #[test]
+    fn arbitrary_unregistered_string_cannot_trigger_tab_transfer() {
+        let token="melania-tab-nonexistent";
+        assert!(active_files_tab_drag(token).is_none());
+        clear_files_tab_drag(token);
+        assert!(active_files_tab_drag(token).is_none());
     }
 }
 
