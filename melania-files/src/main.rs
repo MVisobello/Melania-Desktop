@@ -2677,8 +2677,14 @@ fn clear_files_tab_drag(token: &str) {
         }
     });
 }
-fn detach_files_tab_on_cancel(reason: gdk::DragCancelReason) -> bool {
+fn detach_files_tab_on_cancel(reason: gdk::DragCancelReason,outside_app:bool) -> bool {
+    // GTK Wayland may classify a release on the desktop as Error after the
+    // compositor sends wl_data_source.cancelled, rather than NoTarget.
+    // Only accept that classification when GDK confirms the pointer left
+    // every surface of this application. Escape and in-app errors never tear
+    // a tab off.
     matches!(reason,gdk::DragCancelReason::NoTarget)
+        || (matches!(reason,gdk::DragCancelReason::Error) && outside_app)
 }
 
 /// A successful destination tab must exist before the source is closed.
@@ -2709,8 +2715,12 @@ fn import_dragged_files_tab(
 
 /// GtkDragSource emits NoTarget when a tab is released on the desktop, but
 /// UserCancelled (Escape) and Error MUST NOT create a window.
-fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason) -> bool {
-    if !detach_files_tab_on_cancel(reason){clear_files_tab_drag(token);return false;}
+fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason,
+                              outside_app:bool) -> bool {
+    if !detach_files_tab_on_cancel(reason,outside_app) {
+        clear_files_tab_drag(token);
+        return false;
+    }
     let Some(drag)=active_files_tab_drag(token) else{return false;};
     let Some(window)=drag.source_window.upgrade() else{return false;};
     let Some(app)=window.application().and_then(|app|app.downcast::<Application>().ok())
@@ -3099,13 +3109,13 @@ fn append_file_page(
     });
     let token_for_cancel=tab.widget_name().to_string();
     drag_source.connect_drag_cancel(move |_,drag,reason|{
+        let (hover,x,y)=drag.device().surface_at_position();
+        let outside_app=hover.is_none();
         if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
-            let (hover,x,y)=drag.device().surface_at_position();
-            let off_source=hover.as_ref()!=Some(&drag.surface());
-            eprintln!("MELANIA_FILES_TAB_DRAG_CANCEL token={} reason={reason:?} surface_known={} off_source={} x={x:.1} y={y:.1}",
-                      token_for_cancel,hover.is_some(),off_source);
+            eprintln!("MELANIA_FILES_TAB_DRAG_CANCEL token={} reason={reason:?} surface_known={} x={x:.1} y={y:.1}",
+                      token_for_cancel,hover.is_some());
         }
-        detach_dragged_files_tab(&token_for_cancel,reason)
+        detach_dragged_files_tab(&token_for_cancel,reason,outside_app)
     });
     let token_for_end=tab.widget_name().to_string();
     drag_source.connect_drag_end(move |_,_,delete_data|{
@@ -3553,9 +3563,12 @@ mod files_tab_drag_safety_tests {
 
     #[test]
     fn escape_and_errors_do_not_tear_off_or_create_windows() {
-        assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget));
-        assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled));
-        assert!(!detach_files_tab_on_cancel(DragCancelReason::Error));
+        assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget,true));
+        assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget,false));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled,true));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled,false));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::Error,false));
+        assert!(detach_files_tab_on_cancel(DragCancelReason::Error,true));
     }
     #[test]
     fn arbitrary_unregistered_string_cannot_trigger_tab_transfer() {
