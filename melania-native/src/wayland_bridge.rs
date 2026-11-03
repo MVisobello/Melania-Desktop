@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -111,6 +111,9 @@ struct BridgeState {
     // Real QMP tablet drag AFTER xdg resize; needs one compositor-only KMS frame.
     dynamic_pointer_proof_mode:bool,
     dynamic_toplevels:Vec<ToplevelSurface>,
+    // Opt-in VM-only bridge of real xdg_toplevel requests to Stage77.
+    managed_xdg_mode:bool,
+    managed_windows:Vec<(WlSurface,ManagedWindow)>,
     window_interaction:WindowInteraction,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
@@ -686,6 +689,55 @@ impl BridgeState {
     }
 }
 
+impl BridgeState {
+    /// Apply actual xdg_toplevel requests to the QEMU compositor state and
+    /// configure the client. A new client commit is still required for the
+    /// maximized-sized wl_shm content to become visible at its full size.
+    fn request_managed_maximize(&mut self,top:ToplevelSurface,enabled:bool) {
+        if !self.managed_xdg_mode {
+            top.send_configure();
+            return;
+        }
+        let surface=top.wl_surface().clone();
+        let Some((_,window))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface) else {
+            top.send_configure();
+            return;
+        };
+        let changed=if enabled {window.maximize()} else {
+            // Do not reset unrelated minimized/fullscreen states on an
+            // unmaximize request. They need their own role transition.
+            if window.state()==WindowDisplayState::Maximized {
+                window.restore()
+            } else {false}
+        };
+        let rectangle=window.geometry();
+        top.with_pending_state(|pending| {
+            if enabled {pending.states.set(xdg_toplevel::State::Maximized);}
+            else {pending.states.unset(xdg_toplevel::State::Maximized);}
+            if let Some(rect)=rectangle {
+                pending.size=Some((rect.width,rect.height).into());
+            }
+        });
+        top.send_pending_configure();
+        if changed {
+            if let (Some(key),Some(rect))=(self.known_window_surfaces.id_of(&surface),rectangle) {
+                if self.dynamic_scene.geometry(key).is_some() &&
+                   self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
+                    self.note_scene_change();
+                    if self.continuous_kms_mode &&
+                       self.continuous_frame_count<self.continuous_frame_target {
+                        if let Err(error)=self.submit_continuous_frame() {
+                            eprintln!("managed xdg geometry repaint refused: {error}");
+                        }
+                    }
+                }
+            }
+        }
+        println!("MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED={enabled}");
+    }
+}
+
 impl BufferHandler for BridgeState {
     fn buffer_destroyed(&mut self,_:&wl_buffer::WlBuffer) {}
 }
@@ -730,11 +782,28 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     };
-                    let Some((x,y))=melania_native::window_placement::default_position(key,1280,800) else {
+                    let Some(default_pos)=melania_native::window_placement::default_position(key,1280,800) else {
                         eprintln!("dynamic QEMU client outside bounded placement policy");
                         buffer.release();
                         return;
                     };
+                    // Keep the current position across later wl_shm commits.
+                    let (x,y)=if self.managed_xdg_mode {
+                        self.managed_windows.iter().find(|(role,_)|role==surface)
+                            .and_then(|(_,window)|window.geometry())
+                            .map(|rect|(rect.x,rect.y))
+                            .unwrap_or(default_pos)
+                    } else {
+                        self.dynamic_scene.position(key).unwrap_or(default_pos)
+                    };
+                    if self.managed_xdg_mode {
+                        if let Some((_,window))=self.managed_windows.iter_mut()
+                            .find(|(role,_)|role==surface) {
+                            window.update_normal_geometry(WindowRect {
+                                x,y,width:pixels.width() as i32,height:pixels.height() as i32,
+                            });
+                        }
+                    }
                     if self.dynamic_scene.upsert(key,x,y,pixels).is_err() {
                         eprintln!("dynamic QEMU client image rejected");
                         buffer.release();
@@ -984,6 +1053,18 @@ impl XdgShellHandler for BridgeState {
     fn xdg_shell_state(&mut self)->&mut XdgShellState {&mut self.xdg_shell}
     fn new_toplevel(&mut self,top:ToplevelSurface) {
         self.xdg_toplevel_count=self.xdg_toplevel_count.saturating_add(1);
+        if self.managed_xdg_mode {
+            // XDG configure requests may precede the first buffer commit.
+            // Reserve its stable role slot without pretending pixels exist.
+            if let Ok(key)=self.known_window_surfaces.register(top.wl_surface().clone()) {
+                if let Some((x,y))=melania_native::window_placement::default_position(key,1280,800) {
+                    let rect=WindowRect{x,y,width:360,height:224};
+                    if let Some(window)=ManagedWindow::new(rect,1280,800) {
+                        self.managed_windows.push((top.wl_surface().clone(),window));
+                    }
+                }
+            }
+        }
         if self.dynamic_xdg_resize_mode {
             // Preserve original role order for A/B even before either has
             // attached pixels. The Stage54 QEMU client labels them explicitly.
@@ -998,11 +1079,16 @@ impl XdgShellHandler for BridgeState {
     fn move_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,_:Serial){}
     fn resize_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,
                       _:Serial,_:xdg_toplevel::ResizeEdge){}
-    fn maximize_request(&mut self,top:ToplevelSurface) {top.send_configure();}
-    fn unmaximize_request(&mut self,top:ToplevelSurface) {top.send_configure();}
+    fn maximize_request(&mut self,top:ToplevelSurface) {
+        self.request_managed_maximize(top,true);
+    }
+    fn unmaximize_request(&mut self,top:ToplevelSurface) {
+        self.request_managed_maximize(top,false);
+    }
     fn minimize_request(&mut self,_:ToplevelSurface){}
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
+        self.managed_windows.retain(|(role,_)|role!=&surface);
         if self.dynamic_xdg_resize_mode {
             self.dynamic_toplevels.retain(|existing|existing.wl_surface()!=&surface);
         }
@@ -1352,6 +1438,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         dynamic_pointer_proof_mode:std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
             .as_deref()==Ok("YES_QEMU_VM"),
         dynamic_toplevels:Vec::new(),
+        managed_xdg_mode:std::env::var("MELANIA_NATIVE_MANAGED_XDG")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        managed_windows:Vec::new(),
         window_interaction:WindowInteraction::default(),
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
@@ -1428,6 +1517,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.continuous_kms_mode || !state.multi_window_mode ||
         state.continuous_reopen_mode || !continuous_two_windows) {
         return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
+    }
+    if state.managed_xdg_mode && !state.dynamic_window_mode {
+        return Err("managed xdg requires isolated QEMU dynamic Wayland/KMS mode".into());
     }
     if state.dynamic_xdg_resize_mode && !state.dynamic_window_mode {
         return Err("xdg resize configure is only permitted in disposable QEMU dynamic mode".into());
