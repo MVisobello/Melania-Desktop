@@ -436,6 +436,31 @@ changed=sum(1 for pixel in diff.getdata() if max(pixel)>35)
 assert changed>1000, f'Start was not visibly dismissed: changed pixels={changed}'
 print(f'PASS: real outside mouse click concealed Start and kept panel alive ({changed} changed pixels)')
 PYDISMISS
+# End-to-end focus regression through the live nested compositor. A minimized
+# active GTK toplevel must hand keyboard/taskbar focus to the next mapped
+# window without selecting a hidden workspace or leaving stale active state.
+target/debug/melania-winctl activate "$FILES_ID" >/dev/null
+target/debug/melania-winctl activate "$SETTINGS_ID" >/dev/null
+target/debug/melania-winctl minimize "$SETTINGS_ID" >/dev/null
+target/debug/melania-winctl list >"$TEMP/focus-after-minimize.log"
+if ! awk -F '\t' -v id="$FILES_ID" '$1==id && $2=="attiva" {found=1} END {exit !found}' "$TEMP/focus-after-minimize.log"; then
+  echo 'FAIL: minimizing focused Settings did not focus surviving Files window' >&2
+  cat "$TEMP/focus-after-minimize.log" >&2
+  exit 1
+fi
+if ! awk -F '\t' -v id="$SETTINGS_ID" '$1==id && $2=="minimizzata" {found=1} END {exit !found}' "$TEMP/focus-after-minimize.log"; then
+  echo 'FAIL: Settings did not enter the minimized state' >&2
+  cat "$TEMP/focus-after-minimize.log" >&2
+  exit 1
+fi
+target/debug/melania-winctl activate "$SETTINGS_ID" >/dev/null
+target/debug/melania-winctl list >"$TEMP/focus-after-restore.log"
+if ! awk -F '\t' -v id="$SETTINGS_ID" '$1==id && $2=="attiva" {found=1} END {exit !found}' "$TEMP/focus-after-restore.log"; then
+  echo 'FAIL: restoring Settings did not return its active state' >&2
+  cat "$TEMP/focus-after-restore.log" >&2
+  exit 1
+fi
+echo 'PASS: live Wayland minimized-window focus fallback and reactivation'
 # Verify a REAL running Melania taskbar accepts a changed user config and
 # moves from the bottom to the top edge without a restart or compositor exit.
 # The setting is isolated under the temporary CI XDG_CONFIG_HOME.
