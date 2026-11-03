@@ -1,0 +1,1 @@
+Stage77 introduces a native window state reducer for maximise, minimise, fullscreen and restore, including safe clipping after an output resolution change. Tests prove restore remembers a maximised window after minimisation and preserves bounds on a smaller monitor. Existing Win7-inspired titlebar button visuals are untouched; actual xdg-toplevel state integration comes later.
