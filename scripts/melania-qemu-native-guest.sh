@@ -361,6 +361,7 @@ MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
 MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_DRAG_REDRAW=YES_QEMU_VM \
+MELANIA_NATIVE_CLOSE_REDRAW=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 54s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
@@ -385,6 +386,7 @@ fi
 MELANIA_QEMU_RUST_LIVE_STREAM_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_QEMU_DRAG_FRAME=YES_QEMU_VM \
+MELANIA_QEMU_CLOSE_FRAME=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 53s \
   "$stream_binary" < /dev/tty1 2>&1 | tee "$multi_kms_log" &
 multi_kms_pid=$!
@@ -400,7 +402,8 @@ if ! grep -q '^MELANIA_RUST_STREAM_KMS_CONNECTED=true' "$multi_kms_log"; then
 fi
 if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
   MELANIA_NATIVE_WAIT_PRESENT_CALLBACK=YES_QEMU_VM \
-  MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
+  MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+  MELANIA_NATIVE_CLOSE_REDRAW=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
   timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
   cat "$multi_server_log"
   kill "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
@@ -432,6 +435,18 @@ grep -q '^MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true' "$multi_server_log" ||
   fatal 'drag_redraw_not_retained_through_scene'
 grep -q '^MELANIA_RUST_COMPOSITOR_DRAG_FRAME4_PASS=true' "$multi_kms_log" ||
   fatal 'Rust_KMS_fourth_frame_not_presented'
+grep -q '^MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true' "$multi_server_log" ||
+  fatal 'real_Wayland_first_window_not_destroyed'
+grep -q '^MELANIA_NATIVE_CLOSE_DAMAGE_QUEUED=true' "$multi_server_log" ||
+  fatal 'first_window_close_did_not_invalidate_scene'
+grep -q '^MELANIA_NATIVE_CLOSE_FRAME_SUBMITTED=5' "$multi_server_log" ||
+  fatal 'fifth_close_scene_not_submitted'
+grep -q '^MELANIA_NATIVE_CLOSE_FRAME_ACKED=5' "$multi_server_log" ||
+  fatal 'fifth_close_scene_not_acknowledged'
+grep -q '^MELANIA_NATIVE_CLOSE_FRAME_VISIBLE=true' "$multi_server_log" ||
+  fatal 'fifth_close_scene_not_verified_by_Smithay'
+grep -q '^MELANIA_RUST_CLOSE_FRAME5_PASS=true' "$multi_kms_log" ||
+  fatal 'Rust_KMS_fifth_close_frame_not_presented'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
   fatal 'two_window_KMS_original_CRTC_not_restored'
 for index in 1 2 3; do
@@ -441,6 +456,7 @@ done
 rm -f "$multi_server_log" "$multi_kms_log"
 report 'MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true'
 report 'MELANIA_QEMU_NONBLOCKING_KMS_WORKER_PASS=true'
+report 'MELANIA_QEMU_REAL_WINDOW_CLOSE_KMS_FRAME5_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'
