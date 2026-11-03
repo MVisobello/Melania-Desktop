@@ -2597,18 +2597,73 @@ fn sync_tab_highlights(
     }
 }
 
+/// A closed tab keeps only its location, never the GTK widgets, GIO monitor
+/// or a background operation from the destroyed tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClosedFilesTab {
+    Local(PathBuf),
+    Remote(String),
+}
+const MAX_RECENT_FILES_TABS: usize = 16;
+
+impl ClosedFilesTab {
+    fn from_location(location: &str) -> Option<Self> {
+        if location.contains("://") {
+            let file = gio::File::for_uri(location);
+            if file.uri().as_str() == location {
+                return Some(Self::Remote(location.to_owned()));
+            }
+            return None;
+        }
+        let path = PathBuf::from(location);
+        if path.is_absolute() { Some(Self::Local(path)) } else { None }
+    }
+    fn location(&self) -> String {
+        match self {
+            Self::Local(path) => path.to_string_lossy().into_owned(),
+            Self::Remote(uri) => uri.clone(),
+        }
+    }
+}
+fn push_closed_file_tab(history:&mut Vec<ClosedFilesTab>,location:ClosedFilesTab) {
+    if history.len()==MAX_RECENT_FILES_TABS {history.remove(0);}
+    history.push(location);
+}
+fn remember_closed_files_tab(
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    title: &Label,
+) {
+    let Some(location) = title.tooltip_text()
+        .and_then(|text| ClosedFilesTab::from_location(&text)) else{return;};
+    push_closed_file_tab(&mut recently_closed.borrow_mut(),location);
+}
+
+/// A closed tab is restored by opening its URI again. No GTK resources or
+/// running transfer workers survive the previous page's lifetime.
+fn reopen_closed_files_tab(history:&Rc<RefCell<Vec<ClosedFilesTab>>>,
+                           pending:&Rc<RefCell<Option<ClosedFilesTab>>>,new_button:&Button) {
+    if let Some(place)=history.borrow_mut().pop() {
+        *pending.borrow_mut()=Some(place);
+        new_button.emit_clicked();
+    }
+}
+
 /// Close a tab by its page identity rather than a saved numeric index.
 fn close_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
                    headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
-                   window:&ApplicationWindow,page:&GtkBox) {
+                   window:&ApplicationWindow,page:&GtkBox,
+                   recently_closed:&Rc<RefCell<Vec<ClosedFilesTab>>>, remember:bool) {
     // Melania retains the final open tab instead of unexpectedly closing the
     // whole file manager. Both the X and Ctrl+W use this exact same rule.
     if notebook.n_pages()<=1{return;}
     let Some(index)=notebook.page_num(page) else{return;};
-    let heading=headers.borrow().iter()
+    let entry=headers.borrow().iter()
         .find(|(candidate,_,_)|candidate==page)
-        .map(|(_,heading,_)|heading.clone());
-    if let Some(heading)=heading{strip.remove(&heading);}
+        .map(|(_,heading,title)|(heading.clone(),title.clone()));
+    if let Some((heading,title))=entry {
+        if remember { remember_closed_files_tab(recently_closed,&title); }
+        strip.remove(&heading);
+    }
     headers.borrow_mut().retain(|(candidate,_,_)|candidate!=page);
     notebook.remove_page(Some(index));
     sync_tab_highlights(notebook,headers,window);
@@ -2652,13 +2707,16 @@ fn tab_drop_destination(source:u32,target:u32,after:bool)->u32 {
 
 fn close_other_files_tabs(notebook:&gtk::Notebook,strip:&GtkBox,
                           headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
-                          window:&ApplicationWindow,keep:&GtkBox,right_only:bool){
+                          window:&ApplicationWindow,keep:&GtkBox,right_only:bool,
+                          recently_closed:&Rc<RefCell<Vec<ClosedFilesTab>>>){
     let keep_index=notebook.page_num(keep).unwrap_or(0);
     let to_close:Vec<GtkBox>=headers.borrow().iter()
         .filter(|(page,_,_)|page!=keep &&
             (!right_only || notebook.page_num(page).is_some_and(|index|index>keep_index)))
         .map(|(page,_,_)|page.clone()).collect();
-    for page in to_close{close_files_tab(notebook,strip,headers,window,&page);}
+    for page in to_close {
+        close_files_tab(notebook,strip,headers,window,&page,recently_closed,true);
+    }
 }
 
 /// Reveal the active tab when the rail is narrower than the total set.
@@ -2695,10 +2753,13 @@ fn append_browser_tab(
     title: &str,
     open_remote: Rc<dyn Fn(String)>,
     new_button: &Button,
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    next_tab_location: &Rc<RefCell<Option<ClosedFilesTab>>>,
 ) {
     let text = Label::new(Some(title));
+    text.set_tooltip_text(Some(&path.display().to_string()));
     let child = file_tab(path, pending, text.clone(), open_remote);
-    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button);
+    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button,recently_closed,next_tab_location);
 }
 fn append_remote_tab(
     notebook: &gtk::Notebook,
@@ -2707,15 +2768,18 @@ fn append_remote_tab(
     window: &ApplicationWindow,
     uri: &str,
     new_button: &Button,
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    next_tab_location: &Rc<RefCell<Option<ClosedFilesTab>>>,
 ) {
     let title=Label::new(Some("Rete"));
+    title.set_tooltip_text(Some(uri));
     let child=gio_remote::create(uri,title.clone());
-    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button);
+    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button,recently_closed,next_tab_location);
 }
 /// Shared Nautilus-style tab bar for local and GVfs pages. The GTK Notebook
 /// still owns actual pages, while the compact headerbar renders their handles.
 #[derive(Clone,Copy)]
-enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight }
+enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight, RestoreClosed, MoveToWindow }
 
 fn append_file_page(
     notebook: &gtk::Notebook,
@@ -2726,6 +2790,8 @@ fn append_file_page(
     child: GtkBox,
     icon_name: &str,
     new_button: &Button,
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    next_tab_location: &Rc<RefCell<Option<ClosedFilesTab>>>,
 ) {
     let tab = GtkBox::new(Orientation::Horizontal, 2);
     tab.add_css_class("files-top-tab");
@@ -2786,6 +2852,8 @@ fn append_file_page(
     let weak_page=child.downgrade();
     let weak_new=new_button.downgrade();
     let weak_headers=Rc::downgrade(headers);
+    let closed_for_actions=recently_closed.clone();
+    let next_for_actions=next_tab_location.clone();
     let dispatch:Rc<dyn Fn(FilesTabAction)>=Rc::new(move |action|{
         let (Some(pages),Some(strip),Some(window),Some(page),Some(headers))=(
             weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
@@ -2798,12 +2866,36 @@ fn append_file_page(
                 if let Some(index)=pages.page_num(&page){pages.set_current_page(Some(index));}
                 if let Some(button)=weak_new.upgrade(){button.emit_clicked();}
             },
-            FilesTabAction::Close=>close_files_tab(&pages,&strip,&headers,&window,&page),
+            FilesTabAction::Close=>close_files_tab(
+                &pages,&strip,&headers,&window,&page,&closed_for_actions,true),
             FilesTabAction::CloseOthers=>{
-                close_other_files_tabs(&pages,&strip,&headers,&window,&page,false)
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,false,&closed_for_actions)
             },
             FilesTabAction::CloseRight=>{
-                close_other_files_tabs(&pages,&strip,&headers,&window,&page,true)
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,true,&closed_for_actions)
+            },
+            FilesTabAction::RestoreClosed=>{
+                if let Some(button)=weak_new.upgrade(){
+                    reopen_closed_files_tab(&closed_for_actions,&next_for_actions,&button);
+                }
+            },
+            FilesTabAction::MoveToWindow=>{
+                if let Some(place)=headers.borrow().iter().find(|(candidate,_,_)|candidate==&page)
+                    .and_then(|(_,_,title)|title.tooltip_text())
+                    .and_then(|text|ClosedFilesTab::from_location(&text)) {
+                    if let Some(app)=window.application()
+                        .and_then(|app|app.downcast::<Application>().ok()){
+                        // The new application window retains its own independent
+                        // navigation state; remove the original page only after
+                        // creating a new destination window.
+                        create_files_window(&app,Some(place.location()));
+                        if pages.n_pages()>1 {
+                            close_files_tab(&pages,&strip,&headers,&window,&page,&closed_for_actions,false);
+                        }else{
+                            window.close();
+                        }
+                    }
+                }
             },
             FilesTabAction::MoveLeft|FilesTabAction::MoveRight=>{
                 if let Some(index)=pages.page_num(&page){
@@ -2841,6 +2933,8 @@ fn append_file_page(
         ("Chiudi scheda",FilesTabAction::Close),
         ("Chiudi altre schede",FilesTabAction::CloseOthers),
         ("Chiudi schede a destra",FilesTabAction::CloseRight),
+        ("Riapri ultima scheda chiusa",FilesTabAction::RestoreClosed),
+        ("Sposta scheda in nuova finestra",FilesTabAction::MoveToWindow),
     ] {
         let button=Button::with_label(caption);
         button.add_css_class("files-tab-menu-item");
@@ -2909,7 +3003,7 @@ fn files_initial_size(screen_width: i32, screen_height: i32) -> (i32, i32) {
     (width,height)
 }
 
-fn build_ui(app: &Application) {
+fn create_files_window(app: &Application, explicitly_requested: Option<String>) {
     let startup_clock=Instant::now();
     install_files_ui_stall_probe();
     setup_melania_icon_theme();
@@ -2989,6 +3083,8 @@ fn build_ui(app: &Application) {
     loading.add_css_class("files-loading");
     tabs.append_page(&loading,None::<&gtk::Widget>);
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
+    let recently_closed: Rc<RefCell<Vec<ClosedFilesTab>>> = Rc::new(RefCell::new(Vec::new()));
+    let next_tab_location: Rc<RefCell<Option<ClosedFilesTab>>> = Rc::new(RefCell::new(None));
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
     let scroll_for_switch = tab_scroll.clone();
@@ -3003,10 +3099,13 @@ fn build_ui(app: &Application) {
     let weak_window=window.downgrade();
     let weak_add=add_button.downgrade();
     let headers_for_remote=tab_headers.clone();
+    let recent_for_remote=recently_closed.clone();
+    let next_for_remote=next_tab_location.clone();
     let open_remote:Rc<dyn Fn(String)>=Rc::new(move |uri:String| {
         if let (Some(tabs),Some(strip),Some(window),Some(add))=(
             weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),weak_add.upgrade()) {
-            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri,&add);
+            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri,&add,
+                              &recent_for_remote,&next_for_remote);
         }
     });
     let open_network=open_remote.clone();
@@ -3019,14 +3118,17 @@ fn build_ui(app: &Application) {
     let window_for_add = window.clone();
     let remote_for_add=open_remote.clone();
     let new_button_for_tab=add_button.clone();
+    let recent_for_add=recently_closed.clone();
+    let next_for_add=next_tab_location.clone();
     add_button.connect_clicked(move |_| {
         // A Nautilus new tab starts in the currently visible folder/URI,
         // rather than unexpectedly resetting to Home.
         let current=notebook.current_page();
-        let place=header_for_add.borrow().iter()
-            .find(|(page,_,_)|notebook.page_num(page)==current)
-            .and_then(|(_,_,title)|title.tooltip_text())
-            .map(|uri|uri.to_string());
+        let place=next_for_add.borrow_mut().take().map(|closed|closed.location())
+            .or_else(||header_for_add.borrow().iter()
+                .find(|(page,_,_)|notebook.page_num(page)==current)
+                .and_then(|(_,_,title)|title.tooltip_text())
+                .map(|uri|uri.to_string()));
         if let Some(uri)=place.as_deref().filter(|uri|uri.contains("://")){
             remote_for_add(uri.to_string());
         } else {
@@ -3034,7 +3136,8 @@ fn build_ui(app: &Application) {
             let title=path.file_name().map(|name|name.to_string_lossy().into_owned())
                 .filter(|name|!name.is_empty()).unwrap_or_else(||"Home".to_owned());
             append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
-                path, pending_for_add.clone(), &title, remote_for_add.clone(),&new_button_for_tab);
+                path, pending_for_add.clone(), &title, remote_for_add.clone(),
+                &new_button_for_tab,&recent_for_add,&next_for_add);
         }
     });
     frame.append(&tabs);
@@ -3047,6 +3150,8 @@ fn build_ui(app: &Application) {
     let tab_headers_for_keys = tab_headers.clone();
     let strip_for_keys = tab_strip.clone();
     let window_for_keys = window.clone();
+    let recent_for_keys=recently_closed.clone();
+    let next_for_keys=next_tab_location.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         let ctrl=modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         let shift=modifiers.contains(gdk::ModifierType::SHIFT_MASK);
@@ -3062,15 +3167,28 @@ fn build_ui(app: &Application) {
         }
         if !ctrl{return glib::Propagation::Proceed;}
         if key == gdk::Key::t || key == gdk::Key::T {
-            if !shift{keys_add.emit_clicked();}
-            return if shift{glib::Propagation::Proceed}else{glib::Propagation::Stop};
+            if shift {
+                reopen_closed_files_tab(&recent_for_keys,&next_for_keys,&keys_add);
+            }else{keys_add.emit_clicked();}
+            return glib::Propagation::Stop;
+        }
+        if (key==gdk::Key::n || key==gdk::Key::N) && !shift {
+            let location=tab_headers_for_keys.borrow().iter()
+                .find(|(page,_,_)|keys_notebook.page_num(page)==keys_notebook.current_page())
+                .and_then(|(_,_,title)|title.tooltip_text())
+                .map(|text|text.to_string());
+            if let Some(app)=window_for_keys.application()
+                .and_then(|app|app.downcast::<Application>().ok()){
+                create_files_window(&app,location);
+            }
+            return glib::Propagation::Stop;
         }
         if key == gdk::Key::w || key == gdk::Key::W {
             if let Some(index)=keys_notebook.current_page(){
                 if let Some(page)=keys_notebook.nth_page(Some(index))
                     .and_then(|page|page.downcast::<GtkBox>().ok()){
                     close_files_tab(&keys_notebook,&strip_for_keys,&tab_headers_for_keys,
-                                    &window_for_keys,&page);
+                                    &window_for_keys,&page,&recent_for_keys,true);
                 }
             }
             return glib::Propagation::Stop;
@@ -3110,6 +3228,9 @@ fn build_ui(app: &Application) {
     window.add_controller(keys);
     window.set_child(Some(&frame));
     window.present();
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_WINDOW_CREATED count={}",app.windows().len());
+    }
     if files_profile_enabled() {
         eprintln!("MELANIA_FILES_FIRST_WINDOW_MS={}",startup_clock.elapsed().as_millis());
     }
@@ -3120,23 +3241,32 @@ fn build_ui(app: &Application) {
     let first_pending=shared_pending.clone();
     let first_remote=open_remote.clone();
     let first_add=add_button.clone();
+    let recent_first=recently_closed.clone();
+    let next_first=next_tab_location.clone();
+    let detached_window=explicitly_requested.is_some();
     glib::timeout_add_local_once(Duration::from_millis(55),move || {
         // Only now perform path probes and instantiate the complete browser
         // widget tree. Initial async listing and thumbnails remain separate.
-        let requested_uri=std::env::args_os().nth(1)
-            .and_then(|s|s.into_string().ok())
-            .filter(|s|s.contains("://"));
-        let starting=std::env::args_os().nth(1).map(PathBuf::from)
-            .filter(|p|p.is_dir()).unwrap_or_else(home);
+        let requested=explicitly_requested.or_else(||
+            std::env::args_os().nth(1).and_then(|s|s.into_string().ok()));
+        let requested_uri=requested.as_deref()
+            .filter(|value|value.contains("://")).map(ToOwned::to_owned);
+        let starting=requested.as_deref().filter(|value|!value.contains("://"))
+            .map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(home);
         let title=starting.file_name().map(|s|s.to_string_lossy().into_owned())
             .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_owned());
-        append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
-            starting,first_pending,&title,first_remote.clone(),&first_add);
-        // Drop only the temporary loading page; all genuine tabs remain.
+        if let Some(uri)=requested_uri {
+            first_remote(uri);
+        }else{
+            append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
+                starting,first_pending,&title,first_remote.clone(),&first_add,
+                &recent_first,&next_first);
+        }
         first_tabs.remove_page(Some(0));
-        if let Some(uri)=requested_uri {first_remote(uri);}
-        if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
-            if uri.starts_with("file:///") {first_remote(uri);}
+        if !detached_window {
+            if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
+                if uri.starts_with("file:///") {first_remote(uri);}
+            }
         }
         if files_profile_enabled() {
             eprintln!("MELANIA_FILES_FIRST_TAB_MS={}",startup_clock.elapsed().as_millis());
@@ -3145,6 +3275,10 @@ fn build_ui(app: &Application) {
 }
 
 
+
+fn build_ui(app:&Application) {
+    create_files_window(app,None);
+}
 
 /// Prefer Melania's freedesktop icon theme inside Melania applications.
 /// During development, assets can be loaded directly from the source tree;
@@ -3218,6 +3352,33 @@ mod software_preview_performance_tests {
     fn bound_thumbnail_decoding_on_software_renderers() {
         assert_eq!(thumbnail_budget_for(Some("cairo"),false),16);
         assert_eq!(thumbnail_budget_for(None,true),16);
+    }
+}
+
+#[cfg(test)]
+mod nautilus_tab_restore_tests {
+    use super::{ClosedFilesTab,push_closed_file_tab,MAX_RECENT_FILES_TABS};
+    use std::path::PathBuf;
+
+    #[test]
+    fn remembers_local_and_remote_locations_without_any_gtk_resources() {
+        assert_eq!(
+            ClosedFilesTab::from_location("/tmp/melania/documents"),
+            Some(ClosedFilesTab::Local(PathBuf::from("/tmp/melania/documents"))));
+        assert_eq!(
+            ClosedFilesTab::from_location("sftp://host/share"),
+            Some(ClosedFilesTab::Remote("sftp://host/share".to_owned())));
+        assert!(ClosedFilesTab::from_location("../relative").is_none());
+    }
+    #[test]
+    fn only_the_last_sixteen_closed_tabs_are_kept_in_lifo_order() {
+        let mut history=Vec::new();
+        for i in 0..(MAX_RECENT_FILES_TABS+3) {
+            push_closed_file_tab(&mut history,ClosedFilesTab::Local(PathBuf::from(format!("/tmp/{i}"))));
+        }
+        assert_eq!(history.len(),MAX_RECENT_FILES_TABS);
+        assert_eq!(history.first(),Some(&ClosedFilesTab::Local(PathBuf::from("/tmp/3"))));
+        assert_eq!(history.pop(),Some(ClosedFilesTab::Local(PathBuf::from("/tmp/18"))));
     }
 }
 

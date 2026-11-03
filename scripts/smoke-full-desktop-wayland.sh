@@ -568,6 +568,39 @@ assert max(diffs)>60, f"wallpaper did not update in live desktop layer: {diffs}"
 print("PASS: actual GTK desktop wallpaper changed live from XDG preferences",diffs)
 PYWALLCHECK
 fi
+# Exercise real GTK closed-tab history after the earlier Ctrl+W test. The
+# existing two Ctrl+T inputs produced the n+2 count once; restoring adds it
+# a second time, proving the source tab was recreated in the live client.
+target/debug/melania-winctl activate "$FILES_ID" >/dev/null
+xdotool windowfocus --sync "$HOST_WINDOW"
+xdotool key --clearmodifiers ctrl+shift+t
+restored_count=$((initial_tabs+2))
+for i in $(seq 1 45); do
+  [[ "$(grep -c "MELANIA_FILES_TAB_COUNT=$restored_count$" "$TEMP/compositor.log")" -ge 2 ]] && break
+  sleep .1
+done
+[[ "$(grep -c "MELANIA_FILES_TAB_COUNT=$restored_count$" "$TEMP/compositor.log")" -ge 2 ]] || {
+  echo 'FAIL: Ctrl+Shift+T did not reopen the last closed tab in real GTK' >&2
+  grep MELANIA_FILES_TAB_COUNT "$TEMP/compositor.log" | tail -15 >&2
+  exit 1
+}
+# Ctrl+N must create a distinct GTK toplevel (not another Notebook page).
+xdotool key --clearmodifiers ctrl+n
+new_window=0
+for i in $(seq 1 65); do
+  if grep -q 'MELANIA_FILES_WINDOW_CREATED count=2' "$TEMP/compositor.log" && \
+      [[ "$(target/debug/melania-winctl list | grep -c 'Melania Files' || true)" -ge 2 ]]; then
+    new_window=1; break
+  fi
+  sleep .1
+done
+[[ "$new_window" == 1 ]] || {
+  echo 'FAIL: Ctrl+N did not create a second real GTK Files window' >&2
+  target/debug/melania-winctl list >&2 || true
+  grep 'MELANIA_FILES_WINDOW_CREATED' "$TEMP/compositor.log" >&2 || true
+  exit 1
+}
+echo 'PASS: real GTK Ctrl+Shift+T reopened a closed tab and Ctrl+N created a second mapped Files window'
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
 for i in $(seq 1 60); do
