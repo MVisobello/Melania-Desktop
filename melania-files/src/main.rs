@@ -2597,18 +2597,61 @@ fn sync_tab_highlights(
     }
 }
 
+/// A closed tab keeps only its location, never the GTK widgets, GIO monitor
+/// or a background operation from the destroyed tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClosedFilesTab {
+    Local(PathBuf),
+    Remote(String),
+}
+const MAX_RECENT_FILES_TABS: usize = 16;
+
+impl ClosedFilesTab {
+    fn from_location(location: &str) -> Option<Self> {
+        if location.contains("://") {
+            let file = gio::File::for_uri(location);
+            if file.uri().as_str() == location {
+                return Some(Self::Remote(location.to_owned()));
+            }
+            return None;
+        }
+        let path = PathBuf::from(location);
+        if path.is_absolute() { Some(Self::Local(path)) } else { None }
+    }
+    fn location(&self) -> String {
+        match self {
+            Self::Local(path) => path.to_string_lossy().into_owned(),
+            Self::Remote(uri) => uri.clone(),
+        }
+    }
+}
+fn remember_closed_files_tab(
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    title: &Label,
+) {
+    let Some(location) = title.tooltip_text()
+        .and_then(|text| ClosedFilesTab::from_location(&text)) else{return;};
+    let mut recent = recently_closed.borrow_mut();
+    if recent.len() == MAX_RECENT_FILES_TABS { recent.remove(0); }
+    recent.push(location);
+}
+
 /// Close a tab by its page identity rather than a saved numeric index.
 fn close_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
                    headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
-                   window:&ApplicationWindow,page:&GtkBox) {
+                   window:&ApplicationWindow,page:&GtkBox,
+                   recently_closed:&Rc<RefCell<Vec<ClosedFilesTab>>>, remember:bool) {
     // Melania retains the final open tab instead of unexpectedly closing the
     // whole file manager. Both the X and Ctrl+W use this exact same rule.
     if notebook.n_pages()<=1{return;}
     let Some(index)=notebook.page_num(page) else{return;};
-    let heading=headers.borrow().iter()
+    let entry=headers.borrow().iter()
         .find(|(candidate,_,_)|candidate==page)
-        .map(|(_,heading,_)|heading.clone());
-    if let Some(heading)=heading{strip.remove(&heading);}
+        .map(|(_,heading,title)|(heading.clone(),title.clone()));
+    if let Some((heading,title))=entry {
+        if remember { remember_closed_files_tab(recently_closed,&title); }
+        strip.remove(&heading);
+    }
     headers.borrow_mut().retain(|(candidate,_,_)|candidate!=page);
     notebook.remove_page(Some(index));
     sync_tab_highlights(notebook,headers,window);
@@ -2652,13 +2695,16 @@ fn tab_drop_destination(source:u32,target:u32,after:bool)->u32 {
 
 fn close_other_files_tabs(notebook:&gtk::Notebook,strip:&GtkBox,
                           headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
-                          window:&ApplicationWindow,keep:&GtkBox,right_only:bool){
+                          window:&ApplicationWindow,keep:&GtkBox,right_only:bool,
+                          recently_closed:&Rc<RefCell<Vec<ClosedFilesTab>>>){
     let keep_index=notebook.page_num(keep).unwrap_or(0);
     let to_close:Vec<GtkBox>=headers.borrow().iter()
         .filter(|(page,_,_)|page!=keep &&
             (!right_only || notebook.page_num(page).is_some_and(|index|index>keep_index)))
         .map(|(page,_,_)|page.clone()).collect();
-    for page in to_close{close_files_tab(notebook,strip,headers,window,&page);}
+    for page in to_close {
+        close_files_tab(notebook,strip,headers,window,&page,recently_closed,true);
+    }
 }
 
 /// Reveal the active tab when the rail is narrower than the total set.
@@ -2695,10 +2741,12 @@ fn append_browser_tab(
     title: &str,
     open_remote: Rc<dyn Fn(String)>,
     new_button: &Button,
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
 ) {
     let text = Label::new(Some(title));
+    text.set_tooltip_text(Some(&path.display().to_string()));
     let child = file_tab(path, pending, text.clone(), open_remote);
-    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button);
+    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button,recently_closed);
 }
 fn append_remote_tab(
     notebook: &gtk::Notebook,
@@ -2707,15 +2755,17 @@ fn append_remote_tab(
     window: &ApplicationWindow,
     uri: &str,
     new_button: &Button,
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
 ) {
     let title=Label::new(Some("Rete"));
+    title.set_tooltip_text(Some(uri));
     let child=gio_remote::create(uri,title.clone());
-    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button);
+    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button,recently_closed);
 }
 /// Shared Nautilus-style tab bar for local and GVfs pages. The GTK Notebook
 /// still owns actual pages, while the compact headerbar renders their handles.
 #[derive(Clone,Copy)]
-enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight }
+enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight, RestoreClosed, MoveToWindow }
 
 fn append_file_page(
     notebook: &gtk::Notebook,
@@ -2726,6 +2776,7 @@ fn append_file_page(
     child: GtkBox,
     icon_name: &str,
     new_button: &Button,
+    recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
 ) {
     let tab = GtkBox::new(Orientation::Horizontal, 2);
     tab.add_css_class("files-top-tab");
@@ -2786,6 +2837,7 @@ fn append_file_page(
     let weak_page=child.downgrade();
     let weak_new=new_button.downgrade();
     let weak_headers=Rc::downgrade(headers);
+    let closed_for_actions=recently_closed.clone();
     let dispatch:Rc<dyn Fn(FilesTabAction)>=Rc::new(move |action|{
         let (Some(pages),Some(strip),Some(window),Some(page),Some(headers))=(
             weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
@@ -2798,12 +2850,36 @@ fn append_file_page(
                 if let Some(index)=pages.page_num(&page){pages.set_current_page(Some(index));}
                 if let Some(button)=weak_new.upgrade(){button.emit_clicked();}
             },
-            FilesTabAction::Close=>close_files_tab(&pages,&strip,&headers,&window,&page),
+            FilesTabAction::Close=>close_files_tab(
+                &pages,&strip,&headers,&window,&page,&closed_for_actions,true),
             FilesTabAction::CloseOthers=>{
-                close_other_files_tabs(&pages,&strip,&headers,&window,&page,false)
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,false,&closed_for_actions)
             },
             FilesTabAction::CloseRight=>{
-                close_other_files_tabs(&pages,&strip,&headers,&window,&page,true)
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,true,&closed_for_actions)
+            },
+            FilesTabAction::RestoreClosed=>{
+                if let Some(button)=weak_new.upgrade(){
+                    reopen_closed_files_tab(&closed_for_actions,&button);
+                }
+            },
+            FilesTabAction::MoveToWindow=>{
+                if let Some(place)=headers.borrow().iter().find(|(candidate,_,_)|candidate==&page)
+                    .and_then(|(_,_,title)|title.tooltip_text())
+                    .and_then(|text|ClosedFilesTab::from_location(&text)) {
+                    if let Some(app)=window.application()
+                        .and_then(|app|app.downcast::<Application>().ok()){
+                        // The new application window retains its own independent
+                        // navigation state; remove the original page only after
+                        // creating a new destination window.
+                        create_files_window(&app,Some(place.location()));
+                        if pages.n_pages()>1 {
+                            close_files_tab(&pages,&strip,&headers,&window,&page,&closed_for_actions,false);
+                        }else{
+                            window.close();
+                        }
+                    }
+                }
             },
             FilesTabAction::MoveLeft|FilesTabAction::MoveRight=>{
                 if let Some(index)=pages.page_num(&page){
@@ -2841,6 +2917,8 @@ fn append_file_page(
         ("Chiudi scheda",FilesTabAction::Close),
         ("Chiudi altre schede",FilesTabAction::CloseOthers),
         ("Chiudi schede a destra",FilesTabAction::CloseRight),
+        ("Riapri ultima scheda chiusa",FilesTabAction::RestoreClosed),
+        ("Sposta scheda in nuova finestra",FilesTabAction::MoveToWindow),
     ] {
         let button=Button::with_label(caption);
         button.add_css_class("files-tab-menu-item");
