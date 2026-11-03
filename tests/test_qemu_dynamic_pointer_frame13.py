@@ -26,7 +26,8 @@ class ResizedClientQmpTest(unittest.TestCase):
     def test_frame13_requires_real_libinput_and_kms_ack(self):
         self.assertIn("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF", BRIDGE)
         self.assertIn("MELANIA_NATIVE_DYNAMIC_POINTER_READY_AFTER_KMS12=true", BRIDGE)
-        self.assertIn("MELANIA_NATIVE_DYNAMIC_POINTER_READY_AFTER_KMS12=true", INJECT.read_text())
+        self.assertIn("MELANIA_RUST_CONTINUOUS_DYNAMIC_POINTER_READY_AFTER_KMS12=true", INJECT.read_text())
+        self.assertIn("MELANIA_RUST_CONTINUOUS_DYNAMIC_POINTER_READY_AFTER_KMS12=true", (ROOT / "melania-native" / "src" / "bin" / "qemu-rust-kms-continuous.rs").read_text())
         self.assertNotIn("wait_marker(args.serial, \"MELANIA_RUST_CONTINUOUS_FRAME_ACKED=12", INJECT.read_text())
         self.assertIn("dynamic pointer frame13 requires real xdg resize", BRIDGE)
         self.assertIn("dynamic-pointer-frame13-acked", BRIDGE)
