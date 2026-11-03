@@ -76,6 +76,7 @@ struct BridgeState {
     continuous_inflight:Option<(PlannedSceneFrame,Option<(WlSurface,wl_buffer::WlBuffer)>)>,
     continuous_latest_client:Option<(WlSurface,wl_buffer::WlBuffer)>,
     continuous_frame_count:u64,
+    continuous_two_window_presented:bool,
     multi_window_mode:bool,
     async_kms_mode:bool,
     drag_redraw_mode:bool,
@@ -205,6 +206,13 @@ impl BridgeState {
         }
         self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
         self.presented_layout_generation=planned.generation;
+        // Keep the proof at the verified FB_ID ACK, since the clients may
+        // destroy their xdg_toplevels after receiving frame.done.
+        if self.multi_window_mode && self.continuous_frame_count==12 &&
+           self.multi_scene.window_count()==2 &&
+           self.known_window_surfaces.live_count()==2 {
+            self.continuous_two_window_presented=true;
+        }
         if let Some((surface,buffer))=client {
             if self.multi_scene.layout_generation()==planned.generation {
                 let delivered=complete_presented_frame(
@@ -1063,6 +1071,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_worker:None,continuous_inflight:None,
         continuous_latest_client:None,continuous_frame_count:0,
+        continuous_two_window_presented:false,
         multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM"),
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
@@ -1133,11 +1142,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         return Err("frame presentation probe needs live VM Rust DRM stream".into());
     }
     if state.continuous_kms_mode &&
-       (!live_stream || !state.frame_callbacks_probe ||
-        state.async_kms_mode || state.multi_window_mode) {
-        return Err("continuous KMS requires dedicated single-client QEMU probe".into());
+       (!live_stream || !state.frame_callbacks_probe || state.async_kms_mode) {
+        return Err("continuous KMS requires a dedicated QEMU probe".into());
     }
-    if state.multi_window_mode &&
+    let continuous_two_windows=std::env::var("MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if state.continuous_kms_mode &&
+       (state.multi_window_mode != continuous_two_windows) {
+        return Err("continuous QEMU window layout flags must agree".into());
+    }
+    if state.multi_window_mode && !state.continuous_kms_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
         state.pixel_frame_target!=if state.reopen_redraw_mode {6} else if state.close_redraw_mode {5} else if state.drag_redraw_mode {4} else {3}) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
@@ -1223,6 +1237,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         if state.continuous_kms_mode && state.continuous_frame_count==12 {
             if state.frame_callback_count!=12 {
                 return Err("twelve Wayland callbacks not completed after KMS".into());
+            }
+            if state.multi_window_mode && !state.continuous_two_window_presented {
+                return Err("continuous KMS did not present both retained windows".into());
             }
             // Keep dispatching display.sync for the client after the last
             // callback, rather than shutting down its socket prematurely.

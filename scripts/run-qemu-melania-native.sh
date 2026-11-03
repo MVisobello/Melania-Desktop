@@ -26,6 +26,9 @@ pixel_client="$root/target/debug/qemu-client-window"
 stream_kms="$root/target/debug/qemu-rust-kms-stream"
 continuous_kms="$root/target/debug/qemu-rust-kms-continuous"
 continuous_client="$root/target/debug/qemu-continuous-client"
+two_continuous_client="$root/target/debug/qemu-continuous-two-windows"
+[[ -x "$two_continuous_client" ]] ||
+  deny 'build real two-window continuous Wayland client first'
 [[ -x "$continuous_kms" && -x "$continuous_client" ]] ||
   deny 'build continuous DRM recipient and Wayland client first'
 [[ -x "$stream_kms" ]] || deny 'build live Rust KMS consumer first'
@@ -58,6 +61,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QEMU sixth-frame reopen screendump verifier missing'
 [[ -f "$root/scripts/capture-qemu-continuous-frames.py" ]] ||
   deny 'QEMU continuous frame7/12 screenshot verifier missing'
+[[ -f "$root/scripts/capture-qemu-continuous-two-windows.py" ]] ||
+  deny 'QEMU real two-window continuous pixel verifier missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -78,7 +83,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -175,6 +180,11 @@ python3 "$root/scripts/capture-qemu-continuous-frames.py" \
   --twelfth "$report/continuous-frame12.ppm" --timeout 950 \
   > "$report/qmp-continuous-frames.log" 2>&1 &
 continuous_capture_pid=$!
+python3 "$root/scripts/capture-qemu-continuous-two-windows.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/continuous-two-windows-frame12.ppm" --timeout 950 \
+  > "$report/qmp-continuous-two-windows.log" 2>&1 &
+two_continuous_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -217,9 +227,11 @@ wait "$reopen_capture_pid"
 reopen_capture_code=$?
 wait "$continuous_capture_pid"
 continuous_capture_code=$?
+wait "$two_continuous_capture_pid"
+two_continuous_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_REAL_POINTER_DRAG_TO_KMS=true' "$report/qmp-window-drag.log" ||
    ! grep -q '^MELANIA_QEMU_DRAG_FRAME4_PIXELS_VERIFIED=true' "$report/qmp-drag-frame.log" ||
    ! test -s "$report/drag-window-frame4.ppm" ||
@@ -227,6 +239,9 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! test -s "$report/close-window-frame5.ppm" ||
    ! grep -q '^MELANIA_QEMU_REOPEN_FRAME6_PIXELS_VERIFIED=true' "$report/qmp-reopen-frame.log" ||
    ! test -s "$report/reopen-window-frame6.ppm" ||
+   ! grep -q '^MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS_PIXELS_VERIFIED=true' "$report/qmp-continuous-two-windows.log" ||
+   ! test -s "$report/continuous-two-windows-frame12.ppm" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_CONTINUOUS_TWO_WINDOWS_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_CONTINUOUS_FRAME7_PIXELS_VERIFIED=true' "$report/qmp-continuous-frames.log" ||
    ! grep -q '^MELANIA_QEMU_CONTINUOUS_FRAME12_PIXELS_VERIFIED=true' "$report/qmp-continuous-frames.log" ||
    ! test -s "$report/continuous-frame7.ppm" ||
@@ -359,6 +374,7 @@ fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_12_KMS_ACKS=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_FRAME7_12_PIXELS=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_NATIVE_TWO_CONTINUOUS_WINDOWS_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_WAYLAND_REAL_INPUT_DELIVERY=true' >> "$report/result.txt"
