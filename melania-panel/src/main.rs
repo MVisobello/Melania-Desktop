@@ -157,7 +157,10 @@ fn taskbar_app_icon(app_id: &str) -> Image {
     if lower.contains("melania") && lower.contains("settings") {
         return icon_with_fallback("preferences-system","applications-system");
     }
-    if let Some(info)=gio::DesktopAppInfo::new(&format!("{app_id}.desktop")) {
+    if let Some(info)=gio::AppInfo::all().into_iter().find(|app| {
+        app.id().as_deref()==Some(app_id)
+            || app.id().as_deref()==Some(&format!("{app_id}.desktop"))
+    }) {
         if let Some(icon)=info.icon() {return Image::from_gicon(&icon);}
     }
     icon_with_fallback(app_id,"application-x-executable")
