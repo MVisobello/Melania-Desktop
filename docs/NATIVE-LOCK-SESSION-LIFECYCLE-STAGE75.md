@@ -1,0 +1,1 @@
+Stage75 models a secure-lock handshake without pretending the lock screen is implemented. It requires full output coverage, input isolation and external authentication before any unlock transition. VT/hotplug revokes unlock and requires coverage again. Passwords are neither stored nor logged; the native session remains disabled.
