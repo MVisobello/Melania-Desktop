@@ -883,36 +883,42 @@ fn start_local_thumbnail_worker(browser:&Browser) {
     let targets=request.targets;
     let cancelled=request.cancelled;
     let generation=request.generation;
-    glib::timeout_add_local(Duration::from_millis(55),move ||{
-        match rx.try_recv(){
-            Ok((index,Ok(thumbnail)))=>{
-                // Discard outdated decoded buffers without touching old tiles.
-                if !cancelled.load(Ordering::Acquire) &&
-                    ui.listing_generation.get()==generation{
-                    if let Some((_,frame))=targets.get(index){
-                        let bytes=glib::Bytes::from_owned(thumbnail.rgba);
-                        let texture=gdk::MemoryTexture::new(
-                            thumbnail.width as i32,thumbnail.height as i32,
-                            gdk::MemoryFormat::R8g8b8a8,&bytes,
-                            thumbnail.width as usize*4);
-                        let picture=Picture::new();
-                        picture.set_size_request(112,84);
-                        picture.set_content_fit(gtk::ContentFit::Contain);
-                        picture.set_paintable(Some(&texture));
-                        while let Some(child)=frame.first_child(){frame.remove(&child);}
-                        frame.append(&picture);
+    // The old 55 ms timer applied one thumbnail per tick: 48 pictures could
+    // take >2.6 seconds to appear even when the worker had already decoded
+    // them. Drain a SMALL batch each frame and yield to GTK between batches.
+    glib::timeout_add_local(Duration::from_millis(16),move ||{
+        for _ in 0..4 {
+            match rx.try_recv(){
+                Ok((index,Ok(thumbnail)))=>{
+                    // Discard outdated decoded buffers without touching old tiles.
+                    if !cancelled.load(Ordering::Acquire) &&
+                        ui.listing_generation.get()==generation{
+                        if let Some((_,frame))=targets.get(index){
+                            let bytes=glib::Bytes::from_owned(thumbnail.rgba);
+                            let texture=gdk::MemoryTexture::new(
+                                thumbnail.width as i32,thumbnail.height as i32,
+                                gdk::MemoryFormat::R8g8b8a8,&bytes,
+                                thumbnail.width as usize*4);
+                            let picture=Picture::new();
+                            picture.set_size_request(112,84);
+                            picture.set_content_fit(gtk::ContentFit::Contain);
+                            picture.set_paintable(Some(&texture));
+                            while let Some(child)=frame.first_child(){frame.remove(&child);}
+                            frame.append(&picture);
+                        }
                     }
-                }
-                glib::ControlFlow::Continue
-            },
-            Ok((_,Err(_)))=>glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
-                ui.thumbnail_running.set(false);
-                start_local_thumbnail_worker(&ui);
-                glib::ControlFlow::Break
-            },
+                },
+                Ok((_,Err(_)))=>{},
+                Err(std::sync::mpsc::TryRecvError::Empty)=>
+                    return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                    ui.thumbnail_running.set(false);
+                    start_local_thumbnail_worker(&ui);
+                    return glib::ControlFlow::Break;
+                },
+            }
         }
+        glib::ControlFlow::Continue
     });
 }
 
@@ -992,7 +998,19 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
     let list_mode = browser.list_mode.get();
     let mut thumbnail_targets:Vec<(PathBuf,GtkBox)>=Vec::new();
     let max_thumbnails=thumbnail_budget();
-    for entry in entries {
+    // Each GTK idle slice constructs only a bounded group of entries. This
+    // keeps pointer/keyboard input responsive in directories with many files.
+    // An obsolete slice must never add rows to a new location or search.
+    let generation=browser.listing_generation.get();
+    let browser=browser.clone();
+    let dir=dir.to_path_buf();
+    let mut remaining=std::collections::VecDeque::from(entries);
+    glib::idle_add_local(move ||{
+        if browser.listing_generation.get()!=generation {
+            return glib::ControlFlow::Break;
+        }
+        for _ in 0..24 {
+            let Some(entry)=remaining.pop_front() else {break;};
         let type_name = file_type_label(&entry);
         let file_size = if entry.is_directory {"—".to_string()} else {human_size(entry.size)};
         let changed = modified_time_label(entry.modified);
@@ -1234,15 +1252,18 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         });
         button.add_controller(secondary_click);
         browser.tiles.insert(&button, -1);
-    }
+        }
+        if !remaining.is_empty() {
+            return glib::ControlFlow::Continue;
+        }
     let queued_thumbnails=thumbnail_targets.len();
     if !list_mode && !thumbnail_targets.is_empty() {
         let cancelled=Arc::new(AtomicBool::new(false));
         *browser.thumbnail_cancel.borrow_mut()=Some(cancelled.clone());
         *browser.thumbnail_pending.borrow_mut()=Some(LocalThumbnailRequest{
-            generation:browser.listing_generation.get(),targets:thumbnail_targets,cancelled,
+            generation:browser.listing_generation.get(),targets:std::mem::take(&mut thumbnail_targets),cancelled,
         });
-        start_local_thumbnail_worker(browser);
+        start_local_thumbnail_worker(&browser);
     }
     if browser.selected_paths.borrow().is_empty() {
         browser.preview_heading.set_text(&caption);
@@ -1269,6 +1290,8 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         let line=format!("MELANIA_FILES_LISTING_READY count={count}\n");
         let _=std::io::stderr().write_all(line.as_bytes());
     }
+    glib::ControlFlow::Break
+    });
 }
 
 // Keep a bounded navigation history, independent of the directory renderer.
