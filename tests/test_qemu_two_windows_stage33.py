@@ -70,8 +70,8 @@ class TwoWindowStage33(unittest.TestCase):
         ):
             self.assertIn(needle,CLIENT)
         for needle in (
-            "known_window_surfaces:Vec<WlSurface>",
-            "known==surface",
+            "known_window_surfaces:WindowSlots<WlSurface>",
+            "self.known_window_surfaces.register(surface.clone())",
             "native_client_frame::copy_client_shm(ptr,len,metadata)",
             "self.multi_scene.upsert(key,imported)",
             "self.multi_scene.composite()",
