@@ -223,6 +223,14 @@ fn run()->Result<(),Box<dyn Error>> {
             // Only verified CRTC scanout may produce a success ACK.
             wait_for_fb(&card,crtc_handle,framebuffer)?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_VISIBLE={}",index+1);
+            // Only the disposable managed-role run emits these markers.
+            // The host reads the *actual* QMP GPU framebuffer during the
+            // following hold, before any later client frame is presented.
+            let managed_role_qmp=std::env::var("MELANIA_QEMU_CONTINUOUS_MANAGED_ROLE_QMP")
+                .as_deref()==Ok("YES_QEMU_VM");
+            if managed_role_qmp && matches!(index+1,3|5|7|9) {
+                println!("MELANIA_RUST_CONTINUOUS_MANAGED_ROLE_FRAME_VISIBLE={}",index+1);
+            }
             // Real-time serial QMP watcher must receive this while FB is live.
             std::io::stdout().flush()?;
             if std::env::var("MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS")
@@ -257,6 +265,7 @@ fn run()->Result<(),Box<dyn Error>> {
             thread::sleep(Duration::from_millis(
                 if (reopen && (index==12 || index==13)) ||
                    (pointer_proof && index==12) ||
+                   (managed_role_qmp && matches!(index+1,3|5|7|9)) ||
                    index==6 || index==11 {2500} else {350}
             ));
             if index+1==total {rollback.restore()?;}
