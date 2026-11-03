@@ -28,15 +28,15 @@ class FilesNautilusTabs(unittest.TestCase):
         self.assertIn("window_controls::install(&window, &aero_header)",FILES)
 
     def test_both_backends_share_the_same_tab_actions(self):
-        self.assertIn('append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button)',FILES)
-        self.assertIn('append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button)',FILES)
+        self.assertIn('append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button,recently_closed,next_tab_location)',FILES)
+        self.assertIn('append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button,recently_closed,next_tab_location)',FILES)
         self.assertIn("browser.tab_title.set_tooltip_text(Some(&directory.display().to_string()))",FILES)
         self.assertIn("remote.title.set_tooltip_text(Some(&uri));",REMOTE)
         self.assertIn('place.as_deref().filter(|uri|uri.contains("://"))',FILES)
 
     def test_context_middle_click_and_drag_reorder_are_real_gtk_handlers(self):
         for marker in (
-            "enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight }",
+            "enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight, RestoreClosed, MoveToWindow }",
             "middle.set_button(2)",
             "right_click.set_button(3)",
             "menu.set_child(Some(&actions))",
