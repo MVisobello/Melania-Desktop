@@ -186,6 +186,10 @@ fi
 cat "$shell_client_log" "$shell_log"
 grep -q '^MELANIA_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true' "$shell_client_log" ||
   fatal 'real_xdg_maximize_fullscreen_client_ACK_missing'
+grep -q '^MELANIA_NATIVE_XDG_MINIMIZE_REQUEST_SENT=true' "$shell_client_log" ||
+  fatal 'real_xdg_minimize_request_missing'
+grep -q '^MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true' "$shell_log" ||
+  fatal 'real_xdg_minimize_request_not_delivered_to_compositor'
 for role_event in \
   'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=true' \
   'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=false' \
