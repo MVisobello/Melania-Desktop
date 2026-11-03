@@ -157,12 +157,28 @@ fn taskbar_app_icon(app_id: &str) -> Image {
     if lower.contains("melania") && lower.contains("settings") {
         return icon_with_fallback("preferences-system","applications-system");
     }
-    if let Some(info)=gio::AppInfo::all().into_iter().find(|app| {
-        app.id().as_deref()==Some(app_id)
-            || app.id().as_deref()==Some(&format!("{app_id}.desktop"))
-    }) {
-        if let Some(icon)=info.icon() {return Image::from_gicon(&icon);}
+    // A full GIO desktop-app enumeration is expensive. Taskbar refreshes
+    // must not repeat it for each window, especially during session startup.
+    // Cache successful icon lookups on the GTK main thread for this session.
+    thread_local! {
+        static ICON_CACHE: RefCell<std::collections::HashMap<String, Option<gio::Icon>>> =
+            RefCell::new(std::collections::HashMap::new());
     }
+    let cached=ICON_CACHE.with(|cache| {
+        if let Some(icon)=cache.borrow().get(app_id) {return icon.clone();}
+        let desktop_id=format!("{app_id}.desktop");
+        let icon=gio::AppInfo::all().into_iter().find(|app| {
+            app.id().as_deref()==Some(app_id)
+                || app.id().as_deref()==Some(desktop_id.as_str())
+        }).and_then(|app|app.icon());
+        // Do not cache misses: an application installed during this session
+        // can still gain its correct icon on the next window-list update.
+        if icon.is_some() {
+            cache.borrow_mut().insert(app_id.to_owned(),icon.clone());
+        }
+        icon
+    });
+    if let Some(icon)=cached {return Image::from_gicon(&icon);}
     icon_with_fallback(app_id,"application-x-executable")
 }
 
