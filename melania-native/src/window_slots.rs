@@ -5,17 +5,27 @@
 //! slot is explicitly removed. Only a freed slot may be recycled.
 //! This registry does not manage DRM resources or authorize native login.
 const MAX_SLOTS:usize=2;
+pub const MAX_DYNAMIC_SLOTS:usize=16;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub enum SlotError { CapacityExceeded }
+pub enum SlotError { CapacityExceeded, InvalidCapacity }
 
 #[derive(Debug)]
 pub struct WindowSlots<T> {
     slots:Vec<Option<T>>,
+    limit:usize,
 }
 
 impl<T> Default for WindowSlots<T> {
-    fn default()->Self { Self { slots:Vec::new() } }
+    fn default()->Self { Self { slots:Vec::new(),limit:MAX_SLOTS } }
+}
+
+impl<T> WindowSlots<T> {
+    pub fn with_capacity(limit:usize)->Result<Self,SlotError> {
+        if limit==0 || limit>MAX_DYNAMIC_SLOTS {return Err(SlotError::InvalidCapacity);}
+        Ok(Self {slots:Vec::new(),limit})
+    }
+    pub fn capacity(&self)->usize {self.limit}
 }
 
 impl<T:PartialEq> WindowSlots<T> {
@@ -30,7 +40,7 @@ impl<T:PartialEq> WindowSlots<T> {
             self.slots[index]=Some(surface);
             return Ok(index as u64+1);
         }
-        if self.slots.len()>=MAX_SLOTS {
+        if self.slots.len()>=self.limit {
             return Err(SlotError::CapacityExceeded);
         }
         self.slots.push(Some(surface));
@@ -87,6 +97,20 @@ mod tests {
         assert_eq!(registry.remove(&20),Some(1));
         assert_eq!(registry.remove(&20),None);
         assert_eq!(registry.live_count(),0);
+    }
+
+    #[test]
+    fn sixteen_client_slots_recycle_only_vacant_stable_ids() {
+        let mut slots=WindowSlots::with_capacity(16).unwrap();
+        for id in 1..=16 {assert_eq!(slots.register(id),Ok(id as u64));}
+        assert_eq!(slots.register(17),Err(SlotError::CapacityExceeded));
+        assert_eq!(slots.remove(&3),Some(3));
+        assert_eq!(slots.register(17),Ok(3));
+        assert_eq!(slots.get(1),Some(&1));
+        assert_eq!(slots.get(3),Some(&17));
+        assert_eq!(slots.get(16),Some(&16));
+        assert_eq!(WindowSlots::<u32>::with_capacity(0).err(),Some(SlotError::InvalidCapacity));
+        assert_eq!(WindowSlots::<u32>::with_capacity(17).err(),Some(SlotError::InvalidCapacity));
     }
 
     #[test]

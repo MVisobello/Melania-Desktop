@@ -1,0 +1,1 @@
+Stable one-based Wayland window IDs now support an explicitly checked 1..=16 capacity for the future compositor. Legacy QEMU remains bounded to two slots by default. IDs never shift on close; vacated slots may be reused, and invalid sizes are rejected without allocation. Rust tests cover all sixteen windows and stale slot reuse. No native login.
