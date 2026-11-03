@@ -27,8 +27,10 @@ class Files038(unittest.TestCase):
     def test_move_is_atomic_and_avoids_overwrite(self):
         original=(R/'melania-transfer/src/lib.rs').read_text()
         self.assertIn('RENAME_NOREPLACE',original)
-        self.assertIn('transfer::move_local(&path,&target)',GUI)
-        self.assertIn('Some(PendingTransfer{paths:remaining,is_move:true})',GUI)
+        self.assertIn('transfer::move_local(path,',GUI)
+        self.assertIn('LocalMutationKind::Move,pending.paths,Some(target)',GUI)
+        self.assertIn('Some(PendingTransfer{paths:report.remaining.clone(),is_move:true})',GUI)
+        self.assertIn('fn local_cut_never_overwrites_destination()',GUI)
 
     def test_rust_unit_tests_cover_critical_cases(self):
         for test in ('copies_files_and_reports_complete_progress','fails_without_overwriting',
