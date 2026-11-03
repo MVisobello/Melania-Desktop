@@ -3085,6 +3085,9 @@ fn append_file_page(
         let Some(location)=weak_drag_title.upgrade()
             .and_then(|label|label.tooltip_text())
             .and_then(|text|ClosedFilesTab::from_location(&text)) else{return;};
+        if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+            eprintln!("MELANIA_FILES_TAB_DRAG_BEGIN token={}",token_for_begin);
+        }
         ACTIVE_FILES_TAB_DRAG.with(|state| *state.borrow_mut()=Some(FilesTabDrag {
             token:token_for_begin.clone(),
             location,
@@ -3528,6 +3531,26 @@ mod software_preview_performance_tests {
     fn bound_thumbnail_decoding_on_software_renderers() {
         assert_eq!(thumbnail_budget_for(Some("cairo"),false),16);
         assert_eq!(thumbnail_budget_for(None,true),16);
+    }
+}
+
+#[cfg(test)]
+mod files_tab_drag_safety_tests {
+    use super::{detach_files_tab_on_cancel,active_files_tab_drag,clear_files_tab_drag};
+    use gtk::gdk::DragCancelReason;
+
+    #[test]
+    fn escape_and_errors_do_not_tear_off_or_create_windows() {
+        assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled));
+        assert!(!detach_files_tab_on_cancel(DragCancelReason::Error));
+    }
+    #[test]
+    fn arbitrary_unregistered_string_cannot_trigger_tab_transfer() {
+        let token="melania-tab-nonexistent";
+        assert!(active_files_tab_drag(token).is_none());
+        clear_files_tab_drag(token);
+        assert!(active_files_tab_drag(token).is_none());
     }
 }
 
