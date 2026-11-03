@@ -1766,6 +1766,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true");
         Some(listener)
     } else {None};
+    // This experimental shell control socket shares Melania Panel's wire
+    // protocol, is private to the QEMU VM runtime and cannot authorize login.
+    let control_listener=if state.managed_xdg_mode {
+        let dir=PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")
+            .ok_or("native QEMU control requires XDG_RUNTIME_DIR")?);
+        let metadata=fs::metadata(&dir)?;
+        if !metadata.is_dir() || metadata.permissions().mode()&0o077!=0 {
+            return Err("native QEMU control runtime must be private (0700)".into());
+        }
+        let path=dir.join(format!("melania-{}-control.sock",std::process::id()));
+        let listener=UnixListener::bind(&path)?;
+        let cleanup=ControlSocketCleanup(path.clone());
+        fs::set_permissions(&path,fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        println!("MELANIA_NATIVE_CONTROL_SOCKET_READY={}",path.display());
+        Some((listener,cleanup))
+    } else {None};
     let listener=ListeningSocket::bind_auto("melania-native-seat",1..=8)?;
     let socket=listener.socket_name().ok_or("Missing native Wayland socket name")?;
     println!("MELANIA_NATIVE_WAYLAND_SOCKET_READY={}",socket.to_string_lossy());
@@ -1813,6 +1830,29 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
+        // Accept only bounded, LF-complete commands. The client must close
+        // its write half; the compositor never trusts an incomplete prefix.
+        if let Some((listener,_cleanup))=&control_listener {
+            for _ in 0..8 {
+                match listener.accept() {
+                    Ok((mut client,_))=>{
+                        let _=client.set_read_timeout(Some(Duration::from_millis(40)));
+                        let _=client.set_write_timeout(Some(Duration::from_millis(120)));
+                        let response=match read_command(&mut client) {
+                            Ok(Some(command))=>state.control_command(command),
+                            Ok(None)=>respond_error("Comando incompleto o non valido"),
+                            Err(error)=>respond_error(&format!("Lettura IPC: {error}")),
+                        };
+                        let _=client.write_all(response.as_bytes());
+                    },
+                    Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
+                    Err(error)=>{
+                        eprintln!("native QEMU control accept failed: {error}");
+                        break;
+                    }
+                }
+            }
+        }
         if state.async_kms_mode && state.async_stream.is_some() {
             state.poll_async_kms()?;
         }
