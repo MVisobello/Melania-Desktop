@@ -1101,10 +1101,20 @@ fn refresh(browser: &Browser) {
     browser.selected_paths.borrow_mut().clear();
     *browser.selected.borrow_mut()=None;
     *browser.selection_anchor.borrow_mut()=None;
+    // Measure synchronous FlowBox teardown separately from the GIO scan and
+    // idle-batched row renderer. An expensive clear can otherwise be hidden
+    // behind a fast scan in software-rendered Mint/VirtualBox previews.
+    let clear_started=Instant::now();
+    let mut cleared_tiles=0usize;
     while let Some(child)=browser.tiles.first_child(){
         if let Ok(tile)=child.downcast::<gtk::FlowBoxChild>() {
             browser.tiles.remove(&tile);
+            cleared_tiles+=1;
         } else {break;}
+    }
+    if files_profile_enabled() {
+        eprintln!("MELANIA_FILES_CLEAR_MS={} tiles={} generation={}",
+            clear_started.elapsed().as_millis(),cleared_tiles,generation);
     }
     browser.preview.set_text("Lettura della cartella in corso…");
     browser.preview_image.set_visible(false);
@@ -2557,6 +2567,13 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     // background reads; stale completions must not repaint a closed tab.
     let closing=browser.clone();
     root.connect_unrealize(move |_| {
+        // A removed tab must invalidate both pending listing results and
+        // already-scheduled idle slices that create GTK rows. Cancellation
+        // flags alone do not stop a render already handed to the UI thread.
+        closing.listing_generation.set(closing.listing_generation.get().wrapping_add(1));
+        // Also suppress the delayed search refresh, which otherwise could
+        // restart a worker after the tab has been detached.
+        closing.search_revision.set(closing.search_revision.get().wrapping_add(1));
         closing.monitor_epoch.set(closing.monitor_epoch.get().wrapping_add(1));
         if let Some(monitor)=closing.monitor.borrow_mut().take(){monitor.cancel();}
         if let Some(cancel)=closing.listing_cancel.borrow_mut().take(){
