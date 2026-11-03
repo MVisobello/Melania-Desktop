@@ -59,7 +59,19 @@ impl MultiWindowScene {
         if self.windows.len() == MAX_WINDOWS {
             return Err(MultiSceneError::TooManyWindows);
         }
-        let (x,y)=POSITIONS[self.windows.len()];
+        // Slot IDs 1 and 2 are stable across close/reopen in the QEMU
+        // Wayland bridge. Use their actual assigned positions, not the count
+        // of currently visible windows: after closing window 1 while window 2
+        // remains, the reopened window 1 must return to the left slot rather
+        // than overlapping the still-running right-hand window.
+        //
+        // Arbitrary IDs are retained for standalone scene unit tests; their
+        // initial positions follow insertion order as before.
+        let slot=usize::try_from(key).ok()
+            .filter(|n|(1..=MAX_WINDOWS).contains(n))
+            .map(|n|n-1)
+            .unwrap_or(self.windows.len());
+        let (x,y)=POSITIONS[slot];
         self.windows.push(Entry { key, x, y, pixels });
         self.dirty();
         Ok(())
@@ -235,6 +247,51 @@ mod tests {
         let overlap=graph.composite().unwrap();
         assert_eq!(sample(&overlap,900,270),[73,126,237]);
         assert_eq!(graph.position(11),Some((700,230)));
+    }
+
+    #[test]
+    fn closed_first_client_can_reopen_without_overlapping_second() {
+        let mut graph=MultiWindowScene::default();
+        graph.upsert(1,solid(230,50,40)).unwrap();
+        graph.upsert(2,solid(40,110,230)).unwrap();
+        let second_position=graph.position(2);
+        assert_eq!(second_position,Some((650,190)));
+        let before=graph.composite().unwrap();
+        assert_eq!(sample(&before,200,200),[230,50,40]);
+        assert_eq!(sample(&before,700,250),[40,110,230]);
+
+        // Destruction frees only the first retained wl_shm snapshot. Until
+        // the next real KMS presentation the display may show stale pixels;
+        // a new composition must already contain the correct background.
+        let previous_generation=graph.layout_generation();
+        assert!(graph.remove(1));
+        assert!(graph.layout_generation()>previous_generation);
+        assert_eq!(graph.window_count(),1);
+        assert_eq!(graph.position(2),second_position);
+        let removed=graph.composite().unwrap();
+        assert_eq!(sample(&removed,200,200),[27,33,58]);
+        assert_eq!(sample(&removed,700,250),[40,110,230]);
+
+        graph.upsert(1,solid(80,220,90)).unwrap();
+        assert_eq!(graph.window_count(),2);
+        assert_eq!(graph.position(1),Some((160,120)));
+        assert_eq!(graph.position(2),second_position);
+        let reopened=graph.composite().unwrap();
+        assert_eq!(sample(&reopened,200,200),[80,220,90]);
+        assert_eq!(sample(&reopened,700,250),[40,110,230]);
+        assert!(!graph.remove(200));
+    }
+
+    #[test]
+    fn left_slot_remains_free_when_right_client_is_first_to_commit() {
+        let mut graph=MultiWindowScene::default();
+        graph.upsert(2,solid(30,90,200)).unwrap();
+        assert_eq!(graph.position(2),Some((650,190)));
+        assert_eq!(sample(&graph.composite().unwrap(),200,200),[27,33,58]);
+        graph.upsert(1,solid(180,70,30)).unwrap();
+        assert_eq!(graph.position(1),Some((160,120)));
+        assert_eq!(sample(&graph.composite().unwrap(),200,200),[180,70,30]);
+        assert_eq!(sample(&graph.composite().unwrap(),700,250),[30,90,200]);
     }
 
     #[test]
