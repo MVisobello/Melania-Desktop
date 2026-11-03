@@ -151,11 +151,16 @@ fn icon_with_fallback(primary: &str, fallback: &str) -> Image {
 // launchers before falling back to a generic, visible taskbar glyph.
 fn taskbar_app_icon(app_id: &str) -> Image {
     let lower=app_id.to_ascii_lowercase();
-    if lower.contains("melania") && lower.contains("files") || lower=="nautilus" || lower=="nemo" {
-        return icon_with_fallback("system-file-manager","folder");
+    // Prefer the actual Melania Fluent app artwork for our own windows.
+    // Generic freedesktop aliases are used only when a theme is missing.
+    if lower.contains("melania") && lower.contains("files") {
+        return icon_with_fallback("org.melaniadesktop.Files","system-file-manager");
     }
     if lower.contains("melania") && lower.contains("settings") {
-        return icon_with_fallback("preferences-system","applications-system");
+        return icon_with_fallback("org.melaniadesktop.Settings","preferences-system");
+    }
+    if lower=="nautilus" || lower=="nemo" {
+        return icon_with_fallback("system-file-manager","folder");
     }
     // Prefer the current GTK theme, including the bundled Melania icon pack:
     // the theme can resolve most app IDs without enumerating desktop launchers.
@@ -189,69 +194,23 @@ fn taskbar_app_icon(app_id: &str) -> Image {
     icon_with_fallback(app_id,"application-x-executable")
 }
 
-// Draw the two core Start icons independently of incomplete installed themes.
-// The Files pictogram is the conventional folder used by Linux file managers.
-fn start_core_icon(kind: &'static str) -> gtk::DrawingArea {
-    let area=gtk::DrawingArea::new();
-    area.set_content_width(27);
-    area.set_content_height(27);
-    area.set_draw_func(move |_,cr,w,h| {
-        if w<=0 || h<=0 {return;}
-        cr.scale(w as f64/28.0,h as f64/28.0);
-        if kind=="files" {
-            // Folder tab and body, with a subtle Fluent-style highlight.
-            cr.set_source_rgb(0.19,0.52,0.82);
-            cr.rectangle(2.5,6.0,10.5,5.5);
-            let _=cr.fill();
-            cr.set_source_rgb(0.25,0.65,0.95);
-            cr.rectangle(2.5,9.0,23.0,15.5);
-            let _=cr.fill();
-            cr.set_source_rgb(0.49,0.79,1.0);
-            cr.rectangle(4.0,10.5,20.0,2.2);
-            let _=cr.fill();
-        } else {
-            // Recognisable settings gear, not a generic blue application tile.
-            cr.set_source_rgb(0.39,0.51,0.66);
-            for tooth in 0..8 {
-                let angle=(tooth as f64)*std::f64::consts::TAU/8.0;
-                cr.save().ok();
-                cr.translate(14.0,14.0);
-                cr.rotate(angle);
-                cr.rectangle(-2.4,-12.0,4.8,6.0);
-                let _=cr.fill();
-                cr.restore().ok();
-            }
-            cr.arc(14.0,14.0,9.0,0.0,std::f64::consts::TAU);
-            let _=cr.fill();
-            cr.set_source_rgb(0.95,0.97,1.0);
-            cr.arc(14.0,14.0,3.9,0.0,std::f64::consts::TAU);
-            let _=cr.fill();
-        }
-    });
-    area
-}
-
+// The original Melania Fluent theme ships exact GTK application-ID aliases.
+ // Never replace them with hard-coded Cairo folder/gear pictograms.
 fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     let button = Button::new();
     button.add_css_class(class);
     let row = GtkBox::new(Orientation::Horizontal, 10);
-    let resolved = match icon_name {
-        // These standard freedesktop names are shipped by Adwaita, Nemo and
-        // Nautilus icon themes, even when Melania app-ID aliases are absent.
+    // Resolve the exact app name before falling back to a distro icon.
+    // Fluent artwork must be visible in Start, not just in Files/Settings.
+    let fallback=match icon_name {
         "org.melaniadesktop.Settings" => "preferences-system",
         "org.melaniadesktop.Files" => "system-file-manager",
-        other => other,
+        _ => "application-x-executable",
     };
-    if icon_name == "org.melaniadesktop.Files" || icon_name == "org.melaniadesktop.Settings" {
-        let icon=start_core_icon(if icon_name == "org.melaniadesktop.Files" {"files"} else {"settings"});
-        icon.add_css_class("melania-menu-app-icon");
-        row.append(&icon);
-    } else {
-        let icon=icon_with_fallback(resolved,"application-x-executable");
-        icon.set_pixel_size(if class == "melania-shortcut" {18} else {27});
-        icon.add_css_class("melania-menu-app-icon");
-        row.append(&icon);
-    }
+    let icon=icon_with_fallback(icon_name,fallback);
+    icon.set_pixel_size(if class == "melania-shortcut" {18} else {27});
+    icon.add_css_class("melania-menu-app-icon");
+    row.append(&icon);
     let caption = label(text, "melania-row-text");
     caption.set_hexpand(true);
     row.append(&caption);
@@ -1851,7 +1810,13 @@ fn install_start_hotkey_listener(
                     hide_popup_surface(&notifications);
                     toggle_surface(&open,&quick);
                     if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
-                        eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible() && !open.has_css_class("melania-start-concealed"));
+                        // Write the entire diagnostic marker in one syscall.
+                        // This panel and the compositor share an Xvfb CI log;
+                        // ordinary formatted output can interleave mid-line
+                        // with the compositor's frequent wl_surface commits.
+                        let is_open=open.is_visible() && !open.has_css_class("melania-start-concealed");
+                        let marker=format!("MELANIA_START_IPC toggled open={is_open}\n");
+                        let _=std::io::stderr().write_all(marker.as_bytes());
                     }
                 }
                 Ok(n) if &packet[..n]==b"CLOSE_START" => hide_start_surface(&open),
