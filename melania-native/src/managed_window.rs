@@ -30,6 +30,16 @@ impl ManagedWindow {
             WindowDisplayState::Minimized=>None,
         }
     }
+    /// Synchronize the remembered restore rectangle with a real, bounded
+    /// client commit or compositor move. Never overwrite it while maximized.
+    pub fn update_normal_geometry(&mut self,rect:WindowRect)->bool {
+        if self.state!=WindowDisplayState::Normal ||
+           !rect.valid_for(self.output_width,self.output_height) || self.normal==rect {
+            return false;
+        }
+        self.normal=rect;
+        true
+    }
     pub fn maximize(&mut self)->bool {
         if self.state==WindowDisplayState::Maximized {return false;}
         self.state=WindowDisplayState::Maximized;true
@@ -80,6 +90,18 @@ mod tests {
         assert!(w.restore());
         assert_eq!(w.geometry(),Some(window()));
         assert!(!w.restore());
+    }
+    #[test]
+    fn native_client_commit_updates_restore_only_in_normal_state() {
+        let mut window=ManagedWindow::new(window(),1280,800).unwrap();
+        let updated=WindowRect{x:240,y:180,width:320,height:192};
+        assert!(window.update_normal_geometry(updated));
+        assert!(!window.update_normal_geometry(updated));
+        assert!(window.maximize());
+        assert!(!window.update_normal_geometry(WindowRect{x:0,y:0,width:1280,height:800}));
+        assert!(window.restore());
+        assert_eq!(window.geometry(),Some(updated));
+        assert!(!window.update_normal_geometry(WindowRect{x:-1,..updated}));
     }
     #[test]
     fn fullscreen_and_mode_change_clip_restore_position() {
