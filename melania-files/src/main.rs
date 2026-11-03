@@ -2691,10 +2691,11 @@ fn append_browser_tab(
     pending: Rc<RefCell<Option<PendingTransfer>>>,
     title: &str,
     open_remote: Rc<dyn Fn(String)>,
+    new_button: &Button,
 ) {
     let text = Label::new(Some(title));
     let child = file_tab(path, pending, text.clone(), open_remote);
-    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic");
+    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button);
 }
 fn append_remote_tab(
     notebook: &gtk::Notebook,
@@ -2702,12 +2703,17 @@ fn append_remote_tab(
     headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
     window: &ApplicationWindow,
     uri: &str,
+    new_button: &Button,
 ) {
     let title=Label::new(Some("Rete"));
     let child=gio_remote::create(uri,title.clone());
-    append_file_page(notebook,tab_strip,headers,window,title,child,"network-server-symbolic");
+    append_file_page(notebook,tab_strip,headers,window,title,child,"network-server-symbolic",new_button);
 }
-/// Shared Melania tab rail for local and GVfs pages.
+/// Shared Nautilus-style tab bar for local and GVfs pages. The GTK Notebook
+/// still owns actual pages, while the compact headerbar renders their handles.
+#[derive(Clone,Copy)]
+enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight }
+
 fn append_file_page(
     notebook: &gtk::Notebook,
     tab_strip: &GtkBox,
@@ -2716,63 +2722,175 @@ fn append_file_page(
     text: Label,
     child: GtkBox,
     icon_name: &str,
+    new_button: &Button,
 ) {
-    let tab = GtkBox::new(Orientation::Horizontal, 3);
+    let tab = GtkBox::new(Orientation::Horizontal, 2);
     tab.add_css_class("files-top-tab");
+    tab.set_valign(Align::End);
+    tab.set_widget_name(&format!("melania-tab-{}",NEXT_FILES_TAB_ID.fetch_add(1,Ordering::Relaxed)));
     let tab_button = Button::new();
     tab_button.add_css_class("files-top-tab-select");
-    let tab_contents = GtkBox::new(Orientation::Horizontal, 6);
+    tab_button.set_hexpand(true);
+    let tab_contents = GtkBox::new(Orientation::Horizontal, 7);
     let icon = Image::from_icon_name(icon_name);
     icon.set_pixel_size(16);
     text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    text.set_max_width_chars(16);
+    text.set_max_width_chars(17);
+    text.set_hexpand(true);
+    text.set_xalign(0.0);
     tab_contents.append(&icon);
     tab_contents.append(&text);
     tab_button.set_child(Some(&tab_contents));
     let close = Button::from_icon_name("window-close-symbolic");
     close.add_css_class("files-tab-close");
-    close.set_tooltip_text(Some("Chiudi scheda"));
+    close.set_tooltip_text(Some("Chiudi scheda (Ctrl+W)"));
     tab.append(&tab_button);
     tab.append(&close);
-    let index = notebook.append_page(&child, None::<&gtk::Widget>);
-    headers.borrow_mut().push((child.clone(), tab.clone(), text.clone()));
+
+    // Nautilus opens a new tab immediately to the right of the active page.
+    // The plus button itself stays at the far end of the scrollable tab rail.
+    let previous=notebook.current_page();
+    let index=notebook.append_page(&child,None::<&gtk::Widget>);
+    headers.borrow_mut().push((child.clone(),tab.clone(),text.clone()));
     tab_strip.append(&tab);
-    notebook.set_current_page(Some(index));
-    sync_tab_highlights(notebook, headers, window);
-    let tabs_for_title = notebook.clone();
-    let page_for_title = child.clone();
-    let window_for_title = window.clone();
+    if let Some(active)=previous {
+        let after=(active+1).min(index);
+        if after<index {
+            reorder_files_tab(notebook,tab_strip,headers,window,&child,after);
+        }
+    }
+    notebook.set_current_page(notebook.page_num(&child));
+    sync_tab_highlights(notebook,headers,window);
+
+    let tabs_for_title=notebook.clone();
+    let page_for_title=child.clone();
+    let window_for_title=window.clone();
     text.connect_label_notify(move |label| {
-        if tabs_for_title.page_num(&page_for_title) == tabs_for_title.current_page() {
-            window_for_title.set_title(Some(&format!("{} — Melania Files", label.label())));
+        if tabs_for_title.page_num(&page_for_title)==tabs_for_title.current_page() {
+            window_for_title.set_title(Some(&format!("{} — Melania Files",label.label())));
         }
     });
 
-    let pages = notebook.clone();
-    let selected_page = child.clone();
-    tab_button.connect_clicked(move |_| {
-        if let Some(number) = pages.page_num(&selected_page) {
-            pages.set_current_page(Some(number));
-        }
-    });
-
-    let pages = notebook.clone();
-    let heading_list = headers.clone();
-    let strip = tab_strip.clone();
-    let window_after_close = window.clone();
-    close.connect_clicked(move |_| {
-        // Never silently close the last browser. Ctrl+W follows the same rule.
-        if pages.n_pages() <= 1 { return; }
-        if let Some(index) = pages.page_num(&child) {
-            if let Some(position) = heading_list.borrow().iter()
-                .position(|(page, _, _)| page == &child) {
-                heading_list.borrow_mut().remove(position);
+    // Only weak references are captured by tab controls, so closing a tab
+    // does not keep its file monitors and GTK widgets alive indefinitely.
+    let weak_pages=notebook.downgrade();
+    let weak_strip=tab_strip.downgrade();
+    let weak_window=window.downgrade();
+    let weak_page=child.downgrade();
+    let weak_new=new_button.downgrade();
+    let weak_headers=Rc::downgrade(headers);
+    let dispatch:Rc<dyn Fn(FilesTabAction)>=Rc::new(move |action|{
+        let (Some(pages),Some(strip),Some(window),Some(page),Some(headers))=(
+            weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
+            weak_page.upgrade(),weak_headers.upgrade()) else{return;};
+        match action {
+            FilesTabAction::Select=>{
+                if let Some(index)=pages.page_num(&page){pages.set_current_page(Some(index));}
+            },
+            FilesTabAction::New=>{
+                if let Some(index)=pages.page_num(&page){pages.set_current_page(Some(index));}
+                if let Some(button)=weak_new.upgrade(){button.emit_clicked();}
+            },
+            FilesTabAction::Close=>close_files_tab(&pages,&strip,&headers,&window,&page),
+            FilesTabAction::CloseOthers=>{
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,false)
+            },
+            FilesTabAction::CloseRight=>{
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,true)
+            },
+            FilesTabAction::MoveLeft|FilesTabAction::MoveRight=>{
+                if let Some(index)=pages.page_num(&page){
+                    let target=if matches!(action,FilesTabAction::MoveLeft) {
+                        index.saturating_sub(1)
+                    }else{(index+1).min(pages.n_pages().saturating_sub(1))};
+                    reorder_files_tab(&pages,&strip,&headers,&window,&page,target);
+                }
             }
-            strip.remove(&tab);
-            pages.remove_page(Some(index));
-            sync_tab_highlights(&pages, &heading_list, &window_after_close);
         }
     });
+    let select=dispatch.clone();
+    tab_button.connect_clicked(move |_|select(FilesTabAction::Select));
+    let close_action=dispatch.clone();
+    close.connect_clicked(move |_|close_action(FilesTabAction::Close));
+
+    let middle=gtk::GestureClick::new();
+    middle.set_button(2);
+    let close_middle=dispatch.clone();
+    middle.connect_released(move |_,_,_,_|close_middle(FilesTabAction::Close));
+    tab.add_controller(middle);
+
+    // A native GTK popover presents the familiar Nautilus tab operations.
+    let menu=gtk::Popover::new();
+    menu.add_css_class("files-tab-menu");
+    menu.set_has_arrow(false);
+    menu.set_autohide(true);
+    menu.set_parent(&tab);
+    let actions=GtkBox::new(Orientation::Vertical,3);
+    actions.add_css_class("files-tab-menu-items");
+    for (caption,command) in [
+        ("Nuova scheda",FilesTabAction::New),
+        ("Sposta scheda a sinistra",FilesTabAction::MoveLeft),
+        ("Sposta scheda a destra",FilesTabAction::MoveRight),
+        ("Chiudi scheda",FilesTabAction::Close),
+        ("Chiudi altre schede",FilesTabAction::CloseOthers),
+        ("Chiudi schede a destra",FilesTabAction::CloseRight),
+    ] {
+        let button=Button::with_label(caption);
+        button.add_css_class("files-tab-menu-item");
+        button.set_halign(Align::Fill);
+        let dispatch=dispatch.clone();
+        let weak_menu=menu.downgrade();
+        button.connect_clicked(move |_| {
+            if let Some(popover)=weak_menu.upgrade(){popover.popdown();}
+            dispatch(command);
+        });
+        actions.append(&button);
+    }
+    menu.set_child(Some(&actions));
+    let right_click=gtk::GestureClick::new();
+    right_click.set_button(3);
+    let weak_menu=menu.downgrade();
+    right_click.connect_pressed(move |_,_,x,y|{
+        if let Some(popover)=weak_menu.upgrade(){
+            popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32,y as i32,1,1)));
+            popover.popup();
+        }
+    });
+    tab.add_controller(right_click);
+
+    // Drag a tab onto either half of another tab to reorder it. This
+    // represents TAB handles only; no file DnD/clipboard payload is changed.
+    let drag_source=gtk::DragSource::new();
+    drag_source.set_actions(gdk::DragAction::MOVE);
+    let drag_token=tab.widget_name().to_string();
+    drag_source.connect_prepare(move |_,_,_|{
+        Some(gdk::ContentProvider::for_value(&drag_token.to_value()))
+    });
+    tab.add_controller(drag_source);
+    let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
+    let weak_pages=notebook.downgrade();
+    let weak_strip=tab_strip.downgrade();
+    let weak_window=window.downgrade();
+    let weak_page=child.downgrade();
+    let weak_tab=tab.downgrade();
+    let weak_headers=Rc::downgrade(headers);
+    drop.connect_drop(move |_,value,x,_|{
+        let Ok(token)=value.get::<String>() else{return false;};
+        if !token.starts_with("melania-tab-"){return false;}
+        let (Some(pages),Some(strip),Some(window),Some(page),Some(tab),Some(headers))=(
+            weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
+            weak_page.upgrade(),weak_tab.upgrade(),weak_headers.upgrade()) else{return false;};
+        let source=headers.borrow().iter()
+            .find(|(_,heading,_)|heading.widget_name().as_str()==token)
+            .map(|(source,_,_)|source.clone());
+        let Some(source)=source else{return false;};
+        let (Some(from),Some(target))=(pages.page_num(&source),pages.page_num(&page))
+            else{return false;};
+        let right_half=x>f64::from(tab.width())/2.0;
+        let destination=tab_drop_destination(from,target,right_half);
+        reorder_files_tab(&pages,&strip,&headers,&window,&source,destination)
+    });
+    tab.add_controller(drop);
 }
 
 /// The nested Wayland compositor does not yet expose a formal panel work area.
