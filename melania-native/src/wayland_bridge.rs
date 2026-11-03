@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -68,6 +68,8 @@ struct BridgeState {
     frame_callbacks_probe:bool,
     frame_callback_count:u32,
     render_scheduler:RenderScheduler,
+    continuous_redraw:ContinuousRedraw,
+    continuous_pending:Option<PlannedSceneFrame>,
     multi_window_mode:bool,
     async_kms_mode:bool,
     drag_redraw_mode:bool,
@@ -130,6 +132,49 @@ fn complete_presented_frame(surface:&WlSurface,elapsed_ms:u32)->u32 {
 }
 
 impl BridgeState {
+    // Stage43: observe the *actual* scene changes in the QEMU Wayland
+    // event loop. The stable ordinal-based KMS presenter remains unchanged;
+    // this second, generation-based ledger audits its real ACKs before any
+    // wl_surface.frame callback or buffer.release is emitted.
+    fn note_scene_change(&mut self) {
+        if self.async_kms_mode {
+            self.continuous_redraw.scene_changed(self.multi_scene.layout_generation());
+        }
+    }
+
+    fn begin_generation_proof(&mut self,expected:u64)->Result<(),Box<dyn Error>> {
+        if !self.async_kms_mode { return Ok(()); }
+        if self.continuous_pending.is_some() {
+            return Err("continuous redraw proof already has an outstanding frame".into());
+        }
+        let candidate=self.continuous_redraw.next_frame()
+            .ok_or("continuous redraw proof has no eligible dirty scene")?;
+        if candidate.generation!=expected {
+            self.continuous_redraw.failed(candidate);
+            return Err("continuous redraw proof disagrees with composed scene generation".into());
+        }
+        self.continuous_pending=Some(candidate);
+        Ok(())
+    }
+
+    fn reject_generation_proof(&mut self) {
+        if let Some(candidate)=self.continuous_pending.take() {
+            self.continuous_redraw.failed(candidate);
+        }
+    }
+
+    fn confirm_generation_proof(&mut self,actual:u64)->Result<(),Box<dyn Error>> {
+        if !self.async_kms_mode { return Ok(()); }
+        let candidate=self.continuous_pending.take()
+            .ok_or("KMS ACK without a planned continuous scene generation")?;
+        if candidate.generation!=actual ||
+           !self.continuous_redraw.presented(candidate) {
+            return Err("KMS ACK does not match the outstanding scene generation".into());
+        }
+        println!("MELANIA_NATIVE_SCENE_GENERATION_ACK={}",candidate.generation);
+        Ok(())
+    }
+
     /// Resolve QEMU physical output coordinates to a retained client surface.
     fn pointer_target(&self,point:Point<f64,Logical>)
         ->Option<(WlSurface,Point<f64,Logical>)>
@@ -154,6 +199,7 @@ impl BridgeState {
         match self.window_interaction.active_kind() {
             Some(InteractionKind::Move)=>{
                 if self.multi_scene.move_to(key,rect.x,rect.y).is_ok() {
+                    self.note_scene_change();
                     println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
                              key,rect.x,rect.y);
                     if let Err(error)=self.submit_drag_frame() {
@@ -187,9 +233,14 @@ impl BridgeState {
         }
         let ticket=self.render_scheduler.begin_frame()
             .ok_or("QEMU drag presentation already in progress")?;
+        if let Err(error)=self.begin_generation_proof(self.multi_scene.layout_generation()) {
+            self.render_scheduler.fail_present(ticket);
+            return Err(error);
+        }
         let worker=self.async_stream.as_ref()
             .ok_or("QEMU drag KMS worker unavailable")?;
         if worker.submit(FrameJob{ticket,ordinal:4,pixels:frame}).is_err() {
+            self.reject_generation_proof();
             self.render_scheduler.fail_present(ticket);
             return Err("QEMU drag KMS queue rejected fourth frame".into());
         }
@@ -216,9 +267,14 @@ impl BridgeState {
             .map_err(|_|"QEMU close scene compose failed")?;
         let ticket=self.render_scheduler.begin_frame()
             .ok_or("QEMU close frame could not acquire next KMS ticket")?;
+        if let Err(error)=self.begin_generation_proof(self.multi_scene.layout_generation()) {
+            self.render_scheduler.fail_present(ticket);
+            return Err(error);
+        }
         let worker=self.async_stream.as_ref()
             .ok_or("QEMU close frame KMS worker unavailable")?;
         if worker.submit(FrameJob{ticket,ordinal:5,pixels:frame}).is_err() {
+            self.reject_generation_proof();
             self.render_scheduler.fail_present(ticket);
             return Err("QEMU close frame was not accepted by KMS worker".into());
         }
@@ -255,6 +311,7 @@ impl BridgeState {
         if key!=1 { return Err("QEMU reopened surface failed to reuse the freed slot".into()); }
         self.multi_scene.upsert(key,pixels)
             .map_err(|_|"QEMU reopened window invalid scene image")?;
+        self.note_scene_change();
         let frame=self.multi_scene.composite()
             .map_err(|_|"QEMU reopened window scene cannot be composed")?;
         if !self.render_scheduler.damage() {
@@ -262,9 +319,14 @@ impl BridgeState {
         }
         let ticket=self.render_scheduler.begin_frame()
             .ok_or("QEMU reopen frame could not acquire KMS ticket")?;
+        if let Err(error)=self.begin_generation_proof(self.multi_scene.layout_generation()) {
+            self.render_scheduler.fail_present(ticket);
+            return Err(error);
+        }
         let worker=self.async_stream.as_ref()
             .ok_or("QEMU reopen frame KMS worker unavailable")?;
         if worker.submit(FrameJob{ticket,ordinal:6,pixels:frame}).is_err() {
+            self.reject_generation_proof();
             self.render_scheduler.fail_present(ticket);
             return Err("QEMU reopening sixth frame rejected by KMS worker".into());
         }
@@ -297,12 +359,17 @@ impl BridgeState {
             return Err("async KMS ticket or frame ordinal mismatch".into());
         }
         if let Err(error)=reply.status {
+            self.reject_generation_proof();
             self.render_scheduler.fail_present(pending.ticket);
             return Err(format!("async Rust KMS presentation failed: {error}").into());
         }
         if !self.render_scheduler.complete_present(pending.ticket) {
+            self.reject_generation_proof();
             return Err("async KMS ACK invalidated by seat pause or GPU change".into());
         }
+        // The native scene generation is checked only after the verified
+        // CRTC FB_ID ACK and before clients are notified of presentation.
+        self.confirm_generation_proof(pending.layout_generation)?;
         self.pixel_frame_count=pending.ordinal;
         self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
         self.presented_layout_generation=pending.layout_generation;
@@ -429,6 +496,7 @@ impl CompositorHandler for BridgeState {
                                 eprintln!("QEMU retained window rejected invalid wl_shm image");
                                 return;
                             }
+                            self.note_scene_change();
                             match self.multi_scene.composite() {
                                 Ok(frame)=>frame,
                                 Err(error)=>{
@@ -465,16 +533,23 @@ impl CompositorHandler for BridgeState {
                                 self.render_scheduler.fail_present(ticket);
                                 return;
                             }
+                            if let Err(error)=self.begin_generation_proof(self.multi_scene.layout_generation()) {
+                                eprintln!("QEMU generation audit refused native frame: {error}");
+                                self.render_scheduler.fail_present(ticket);
+                                return;
+                            }
                             let worker=match self.async_stream.as_ref() {
                                 Some(worker)=>worker,
                                 None=>{
                                     eprintln!("async KMS transport not connected");
+                                    self.reject_generation_proof();
                                     self.render_scheduler.fail_present(ticket);
                                     return;
                                 }
                             };
                             if worker.submit(FrameJob{ticket,ordinal:next,pixels:frame}).is_err() {
                                 eprintln!("async KMS transport full or disconnected");
+                                self.reject_generation_proof();
                                 self.render_scheduler.fail_present(ticket);
                                 return;
                             }
@@ -600,7 +675,9 @@ impl XdgShellHandler for BridgeState {
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             // The retained pixel copy and stable slot belong to this client.
             // Never leave a closed window occupying the limited QEMU scene.
-            if self.multi_scene.remove(key) && self.close_redraw_mode &&
+            let removed=self.multi_scene.remove(key);
+            if removed { self.note_scene_change(); }
+            if removed && self.close_redraw_mode &&
                self.multi_scene.window_count()==1 && self.pixel_frame_count>=3 {
                 // Defer the redraw until the outstanding fourth KMS frame
                 // receives its ACK. The scheduler coalesces this damage.
@@ -861,6 +938,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         frame_callback_count:0,
         render_scheduler:RenderScheduler::default(),
+        continuous_redraw:ContinuousRedraw::default(),continuous_pending:None,
         multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM"),
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
@@ -888,6 +966,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if session.is_active() {
         state.lifecycle.on_session(SessionEvent::ActivateSession);
         state.render_scheduler.set_seat_active(true);
+        state.continuous_redraw.set_seat_active(true);
     }
     context.dispatch()?;
     for event in &mut context {
@@ -905,6 +984,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 if context.resume().is_err() {
                     state.lifecycle.on_session(SessionEvent::PauseSession);
                     state.render_scheduler.set_seat_active(false);
+                    state.continuous_redraw.set_seat_active(false);
+                    state.continuous_pending=None;
                     return;
                 }
             }
@@ -912,7 +993,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         let active=matches!(event,SessionEvent::ActivateSession);
         state.lifecycle.on_session(event);
         state.render_scheduler.set_seat_active(active);
-        if !active {state.window_interaction.cancel();}
+        state.continuous_redraw.set_seat_active(active);
+        if !active {
+            state.continuous_pending=None;
+            state.window_interaction.cancel();
+        }
     })?;
 
     let live_stream=std::env::var("MELANIA_NATIVE_LIVE_STREAM")
