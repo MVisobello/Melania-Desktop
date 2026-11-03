@@ -12,6 +12,7 @@ on:
       - 'tests/test_appearance_trio_shell_icons.py'
       - 'tests/test_start_menu_tray_design.py'
       - 'tools/test_melania_fluent_artwork.py'
+      - 'tools/test_melania_fluent_core_contrast.py'
       - 'scripts/install-melania-fluent-icons.sh'
       - 'branding/coverage/**'
       - '.github/workflows/melania-fluent-icons.yml'
@@ -26,6 +27,7 @@ on:
       - 'tests/test_appearance_trio_shell_icons.py'
       - 'tests/test_start_menu_tray_design.py'
       - 'tools/test_melania_fluent_artwork.py'
+      - 'tools/test_melania_fluent_core_contrast.py'
       - 'scripts/install-melania-fluent-icons.sh'
       - 'branding/coverage/**'
       - '.github/workflows/melania-fluent-icons.yml'
@@ -51,6 +53,8 @@ jobs:
         run: python3 tests/test_start_menu_tray_design.py
       - name: Validate original SVG artwork and contrast
         run: python3 tools/test_melania_fluent_artwork.py
+      - name: Verify Files and Settings remain colorful on the light Start surface
+        run: python3 tools/test_melania_fluent_core_contrast.py
       - name: Build all variants using the full identifier manifests
         run: |
           set -euo pipefail
