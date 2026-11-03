@@ -20,7 +20,11 @@ class NativeSceneGenerationAudit(unittest.TestCase):
         self.assertIn("continuous_redraw:ContinuousRedraw,",BRIDGE)
         self.assertIn("continuous_pending:Option<PlannedSceneFrame>",BRIDGE)
         self.assertIn("fn note_scene_change(&mut self)",BRIDGE)
-        self.assertIn("self.continuous_redraw.scene_changed(self.multi_scene.layout_generation())",BRIDGE)
+        # Stage53 chooses the correct generation ledger for the active VM
+        # scene; the verified fixed QEMU path is still available.
+        self.assertIn("self.continuous_redraw.scene_changed(generation)",BRIDGE)
+        self.assertIn("self.multi_scene.layout_generation()",BRIDGE)
+        self.assertIn("self.dynamic_scene.generation()",BRIDGE)
         self.assertIn("self.note_scene_change();",BRIDGE)
         self.assertIn("fn begin_generation_proof(&mut self,expected:u64)",BRIDGE)
         self.assertIn("fn confirm_generation_proof(&mut self,actual:u64)",BRIDGE)
