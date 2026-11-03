@@ -166,13 +166,15 @@ for attempt in $(seq 1 100); do
   kill -0 "$shell_pid" 2>/dev/null || break
   sleep .1
 done
-if [[ -z "$shell_socket" ]]; then
+shell_control_socket="$(sed -n 's/^MELANIA_NATIVE_CONTROL_SOCKET_READY=//p' "$shell_log" | head -n 1)"
+if [[ -z "$shell_socket" || -z "$shell_control_socket" || ! -S "$shell_control_socket" ]]; then
   cat "$shell_log"
   kill "$shell_pid" 2>/dev/null || true
   wait "$shell_pid" 2>/dev/null || true
   fatal 'native_xdg_layer_socket_unavailable'
 fi
-if ! MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM WAYLAND_DISPLAY="$shell_socket" \
+if ! MELANIA_CONTROL_SOCKET="$shell_control_socket" \
+     MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM WAYLAND_DISPLAY="$shell_socket" \
   timeout --signal=TERM --kill-after=3s 19s "$shell_client" > "$shell_client_log" 2>&1; then
   cat "$shell_client_log" "$shell_log"
   kill "$shell_pid" 2>/dev/null || true
@@ -190,6 +192,10 @@ grep -q '^MELANIA_NATIVE_XDG_MINIMIZE_REQUEST_SENT=true' "$shell_client_log" ||
   fatal 'real_xdg_minimize_request_missing'
 grep -q '^MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true' "$shell_log" ||
   fatal 'real_xdg_minimize_request_not_delivered_to_compositor'
+grep -q '^MELANIA_NATIVE_CONTROL_RESTORE_PASS=true' "$shell_client_log" ||
+  fatal 'real_xdg_window_not_restored_by_panel_ACTIVATE'
+grep -q '^MELANIA_NATIVE_CONTROL_ACTIVATED=1' "$shell_log" ||
+  fatal 'compositor_never_activated_minimized_window'
 for role_event in \
   'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=true' \
   'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=false' \
@@ -202,6 +208,7 @@ grep -q '^MELANIA_NATIVE_SHELL_PROTOCOLS_READY=true' "$shell_log" ||
 grep -q '^MELANIA_NATIVE_SHELL_RENDERED=false' "$shell_log" ||
   fatal 'native_wayland_shell_claimed_graphical_rendering'
 rm -f "$shell_log" "$shell_client_log"
+report 'MELANIA_QEMU_NATIVE_PANEL_CONTROL_RESTORE_PASS=true'
 report 'MELANIA_QEMU_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true'
 report 'MELANIA_QEMU_NATIVE_SHELL_PROBE_PASS=true'
 
