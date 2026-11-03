@@ -1151,7 +1151,42 @@ impl XdgShellHandler for BridgeState {
     fn unfullscreen_request(&mut self,top:ToplevelSurface) {
         self.request_managed_fullscreen(top,false);
     }
-    fn minimize_request(&mut self,_:ToplevelSurface){}
+    fn minimize_request(&mut self,top:ToplevelSurface) {
+        if !self.managed_xdg_mode {return;}
+        let surface=top.wl_surface().clone();
+        let Some((_,window))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface) else {return;};
+        if !window.minimize() {return;}
+        if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+            if self.dynamic_scene.geometry(key).is_some() &&
+               self.dynamic_scene.set_visible(key,false)==Ok(true) {
+                self.note_scene_change();
+                if self.continuous_kms_mode &&
+                   self.continuous_frame_count<self.continuous_frame_target {
+                    if let Err(error)=self.submit_continuous_frame() {
+                        eprintln!("managed xdg minimize KMS repaint refused: {error}");
+                    }
+                }
+            }
+        }
+        // Hidden windows cannot keep keyboard or pointer focus even if
+        // their owned wl_shm image is still retained for a later restore.
+        if self.focused.as_ref()==Some(&surface) {
+            self.focused=None;
+            let target=self.pointer_target(self.pointer_position);
+            let replacement=target.as_ref().map(|(next,_)|next.clone());
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,replacement.clone(),SERIAL_COUNTER.next_serial());
+            self.focused=replacement;
+            let pointer=self.seat.get_pointer().expect("pointer");
+            pointer.motion(self,target,&MotionEvent {
+                location:self.pointer_position,
+                serial:SERIAL_COUNTER.next_serial(),time:0,
+            });
+            pointer.frame(self);
+        }
+        println!("MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true");
+    }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
         self.managed_windows.retain(|(role,_)|role!=&surface);
