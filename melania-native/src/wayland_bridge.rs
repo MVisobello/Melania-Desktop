@@ -433,6 +433,15 @@ impl BridgeState {
                     self.multi_scene.move_to(key,rect.x,rect.y).is_ok()
                 };
                 if moved {
+                    if self.managed_xdg_mode && self.dynamic_window_mode {
+                        // Save the real pointer-drag placement for restore.
+                        if let Some(surface)=self.known_window_surfaces.get(key) {
+                            if let Some((_,model))=self.managed_windows.iter_mut()
+                                .find(|(role,_)|role==surface) {
+                                model.update_normal_geometry(rect);
+                            }
+                        }
+                    }
                     self.note_scene_change();
                     println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
                              key,rect.x,rect.y);
