@@ -601,6 +601,43 @@ done
   exit 1
 }
 echo 'PASS: real GTK Ctrl+Shift+T reopened a closed tab and Ctrl+N created a second mapped Files window'
+# The pointer is injected into the isolated Xvfb host, NOT the developer's
+# real desktop. Drag the second visible Nautilus-style tab out onto exposed
+# desktop wallpaper: GTK must emit NoTarget and tear it off as a new toplevel.
+# Verify actual GDK drag start and successful window creation, not just a
+# mocked application callback. Do this after Ctrl+N, so both old/new windows
+# have been proven usable first.
+xdotool windowfocus --sync "$HOST_WINDOW"
+prior_tearoffs="$(grep -c 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)"
+xdotool mousemove --window "$HOST_WINDOW" 270 85
+xdotool mousedown 1
+sleep .08
+xdotool mousemove --sync --window "$HOST_WINDOW" 315 85
+sleep .1
+xdotool mousemove --sync --window "$HOST_WINDOW" 24 330
+sleep .18
+xdotool mouseup 1
+drag_started=0
+tearoff=0
+for i in $(seq 1 50); do
+  grep -q 'MELANIA_FILES_TAB_DRAG_BEGIN' "$TEMP/compositor.log" && drag_started=1
+  if [[ "$(grep -c 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)" -gt "$prior_tearoffs" ]]; then
+    tearoff=1
+    break
+  fi
+  sleep .1
+done
+[[ "$drag_started" == 1 && "$tearoff" == 1 ]] || {
+  echo 'FAIL: real mouse drag did not tear the active tab off to a separate window' >&2
+  grep -E 'MELANIA_FILES_TAB_(DRAG_BEGIN|TEAROFF|COUNT)' "$TEMP/compositor.log" | tail -20 >&2 || true
+  exit 1
+}
+[[ "$(target/debug/melania-winctl list | grep -c 'Melania Files' || true)" -ge 3 ]] || {
+  echo 'FAIL: tear-off did not leave three mapped Files windows' >&2
+  target/debug/melania-winctl list >&2
+  exit 1
+}
+echo 'PASS: real GTK pointer drag outside tab bar created third independent Files window'
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
 for i in $(seq 1 60); do
