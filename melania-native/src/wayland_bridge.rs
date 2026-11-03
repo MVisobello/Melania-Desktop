@@ -236,6 +236,12 @@ impl BridgeState {
         if !self.continuous_redraw.presented(planned) {
             return Err("continuous KMS stale ACK after seat/output transition".into());
         }
+        // Stage59: a damage snapshot is retired only after the real KMS
+        // CRTC FB_ID receiver verified this exact frame. A newer client
+        // commit or pointer motion keeps its regions dirty for the successor.
+        if self.dynamic_window_mode {
+            self.dynamic_scene.confirm_presented_damage(planned.generation);
+        }
         self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
         self.presented_layout_generation=planned.generation;
         if self.dynamic_pointer_proof_mode && self.continuous_frame_count==12 {
