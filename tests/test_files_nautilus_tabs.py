@@ -10,6 +10,8 @@ ROOT=Path(__file__).resolve().parents[1]
 FILES=(ROOT/"melania-files/src/main.rs").read_text()
 REMOTE=(ROOT/"melania-files/src/gio_remote.rs").read_text()
 CSS=(ROOT/"melania-files/assets/style.css").read_text()
+SMOKE=(ROOT/"scripts/smoke-full-desktop-wayland.sh").read_text()
+CI=(ROOT/".github/workflows/wayland-smoke.yml").read_text()
 
 
 class FilesNautilusTabs(unittest.TestCase):
@@ -63,6 +65,16 @@ class FilesNautilusTabs(unittest.TestCase):
                        "gdk::Key::w","gdk::Key::t","to_unicode()",
                        "reorder_files_tab("):
             self.assertIn(marker,keyboard)
+
+    def test_actual_wayland_session_captures_multiple_tabs(self):
+        for marker in ('export MELANIA_SMOKE_FILES_TABS=1',
+                       'xdotool key --clearmodifiers ctrl+t',
+                       'xdotool key --clearmodifiers ctrl+w',
+                       'MELANIA_FILES_TAB_COUNT=',
+                       'scrot -z -o reports/nested-wayland-files-tabs.png'):
+            self.assertIn(marker,SMOKE)
+        self.assertIn('reports/nested-wayland-files-tabs.png',CI)
+        self.assertIn('eprintln!("MELANIA_FILES_TAB_COUNT={}"',FILES)
 
     def test_graphic_is_nautilus_like_in_all_three_themes(self):
         for marker in ("files-tab-rail","files-top-tab.files-tab-active",
