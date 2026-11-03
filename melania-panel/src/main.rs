@@ -166,6 +166,48 @@ fn taskbar_app_icon(app_id: &str) -> Image {
     icon_with_fallback(app_id,"application-x-executable")
 }
 
+// Draw the two core Start icons independently of incomplete installed themes.
+// The Files pictogram is the conventional folder used by Linux file managers.
+fn start_core_icon(kind: &'static str) -> gtk::DrawingArea {
+    let area=gtk::DrawingArea::new();
+    area.set_content_width(27);
+    area.set_content_height(27);
+    area.set_draw_func(move |_,cr,w,h| {
+        if w<=0 || h<=0 {return;}
+        cr.scale(w as f64/28.0,h as f64/28.0);
+        if kind=="files" {
+            // Folder tab and body, with a subtle Fluent-style highlight.
+            cr.set_source_rgb(0.19,0.52,0.82);
+            cr.rectangle(2.5,6.0,10.5,5.5);
+            let _=cr.fill();
+            cr.set_source_rgb(0.25,0.65,0.95);
+            cr.rectangle(2.5,9.0,23.0,15.5);
+            let _=cr.fill();
+            cr.set_source_rgb(0.49,0.79,1.0);
+            cr.rectangle(4.0,10.5,20.0,2.2);
+            let _=cr.fill();
+        } else {
+            // Recognisable settings gear, not a generic blue application tile.
+            cr.set_source_rgb(0.39,0.51,0.66);
+            for tooth in 0..8 {
+                let angle=(tooth as f64)*std::f64::consts::TAU/8.0;
+                cr.save().ok();
+                cr.translate(14.0,14.0);
+                cr.rotate(angle);
+                cr.rectangle(-2.4,-12.0,4.8,6.0);
+                let _=cr.fill();
+                cr.restore().ok();
+            }
+            cr.arc(14.0,14.0,9.0,0.0,std::f64::consts::TAU);
+            let _=cr.fill();
+            cr.set_source_rgb(0.95,0.97,1.0);
+            cr.arc(14.0,14.0,3.9,0.0,std::f64::consts::TAU);
+            let _=cr.fill();
+        }
+    });
+    area
+}
+
 fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     let button = Button::new();
     button.add_css_class(class);
@@ -177,10 +219,16 @@ fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
         "org.melaniadesktop.Files" => "system-file-manager",
         other => other,
     };
-    let icon = icon_with_fallback(resolved, "application-x-executable");
-    icon.set_pixel_size(if class == "melania-shortcut" { 18 } else { 27 });
-    icon.add_css_class("melania-menu-app-icon");
-    row.append(&icon);
+    if icon_name == "org.melaniadesktop.Files" || icon_name == "org.melaniadesktop.Settings" {
+        let icon=start_core_icon(if icon_name == "org.melaniadesktop.Files" {"files"} else {"settings"});
+        icon.add_css_class("melania-menu-app-icon");
+        row.append(&icon);
+    } else {
+        let icon=icon_with_fallback(resolved,"application-x-executable");
+        icon.set_pixel_size(if class == "melania-shortcut" {18} else {27});
+        icon.add_css_class("melania-menu-app-icon");
+        row.append(&icon);
+    }
     let caption = label(text, "melania-row-text");
     caption.set_hexpand(true);
     row.append(&caption);
