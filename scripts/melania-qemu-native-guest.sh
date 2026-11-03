@@ -893,6 +893,106 @@ rm -f "$dynamic_server_log" "$dynamic_kms_log" "$dynamic_client_log"
 report 'MELANIA_QEMU_NATIVE_DYNAMIC_TWO_SIZES_PASS=true'
 report 'MELANIA_QEMU_NATIVE_DYNAMIC_POINTER_KMS13_PASS=true'
 
+# Stage81B: different test, same REAL Smithay -> owned wl_shm -> retained
+# scene -> Rust continuous DRM/KMS CRTC ACK pipeline. The client changes A's
+# xdg role at frames 3/5/7/9 (maximize/restore/fullscreen/restore) and must
+# commit correctly-sized buffers while B remains a separate live toplevel.
+# This proves CRTC frame acknowledgements, not yet role-specific QMP pixels.
+managed_server_log="$(mktemp -t melania-managed-role-server-XXXXXX)"
+managed_kms_log="$(mktemp -t melania-managed-role-kms-XXXXXX)"
+managed_client_log="$(mktemp -t melania-managed-role-client-XXXXXX)"
+rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 83s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$managed_server_log" 2>&1 &
+managed_server_pid=$!
+managed_socket=''
+for attempt in $(seq 1 100); do
+  managed_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$managed_server_log" | head -n 1)"
+  [[ -n "$managed_socket" && -S /run/melania-native-qemu/continuous-frame-stream.sock ]] && break
+  kill -0 "$managed_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$managed_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+  cat "$managed_server_log"
+  fatal 'managed_role_live_Wayland_stream_unavailable'
+fi
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 76s \
+  "$continuous_kms" < /dev/tty1 > "$managed_kms_log" 2>&1 &
+managed_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$managed_kms_log" && break
+  kill -0 "$managed_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$managed_kms_log"; then
+  cat "$managed_server_log" "$managed_kms_log"
+  kill "$managed_server_pid" "$managed_kms_pid" 2>/dev/null || true
+  fatal 'managed_role_KMS_worker_not_connected'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
+       MELANIA_QEMU_MANAGED_ROLE_CLIENT=YES_QEMU_VM \
+       WAYLAND_DISPLAY="$managed_socket" \
+  timeout --signal=TERM --kill-after=3s 70s \
+  "$two_continuous_client" > "$managed_client_log" 2>&1; then
+  cat "$managed_client_log" "$managed_kms_log" "$managed_server_log"
+  kill "$managed_server_pid" "$managed_kms_pid" 2>/dev/null || true
+  fatal 'managed_role_real_Wayland_client_failed'
+fi
+if ! wait "$managed_kms_pid"; then
+  cat "$managed_kms_log" "$managed_server_log"
+  kill "$managed_server_pid" 2>/dev/null || true
+  fatal 'managed_role_KMS_CRTC_12_ACKs_failed'
+fi
+if ! wait "$managed_server_pid"; then
+  cat "$managed_server_log"
+  fatal 'managed_role_Smithay_live_stream_failed'
+fi
+cat "$managed_client_log" "$managed_kms_log" "$managed_server_log"
+for index in $(seq 1 12); do
+  grep -q "^MELANIA_NATIVE_MANAGED_ROLE_KMS_CALLBACK=$index$" "$managed_client_log" ||
+    fatal "managed_role_client_KMS_callback_$index_missing"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$managed_server_log" ||
+    fatal "managed_role_retained_scene_CRTC_ACK_$index_missing"
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$managed_kms_log" ||
+    fatal "managed_role_real_DRM_CRTC_$index_missing"
+done
+for transition in '3 size=1280x800' '5 size=360x224' \
+                  '7 size=1280x800' '9 size=360x224'; do
+  grep -q "^MELANIA_NATIVE_MANAGED_ROLE_CLIENT_ACK=$transition$" "$managed_client_log" ||
+    fatal "managed_role_client_configure_ACK_missing:$transition"
+done
+for event in \
+  'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=true' \
+  'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=false' \
+  'MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN=true' \
+  'MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN=false'; do
+  grep -q "^$event$" "$managed_server_log" ||
+    fatal "managed_role_Smithay_request_missing:$event"
+done
+grep -q '^MELANIA_NATIVE_MANAGED_ROLE_12_KMS_FRAMES_PASS=true' "$managed_client_log" ||
+  fatal 'managed_role_client_did_not_complete_all_real_CRTC_ACKs'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12' "$managed_server_log" ||
+  fatal 'managed_role_compositor_did_not_complete_twelve_frames'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$managed_kms_log" ||
+  fatal 'managed_role_KMS_did_not_complete_twelve_frames'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$managed_kms_log" ||
+  fatal 'managed_role_did_not_restore_original_CRTC'
+rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
+report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
