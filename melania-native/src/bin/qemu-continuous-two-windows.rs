@@ -152,7 +152,15 @@ fn main()->Result<(),Box<dyn Error>> {
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[blue,green,red,0]);
         }
-        let path=format!("/run/melania-native-qemu/continuous-two-client-{index}.bgra");
+        // The same disposable VM runs Stage48 before Stage49. Use a distinct
+        // source filename in the reopen scenario: create_new must not
+        // overwrite earlier client-owned wl_shm fixtures.
+        let path=if std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
+            .as_deref()==Ok("YES_QEMU_VM") {
+            format!("/run/melania-native-qemu/continuous-reopen-seed-{index}.bgra")
+        } else {
+            format!("/run/melania-native-qemu/continuous-two-client-{index}.bgra")
+        };
         let mut file=OpenOptions::new().create_new(true).read(true).write(true).open(path)?;
         file.write_all(&pixels)?;
         file.sync_all()?;
