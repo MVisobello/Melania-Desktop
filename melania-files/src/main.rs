@@ -2636,6 +2636,16 @@ fn remember_closed_files_tab(
     recent.push(location);
 }
 
+/// A closed tab is restored by opening its URI again. No GTK resources or
+/// running transfer workers survive the previous page's lifetime.
+fn reopen_closed_files_tab(history:&Rc<RefCell<Vec<ClosedFilesTab>>>,
+                           pending:&Rc<RefCell<Option<ClosedFilesTab>>>,new_button:&Button) {
+    if let Some(place)=history.borrow_mut().pop() {
+        *pending.borrow_mut()=Some(place);
+        new_button.emit_clicked();
+    }
+}
+
 /// Close a tab by its page identity rather than a saved numeric index.
 fn close_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
                    headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
@@ -2742,11 +2752,12 @@ fn append_browser_tab(
     open_remote: Rc<dyn Fn(String)>,
     new_button: &Button,
     recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    next_tab_location: &Rc<RefCell<Option<ClosedFilesTab>>>,
 ) {
     let text = Label::new(Some(title));
     text.set_tooltip_text(Some(&path.display().to_string()));
     let child = file_tab(path, pending, text.clone(), open_remote);
-    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button,recently_closed);
+    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button,recently_closed,next_tab_location);
 }
 fn append_remote_tab(
     notebook: &gtk::Notebook,
@@ -2756,11 +2767,12 @@ fn append_remote_tab(
     uri: &str,
     new_button: &Button,
     recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    next_tab_location: &Rc<RefCell<Option<ClosedFilesTab>>>,
 ) {
     let title=Label::new(Some("Rete"));
     title.set_tooltip_text(Some(uri));
     let child=gio_remote::create(uri,title.clone());
-    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button,recently_closed);
+    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button,recently_closed,next_tab_location);
 }
 /// Shared Nautilus-style tab bar for local and GVfs pages. The GTK Notebook
 /// still owns actual pages, while the compact headerbar renders their handles.
@@ -2777,6 +2789,7 @@ fn append_file_page(
     icon_name: &str,
     new_button: &Button,
     recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
+    next_tab_location: &Rc<RefCell<Option<ClosedFilesTab>>>,
 ) {
     let tab = GtkBox::new(Orientation::Horizontal, 2);
     tab.add_css_class("files-top-tab");
@@ -2838,6 +2851,7 @@ fn append_file_page(
     let weak_new=new_button.downgrade();
     let weak_headers=Rc::downgrade(headers);
     let closed_for_actions=recently_closed.clone();
+    let next_for_actions=next_tab_location.clone();
     let dispatch:Rc<dyn Fn(FilesTabAction)>=Rc::new(move |action|{
         let (Some(pages),Some(strip),Some(window),Some(page),Some(headers))=(
             weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
@@ -2860,7 +2874,7 @@ fn append_file_page(
             },
             FilesTabAction::RestoreClosed=>{
                 if let Some(button)=weak_new.upgrade(){
-                    reopen_closed_files_tab(&closed_for_actions,&button);
+                    reopen_closed_files_tab(&closed_for_actions,&next_for_actions,&button);
                 }
             },
             FilesTabAction::MoveToWindow=>{
