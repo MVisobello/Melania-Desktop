@@ -22,6 +22,11 @@ struct Client {
     xdg_acked:bool,
     buffer_released:bool,
     frame_done_count:u32,
+    dynamic_xdg_resize:bool,
+    resize_requested_a:Option<(usize,usize)>,
+    resize_requested_b:Option<(usize,usize)>,
+    resize_acked_a:bool,
+    resize_acked_b:bool,
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Client {
@@ -44,18 +49,42 @@ impl Dispatch<xdg_wm_base::XdgWmBase,()> for Client {
         if let xdg_wm_base::Event::Ping{serial}=event {wm.pong(serial);}
     }
 }
-impl Dispatch<xdg_surface::XdgSurface,()> for Client {
+impl Dispatch<xdg_surface::XdgSurface,u8> for Client {
     fn event(state:&mut Self,surface:&xdg_surface::XdgSurface,
-             event:xdg_surface::Event,_:&(),_:&Connection,_:&QueueHandle<Self>) {
+             event:xdg_surface::Event,slot:&u8,_:&Connection,_:&QueueHandle<Self>) {
         if let xdg_surface::Event::Configure{serial}=event {
+            // ACK the actual xdg_surface serial, never merely the paired
+            // xdg_toplevel size notification.
             surface.ack_configure(serial);
             state.xdg_acked=true;
+            if state.dynamic_xdg_resize {
+                if *slot==1 && state.resize_requested_a.is_some() {
+                    state.resize_acked_a=true;
+                } else if *slot==2 && state.resize_requested_b.is_some() {
+                    state.resize_acked_b=true;
+                }
+            }
         }
     }
 }
-impl Dispatch<xdg_toplevel::XdgToplevel,()> for Client {
-    fn event(_: &mut Self,_:&xdg_toplevel::XdgToplevel,_:xdg_toplevel::Event,
-             _:&(),_:&Connection,_:&QueueHandle<Self>){}
+impl Dispatch<xdg_toplevel::XdgToplevel,u8> for Client {
+    fn event(state:&mut Self,_:&xdg_toplevel::XdgToplevel,
+             event:xdg_toplevel::Event,slot:&u8,_:&Connection,_:&QueueHandle<Self>) {
+        if state.dynamic_xdg_resize {
+            if let xdg_toplevel::Event::Configure{width,height,..}=event {
+                if width>0 && height>0 {
+                    let requested=(width as usize,height as usize);
+                    match *slot {
+                        1=>{state.resize_requested_a=Some(requested);
+                            state.resize_acked_a=false;},
+                        2=>{state.resize_requested_b=Some(requested);
+                            state.resize_acked_b=false;},
+                        _=>{}
+                    }
+                }
+            }
+        }
+    }
 }
 impl Dispatch<wl_compositor::WlCompositor,()> for Client {
     fn event(_: &mut Self,_:&wl_compositor::WlCompositor,_:wl_compositor::Event,
@@ -109,6 +138,8 @@ fn main()->Result<(),Box<dyn Error>> {
     let qh=queue.handle();
     let _registry=connection.display().get_registry(&qh,());
     let mut state=Client::default();
+    state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
     queue.roundtrip(&mut state)?;
     queue.roundtrip(&mut state)?;
     if !state.output_mode_received {
@@ -118,8 +149,8 @@ fn main()->Result<(),Box<dyn Error>> {
     let wm=state.wm.take().ok_or("xdg_wm_base missing")?;
     let shm=state.shm.take().ok_or("wl_shm missing")?;
     let first=compositor.create_surface(&qh,());
-    let first_xdg=wm.get_xdg_surface(&first,&qh,());
-    let first_top=first_xdg.get_toplevel(&qh,());
+    let first_xdg=wm.get_xdg_surface(&first,&qh,1u8);
+    let first_top=first_xdg.get_toplevel(&qh,1u8);
     first_top.set_title("Melania QEMU retained continuous A".into());
     first.commit();
     for _ in 0..5 {
@@ -129,8 +160,8 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.xdg_acked {return Err("first xdg configure not received".into());}
     state.xdg_acked=false;
     let second=compositor.create_surface(&qh,());
-    let second_xdg=wm.get_xdg_surface(&second,&qh,());
-    let second_top=second_xdg.get_toplevel(&qh,());
+    let second_xdg=wm.get_xdg_surface(&second,&qh,2u8);
+    let second_top=second_xdg.get_toplevel(&qh,2u8);
     second_top.set_title("Melania QEMU retained continuous B".into());
     second.commit();
     for _ in 0..5 {
@@ -152,13 +183,42 @@ fn main()->Result<(),Box<dyn Error>> {
     }
     for index in 1..=12u32 {
         let surface=if index%2==1 {&first} else {&second};
-        // A and B truly replace their wl_shm buffers with smaller images.
-        // The old 400x240 / 280x200 pixels must be erased by compositing,
-        // not left in VRAM after frame7 / frame8.
+        // Frames 7 and 8 must honor the compositor's xdg_toplevel.configure
+        // dimensions and the matching xdg_surface.ack_configure serial.
+        // No buffer from the smaller geometry is submitted beforehand.
+        if dynamic && state.dynamic_xdg_resize && (index==7 || index==8) {
+            let deadline=Instant::now()+Duration::from_secs(10);
+            loop {
+                let done=if index==7 {state.resize_acked_a}
+                         else {state.resize_acked_b};
+                if done {break;}
+                if Instant::now()>deadline {
+                    return Err("xdg resize configure/ACK roundtrip timed out".into());
+                }
+                queue.roundtrip(&mut state)?;
+            }
+            let size=if index==7 {state.resize_requested_a}
+                     else {state.resize_requested_b};
+            let expected=if index==7 {(320,192)} else {(220,180)};
+            if size!=Some(expected) {
+                return Err(format!("xdg configure geometry mismatch at frame {index}").into());
+            }
+            println!("MELANIA_NATIVE_CLIENT_XDG_RESIZE_ACK_{}=true",
+                     if index==7 {"A"} else {"B"});
+            std::io::stdout().flush()?;
+        }
+        // Both clients replace their old wl_shm content with the requested
+        // geometry and the CPU compositor clears the old pixels in QMP.
         let (client_w,client_h)=if dynamic {
             if index%2==1 {
-                if index<7 {(400usize,240usize)} else {(320usize,192usize)}
-            } else if index<8 {(280usize,200usize)} else {(220usize,180usize)}
+                if index<7 {(400usize,240usize)}
+                else if state.dynamic_xdg_resize {
+                    state.resize_requested_a.ok_or("unconfigured xdg window A")?
+                } else {(320usize,192usize)}
+            } else if index<8 {(280usize,200usize)}
+            else if state.dynamic_xdg_resize {
+                state.resize_requested_b.ok_or("unconfigured xdg window B")?
+            } else {(220usize,180usize)}
         } else {(W,H)};
         let mut pixels=vec![0u8;client_w*client_h*4];
         let red=(30+(index*17)%200) as u8;
@@ -256,8 +316,8 @@ fn main()->Result<(),Box<dyn Error>> {
         // must recycle stable slot 1 without moving the retained B window.
         state.xdg_acked=false;
         let reopened=compositor.create_surface(&qh,());
-        let reopened_xdg=wm.get_xdg_surface(&reopened,&qh,());
-        let reopened_top=reopened_xdg.get_toplevel(&qh,());
+        let reopened_xdg=wm.get_xdg_surface(&reopened,&qh,3u8);
+        let reopened_top=reopened_xdg.get_toplevel(&qh,3u8);
         reopened_top.set_title("Melania QEMU continuous reopened A".into());
         reopened.commit();
         for _ in 0..5 {
