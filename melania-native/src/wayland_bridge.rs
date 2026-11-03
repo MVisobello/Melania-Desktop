@@ -238,6 +238,13 @@ impl BridgeState {
         }
         self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
         self.presented_layout_generation=planned.generation;
+        if self.dynamic_pointer_proof_mode && self.continuous_frame_count==12 {
+            // Unique *post-ACK* signal: prior scenarios in this same QEMU
+            // guest also present frame 12, so the host must not use a
+            // generic ordinal to inject input into the wrong test.
+            println!("MELANIA_NATIVE_DYNAMIC_POINTER_READY_AFTER_KMS12=true");
+            std::io::stdout().flush()?;
+        }
         if self.dynamic_pointer_proof_mode && self.continuous_frame_count==13 {
             let (x,y,width,height)=self.dynamic_scene.geometry(2)
                 .ok_or("QMP pointer drag lost resized client B")?;
