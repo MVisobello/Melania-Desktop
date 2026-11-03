@@ -1,0 +1,1 @@
+Stage67 removes hard-coded 1280x800 bounds from the pointer interaction model while preserving that exact QEMU default. New runtime-output constructor validates a 96x72–16384x16384 size; resizing output cancels active grabs so stale coordinates cannot drag another window. Invalid mode transitions preserve current state. Rust tests cover 640x480 and 1920x1080 and misuse.
