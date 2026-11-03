@@ -27,7 +27,10 @@ class ContinuousQmpPixels(unittest.TestCase):
         self.assertIn('MELANIA_QEMU_CONTINUOUS_FRAME12_PIXELS_VERIFIED=true',HOST)
         self.assertIn('continuous_capture_code',HOST)
         self.assertIn('tail -n +1 -f -s 0.05 "$continuous_kms_log" > /dev/ttyS0',GUEST)
-        self.assertIn('if index==6 || index==11 {2500} else {350}',RECEIVER)
+        # Additional VM-only capture holds may be inserted for later frames.
+        # Verify that the original seven/twelve framebuffer holds survive.
+        self.assertIn('index==6 || index==11',RECEIVER)
+        self.assertIn('{2500} else {350}',RECEIVER)
         self.assertIn('wait_for_fb(&card,crtc_handle,framebuffer)?',RECEIVER)
 
 if __name__=="__main__":

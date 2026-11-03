@@ -230,13 +230,20 @@ fn run()->Result<(),Box<dyn Error>> {
                 println!("MELANIA_RUST_CONTINUOUS_TWO_WINDOW_FRAME_VISIBLE={}",index+1);
                 std::io::stdout().flush()?;
             }
+            let reopen=std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN")
+                .as_deref()==Ok("YES_QEMU_VM");
+            if reopen && (index+1==13 || index+1==14) {
+                println!("MELANIA_RUST_CONTINUOUS_REOPEN_FRAME_VISIBLE={}",index+1);
+                std::io::stdout().flush()?;
+            }
             previous=Some(pixels);
             previous_identity=Some((epoch,sequence,generation));
             // Short observable hold for QMP; no 5-second delay per frame.
             // QMP needs time to capture the actual framebuffer on the
             // seventh and twelfth presentations (not just its FB_ID).
             thread::sleep(Duration::from_millis(
-                if index==6 || index==11 {2500} else {350}
+                if (reopen && (index==12 || index==13)) ||
+                   index==6 || index==11 {2500} else {350}
             ));
             if index+1==total {rollback.restore()?;}
             let mut ack=[0u8;29];
