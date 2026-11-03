@@ -27,6 +27,8 @@ stream_kms="$root/target/debug/qemu-rust-kms-stream"
 continuous_kms="$root/target/debug/qemu-rust-kms-continuous"
 continuous_client="$root/target/debug/qemu-continuous-client"
 two_continuous_client="$root/target/debug/qemu-continuous-two-windows"
+layer_client="$root/target/debug/qemu-layer-panel-client"
+[[ -x "$layer_client" ]] || deny 'QEMU real layer-shell client missing'
 [[ -x "$two_continuous_client" ]] ||
   deny 'build real two-window continuous Wayland client first'
 [[ -x "$continuous_kms" && -x "$continuous_client" ]] ||
@@ -65,6 +67,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QEMU real two-window continuous pixel verifier missing'
 [[ -f "$root/scripts/capture-qemu-continuous-reopen.py" ]] ||
   deny 'QEMU real close/reopen frame13/14 screenshot verifier missing'
+[[ -f "$root/scripts/capture-qemu-real-layer-panel.py" ]] ||
+  deny 'independent QMP layer pixel verifier missing'
 [[ -f "$root/scripts/capture-qemu-continuous-dynamic.py" ]] ||
   deny 'QEMU real variable-size two-window pixel verifier missing'
 [[ -f "$root/scripts/inject-qemu-dynamic-pointer.py" &&
@@ -92,7 +96,7 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-layer-panel-client=$layer_client"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -219,6 +223,11 @@ python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --out-dir "$report" --timeout 950 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
+python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/real-layer-panel-frame12.ppm" --timeout 950 \
+  > "$report/qmp-real-layer-panel.log" 2>&1 &
+layer_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -273,9 +282,14 @@ wait "$dynamic_pointer_capture_pid"
 dynamic_pointer_capture_code=$?
 wait "$managed_role_capture_pid"
 managed_role_capture_code=$?
+wait "$layer_capture_pid"
+layer_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$layer_capture_code" -ne 0 ]] ||
+    ! grep -q '^MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true' "$report/qmp-real-layer-panel.log" ||
+    ! grep -q '^MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true' "$serial" ||
+    ! test -s "$report/real-layer-panel-frame12.ppm" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FOUR_FRAMES_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME3_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME5_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
@@ -436,6 +450,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-close-frame.log" || true
   tail -n 30 "$report/qmp-reopen-frame.log" || true
   tail -n 30 "$report/qmp-managed-xdg-roles.log" || true
+  tail -n 30 "$report/qmp-real-layer-panel.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -445,6 +460,7 @@ printf '%s\n' 'MELANIA_VM_NATIVE_TWO_CONTINUOUS_WINDOWS_QMP=true' >> "$report/re
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_CLOSE_REOPEN_14_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_VARIABLE_CLIENT_SIZES_GPU_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_MANAGED_XDG_FOUR_QMP_FRAMES=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_NATIVE_REAL_LAYER_SHELL_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_WAYLAND_REAL_INPUT_DELIVERY=true' >> "$report/result.txt"
