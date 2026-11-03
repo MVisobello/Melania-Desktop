@@ -186,3 +186,4 @@ pub mod vt_handoff;
 pub mod session_lock;
 pub mod kms_watchdog;
 pub mod managed_window;
+pub mod layer_surface_layout;
