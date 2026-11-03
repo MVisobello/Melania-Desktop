@@ -72,6 +72,20 @@ La prova annidata può essere avviata da un Linux grafico esistente:
 bash scripts/melania-session --nested
 ```
 
+Per un avvio più rapido si aprono soltanto desktop e barra; Melania Files e
+Impostazioni rimangono disponibili tramite Start. Per la modalità dimostrativa
+che apre anche entrambe le applicazioni (utile per screenshot e test):
+
+```sh
+MELANIA_PREVIEW_OPEN_APPS=1 bash scripts/melania-session --nested
+```
+
+Per misurare i tempi di costruzione delle parti GTK della barra e dei popup,
+aggiungere `MELANIA_PROFILE_START=1` al comando: il pannello scriverà
+`MELANIA_PANEL_BOOT_MS` nei log. Questi tempi non comprendono il tempo
+di compilazione Cargo né quello di avvio del compositore.
+
+
 Per aggiungerla facoltativamente al menu applicazioni **dell'utente**:
 
 ```sh

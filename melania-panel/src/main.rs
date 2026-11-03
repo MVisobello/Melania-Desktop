@@ -157,12 +157,35 @@ fn taskbar_app_icon(app_id: &str) -> Image {
     if lower.contains("melania") && lower.contains("settings") {
         return icon_with_fallback("preferences-system","applications-system");
     }
-    if let Some(info)=gio::AppInfo::all().into_iter().find(|app| {
-        app.id().as_deref()==Some(app_id)
-            || app.id().as_deref()==Some(&format!("{app_id}.desktop"))
-    }) {
-        if let Some(icon)=info.icon() {return Image::from_gicon(&icon);}
+    // Prefer the current GTK theme, including the bundled Melania icon pack:
+    // the theme can resolve most app IDs without enumerating desktop launchers.
+    if gdk::Display::default().map(|display|
+        gtk::IconTheme::for_display(&display).has_icon(app_id)
+    ).unwrap_or(false) {
+        return Image::from_icon_name(app_id);
     }
+    // A full GIO desktop-app enumeration is expensive. Taskbar refreshes
+    // must not repeat it for each window, especially during session startup.
+    // Cache successful icon lookups on the GTK main thread for this session.
+    thread_local! {
+        static ICON_CACHE: RefCell<std::collections::HashMap<String, Option<gio::Icon>>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+    let cached=ICON_CACHE.with(|cache| {
+        if let Some(icon)=cache.borrow().get(app_id) {return icon.clone();}
+        let desktop_id=format!("{app_id}.desktop");
+        let icon=gio::AppInfo::all().into_iter().find(|app| {
+            app.id().as_deref()==Some(app_id)
+                || app.id().as_deref()==Some(desktop_id.as_str())
+        }).and_then(|app|app.icon());
+        // Do not cache misses: an application installed during this session
+        // can still gain its correct icon on the next window-list update.
+        if icon.is_some() {
+            cache.borrow_mut().insert(app_id.to_owned(),icon.clone());
+        }
+        icon
+    });
+    if let Some(icon)=cached {return Image::from_gicon(&icon);}
     icon_with_fallback(app_id,"application-x-executable")
 }
 
@@ -1857,7 +1880,11 @@ fn install_start_hotkey_listener(
 }
 
 fn build(app:&Application){
+    // Measure actual GTK construction costs to guide further startup work.
+    // Measurements refer to activation, not total compositor boot time.
+    let startup = Instant::now();
     setup_melania_icon_theme();
+    let theme_ready = startup.elapsed();
     if !gtk4_layer_shell::is_supported() {
         eprintln!("Melania Panel requires Wayland with zwlr_layer_shell_v1 (try the nested compositor)");
         return;
@@ -1871,17 +1898,35 @@ fn build(app:&Application){
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
     let start=start_window(app);
+    let start_ready = startup.elapsed();
     let notifications=notifications_window(app);
+    let notifications_ready = startup.elapsed();
     let quick=quick_window(app,&notifications);
+    let quick_ready = startup.elapsed();
     let calendar=calendar_window(app);
+    let calendar_ready = startup.elapsed();
     install_start_hotkey_listener(app,&start,&quick,&notifications,&calendar);
     // Do not present popup windows until the user clicks.
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);
+    let taskbar_ready = startup.elapsed();
     if let Some(content)=bar.child().and_then(|child|child.downcast::<GtkBox>().ok()) {
         panel_preferences::attach_live_preferences(
             &bar,&content,&start,&quick,&notifications,&calendar);
     }
     bar.present();
+    if std::env::var_os("MELANIA_PROFILE_START").is_some() {
+        eprintln!(
+            "MELANIA_PANEL_BOOT_MS theme={} start={} notifications={} quick={} calendar={} taskbar={} present={} total={}",
+            theme_ready.as_millis(),
+            (start_ready-theme_ready).as_millis(),
+            (notifications_ready-start_ready).as_millis(),
+            (quick_ready-notifications_ready).as_millis(),
+            (calendar_ready-quick_ready).as_millis(),
+            (taskbar_ready-calendar_ready).as_millis(),
+            (startup.elapsed()-taskbar_ready).as_millis(),
+            startup.elapsed().as_millis()
+        );
+    }
     // CI-only: show the *real* launcher in the nested compositor screenshot.
     // Never open Start automatically in a normal user session.
     if std::env::var_os("MELANIA_SMOKE_OPEN_START").as_deref() == Some(std::ffi::OsStr::new("1")) {

@@ -44,9 +44,18 @@ dbus-run-session -- bash -euo pipefail -c '
     wait "$NOTIFY_PID" 2>/dev/null || true
   }
   trap cleanup EXIT
-  "$MELANIA_ROOT/target/debug/melania-compositor" \
-    --command "$MELANIA_ROOT/target/debug/melania-desktop-surface" \
-    --command "$MELANIA_ROOT/target/debug/melania-panel" \
-    --command "$MELANIA_ROOT/target/debug/melania-files" \
-    --command "$MELANIA_ROOT/target/debug/melania-settings"
+  # Desktop and panel are the only essential startup clients. Opening Files
+  # and Settings on every boot delays first interaction and is not normal DE
+  # behavior. Keep the previous four-window layout opt-in for visual tests.
+  launch_args=(
+    --command "$MELANIA_ROOT/target/debug/melania-desktop-surface"
+    --command "$MELANIA_ROOT/target/debug/melania-panel"
+  )
+  if [[ "${MELANIA_PREVIEW_OPEN_APPS:-0}" == "1" ]]; then
+    launch_args+=(
+      --command "$MELANIA_ROOT/target/debug/melania-files"
+      --command "$MELANIA_ROOT/target/debug/melania-settings"
+    )
+  fi
+  "$MELANIA_ROOT/target/debug/melania-compositor" "${launch_args[@]}"
 '
