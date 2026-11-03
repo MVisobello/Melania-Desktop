@@ -1,0 +1,85 @@
+name: Melania exact desktop screenshot — isolated preview
+on:
+  push:
+    branches: [test/real-screen-stage78-20261103]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  current-desktop-screenshot:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: melania-linux-binaries
+          path: melania-prebuilt
+          run-id: 41715030971
+          github-token: \${{ github.token }}
+      - name: Install GTK and software display dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xauth libgtk-4-dev libgtk4-layer-shell-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libwayland-dev libxkbcommon-dev libgbm-dev scrot x11-utils python3-pil dbus dbus-x11
+      - name: Install actual Melania icon theme
+        run: |
+          python3 tools/build_melania_fluent_themes.py --output dist/melania-fluent-icons
+          XDG_DATA_HOME="\${{ runner.temp }}/melania-data" bash scripts/install-melania-fluent-icons.sh dist/melania-fluent-icons
+      - name: Launch real compositor GTK desktop panel Files Settings and capture pixels
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+          WINIT_UNIX_BACKEND: x11
+          GSK_RENDERER: cairo
+          XDG_DATA_HOME: \${{ runner.temp }}/melania-data
+          MELANIA_DEBUG_RENDER: '1'
+          MELANIA_SMOKE_OPEN_START: '1'
+        run: |
+          set -euo pipefail
+          chmod +x melania-prebuilt/*
+          mkdir -p reports
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' bash -euo pipefail -c '
+            export XDG_RUNTIME_DIR="$(mktemp -d)"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            export XDG_CONFIG_HOME="$(mktemp -d)"
+            mkdir -p "$HOME/Desktop"
+            root="$(pwd)"
+            "$root/melania-prebuilt/melania-compositor" \
+              --command "$root/melania-prebuilt/melania-desktop-surface" \
+              --command "$root/melania-prebuilt/melania-panel" \
+              --command "$root/melania-prebuilt/melania-files" \
+              --command "$root/melania-prebuilt/melania-settings" \
+              >"$root/reports/compositor.log" 2>&1 &
+            pid=$!
+            trap "kill $pid 2>/dev/null || true" EXIT
+            ready=0
+            for i in $(seq 1 100); do
+              kill -0 "$pid" 2>/dev/null || { cat "$root/reports/compositor.log"; exit 1; }
+              if grep -Eq "MELANIA_RENDER .*xdg=[2-9]" "$root/reports/compositor.log"; then
+                ready=1
+                break
+              fi
+              sleep .3
+            done
+            if [ "$ready" != 1 ]; then echo "NO_REAL_GTK_RENDER"; tail -90 "$root/reports/compositor.log"; exit 1; fi
+            sleep 4
+            scrot "$root/reports/melania-current-stage78-20261103.png"
+            python3 - "$root/reports/melania-current-stage78-20261103.png" <<"PY"
+          from PIL import Image, ImageStat
+          import sys
+          im=Image.open(sys.argv[1]).convert("RGB")
+          st=ImageStat.Stat(im)
+          print("IMAGE_SIZE",im.size,"CHANNEL_STDEV",st.stddev)
+          assert im.size == (1280,800)
+          assert max(st.stddev)>12, "Screenshot looks blank"
+          PY
+          '
+      - name: Upload exact screenshot and diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melania-current-stage78-screenshot
+          path: |
+            reports/melania-current-stage78-20261103.png
+            reports/compositor.log
+          if-no-files-found: warn
