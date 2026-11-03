@@ -48,6 +48,14 @@ class NativeXdgResizeHandshake(unittest.TestCase):
                         CLIENT.index("let pool=shm.create_pool(file.as_fd()"))
         self.assertIn('get_xdg_surface(&first,&qh,1u8)',CLIENT)
         self.assertIn('get_xdg_surface(&second,&qh,2u8)',CLIENT)
+        self.assertIn('let expected=if index==7 {(320,192)} else {(220,180)};',CLIENT)
+        self.assertIn('if size!=Some(expected)',CLIENT)
+        self.assertIn('return Err("xdg resize configure/ACK roundtrip timed out".into());',CLIENT)
+        # The real xdg_surface ACK handler must execute before the next
+        # wl_shm buffer attachment; other modes still use their prior path.
+        ack=CLIENT.index("surface.ack_configure(serial)")
+        attach=CLIENT.index("surface.attach(Some(&buffer),0,0);")
+        self.assertLess(ack,attach)
 
     def test_experiment_remains_explicit_and_guest_requires_both_acks(self):
         self.assertIn('MELANIA_NATIVE_XDG_RESIZE',BRIDGE)
