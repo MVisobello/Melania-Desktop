@@ -18,7 +18,10 @@ class NativeWindowLifetime(unittest.TestCase):
     def test_qemu_scene_uses_stable_bounded_window_ids(self):
         self.assertIn("pub mod window_slots;",LIB)
         self.assertIn("known_window_surfaces:WindowSlots<WlSurface>",BRIDGE)
-        self.assertIn("known_window_surfaces:WindowSlots::default()",BRIDGE)
+        # Dynamic QEMU scenes use sixteen slots; fixed probes retain two.
+        self.assertIn("known_window_surfaces:if std::env::var",BRIDGE)
+        self.assertIn("WindowSlots::with_capacity(16)",BRIDGE)
+        self.assertIn("} else {WindowSlots::default()}",BRIDGE)
         self.assertIn("known_window_surfaces.register(surface.clone())",BRIDGE)
         self.assertIn("known_window_surfaces.get(key)?.clone()",BRIDGE)
         self.assertIn("const MAX_SLOTS:usize=2;",REGISTRY)

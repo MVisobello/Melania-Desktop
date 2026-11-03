@@ -1,0 +1,1 @@
+In the explicitly gated QEMU dynamic scene only, Stage65 raises Wayland surface slot and pending KMS receipt capacity from 2 to 16. This matches DynamicWindowScene::MAX_DYNAMIC_WINDOWS. Fixed QEMU experiments retain their two-client limits. Existing placement rules are not a full window manager; Xwayland, login and real multi-output remain future work.
