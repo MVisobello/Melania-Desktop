@@ -19,7 +19,8 @@ class FilesIntegration015(unittest.TestCase):
 
     def test_cut_is_local_atomic_no_replace(self):
         self.assertIn('pending.filter(|p|p.is_move)', SOURCE)
-        self.assertIn('transfer::move_local(&path,&target)', SOURCE)
+        self.assertIn('transfer::move_local(path,', SOURCE)
+        self.assertIn('start_local_mutation(&state,LocalMutationKind::Move', SOURCE)
         self.assertIn('source.set_actions(gdk::DragAction::COPY)', SOURCE)
         self.assertIn('gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY)', SOURCE)
         self.assertNotIn('gdk::DragAction::MOVE)', SOURCE)
@@ -30,8 +31,10 @@ class FilesIntegration015(unittest.TestCase):
         self.assertIn('gio_backend::make_folder(&folder_uri,name)', SOURCE)
         self.assertIn('gio_backend::create_blank_file(&folder_uri,&name)', SOURCE)
         self.assertIn('trash:///', SOURCE)
-        self.assertNotIn('fs::remove_file(', SOURCE)
-        self.assertNotIn('fs::remove_dir_all(', SOURCE)
+        production = SOURCE.split('#[cfg(test)]', 1)[0]
+        self.assertNotIn('fs::remove_file(', production)
+        self.assertNotIn('fs::remove_dir_all(', production)
+        self.assertIn('start_local_mutation(&state,LocalMutationKind::Trash', production)
 
     def test_theme_and_localized_folders(self):
         self.assertIn('fn xdg_user_directory(', SOURCE)
