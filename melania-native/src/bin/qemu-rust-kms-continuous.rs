@@ -230,6 +230,13 @@ fn run()->Result<(),Box<dyn Error>> {
                 println!("MELANIA_RUST_CONTINUOUS_TWO_WINDOW_FRAME_VISIBLE={}",index+1);
                 std::io::stdout().flush()?;
             }
+            if std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC")
+                    .as_deref()==Ok("YES_QEMU_VM") && index+1==total {
+                // QMP must capture two different-sized real client
+                // framebuffers while the virtual CRTC still scans them out.
+                println!("MELANIA_RUST_CONTINUOUS_DYNAMIC_FRAME_VISIBLE={}",index+1);
+                std::io::stdout().flush()?;
+            }
             let reopen=std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN")
                 .as_deref()==Ok("YES_QEMU_VM");
             if reopen && (index+1==13 || index+1==14) {

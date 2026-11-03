@@ -52,6 +52,18 @@ impl WindowPixels {
         }
         Ok(Self {width,height,alpha,data})
     }
+    /// Convert the fully validated, owned Wayland wl_shm copy from Stage51.
+    /// No borrowed pool mapping survives this conversion.
+    pub fn from_owned_shm(image:crate::owned_shm::OwnedClientPixels)
+        ->Result<Self,DynamicSceneError>
+    {
+        let alpha=match image.alpha {
+            crate::owned_shm::AlphaType::Opaque=>DynamicAlpha::Opaque,
+            crate::owned_shm::AlphaType::Premultiplied=>DynamicAlpha::Premultiplied,
+        };
+        Self::new(image.width,image.height,alpha,image.data)
+    }
+
     pub fn width(&self)->usize {self.width}
     pub fn height(&self)->usize {self.height}
     pub fn alpha(&self)->DynamicAlpha {self.alpha}

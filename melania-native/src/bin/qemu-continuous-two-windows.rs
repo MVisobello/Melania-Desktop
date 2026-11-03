@@ -143,19 +143,46 @@ fn main()->Result<(),Box<dyn Error>> {
 
     // A1 B2 A3 B4 ... A11 B12. A's old image survives B's commit.
     // Each client owns an independent wl_shm buffer and wl_surface.
+    let dynamic=std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if dynamic {
+        println!("MELANIA_NATIVE_CONTINUOUS_DYNAMIC_SIZES=320x192;220x180");
+        println!("MELANIA_NATIVE_CONTINUOUS_DYNAMIC_SHRINK=400x240->320x192;280x200->220x180");
+        std::io::stdout().flush()?;
+    }
     for index in 1..=12u32 {
         let surface=if index%2==1 {&first} else {&second};
-        let mut pixels=vec![0u8;W*H*4];
+        // A and B truly replace their wl_shm buffers with smaller images.
+        // The old 400x240 / 280x200 pixels must be erased by compositing,
+        // not left in VRAM after frame7 / frame8.
+        let (client_w,client_h)=if dynamic {
+            if index%2==1 {
+                if index<7 {(400usize,240usize)} else {(320usize,192usize)}
+            } else if index<8 {(280usize,200usize)} else {(220usize,180usize)}
+        } else {(W,H)};
+        let mut pixels=vec![0u8;client_w*client_h*4];
         let red=(30+(index*17)%200) as u8;
         let green=(40+(index*31)%190) as u8;
         let blue=(25+(index*43)%210) as u8;
+        // A second independent proof: B uses actual premultiplied Wayland
+        // ARGB8888 at half opacity. The generic renderer must blend ONCE.
+        let translucent=dynamic && index%2==0;
+        let premul=|component:u8|((u16::from(component)*128+127)/255) as u8;
         for pixel in pixels.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&[blue,green,red,0]);
+            if translucent {
+                pixel.copy_from_slice(&[
+                    premul(blue),premul(green),premul(red),128
+                ]);
+            } else {
+                pixel.copy_from_slice(&[blue,green,red,0]);
+            }
         }
         // The same disposable VM runs Stage48 before Stage49. Use a distinct
         // source filename in the reopen scenario: create_new must not
         // overwrite earlier client-owned wl_shm fixtures.
-        let path=if std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
+        let path=if dynamic {
+            format!("/run/melania-native-qemu/continuous-dynamic-client-{index}.bgra")
+        } else if std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
             .as_deref()==Ok("YES_QEMU_VM") {
             format!("/run/melania-native-qemu/continuous-reopen-seed-{index}.bgra")
         } else {
@@ -166,12 +193,15 @@ fn main()->Result<(),Box<dyn Error>> {
         file.sync_all()?;
         let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
         let buffer=pool.create_buffer(
-            0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
+            0,client_w as i32,client_h as i32,
+            (client_w*4) as i32,
+            if translucent {wl_shm::Format::Argb8888} else {wl_shm::Format::Xrgb8888},
+            &qh,()
         );
         state.buffer_released=false;
         let _callback=surface.frame(&qh,());
         surface.attach(Some(&buffer),0,0);
-        surface.damage_buffer(0,0,W as i32,H as i32);
+        surface.damage_buffer(0,0,client_w as i32,client_h as i32);
         surface.commit();
         let deadline=Instant::now()+Duration::from_secs(10);
         while !state.buffer_released || state.frame_done_count<index {
@@ -191,6 +221,10 @@ fn main()->Result<(),Box<dyn Error>> {
         pool.destroy();
     }
     println!("MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_12_FRAMES_PASS=true");
+    if dynamic {
+        println!("MELANIA_NATIVE_DYNAMIC_TWO_SIZES_12_KMS_FRAMES_PASS=true");
+        println!("MELANIA_NATIVE_DYNAMIC_PREMULTIPLIED_ARGB_CLIENT_PASS=true");
+    }
     std::io::stdout().flush()?;
     let reopen=std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");

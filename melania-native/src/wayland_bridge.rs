@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -97,6 +97,10 @@ struct BridgeState {
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
+    // Stage53 is opt-in within disposable QEMU. The original two fixed
+    // window scene and its verified KMS experiments remain unchanged.
+    dynamic_window_mode:bool,
+    dynamic_scene:DynamicWindowScene,
     window_interaction:WindowInteraction,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
@@ -150,7 +154,12 @@ impl BridgeState {
     // wl_surface.frame callback or buffer.release is emitted.
     fn note_scene_change(&mut self) {
         if self.async_kms_mode || self.continuous_kms_mode {
-            self.continuous_redraw.scene_changed(self.multi_scene.layout_generation());
+            let generation=if self.dynamic_window_mode {
+                self.dynamic_scene.generation()
+            } else {
+                self.multi_scene.layout_generation()
+            };
+            self.continuous_redraw.scene_changed(generation);
         }
     }
 
@@ -161,11 +170,21 @@ impl BridgeState {
             return Ok(());
         }
         let Some(planned)=self.continuous_redraw.next_frame() else {return Ok(());};
-        if planned.generation!=self.multi_scene.layout_generation() {
+        let generation=if self.dynamic_window_mode {
+            self.dynamic_scene.generation()
+        } else {
+            self.multi_scene.layout_generation()
+        };
+        if planned.generation!=generation {
             self.continuous_redraw.failed(planned);
             return Err("continuous KMS scene changed during planning".into());
         }
-        let pixels=match self.multi_scene.composite() {
+        let composed=if self.dynamic_window_mode {
+            self.dynamic_scene.composite().map_err(|_|"dynamic scene failed")
+        } else {
+            self.multi_scene.composite().map_err(|_|"fixed scene failed")
+        };
+        let pixels=match composed {
             Ok(pixels)=>pixels,
             Err(_)=>{
                 self.continuous_redraw.failed(planned);
@@ -215,7 +234,12 @@ impl BridgeState {
         self.presented_layout_generation=planned.generation;
         // Keep the proof at the verified FB_ID ACK, since the clients may
         // destroy their xdg_toplevels after receiving frame.done.
-        if self.multi_window_mode && self.multi_scene.window_count()==2 &&
+        let two_visible=if self.dynamic_window_mode {
+            self.dynamic_scene.window_count()==2
+        } else {
+            self.multi_scene.window_count()==2
+        };
+        if self.multi_window_mode && two_visible &&
            self.known_window_surfaces.live_count()==2 {
             if self.continuous_frame_count==12 {
                 self.continuous_two_window_presented=true;
@@ -302,9 +326,17 @@ impl BridgeState {
         if !self.multi_window_mode {
             return self.focused.clone().map(|s|(s,(0.0,0.0).into()));
         }
-        let key=self.multi_scene.hit_test(point.x,point.y)?;
+        let key=if self.dynamic_window_mode {
+            self.dynamic_scene.hit_test(point.x,point.y)?
+        } else {
+            self.multi_scene.hit_test(point.x,point.y)?
+        };
         let surface=self.known_window_surfaces.get(key)?.clone();
-        let (x,y)=self.multi_scene.position(key)?;
+        let (x,y)=if self.dynamic_window_mode {
+            self.dynamic_scene.position(key)?
+        } else {
+            self.multi_scene.position(key)?
+        };
         Some((surface,(f64::from(x),f64::from(y)).into()))
     }
 
@@ -312,7 +344,9 @@ impl BridgeState {
     /// pointer grab. A compositor-only change is not proof of repaint; the
     /// current KMS stream still presents only on subsequent client commits.
     fn apply_window_motion(&mut self,point:Point<f64,Logical>) {
-        if !self.multi_window_mode {return;}
+        // Existing guest drag policy uses the fixed two-window geometry.
+        // Dynamic gestures need independent xdg-shell resize validation.
+        if !self.multi_window_mode || self.dynamic_window_mode {return;}
         let Some((key,rect))=self.window_interaction.motion(point.x,point.y) else {
             return;
         };
@@ -580,26 +614,64 @@ impl CompositorHandler for BridgeState {
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
             if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
-                let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
-                    native_client_frame::copy_client_shm(ptr,len,metadata)
-                });
-                let pixels=match imported {
-                    Ok(Ok(pixels))=>pixels,
-                    _=>{
-                        eprintln!("continuous QEMU client submitted invalid wl_shm");
+                // The importer owns the snapshot before the Smithay pool
+                // access callback returns. Fixed QEMU uses its original
+                // 360x224 checks; the separate dynamic VM path uses Stage51.
+                if self.dynamic_window_mode {
+                    let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                        melania_native::owned_shm::copy_bounded_client_shm(ptr,len,metadata)
+                    });
+                    let pixels=match imported {
+                        Ok(Ok(image))=>match WindowPixels::from_owned_shm(image) {
+                            Ok(pixels)=>pixels,
+                            Err(_)=>{
+                                eprintln!("dynamic QEMU client has invalid image");
+                                buffer.release();
+                                return;
+                            }
+                        },
+                        _=>{
+                            eprintln!("dynamic QEMU client submitted invalid wl_shm");
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    let key=match self.known_window_surfaces.register(surface.clone()) {
+                        Ok(key)=>key,
+                        Err(_)=>{
+                            eprintln!("dynamic QEMU client has no scene slot");
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    let (x,y)=if key==1 {(160,120)} else {(650,190)};
+                    if self.dynamic_scene.upsert(key,x,y,pixels).is_err() {
+                        eprintln!("dynamic QEMU client image rejected");
+                        buffer.release();
                         return;
                     }
-                };
-                let key=match self.known_window_surfaces.register(surface.clone()) {
-                    Ok(key)=>key,
-                    Err(_)=>{
-                        eprintln!("continuous QEMU client has no free scene slot");
+                } else {
+                    let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                        native_client_frame::copy_client_shm(ptr,len,metadata)
+                    });
+                    let pixels=match imported {
+                        Ok(Ok(pixels))=>pixels,
+                        _=>{
+                            eprintln!("continuous QEMU client submitted invalid wl_shm");
+                            return;
+                        }
+                    };
+                    let key=match self.known_window_surfaces.register(surface.clone()) {
+                        Ok(key)=>key,
+                        Err(_)=>{
+                            eprintln!("continuous QEMU client has no free scene slot");
+                            return;
+                        }
+                    };
+                    if self.multi_scene.upsert(key,pixels).is_err() {
+                        eprintln!("continuous QEMU scene pixels rejected");
                         return;
                     }
-                };
-                if self.multi_scene.upsert(key,pixels).is_err() {
-                    eprintln!("continuous QEMU scene pixels rejected");
-                    return;
                 }
                 // Retain at most one not-yet-submitted client buffer. Its
                 // pixels were copied into the bounded retained scene.
@@ -839,7 +911,11 @@ impl XdgShellHandler for BridgeState {
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             // The retained pixel copy and stable slot belong to this client.
             // Never leave a closed window occupying the limited QEMU scene.
-            let removed=self.multi_scene.remove(key);
+            let removed=if self.dynamic_window_mode {
+                self.dynamic_scene.remove(key)
+            } else {
+                self.multi_scene.remove(key)
+            };
             if removed { self.note_scene_change(); }
             if removed && self.continuous_kms_mode &&
                self.continuous_frame_count<self.continuous_frame_target {
@@ -1137,6 +1213,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         drag_frame_presented:false,two_window_frame_presented:false,
         async_stream:None,async_pending:None,
         multi_scene:MultiWindowScene::default(),
+        dynamic_window_mode:std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        dynamic_scene:DynamicWindowScene::new(1280,800,[58,33,27,0])
+            .expect("bounded disposable QEMU output"),
         window_interaction:WindowInteraction::default(),
         known_window_surfaces:WindowSlots::default(),
         stream:None,
@@ -1205,6 +1285,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if state.continuous_reopen_mode &&
        (!state.continuous_kms_mode || !state.multi_window_mode) {
         return Err("continuous reopen requires two real windows in disposable QEMU".into());
+    }
+    if state.dynamic_window_mode &&
+       (!state.continuous_kms_mode || !state.multi_window_mode ||
+        state.continuous_reopen_mode || !continuous_two_windows) {
+        return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
     }
     if state.multi_window_mode && !state.continuous_kms_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
