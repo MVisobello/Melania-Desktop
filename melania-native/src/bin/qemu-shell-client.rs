@@ -21,6 +21,8 @@ struct Probe {
     xdg_acked:bool,
     layer_acked:bool,
     server_closed_layer:bool,
+    role_size:Option<(i32,i32)>,
+    role_states:Vec<u32>,
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Probe {
@@ -73,8 +75,15 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,()> for Probe {
     }
 }
 impl Dispatch<xdg_toplevel::XdgToplevel,()> for Probe {
-    fn event(state:&mut Self,_:&xdg_toplevel::XdgToplevel,_:xdg_toplevel::Event,
-             _:&(),_:&Connection,_:&QueueHandle<Self>){}
+    fn event(state:&mut Self,_:&xdg_toplevel::XdgToplevel,event:xdg_toplevel::Event,
+              _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let xdg_toplevel::Event::Configure{width,height,states}=event {
+            state.role_size=Some((width,height));
+            state.role_states=states.chunks_exact(4)
+                .map(|bytes|u32::from_ne_bytes([bytes[0],bytes[1],bytes[2],bytes[3]]))
+                .collect();
+        }
+    }
 }
 // wl_compositor, wl_surface and layer_shell have no incoming events here.
 impl Dispatch<wl_compositor::WlCompositor,()> for Probe {
@@ -89,6 +98,32 @@ impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1,()> for Probe {
     fn event(state:&mut Self,_:&zwlr_layer_shell_v1::ZwlrLayerShellV1,
              _:zwlr_layer_shell_v1::Event,_:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
+fn expect_managed_role(
+    events:&mut wayland_client::EventQueue<Probe>,
+    state:&mut Probe,
+    size:(i32,i32),
+    required:Option<xdg_toplevel::State>,
+    forbidden:Option<xdg_toplevel::State>,
+)->Result<(),Box<dyn Error>> {
+    state.xdg_acked=false;
+    for _ in 0..8 {
+        events.roundtrip(state)?;
+        if state.xdg_acked {break;}
+    }
+    if !state.xdg_acked {return Err("managed xdg configure was not ACKed".into());}
+    if state.role_size!=Some(size) {
+        return Err(format!("managed xdg configure size {:?}, expected {:?}",
+                           state.role_size,size).into());
+    }
+    if required.is_some_and(|v|!state.role_states.contains(&(v as u32))) {
+        return Err("managed xdg configure missing required window state".into());
+    }
+    if forbidden.is_some_and(|v|state.role_states.contains(&(v as u32))) {
+        return Err("managed xdg configure advertised incompatible window state".into());
+    }
+    Ok(())
+}
+
 fn main()->Result<(),Box<dyn Error>> {
     let connection=Connection::connect_to_env()?;
     let mut events=connection.new_event_queue::<Probe>();
@@ -126,6 +161,26 @@ fn main()->Result<(),Box<dyn Error>> {
     window_surface.commit();
     panel_surface.commit();
     events.roundtrip(&mut state)?;
+    if std::env::var("MELANIA_NATIVE_MANAGED_XDG").as_deref()==Ok("YES_QEMU_VM") {
+        // A real client, not a synthetic reducer-only test.
+        top.set_maximized();
+        expect_managed_role(&mut events,&mut state,(1280,800),
+            Some(xdg_toplevel::State::Maximized),Some(xdg_toplevel::State::Fullscreen))?;
+        window_surface.commit();
+        top.unset_maximized();
+        expect_managed_role(&mut events,&mut state,(360,224),
+            None,Some(xdg_toplevel::State::Maximized))?;
+        window_surface.commit();
+        top.set_fullscreen(None);
+        expect_managed_role(&mut events,&mut state,(1280,800),
+            Some(xdg_toplevel::State::Fullscreen),Some(xdg_toplevel::State::Maximized))?;
+        window_surface.commit();
+        top.unset_fullscreen();
+        expect_managed_role(&mut events,&mut state,(360,224),
+            None,Some(xdg_toplevel::State::Fullscreen))?;
+        window_surface.commit();
+        println!("MELANIA_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true");
+    }
     println!("MELANIA_NATIVE_XDG_CONFIGURE_ACK=true");
     println!("MELANIA_NATIVE_LAYER_CONFIGURE_ACK=true");
     println!("MELANIA_NATIVE_SHELL_PROTOCOL_CLIENT_PASS=true");
