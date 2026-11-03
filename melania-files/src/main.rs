@@ -1263,7 +1263,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         *browser.thumbnail_pending.borrow_mut()=Some(LocalThumbnailRequest{
             generation:browser.listing_generation.get(),targets:std::mem::take(&mut thumbnail_targets),cancelled,
         });
-        start_local_thumbnail_worker(browser);
+        start_local_thumbnail_worker(&browser);
     }
     if browser.selected_paths.borrow().is_empty() {
         browser.preview_heading.set_text(&caption);
