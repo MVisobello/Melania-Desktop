@@ -16,7 +16,7 @@ jobs:
           name: melania-linux-binaries
           path: melania-prebuilt
           run-id: 41715030971
-          github-token: \${{ github.token }}
+          github-token: ${{ github.token }}
       - name: Install GTK and software display dependencies
         run: |
           sudo apt-get update -qq
@@ -24,14 +24,14 @@ jobs:
       - name: Install actual Melania icon theme
         run: |
           python3 tools/build_melania_fluent_themes.py --output dist/melania-fluent-icons
-          XDG_DATA_HOME="\${{ runner.temp }}/melania-data" bash scripts/install-melania-fluent-icons.sh dist/melania-fluent-icons
+          XDG_DATA_HOME="${{ runner.temp }}/melania-data" bash scripts/install-melania-fluent-icons.sh dist/melania-fluent-icons
       - name: Launch real compositor GTK desktop panel Files Settings and capture pixels
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
           GALLIUM_DRIVER: llvmpipe
           WINIT_UNIX_BACKEND: x11
           GSK_RENDERER: cairo
-          XDG_DATA_HOME: \${{ runner.temp }}/melania-data
+          XDG_DATA_HOME: ${{ runner.temp }}/melania-data
           MELANIA_DEBUG_RENDER: '1'
           MELANIA_SMOKE_OPEN_START: '1'
         run: |
