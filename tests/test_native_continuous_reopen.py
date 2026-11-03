@@ -13,7 +13,8 @@ class ReopenAfterTwelveKmsFrames(unittest.TestCase):
     def test_reopen_is_explicitly_vm_gated_and_legacy_test_unchanged(self):
         for word in ("MELANIA_NATIVE_CONTINUOUS_REOPEN",
                      "continuous_reopen_mode:bool", "continuous_frame_target:u64",
-                     '"YES_QEMU_VM") {14} else {12}',
+                     '"YES_QEMU_VM") {14} else if',
+                     '"YES_QEMU_VM") {13} else {12}',
                      "continuous_close_frame_presented",
                      "continuous_reopen_frame_presented"):
             self.assertIn(word,BRIDGE)
