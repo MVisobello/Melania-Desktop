@@ -1810,7 +1810,13 @@ fn install_start_hotkey_listener(
                     hide_popup_surface(&notifications);
                     toggle_surface(&open,&quick);
                     if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
-                        eprintln!("MELANIA_START_IPC toggled open={}",open.is_visible() && !open.has_css_class("melania-start-concealed"));
+                        // Write the entire diagnostic marker in one syscall.
+                        // This panel and the compositor share an Xvfb CI log;
+                        // ordinary formatted output can interleave mid-line
+                        // with the compositor's frequent wl_surface commits.
+                        let is_open=open.is_visible() && !open.has_css_class("melania-start-concealed");
+                        let marker=format!("MELANIA_START_IPC toggled open={is_open}\n");
+                        let _=std::io::stderr().write_all(marker.as_bytes());
                     }
                 }
                 Ok(n) if &packet[..n]==b"CLOSE_START" => hide_start_surface(&open),
