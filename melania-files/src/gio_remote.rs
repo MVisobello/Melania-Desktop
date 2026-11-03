@@ -173,6 +173,7 @@ fn refresh(remote:&Remote) {
     let place=gio::File::for_uri(&uri).basename()
         .map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||"Rete".into());
     remote.title.set_text(&place);
+    remote.title.set_tooltip_text(Some(&uri));
     remote.status.set_text("Connessione e lettura in corso…");
     let cancelled=Arc::new(AtomicBool::new(false));
     *remote.listing_cancel.borrow_mut()=Some(cancelled.clone());
