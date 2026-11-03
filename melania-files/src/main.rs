@@ -2612,6 +2612,9 @@ fn close_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
     headers.borrow_mut().retain(|(candidate,_,_)|candidate!=page);
     notebook.remove_page(Some(index));
     sync_tab_highlights(notebook,headers,window);
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_TAB_COUNT={}",headers.borrow().len());
+    }
 }
 
 /// One source of truth for keyboard, context-menu and pointer tab reorder.
@@ -2761,6 +2764,9 @@ fn append_file_page(
     }
     notebook.set_current_page(notebook.page_num(&child));
     sync_tab_highlights(notebook,headers,window);
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_TAB_COUNT={}",headers.borrow().len());
+    }
 
     let tabs_for_title=notebook.clone();
     let page_for_title=child.clone();
