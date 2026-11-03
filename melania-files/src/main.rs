@@ -88,6 +88,11 @@ struct Browser {
     // GIO filesystem events refresh the active tab without polling.
     monitor: Rc<RefCell<Option<gio::FileMonitor>>>,
     refresh_pending: Rc<Cell<bool>>,
+    // Reject delayed monitor events and timers from folders already left.
+    monitor_epoch: Rc<Cell<u64>>,
+    // A navigation invalidates pending search-as-you-type debounce callbacks.
+    search_revision: Rc<Cell<u64>>,
+    suppress_search_refresh: Rc<Cell<bool>>,
     // Single coalescing filesystem worker per tab, with stale-result fencing.
     listing_generation: Rc<Cell<u64>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
@@ -296,6 +301,130 @@ fn start_background_copy(browser: &Browser, sources: Vec<PathBuf>, target: PathB
             return glib::ControlFlow::Break;
         }
         glib::ControlFlow::Continue
+    });
+}
+
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LocalMutationKind { Move, Trash }
+
+struct LocalMutationResult {
+    completed: usize,
+    failed: usize,
+    remaining: Vec<PathBuf>,
+    error: Option<String>,
+    cancelled: bool,
+}
+
+/// Run filesystem mutations on a worker, never on the GTK event loop.
+/// A move uses the existing no-replace primitive; trash never permanently
+/// deletes, and cancellation takes effect between individual items.
+fn run_local_mutation(kind: LocalMutationKind, sources: Vec<PathBuf>,
+                      destination: Option<PathBuf>, cancel: &Arc<AtomicBool>) -> LocalMutationResult {
+    let mut result=LocalMutationResult {
+        completed:0, failed:0, remaining:Vec::new(), error:None, cancelled:false,
+    };
+    for (index,path) in sources.iter().enumerate() {
+        if cancel.load(Ordering::Acquire) {
+            result.cancelled=true;
+            result.remaining.extend(sources[index..].iter().cloned());
+            break;
+        }
+        let operation: Result<(),String> = match kind {
+            LocalMutationKind::Move => transfer::move_local(path,
+                destination.as_ref().expect("move requires a destination"))
+                .map(|_|()).map_err(|e|e.to_string()),
+            LocalMutationKind::Trash => {
+                let uri=gio::File::for_path(path).uri();
+                gio_backend::move_to_trash(&uri)
+            }
+        };
+        match operation {
+            Ok(())=>result.completed+=1,
+            Err(error)=>{
+                result.failed+=1;
+                if kind==LocalMutationKind::Move {
+                    result.error=Some(error);
+                    result.remaining.extend(sources[index..].iter().cloned());
+                    break;
+                }
+            }
+        }
+    }
+    result
+}
+
+fn start_local_mutation(browser:&Browser, kind:LocalMutationKind,
+                        sources:Vec<PathBuf>,destination:Option<PathBuf>) {
+    if browser.active_job.borrow().is_some() {
+        browser.status.set_text("Attendi o annulla l'operazione già in corso.");
+        return;
+    }
+    if sources.is_empty(){return;}
+    let snapshot=if kind==LocalMutationKind::Move{Some(sources.clone())}else{None};
+    let cancel=Arc::new(AtomicBool::new(false));
+    *browser.active_job.borrow_mut()=Some(cancel.clone());
+    browser.transfer_progress.set_visible(true);
+    browser.transfer_progress.pulse();
+    browser.transfer_cancel.set_label("Annulla operazione");
+    browser.transfer_cancel.set_visible(true);
+    browser.status.set_text(match kind {
+        LocalMutationKind::Move => "Spostamento in corso…",
+        LocalMutationKind::Trash => "Spostamento nel Cestino in corso…",
+    });
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move ||{
+        let outcome=run_local_mutation(kind,sources,destination,&cancel);
+        let _=tx.send(outcome);
+    });
+    let state=browser.clone();
+    glib::timeout_add_local(Duration::from_millis(70),move ||match rx.try_recv(){
+        Ok(report)=>{
+            state.active_job.borrow_mut().take();
+            state.transfer_progress.set_visible(false);
+            state.transfer_cancel.set_visible(false);
+            state.transfer_cancel.set_label("Annulla copia");
+            if let Some(original)=snapshot.as_ref(){
+                // Another tab may have replaced the cut clipboard meanwhile.
+                // Never overwrite that newer selection with an old job result.
+                let mut pending=state.pending.borrow_mut();
+                if pending.as_ref().is_some_and(|p|p.is_move && &p.paths==original){
+                    *pending=if report.remaining.is_empty(){None}else{
+                        Some(PendingTransfer{paths:report.remaining.clone(),is_move:true})
+                    };
+                }
+            }
+            refresh(&state);
+            let message=match kind {
+                LocalMutationKind::Move=>{
+                    let suffix=if report.cancelled{" · Annullato dopo l'elemento in corso".to_string()}
+                        else if let Some(error)=report.error{format!(" · Non completato: {error}")}
+                        else {String::new()};
+                    format!("Spostati {} elementi; {} restanti{}.",
+                        report.completed,report.remaining.len(),suffix)
+                },
+                LocalMutationKind::Trash=>format!(
+                    "{} nel Cestino; {} non spostati; {} non elaborati{} (nessuna eliminazione permanente).",
+                    report.completed,report.failed,report.remaining.len(),
+                    if report.cancelled {" · Annullato"}else{""}),
+            };
+            state.status.set_text(&message);
+            glib::ControlFlow::Break
+        },
+        Err(std::sync::mpsc::TryRecvError::Empty)=>{
+            state.transfer_progress.pulse();
+            glib::ControlFlow::Continue
+        },
+        Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+            state.active_job.borrow_mut().take();
+            state.transfer_progress.set_visible(false);
+            state.transfer_cancel.set_visible(false);
+            state.transfer_cancel.set_label("Annulla copia");
+            // Do not clear the pending CUT list when a worker fails unexpectedly:
+            // never assume that all sources have moved or been deleted.
+            state.status.set_text("Operazione interrotta: verifica i file prima di riprovare.");
+            glib::ControlFlow::Break
+        },
     });
 }
 
@@ -652,16 +781,24 @@ fn open_trash_window(browser: &Browser) {
 }
 
 fn watch_directory(browser: &Browser) {
-    // Drop the previous monitor when switching folders.
-    *browser.monitor.borrow_mut() = None;
+    // Cancel the old monitor and invalidate its pending debounced refreshes.
+    // An event queued for folder A must not reload folder B after navigation.
+    let epoch = browser.monitor_epoch.get().wrapping_add(1);
+    browser.monitor_epoch.set(epoch);
+    if let Some(previous) = browser.monitor.borrow_mut().take() { previous.cancel(); }
+    browser.refresh_pending.set(false);
     let dir = browser.current.borrow().clone();
-    if let Ok(monitor) = gio::File::for_path(dir).monitor_directory(
+    if let Ok(monitor) = gio::File::for_path(&dir).monitor_directory(
         gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>) {
         let state = browser.clone();
         monitor.connect_changed(move |_, _, _, _| {
+            if state.monitor_epoch.get() != epoch || *state.current.borrow() != dir { return; }
             if state.refresh_pending.replace(true) { return; }
             let update = state.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(220), move || {
+            let watched = dir.clone();
+            glib::timeout_add_local_once(Duration::from_millis(220), move || {
+                if update.monitor_epoch.get() != epoch ||
+                    *update.current.borrow() != watched { return; }
                 update.refresh_pending.set(false);
                 refresh(&update);
             });
@@ -1296,10 +1433,8 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
 
 // Keep a bounded navigation history, independent of the directory renderer.
 fn navigate(browser: &Browser, target: PathBuf, keep_history: bool) {
-    if !target.is_dir() {
-        browser.status.set_text(&format!("Non è una cartella: {}", target.display()));
-        return;
-    }
+    // Never synchronously stat a slow FUSE/GVfs-backed path on GTK's main loop.
+    // The cancellable GIO listing worker reports inaccessible/non-folder paths.
     let previous = browser.current.borrow().clone();
     if target == previous { return; }
     if keep_history {
@@ -1315,7 +1450,11 @@ fn navigate(browser: &Browser, target: PathBuf, keep_history: bool) {
     browser.preview.set_text("Seleziona un file per visualizzarne i dettagli.");
     browser.preview_image.set_visible(false);
     browser.preview_image.set_filename(None::<&std::path::Path>);
+    // Clearing the old search must not schedule a SECOND scan 150ms later.
+    browser.search_revision.set(browser.search_revision.get().wrapping_add(1));
+    browser.suppress_search_refresh.set(true);
     browser.search.set_text("");
+    browser.suppress_search_refresh.set(false);
     refresh(browser);
     watch_directory(browser);
 }
@@ -1916,6 +2055,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         highlighted: Rc::new(RefCell::new(None)),
         monitor: Rc::new(RefCell::new(None)),
         refresh_pending: Rc::new(Cell::new(false)),
+        monitor_epoch: Rc::new(Cell::new(0)),
+        search_revision: Rc::new(Cell::new(0)),
+        suppress_search_refresh: Rc::new(Cell::new(false)),
         listing_generation: Rc::new(Cell::new(0)),
         listing_cancel: Rc::new(RefCell::new(None)),
         listing_running: Rc::new(Cell::new(false)),
@@ -2221,11 +2363,11 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let state = browser.clone();
     // Search-as-you-type must not tear down and rebuild the entire FlowBox
     // on every single keystroke. Only the latest edit runs after a short pause.
-    let search_revision=Rc::new(Cell::new(0u64));
     browser.search.connect_changed(move |_| {
-        let ticket=search_revision.get().wrapping_add(1);
-        search_revision.set(ticket);
-        let current_revision=search_revision.clone();
+        let ticket=state.search_revision.get().wrapping_add(1);
+        state.search_revision.set(ticket);
+        if state.suppress_search_refresh.get() {return;}
+        let current_revision=state.search_revision.clone();
         let tab=state.clone();
         glib::timeout_add_local_once(Duration::from_millis(150),move || {
             if current_revision.get()==ticket {refresh(&tab);}
@@ -2308,27 +2450,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         // over a file list copied by another application in the meantime.
         let pending=state.pending.borrow().clone();
         if let Some(pending)=pending.filter(|p|p.is_move) {
-            // Atomic Linux no-replace per entry. On failure completed moves
-            // remain at the destination; pending retains only unmoved paths.
-            let mut moved=0;
-            let mut remaining=Vec::new();
-            let mut failure=None;
-            let mut queue=pending.paths.into_iter();
-            while let Some(path)=queue.next() {
-                if let Err(err)=transfer::move_local(&path,&target) {
-                    failure=Some(err.to_string());
-                    remaining.push(path);
-                    remaining.extend(queue);
-                    break;
-                }
-                moved+=1;
-            }
-            *state.pending.borrow_mut()=if remaining.is_empty() {None} else {Some(PendingTransfer{paths:remaining,is_move:true})};
-            refresh(&state);
-            state.status.set_text(&match failure {
-                Some(err)=>format!("Spostati {moved} elementi; il resto non è stato mosso: {err}"),
-                None=>format!("Spostati {moved} elementi senza sovrascritture."),
-            });
+            // Preserve no-replace CUT semantics, but never block GTK on disk I/O.
+            start_local_mutation(&state,LocalMutationKind::Move,pending.paths,Some(target));
             return;
         }
         let Some(display)=gdk::Display::default() else {
@@ -2364,21 +2487,8 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         if paths.is_empty() {
             state.status.set_text("Seleziona uno o più file da spostare nel Cestino.");return;
         }
-        // Recoverable trash only. Never fallback to permanent deletion.
-        let mut moved=0;
-        let mut failed=0;
-        for path in paths {
-            let uri=gio::File::for_path(&path).uri();
-            match gio_backend::move_to_trash(&uri) {
-                Ok(()) => {state.selected_paths.borrow_mut().remove(&path); moved+=1;},
-                Err(_) => failed+=1,
-            }
-        }
-        *state.selected.borrow_mut()=None;
-        state.preview.set_text("Cestino: gli elementi spostati possono essere ripristinati.");
-        state.preview_image.set_visible(false);
-        refresh(&state);
-        state.status.set_text(&format!("{moved} nel Cestino; {failed} non spostati (nessuna eliminazione permanente)."));
+        // Only recoverable GIO trash, on a worker. No permanent-delete fallback.
+        start_local_mutation(&state,LocalMutationKind::Trash,paths,None);
     });
     // Per-page keyboard navigation works even when other tabs are open.
     // GTK routes the event to the focused page; back/forward histories stay isolated.
@@ -2438,6 +2548,25 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     root.add_controller(key_nav);
     // Drops from GTK/Qt file lists currently negotiate COPY only.
     attach_drop(&scroll, None, browser.clone());
+    // Releasing a notebook page must stop outstanding monitor callbacks and
+    // background reads; stale completions must not repaint a closed tab.
+    let closing=browser.clone();
+    root.connect_unrealize(move |_| {
+        closing.monitor_epoch.set(closing.monitor_epoch.get().wrapping_add(1));
+        if let Some(monitor)=closing.monitor.borrow_mut().take(){monitor.cancel();}
+        if let Some(cancel)=closing.listing_cancel.borrow_mut().take(){
+            cancel.store(true,Ordering::Release);
+        }
+        if let Some(cancel)=closing.thumbnail_cancel.borrow_mut().take(){
+            cancel.store(true,Ordering::Release);
+        }
+        if let Some(pending)=closing.listing_pending.borrow_mut().take(){
+            pending.cancelled.store(true,Ordering::Release);
+        }
+        if let Some(pending)=closing.thumbnail_pending.borrow_mut().take(){
+            pending.cancelled.store(true,Ordering::Release);
+        }
+    });
     refresh(&browser);
     watch_directory(&browser);
     root
@@ -2772,8 +2901,48 @@ fn setup_melania_icon_theme() {
 
 #[cfg(test)]
 mod software_preview_performance_tests {
-    use super::thumbnail_budget_for;
+    use super::{thumbnail_budget_for,LocalMutationKind,run_local_mutation};
+    use std::sync::{Arc,atomic::AtomicBool};
 
+
+    #[test]
+    fn cancelled_cut_does_not_touch_source_or_destination() {
+        let root=std::env::temp_dir().join(format!("melania-mutation-cancel-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        let from=root.join("from");let to=root.join("to");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("safe.txt"),b"original").unwrap();
+        let stop=Arc::new(AtomicBool::new(true));
+        let outcome=run_local_mutation(LocalMutationKind::Move,
+            vec![from.join("safe.txt")],Some(to.clone()),&stop);
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.completed,0);
+        assert_eq!(outcome.remaining,vec![from.join("safe.txt")]);
+        assert_eq!(std::fs::read(from.join("safe.txt")).unwrap(),b"original");
+        assert!(!to.join("safe.txt").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_cut_never_overwrites_destination() {
+        let root=std::env::temp_dir().join(format!("melania-mutation-conflict-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        let from=root.join("from");let to=root.join("to");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("existing.txt"),b"source").unwrap();
+        std::fs::write(to.join("existing.txt"),b"destination").unwrap();
+        let stop=Arc::new(AtomicBool::new(false));
+        let outcome=run_local_mutation(LocalMutationKind::Move,
+            vec![from.join("existing.txt")],Some(to.clone()),&stop);
+        assert_eq!(outcome.completed,0);
+        assert_eq!(outcome.failed,1);
+        assert_eq!(outcome.remaining.len(),1);
+        assert_eq!(std::fs::read(from.join("existing.txt")).unwrap(),b"source");
+        assert_eq!(std::fs::read(to.join("existing.txt")).unwrap(),b"destination");
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn preserve_full_thumbnails_on_accelerated_sessions() {
         assert_eq!(thumbnail_budget_for(None,false),48);

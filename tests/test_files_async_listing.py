@@ -40,7 +40,9 @@ class AsyncFilesystemListing(unittest.TestCase):
         ]:
             self.assertIn(pattern,source)
         self.assertIn("browser.selected_paths.borrow_mut().retain(|path| visible.contains(path))",SOURCE)
-        self.assertIn("gio::File::for_path(dir).monitor_directory(",SOURCE)
+        self.assertIn("gio::File::for_path(&dir).monitor_directory(",SOURCE)
+        self.assertIn("previous.cancel();",SOURCE)
+        self.assertIn("state.monitor_epoch.get() != epoch",SOURCE)
         self.assertIn("pub fn list_directory(dir: &Path",MODEL)
 
 if __name__=="__main__":

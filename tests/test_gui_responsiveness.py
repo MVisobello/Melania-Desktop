@@ -30,7 +30,9 @@ class ResponsivenessContracts(unittest.TestCase):
         self.assertIn("picture.set_filename(Some(&image_path))",section)
 
     def test_search_is_debounced_to_avoid_full_gtk_widget_rebuild(self):
-        self.assertIn("search_revision=Rc::new(Cell::new(0u64))",FILES)
+        self.assertIn("search_revision: Rc<Cell<u64>>",FILES)
+        self.assertIn("search_revision: Rc::new(Cell::new(0))",FILES)
+        self.assertIn("browser.suppress_search_refresh.set(true)",FILES)
         self.assertIn("Duration::from_millis(150)",FILES)
         self.assertIn("if current_revision.get()==ticket {refresh(&tab);}",FILES)
 

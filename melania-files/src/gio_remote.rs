@@ -33,6 +33,8 @@ struct Remote {
     monitor:Rc<RefCell<Option<gio::FileMonitor>>>,
     monitor_uri:Rc<RefCell<Option<String>>>,
     refresh_pending:Rc<Cell<bool>>,
+    monitor_epoch:Rc<Cell<u64>>,
+    search_revision:Rc<Cell<u64>>,
     generation: Rc<Cell<u64>>,
     listing_running: Rc<Cell<bool>>,
     listing_pending: Rc<RefCell<Option<RemoteListingRequest>>>,
@@ -57,7 +59,9 @@ fn navigation(remote:&Remote,uri:String,remember:bool) {
         remote.forward.borrow_mut().clear();
     }
     *remote.current.borrow_mut()=uri;
-    // A monitor from the old folder must never trigger changes in the new one.
+    // Invalidate pending callbacks and search debounce from the old location.
+    remote.search_revision.set(remote.search_revision.get().wrapping_add(1));
+    remote.monitor_epoch.set(remote.monitor_epoch.get().wrapping_add(1));
     if let Some(previous)=remote.monitor.borrow_mut().take(){previous.cancel();}
     remote.monitor_uri.borrow_mut().take();
     remote.refresh_pending.set(false);
@@ -200,18 +204,26 @@ fn format_modified(time:Option<SystemTime>)->String {
 fn watch_current_directory(remote:&Remote) {
     let uri=remote.current.borrow().clone();
     if remote.monitor_uri.borrow().as_deref()==Some(uri.as_str()){return;}
+    let epoch=remote.monitor_epoch.get().wrapping_add(1);
+    remote.monitor_epoch.set(epoch);
     if let Some(old)=remote.monitor.borrow_mut().take(){old.cancel();}
+    remote.refresh_pending.set(false);
     *remote.monitor_uri.borrow_mut()=Some(uri.clone());
     if let Ok(monitor)=gio::File::for_uri(&uri).monitor_directory(
         gio::FileMonitorFlags::NONE,None::<&gio::Cancellable>) {
         let state=remote.clone();
         monitor.connect_changed(move |_,_,_,_|{
-            if state.current.borrow().as_str()!=uri {return;}
+            if state.monitor_epoch.get()!=epoch || state.current.borrow().as_str()!=uri {return;}
             if state.refresh_pending.replace(true){return;}
             let next=state.clone();
+            let watched=uri.clone();
             glib::timeout_add_local_once(Duration::from_millis(260),move ||{
+                // A queued event from A cannot repaint B, even if the user
+                // navigated A→B→A before this timer fired.
+                if next.monitor_epoch.get()!=epoch ||
+                    next.current.borrow().as_str()!=watched {return;}
                 next.refresh_pending.set(false);
-                if next.job_cancel.borrow().is_none() {refresh(&next);}
+                if next.job_cancel.borrow().is_none(){refresh(&next);}
             });
         });
         *remote.monitor.borrow_mut()=Some(monitor);
@@ -938,6 +950,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         monitor:Rc::new(RefCell::new(None)),
         monitor_uri:Rc::new(RefCell::new(None)),
         refresh_pending:Rc::new(Cell::new(false)),
+        monitor_epoch:Rc::new(Cell::new(0)),
+        search_revision:Rc::new(Cell::new(0)),
         generation:Rc::new(Cell::new(0)),
         listing_running:Rc::new(Cell::new(false)),
         listing_pending:Rc::new(RefCell::new(None)),
@@ -1008,7 +1022,17 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
         }
     });
     let ui=state.clone();
-    state.search.connect_changed(move |_|refresh(&ui));
+    state.search.connect_changed(move |_|{
+        // Typing on slow SMB/SFTP mounts should coalesce to one scan after a
+        // short pause, rather than cancelling/restarting on every keystroke.
+        let ticket=ui.search_revision.get().wrapping_add(1);
+        ui.search_revision.set(ticket);
+        let revision=ui.search_revision.clone();
+        let tab=ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(160),move ||{
+            if revision.get()==ticket{refresh(&tab);}
+        });
+    });
     let ui=state.clone();
     reload.connect_clicked(move |_|refresh(&ui));
     let ui=state.clone();
@@ -1295,6 +1319,8 @@ pub fn create(initial:&str,tab_title:Label)->GtkBox {
     // cycles; monitors must not hold removed GTK tabs alive.
     let cleanup=state.clone();
     root.connect_unrealize(move |_| {
+        cleanup.monitor_epoch.set(cleanup.monitor_epoch.get().wrapping_add(1));
+        cleanup.search_revision.set(cleanup.search_revision.get().wrapping_add(1));
         if let Some(monitor)=cleanup.monitor.borrow_mut().take(){monitor.cancel();}
         if let Some(cancel)=cleanup.listing_cancel.borrow_mut().take(){
             cancel.store(true,Ordering::Release);
