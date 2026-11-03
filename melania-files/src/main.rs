@@ -2969,8 +2969,10 @@ fn build_ui(app: &Application) {
     tab_rail.add_css_class("files-tab-rail");
     tab_rail.append(&tab_scroll);
     tab_rail.append(&add_button);
-    let network_button=Button::from_icon_name("network-server");
+    // A readable label avoids a missing-icon square on incomplete icon themes.
+    let network_button=Button::with_label("Rete");
     network_button.add_css_class("files-new-tab");
+    network_button.add_css_class("files-network-tab");
     network_button.set_tooltip_text(Some("Rete e server SMB/SFTP/WebDAV (GVfs)"));
     tab_rail.append(&network_button);
     aero_header.pack_start(&tab_rail);
