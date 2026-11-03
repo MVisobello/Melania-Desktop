@@ -72,6 +72,10 @@ struct BridgeState {
     async_kms_mode:bool,
     drag_redraw_mode:bool,
     presented_layout_generation:u64,
+    // Store proof of a successful KMS presentation separately from the
+    // current scene: a client may destroy its toplevel after the frame ACK.
+    drag_frame_presented:bool,
+    two_window_frame_presented:bool,
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
@@ -220,6 +224,13 @@ impl BridgeState {
         self.pixel_frame_count=pending.ordinal;
         self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
         self.presented_layout_generation=pending.layout_generation;
+        if self.multi_window_mode && pending.ordinal==3 &&
+           self.multi_scene.window_count()==2 {
+            self.two_window_frame_presented=true;
+        }
+        if self.drag_redraw_mode && pending.ordinal==4 {
+            self.drag_frame_presented=true;
+        }
         println!("MELANIA_NATIVE_LIVE_KMS_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_ASYNC_FRAME_COMPLETED={}",pending.ordinal);
@@ -711,6 +722,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         drag_redraw_mode:std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
             .as_deref()==Ok("YES_QEMU_VM"),
         presented_layout_generation:0,
+        drag_frame_presented:false,two_window_frame_presented:false,
         async_stream:None,async_pending:None,
         multi_scene:MultiWindowScene::default(),
         window_interaction:WindowInteraction::default(),
@@ -835,9 +847,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count.min(3));
                 if state.drag_redraw_mode {
-                    if state.pixel_frame_count!=4 ||
-                       state.multi_scene.layout_generation()!=state.presented_layout_generation {
-                        return Err("QEMU drag scene not acknowledged by KMS".into());
+                    // Destruction dirties the next scene, but cannot undo the
+                    // fourth frame which KMS already acknowledged.
+                    if state.pixel_frame_count!=4 || !state.drag_frame_presented {
+                        return Err("QEMU drag frame not acknowledged by KMS".into());
                     }
                     println!("MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true");
                 }
@@ -845,8 +858,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
                 }
                 if state.multi_window_mode {
-                    if state.multi_scene.window_count()!=2 {
-                        return Err("QEMU native scene never received both client windows".into());
+                    if !state.two_window_frame_presented {
+                        return Err("QEMU native scene never presented both client windows".into());
                     }
                     println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
