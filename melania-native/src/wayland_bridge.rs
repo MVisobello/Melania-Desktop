@@ -366,19 +366,34 @@ impl BridgeState {
     /// pointer grab. A compositor-only change is not proof of repaint; the
     /// current KMS stream still presents only on subsequent client commits.
     fn apply_window_motion(&mut self,point:Point<f64,Logical>) {
-        // Existing guest drag policy uses the fixed two-window geometry.
-        // Dynamic gestures need independent xdg-shell resize validation.
-        if !self.multi_window_mode || self.dynamic_window_mode {return;}
+        if !self.multi_window_mode {return;}
         let Some((key,rect))=self.window_interaction.motion(point.x,point.y) else {
             return;
         };
         match self.window_interaction.active_kind() {
             Some(InteractionKind::Move)=>{
-                if self.multi_scene.move_to(key,rect.x,rect.y).is_ok() {
+                let moved=if self.dynamic_window_mode {
+                    // Avoid issuing redundant GPU damage for a pointer event
+                    // that didn't change the client's screen position.
+                    self.dynamic_scene.position(key)!=Some((rect.x,rect.y)) &&
+                        self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok()
+                } else {
+                    self.multi_scene.move_to(key,rect.x,rect.y).is_ok()
+                };
+                if moved {
                     self.note_scene_change();
                     println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
                              key,rect.x,rect.y);
-                    if let Err(error)=self.submit_drag_frame() {
+                    if self.dynamic_window_mode {
+                        // The dynamic scene is presented through the existing
+                        // asynchronous real-ACK KMS path, never on mouse
+                        // motion without a verified framebuffer result.
+                        if self.continuous_frame_count<self.continuous_frame_target {
+                            if let Err(error)=self.submit_continuous_frame() {
+                                eprintln!("dynamic QEMU drag KMS rejected: {error}");
+                            }
+                        }
+                    } else if let Err(error)=self.submit_drag_frame() {
                         eprintln!("QEMU drag KMS frame rejected: {error}");
                     }
                 }
@@ -1101,8 +1116,13 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             }
             let point=state.pointer_position;
             if state.multi_window_mode {
+                let target_key=if state.dynamic_window_mode {
+                    state.dynamic_scene.hit_test(point.x,point.y)
+                } else {
+                    state.multi_scene.hit_test(point.x,point.y)
+                };
                 println!("MELANIA_NATIVE_WINDOW_BUTTON=({:.1},{:.1}) target={:?} state={:?}",
-                    point.x,point.y,state.multi_scene.hit_test(point.x,point.y),event.state());
+                    point.x,point.y,target_key,event.state());
                 let _=std::io::stdout().flush();
             }
             let pointer=state.seat.get_pointer().expect("pointer");
@@ -1115,12 +1135,35 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 // keyboard focus to its actual wl_surface.
                 if event.state()==ButtonState::Pressed {
                     if let Some((surface,_))=target {
-                        if let Some(id)=state.multi_scene.hit_test(point.x,point.y) {
-                            state.multi_scene.raise(id);
+                        let id=if state.dynamic_window_mode {
+                            state.dynamic_scene.hit_test(point.x,point.y)
+                        } else {
+                            state.multi_scene.hit_test(point.x,point.y)
+                        };
+                        if let Some(id)=id {
+                            if state.dynamic_window_mode {
+                                if state.dynamic_scene.raise(id).unwrap_or(false) {
+                                    state.note_scene_change();
+                                    if state.continuous_frame_count<state.continuous_frame_target {
+                                        if let Err(error)=state.submit_continuous_frame() {
+                                            eprintln!("dynamic QEMU raise KMS rejected: {error}");
+                                        }
+                                    }
+                                }
+                            } else {
+                                state.multi_scene.raise(id);
+                            }
                             if event.button_code()==0x110 {
-                                if let Some((x,y))=state.multi_scene.position(id) {
-                                    let right=f64::from(x+360);
-                                    let bottom=f64::from(y+224);
+                                let geometry=if state.dynamic_window_mode {
+                                    state.dynamic_scene.geometry(id)
+                                        .map(|(x,y,w,h)|(x,y,w as i32,h as i32))
+                                } else {
+                                    state.multi_scene.position(id)
+                                        .map(|(x,y)|(x,y,360,224))
+                                };
+                                if let Some((x,y,width,height))=geometry {
+                                    let right=f64::from(x)+f64::from(width);
+                                    let bottom=f64::from(y)+f64::from(height);
                                     let kind=if point.x>=right-16.0 &&
                                                 point.y>=bottom-16.0 {
                                         Some(InteractionKind::ResizeBottomRight)
@@ -1129,9 +1172,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                                         Some(InteractionKind::Move)
                                     } else {None};
                                     if let Some(kind)=kind {
-                                        let original=WindowRect {
-                                            x,y,width:360,height:224
-                                        };
+                                        let original=WindowRect {x,y,width,height};
                                         if state.window_interaction.begin(
                                             id,original,point.x,point.y,kind
                                         ) {
