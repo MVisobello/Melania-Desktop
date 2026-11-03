@@ -1261,7 +1261,7 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         let cancelled=Arc::new(AtomicBool::new(false));
         *browser.thumbnail_cancel.borrow_mut()=Some(cancelled.clone());
         *browser.thumbnail_pending.borrow_mut()=Some(LocalThumbnailRequest{
-            generation:browser.listing_generation.get(),targets:thumbnail_targets,cancelled,
+            generation:browser.listing_generation.get(),targets:std::mem::take(&mut thumbnail_targets),cancelled,
         });
         start_local_thumbnail_worker(browser);
     }
