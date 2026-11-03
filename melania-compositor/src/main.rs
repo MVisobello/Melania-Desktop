@@ -222,7 +222,7 @@ impl XdgShellHandler for Melania {
         if let Some(index) = self.managed.iter().position(|w| w.surface == *top.wl_surface()) {
             let id = self.managed.remove(index).id;
             self.workspaces.forget(id);
-            if self.active_window == Some(id) { self.active_window = None; }
+            self.refocus_after_departure(id, top.wl_surface());
         }
     }
     fn grab(&mut self, _: PopupSurface, _: wl_seat::WlSeat, _: Serial) {}
@@ -264,7 +264,8 @@ impl WlrLayerShellHandler for Melania {
             let keyboard=self.seat.get_keyboard().expect("keyboard");
             if keyboard.current_focus().as_ref()==self.start_layer.as_ref() {
                 let previous=self.start_previous_focus.take().filter(|candidate|
-                    self.managed.iter().any(|w|w.surface==*candidate && !w.minimized));
+                    self.managed.iter().any(|w|w.surface==*candidate && !w.minimized
+                        && self.workspaces.is_visible(w.id)));
                 keyboard.set_focus(self,previous,SERIAL_COUNTER.next_serial());
             }
             self.start_has_focus=false;
@@ -288,6 +289,36 @@ impl SeatHandler for Melania {
     fn cursor_image(&mut self, _: &Seat<Self>, _: CursorImageStatus) {}
 }
 impl Melania {
+    /// Forget input state for a window that has been unmapped or destroyed.
+    /// If it owned keyboard focus, focus the topmost surviving mapped toplevel,
+    /// never a minimized window or one on another workspace.
+    /// Do not steal focus from Start, a popup, or another surface.
+    fn refocus_after_departure(&mut self, id: u64, departed: &WlSurface) {
+        if self.last_press.as_ref().is_some_and(|press| press.surface == *departed) {
+            self.last_press = None;
+        }
+        if self.start_previous_focus.as_ref() == Some(departed) {
+            self.start_previous_focus = None;
+        }
+        if self.active_window == Some(id) {
+            self.active_window = None;
+        }
+        let keyboard = self.seat.get_keyboard().expect("keyboard");
+        if keyboard.current_focus().as_ref() != Some(departed) {
+            return;
+        }
+        // Space::elements() is back-to-front, just as in the render loop.
+        let next = self.space.elements().rev().find_map(|element| {
+            let surface = element.toplevel()?.wl_surface();
+            self.managed.iter()
+                .find(|window| window.surface == *surface && !window.minimized
+                    && self.workspaces.is_visible(window.id))
+                .map(|window| (window.id, window.surface.clone()))
+        });
+        self.active_window = next.as_ref().map(|(next_id, _)| *next_id);
+        keyboard.set_focus(self, next.map(|(_, surface)| surface), SERIAL_COUNTER.next_serial());
+    }
+
     /// On an actual mapped overlay, take keyboard focus so typing after
     /// pressing Super lands straight in the Start search. Restore the
     /// previously focused application when the GTK layer disappears.
@@ -313,7 +344,8 @@ impl Melania {
         let keyboard=self.seat.get_keyboard().expect("keyboard");
         if visible && !self.start_has_focus {
             self.start_previous_focus=keyboard.current_focus().filter(|surface|
-                self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
+                self.managed.iter().any(|w|w.surface==*surface && !w.minimized
+                    && self.workspaces.is_visible(w.id)));
             if let Some(surface)=self.start_layer.clone() {
                 keyboard.set_focus(self,Some(surface),SERIAL_COUNTER.next_serial());
                 self.start_has_focus=true;
@@ -322,7 +354,8 @@ impl Melania {
             // Do not steal focus back from a window the user has clicked.
             if keyboard.current_focus().as_ref()==self.start_layer.as_ref() {
                 let previous=self.start_previous_focus.take().filter(|surface|
-                    self.managed.iter().any(|w|w.surface==*surface && !w.minimized));
+                    self.managed.iter().any(|w|w.surface==*surface && !w.minimized
+                    && self.workspaces.is_visible(w.id)));
                 keyboard.set_focus(self,previous,SERIAL_COUNTER.next_serial());
             }
             self.start_has_focus=false;
@@ -657,18 +690,17 @@ impl Melania {
                 self.active_window = Some(id);
             }
             ControlCommand::Minimize(_) => {
-                let w = &mut self.managed[index];
-                if !w.minimized {
-                    if let Some(position) = self.space.element_location(&w.window) {
-                        w.saved_position = (position.x, position.y);
+                if !self.managed[index].minimized {
+                    let surface = self.managed[index].surface.clone();
+                    {
+                        let w = &mut self.managed[index];
+                        if let Some(position) = self.space.element_location(&w.window) {
+                            w.saved_position = (position.x, position.y);
+                        }
+                        self.space.unmap_elem(&w.window);
+                        w.minimized = true;
                     }
-                    self.space.unmap_elem(&w.window);
-                    w.minimized = true;
-                    if self.active_window == Some(id) {
-                        self.active_window = None;
-                        let serial = SERIAL_COUNTER.next_serial();
-                        self.seat.get_keyboard().expect("keyboard").set_focus(self,None,serial);
-                    }
+                    self.refocus_after_departure(id, &surface);
                 }
             }
             ControlCommand::Close(_) => {
