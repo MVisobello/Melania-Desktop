@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -72,11 +72,15 @@ struct BridgeState {
     async_kms_mode:bool,
     drag_redraw_mode:bool,
     presented_layout_generation:u64,
+    // Store proof of a successful KMS presentation separately from the
+    // current scene: a client may destroy its toplevel after the frame ACK.
+    drag_frame_presented:bool,
+    two_window_frame_presented:bool,
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
     multi_scene:MultiWindowScene,
     window_interaction:WindowInteraction,
-    known_window_surfaces:Vec<WlSurface>,
+    known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
     pixel_frame_target:u8,
@@ -130,7 +134,7 @@ impl BridgeState {
             return self.focused.clone().map(|s|(s,(0.0,0.0).into()));
         }
         let key=self.multi_scene.hit_test(point.x,point.y)?;
-        let surface=self.known_window_surfaces.get((key-1) as usize)?.clone();
+        let surface=self.known_window_surfaces.get(key)?.clone();
         let (x,y)=self.multi_scene.position(key)?;
         Some((surface,(f64::from(x),f64::from(y)).into()))
     }
@@ -220,6 +224,13 @@ impl BridgeState {
         self.pixel_frame_count=pending.ordinal;
         self.pixel_ready=self.pixel_frame_count==self.pixel_frame_target;
         self.presented_layout_generation=pending.layout_generation;
+        if self.multi_window_mode && pending.ordinal==3 &&
+           self.multi_scene.window_count()==2 {
+            self.two_window_frame_presented=true;
+        }
+        if self.drag_redraw_mode && pending.ordinal==4 {
+            self.drag_frame_presented=true;
+        }
         println!("MELANIA_NATIVE_LIVE_KMS_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_ASYNC_FRAME_COMPLETED={}",pending.ordinal);
@@ -275,16 +286,12 @@ impl CompositorHandler for BridgeState {
                 match imported {
                     Ok(Ok(imported))=>{
                         let frame=if self.multi_window_mode {
-                            let key=if let Some(index)=self.known_window_surfaces
-                                .iter().position(|known|known==surface) {
-                                (index+1) as u64
-                            } else {
-                                if self.known_window_surfaces.len()>=2 {
+                            let key=match self.known_window_surfaces.register(surface.clone()) {
+                                Ok(key)=>key,
+                                Err(_)=>{
                                     eprintln!("QEMU two-window scene exceeded bound");
                                     return;
-                                }
-                                self.known_window_surfaces.push(surface.clone());
-                                self.known_window_surfaces.len() as u64
+                                },
                             };
                             if self.multi_scene.upsert(key,imported).is_err() {
                                 eprintln!("QEMU retained window rejected invalid wl_shm image");
@@ -456,7 +463,36 @@ impl XdgShellHandler for BridgeState {
     fn maximize_request(&mut self,top:ToplevelSurface) {top.send_configure();}
     fn unmaximize_request(&mut self,top:ToplevelSurface) {top.send_configure();}
     fn minimize_request(&mut self,_:ToplevelSurface){}
-    fn toplevel_destroyed(&mut self,_:ToplevelSurface){}
+    fn toplevel_destroyed(&mut self,top:ToplevelSurface){
+        let surface=top.wl_surface().clone();
+        if let Some(key)=self.known_window_surfaces.remove(&surface) {
+            // The retained pixel copy and stable slot belong to this client.
+            // Never leave a closed window occupying the limited QEMU scene.
+            self.multi_scene.remove(key);
+            if self.window_interaction.active_key()==Some(key) {
+                self.window_interaction.cancel();
+            }
+            println!("MELANIA_NATIVE_WINDOW_REMOVED={key}");
+            let _=std::io::stdout().flush();
+        }
+        if self.focused.as_ref()==Some(&surface) {
+            // Do not forward keys or pointer events to a destroyed Wayland
+            // role. Where possible retarget the remaining window beneath the
+            // last pointer position; otherwise clear keyboard/pointer focus.
+            self.focused=None;
+            let target=self.pointer_target(self.pointer_position);
+            let replacement=target.as_ref().map(|(next,_)|next.clone());
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,replacement.clone(),SERIAL_COUNTER.next_serial());
+            self.focused=replacement;
+            let pointer=self.seat.get_pointer().expect("pointer");
+            pointer.motion(self,target,&MotionEvent{
+                location:self.pointer_position,
+                serial:SERIAL_COUNTER.next_serial(),time:0,
+            });
+            pointer.frame(self);
+        }
+    }
     fn grab(&mut self,_:PopupSurface,_:wl_seat::WlSeat,_:Serial){}
     fn reposition_request(&mut self,popup:PopupSurface,_:PositionerState,token:u32){
         popup.send_repositioned(token);
@@ -686,10 +722,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         drag_redraw_mode:std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
             .as_deref()==Ok("YES_QEMU_VM"),
         presented_layout_generation:0,
+        drag_frame_presented:false,two_window_frame_presented:false,
         async_stream:None,async_pending:None,
         multi_scene:MultiWindowScene::default(),
         window_interaction:WindowInteraction::default(),
-        known_window_surfaces:Vec::new(),
+        known_window_surfaces:WindowSlots::default(),
         stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
@@ -810,9 +847,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count.min(3));
                 if state.drag_redraw_mode {
-                    if state.pixel_frame_count!=4 ||
-                       state.multi_scene.layout_generation()!=state.presented_layout_generation {
-                        return Err("QEMU drag scene not acknowledged by KMS".into());
+                    // Destruction dirties the next scene, but cannot undo the
+                    // fourth frame which KMS already acknowledged.
+                    if state.pixel_frame_count!=4 || !state.drag_frame_presented {
+                        return Err("QEMU drag frame not acknowledged by KMS".into());
                     }
                     println!("MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true");
                 }
@@ -820,8 +858,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
                 }
                 if state.multi_window_mode {
-                    if state.multi_scene.window_count()!=2 {
-                        return Err("QEMU native scene never received both client windows".into());
+                    if !state.two_window_frame_presented {
+                        return Err("QEMU native scene never presented both client windows".into());
                     }
                     println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
