@@ -67,6 +67,9 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QEMU real close/reopen frame13/14 screenshot verifier missing'
 [[ -f "$root/scripts/capture-qemu-continuous-dynamic.py" ]] ||
   deny 'QEMU real variable-size two-window pixel verifier missing'
+[[ -f "$root/scripts/inject-qemu-dynamic-pointer.py" &&
+   -f "$root/scripts/capture-qemu-dynamic-pointer.py" ]] ||
+  deny 'QEMU resized-client real tablet drag proof missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -200,6 +203,15 @@ python3 "$root/scripts/capture-qemu-continuous-dynamic.py" \
   --output "$report/dynamic-window-frame12.ppm" --timeout 950 \
   > "$report/qmp-continuous-dynamic.log" 2>&1 &
 dynamic_capture_pid=$!
+python3 "$root/scripts/inject-qemu-dynamic-pointer.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  > "$report/qmp-dynamic-pointer-input.log" 2>&1 &
+dynamic_pointer_input_pid=$!
+python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/dynamic-pointer-frame13.ppm" --timeout 950 \
+  > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
+dynamic_pointer_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -248,9 +260,17 @@ wait "$continuous_reopen_capture_pid"
 continuous_reopen_capture_code=$?
 wait "$dynamic_capture_pid"
 dynamic_capture_code=$?
+wait "$dynamic_pointer_input_pid"
+dynamic_pointer_input_code=$?
+wait "$dynamic_pointer_capture_pid"
+dynamic_pointer_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 ]] ||
+   ! grep -q '^MELANIA_QEMU_DYNAMIC_LIBINPUT_DRAG_FRAME13=true' "$report/qmp-dynamic-pointer-input.log" ||
+   ! grep -q '^MELANIA_QEMU_DYNAMIC_POINTER_FRAME13_PIXELS=true' "$report/qmp-dynamic-pointer-frame13.log" ||
+   ! test -s "$report/dynamic-pointer-frame13.ppm" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_DYNAMIC_POINTER_KMS13_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_REAL_POINTER_DRAG_TO_KMS=true' "$report/qmp-window-drag.log" ||
    ! grep -q '^MELANIA_QEMU_DRAG_FRAME4_PIXELS_VERIFIED=true' "$report/qmp-drag-frame.log" ||
    ! test -s "$report/drag-window-frame4.ppm" ||
