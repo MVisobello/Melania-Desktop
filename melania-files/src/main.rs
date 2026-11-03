@@ -3055,6 +3055,50 @@ fn append_file_page(
     drag_source.connect_prepare(move |_,_,_|{
         Some(gdk::ContentProvider::for_value(&drag_token.to_value()))
     });
+    // The source window retains no strong GTK widget refs in a live drag:
+    // even when its last tab is moved, the destination stays independently
+    // mapped and monitor/worker cleanup follows the usual close path.
+    let weak_source_pages=notebook.downgrade();
+    let weak_source_strip=tab_strip.downgrade();
+    let weak_source_page=child.downgrade();
+    let weak_source_window=window.downgrade();
+    let weak_source_headers=Rc::downgrade(headers);
+    let weak_source_history=Rc::downgrade(recently_closed);
+    let finish_move:Rc<dyn Fn()>=Rc::new(move ||{
+        let (Some(pages),Some(strip),Some(page),Some(window),Some(headers),Some(history))=(
+            weak_source_pages.upgrade(),weak_source_strip.upgrade(),
+            weak_source_page.upgrade(),weak_source_window.upgrade(),
+            weak_source_headers.upgrade(),weak_source_history.upgrade()) else{return;};
+        if pages.page_num(&page).is_none(){return;}
+        if pages.n_pages()>1 {
+            close_files_tab(&pages,&strip,&headers,&window,&page,&history,false);
+        }else{
+            window.close();
+        }
+    });
+    let weak_drag_title=text.downgrade();
+    let weak_drag_window=window.downgrade();
+    let weak_drag_page=child.downgrade();
+    let weak_drag_notebook=notebook.downgrade();
+    let token_for_begin=tab.widget_name().to_string();
+    drag_source.connect_drag_begin(move |_,_|{
+        let Some(location)=weak_drag_title.upgrade()
+            .and_then(|label|label.tooltip_text())
+            .and_then(|text|ClosedFilesTab::from_location(&text)) else{return;};
+        ACTIVE_FILES_TAB_DRAG.with(|state| *state.borrow_mut()=Some(FilesTabDrag {
+            token:token_for_begin.clone(),
+            location,
+            source_window:weak_drag_window.clone(),
+            source_page:weak_drag_page.clone(),
+            source_notebook:weak_drag_notebook.clone(),
+            finish_move:finish_move.clone(),
+        }));
+    });
+    let token_for_cancel=tab.widget_name().to_string();
+    drag_source.connect_drag_cancel(move |_,_,reason|
+        detach_dragged_files_tab(&token_for_cancel,reason));
+    let token_for_end=tab.widget_name().to_string();
+    drag_source.connect_drag_end(move |_,_,_|clear_files_tab_drag(&token_for_end));
     tab.add_controller(drag_source);
     let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
     let weak_pages=notebook.downgrade();
@@ -3063,19 +3107,36 @@ fn append_file_page(
     let weak_page=child.downgrade();
     let weak_tab=tab.downgrade();
     let weak_headers=Rc::downgrade(headers);
+    let weak_target_add=new_button.downgrade();
+    let target_next=next_tab_location.clone();
     drop.connect_drop(move |_,value,x,_|{
         let Ok(token)=value.get::<String>() else{return false;};
         if !token.starts_with("melania-tab-"){return false;}
         let (Some(pages),Some(strip),Some(window),Some(page),Some(tab),Some(headers))=(
             weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
             weak_page.upgrade(),weak_tab.upgrade(),weak_headers.upgrade()) else{return false;};
+        let Some(active)=active_files_tab_drag(&token) else{return false;};
+        let right_half=x>f64::from(tab.width())/2.0;
+        if active.source_window.upgrade().as_ref()!=Some(&window) {
+            let Some(add)=weak_target_add.upgrade() else{return false;};
+            if !import_dragged_files_tab(&token,&window,&pages,&add,&target_next) {
+                return false;
+            }
+            // The imported tab is now the active page. Insert it immediately
+            // before/after the tab on which the user released the pointer.
+            let Some(imported)=pages.current_page().and_then(|index|pages.nth_page(Some(index)))
+                .and_then(|widget|widget.downcast::<GtkBox>().ok()) else{return true;};
+            let Some(target)=pages.page_num(&page) else{return true;};
+            let destination=target.saturating_add(u32::from(right_half));
+            reorder_files_tab(&pages,&strip,&headers,&window,&imported,destination);
+            return true;
+        }
         let source=headers.borrow().iter()
             .find(|(_,heading,_)|heading.widget_name().as_str()==token)
             .map(|(source,_,_)|source.clone());
         let Some(source)=source else{return false;};
         let (Some(from),Some(target))=(pages.page_num(&source),pages.page_num(&page))
             else{return false;};
-        let right_half=x>f64::from(tab.width())/2.0;
         let destination=tab_drop_destination(from,target,right_half);
         reorder_files_tab(&pages,&strip,&headers,&window,&source,destination)
     });
