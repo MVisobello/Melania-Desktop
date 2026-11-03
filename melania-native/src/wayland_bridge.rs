@@ -722,8 +722,10 @@ impl BridgeState {
         };
         let rectangle=window.geometry();
         top.with_pending_state(|pending| {
-            if enabled {pending.states.set(xdg_toplevel::State::Maximized);}
-            else {pending.states.unset(xdg_toplevel::State::Maximized);}
+            if enabled {
+                pending.states.set(xdg_toplevel::State::Maximized);
+                pending.states.unset(xdg_toplevel::State::Fullscreen);
+            } else {pending.states.unset(xdg_toplevel::State::Maximized);}
             if let Some(rect)=rectangle {
                 pending.size=Some((rect.width,rect.height).into());
             }
@@ -744,6 +746,55 @@ impl BridgeState {
             }
         }
         println!("MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED={enabled}");
+    }
+
+    /// The disposable QEMU output is a single 1280x800 display. The optional
+    /// xdg fullscreen output hint is therefore ignored, not mistaken for a
+    /// real multi-output KMS policy. The client still owns its pixels.
+    fn request_managed_fullscreen(&mut self,top:ToplevelSurface,enabled:bool) {
+        if !self.managed_xdg_mode {
+            top.send_configure();
+            return;
+        }
+        let surface=top.wl_surface().clone();
+        let Some((_,window))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface) else {
+            top.send_configure();
+            return;
+        };
+        let changed=if enabled {window.fullscreen()} else {
+            if window.state()==WindowDisplayState::Fullscreen {
+                window.restore()
+            } else {false}
+        };
+        let rectangle=window.geometry();
+        top.with_pending_state(|pending| {
+            if enabled {
+                pending.states.set(xdg_toplevel::State::Fullscreen);
+                pending.states.unset(xdg_toplevel::State::Maximized);
+            } else {
+                pending.states.unset(xdg_toplevel::State::Fullscreen);
+            }
+            if let Some(rect)=rectangle {
+                pending.size=Some((rect.width,rect.height).into());
+            }
+        });
+        top.send_pending_configure();
+        if changed {
+            if let (Some(key),Some(rect))=(self.known_window_surfaces.id_of(&surface),rectangle) {
+                if self.dynamic_scene.geometry(key).is_some() &&
+                   self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
+                    self.note_scene_change();
+                    if self.continuous_kms_mode &&
+                       self.continuous_frame_count<self.continuous_frame_target {
+                        if let Err(error)=self.submit_continuous_frame() {
+                            eprintln!("managed xdg fullscreen repaint refused: {error}");
+                        }
+                    }
+                }
+            }
+        }
+        println!("MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN={enabled}");
     }
 }
 
@@ -1093,6 +1144,12 @@ impl XdgShellHandler for BridgeState {
     }
     fn unmaximize_request(&mut self,top:ToplevelSurface) {
         self.request_managed_maximize(top,false);
+    }
+    fn fullscreen_request(&mut self,top:ToplevelSurface,_:Option<WlOutput>) {
+        self.request_managed_fullscreen(top,true);
+    }
+    fn unfullscreen_request(&mut self,top:ToplevelSurface) {
+        self.request_managed_fullscreen(top,false);
     }
     fn minimize_request(&mut self,_:ToplevelSurface){}
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
