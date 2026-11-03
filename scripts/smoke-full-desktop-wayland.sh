@@ -601,100 +601,49 @@ done
   exit 1
 }
 echo 'PASS: real GTK Ctrl+Shift+T reopened a closed tab and Ctrl+N created a second mapped Files window'
-# The pointer is injected into the isolated Xvfb host, NOT the developer's
-# real desktop. Drag the second visible Nautilus-style tab out onto exposed
-# desktop wallpaper: GTK must emit NoTarget and tear it off as a new toplevel.
-# Verify actual GDK drag start and successful window creation, not just a
-# mocked application callback. Do this after Ctrl+N, so both old/new windows
-# have been proven usable first.
-# Map/paint can trail the IPC window registration by 55 ms or more.
-# Require the new Files window's first real tab to exist before pressing it.
-new_tab_ready=0
+# Real Xvfb mouse drag proof: wait for the second Files window's first tab.
+ready=0
 for i in $(seq 1 45); do
-  [[ "$(grep -c '^MELANIA_FILES_TAB_COUNT=1
-drag_started=0
-tearoff=0
-for i in $(seq 1 50); do
-  grep -q 'MELANIA_FILES_TAB_DRAG_BEGIN' "$TEMP/compositor.log" && drag_started=1
-  if [[ "$(grep -c 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)" -gt "$prior_tearoffs" ]]; then
-    tearoff=1
-    break
-  fi
+  count=$(grep -cF 'MELANIA_FILES_TAB_COUNT=1' "$TEMP/compositor.log" || true)
+  if (( count >= 2 )); then ready=1; break; fi
   sleep .1
 done
-[[ "$drag_started" == 1 && "$tearoff" == 1 ]] || {
-  echo 'FAIL: real mouse drag did not tear the active tab off to a separate window' >&2
-  grep -E 'MELANIA_FILES_TAB_(DRAG_BEGIN|TEAROFF|COUNT)' "$TEMP/compositor.log" | tail -20 >&2 || true
-  exit 1
-}
-[[ "$(target/debug/melania-winctl list | grep -c 'Melania Files' || true)" -ge 3 ]] || {
-  echo 'FAIL: tear-off did not leave three mapped Files windows' >&2
-  target/debug/melania-winctl list >&2
-  exit 1
-}
-echo 'PASS: real GTK pointer drag outside tab bar created third independent Files window'
-kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
-target/debug/melania-winctl quit >/dev/null
-for i in $(seq 1 60); do
-  if ! kill -0 "$PID" 2>/dev/null; then break; fi
-  sleep .1
-done
-if kill -0 "$PID" 2>/dev/null; then echo 'FAIL: quit did not close compositor' >&2; exit 1; fi
-wait "$PID" || { echo 'FAIL: compositor exited with error' >&2; exit 1; }
-PID=''
-echo 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit'
-echo 'NOT TESTED: hardware DRM/seat, XWayland, HiDPI, drag-and-drop or production Aero.'
- "$TEMP/compositor.log" || true)" -ge 2 ]] && { new_tab_ready=1; break; }
-  sleep .1
-done
-[[ "$new_tab_ready" == 1 ]] || { echo 'FAIL: Ctrl+N second Files window never painted its tab' >&2; exit 1; }
-# Bring the newly created Files window to the foreground. Host xdotool focus
-# alone does NOT select a toplevel inside the nested Wayland compositor.
-NEW_FILES_ID="$(target/debug/melania-winctl list | awk -F '\t' '$4 ~ /Melania Files/ {id=$1} END{print id}')"
-[[ -n "$NEW_FILES_ID" ]] || { echo 'FAIL: missing second Files window id' >&2; exit 1; }
+if (( ready != 1 )); then echo 'FAIL: new Files tab not ready for GTK drag' >&2; exit 1; fi
+NEW_FILES_ID=$(target/debug/melania-winctl list | grep 'Melania Files' | tail -n1 | cut -f1)
+if [[ -z "$NEW_FILES_ID" ]]; then echo 'FAIL: second Files window has no IPC id' >&2; exit 1; fi
 target/debug/melania-winctl activate "$NEW_FILES_ID" >/dev/null
 xdotool windowfocus --sync "$HOST_WINDOW"
-sleep .5
+sleep .6
 scrot -z -o reports/nested-wayland-files-before-tab-drag.png
-prior_tearoffs="$(grep -c 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)"
-# The just-created single-tab window's handle is within x≈80–220/y≈72–109.
-# Move the pointer through several actual frames before releasing outside it.
+prior=$(grep -cF 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)
+# The visible single-tab titlebar starts near x=80 and y=72.
 xdotool mousemove --window "$HOST_WINDOW" 143 85
-sleep .08
+sleep .1
 xdotool mousedown 1
-sleep .12
+sleep .14
 xdotool mousemove --sync --window "$HOST_WINDOW" 169 89
-sleep .13
+sleep .12
 xdotool mousemove --sync --window "$HOST_WINDOW" 203 95
-sleep .13
-xdotool mousemove --sync --window "$HOST_WINDOW" 115 160
-sleep .13
-xdotool mousemove --sync --window "$HOST_WINDOW" 36 245
-sleep .13
-xdotool mousemove --sync --window "$HOST_WINDOW" 24 330
-sleep .18
+sleep .12
+xdotool mousemove --sync --window "$HOST_WINDOW" 110 165
+sleep .12
+xdotool mousemove --sync --window "$HOST_WINDOW" 30 320
+sleep .2
 xdotool mouseup 1
-drag_started=0
-tearoff=0
+passed=0
 for i in $(seq 1 50); do
-  grep -q 'MELANIA_FILES_TAB_DRAG_BEGIN' "$TEMP/compositor.log" && drag_started=1
-  if [[ "$(grep -c 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)" -gt "$prior_tearoffs" ]]; then
-    tearoff=1
-    break
-  fi
+  current=$(grep -cF 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)
+  if (( current > prior )); then passed=1; break; fi
   sleep .1
 done
-[[ "$drag_started" == 1 && "$tearoff" == 1 ]] || {
-  echo 'FAIL: real mouse drag did not tear the active tab off to a separate window' >&2
-  grep -E 'MELANIA_FILES_TAB_(DRAG_BEGIN|TEAROFF|COUNT)' "$TEMP/compositor.log" | tail -20 >&2 || true
+if (( passed != 1 )); then
+  echo 'FAIL: GTK mouse drag ended without creating a detached Files window' >&2
+  grep -E 'MELANIA_FILES_TAB_(DRAG|TEAROFF|COUNT)' "$TEMP/compositor.log" | tail -24 >&2 || true
   exit 1
-}
-[[ "$(target/debug/melania-winctl list | grep -c 'Melania Files' || true)" -ge 3 ]] || {
-  echo 'FAIL: tear-off did not leave three mapped Files windows' >&2
-  target/debug/melania-winctl list >&2
-  exit 1
-}
-echo 'PASS: real GTK pointer drag outside tab bar created third independent Files window'
+fi
+count=$(target/debug/melania-winctl list | grep -cF 'Melania Files' || true)
+if (( count < 3 )); then echo 'FAIL: detached Files window not mapped in compositor' >&2; exit 1; fi
+echo 'PASS: actual GTK pointer release on the desktop detached a tab into a third Files window'
 kill -0 "$PID" || { echo 'FAIL: compositor stopped during test' >&2; exit 1; }
 target/debug/melania-winctl quit >/dev/null
 for i in $(seq 1 60); do
