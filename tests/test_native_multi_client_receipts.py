@@ -36,10 +36,14 @@ class MultiSurfaceKmsReceipts(unittest.TestCase):
         section=BRIDGE[start:end]
         self.assertLess(section.index("self.continuous_redraw.presented(planned)"),
                         section.index("self.continuous_client_ledger.acknowledged(clients)"))
-        self.assertLess(section.index("self.continuous_client_ledger.acknowledged(clients)"),
-                        section.index("complete_presented_frame("))
-        self.assertLess(section.index("complete_presented_frame("),
-                        section.index("completed.resource.release();"))
+        ledger=section.index("self.continuous_client_ledger.acknowledged(clients)")
+        # Stage49 also has an independent compositor-only close callback,
+        # already verified after the KMS ACK. Inspect the per-surface callback
+        # that belongs to the NEW ledger, not the earlier close callback.
+        frame=section.index("complete_presented_frame(",ledger)
+        release=section.index("completed.resource.release();",ledger)
+        self.assertLess(ledger,frame)
+        self.assertLess(frame,release)
         self.assertIn("completed.notify_frame && is_live",section)
         self.assertIn("self.known_window_surfaces.get(slot)==Some(&completed.key)",section)
 
