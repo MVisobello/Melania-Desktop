@@ -27,13 +27,14 @@ class FirstUseLatency(unittest.TestCase):
         self.assertIn("if let Some(button)=first {button.emit_clicked();}",start)
 
     def test_files_chrome_first_and_full_browser_remains_functional(self):
-        build=FILES[FILES.index("fn build_ui(app: &Application)"):FILES.index("/// Prefer Melania's freedesktop icon theme")]
+        build=FILES[FILES.index("fn create_files_window(app: &Application,"):FILES.index("fn build_ui(app:&Application)")]
         self.assertIn('Label::new(Some("Caricamento cartella…"))',build)
         self.assertIn("window.present();",build)
         self.assertIn("timeout_add_local_once(Duration::from_millis(55)",build)
         self.assertLess(build.index("window.present();"),build.index("append_browser_tab(&first_tabs"))
         self.assertIn("first_tabs.remove_page(Some(0));",build)
-        self.assertIn("if let Some(uri)=requested_uri {first_remote(uri);}",build)
+        self.assertIn("if let Some(uri)=requested_uri {",build)
+        self.assertIn("first_remote(uri);",build)
         self.assertIn('std::env::var("MELANIA_SMOKE_GIO_FILE_URI")',build)
         self.assertIn("MELANIA_FILES_FIRST_WINDOW_MS=",build)
         self.assertIn("MELANIA_FILES_FIRST_TAB_MS=",build)
