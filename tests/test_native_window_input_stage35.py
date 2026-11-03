@@ -32,7 +32,8 @@ class NativeWindowInputStage35(unittest.TestCase):
     def test_actual_wayland_pointer_and_keyboard_are_dispatched_by_hit_test(self):
         self.assertIn("fn pointer_target(&self,point:Point<f64,Logical>)",BRIDGE)
         self.assertIn("self.multi_scene.hit_test(point.x,point.y)",BRIDGE)
-        self.assertIn("self.known_window_surfaces.get((key-1) as usize)",BRIDGE)
+        self.assertIn("self.known_window_surfaces.get(key)?.clone()",BRIDGE)
+        self.assertIn("known_window_surfaces:WindowSlots<WlSurface>",BRIDGE)
         self.assertIn("self.multi_scene.position(key)",BRIDGE)
         self.assertIn("event.position_transformed((1280,800).into())",BRIDGE)
         self.assertIn("let target=state.pointer_target(point)",BRIDGE)
