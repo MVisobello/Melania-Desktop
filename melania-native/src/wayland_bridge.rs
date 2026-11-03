@@ -114,6 +114,9 @@ struct BridgeState {
     // Opt-in VM-only bridge of real xdg_toplevel requests to Stage77.
     managed_xdg_mode:bool,
     managed_windows:Vec<(WlSurface,ManagedWindow)>,
+    // A configure alone is not a displayed resize: wait for the matching
+    // wl_shm client image before changing the retained KMS scene.
+    managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
     window_interaction:WindowInteraction,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
@@ -143,6 +146,12 @@ struct PendingAsyncFrame {
 /// Send wl_surface.frame completions only after the KMS presenter has
 /// acknowledged that client-owned pixels actually reached the VM CRTC.
 /// Traverse subsurfaces so a client does not stall an animated surface tree.
+// A toplevel role request cannot present old pixels at a new geometry.
+// The actual imported wl_shm buffer must satisfy the last configure size.
+fn accepts_managed_role_buffer(expected:Option<(usize,usize)>,actual:(usize,usize))->bool {
+    expected.is_none_or(|size|size==actual)
+}
+
 fn complete_presented_frame(surface:&WlSurface,elapsed_ms:u32)->u32 {
     let mut delivered=0u32;
     with_surface_tree_downward(
@@ -732,17 +741,14 @@ impl BridgeState {
         });
         top.send_pending_configure();
         if changed {
-            if let (Some(key),Some(rect))=(self.known_window_surfaces.id_of(&surface),rectangle) {
-                if self.dynamic_scene.geometry(key).is_some() &&
-                   self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
-                    self.note_scene_change();
-                    if self.continuous_kms_mode &&
-                       self.continuous_frame_count<self.continuous_frame_target {
-                        if let Err(error)=self.submit_continuous_frame() {
-                            eprintln!("managed xdg geometry repaint refused: {error}");
-                        }
-                    }
-                }
+            if let Some(rect)=rectangle {
+                // The configure is only a request. A previous wl_shm image
+                // must NOT be moved or submitted to KMS before the matching
+                // client buffer has been committed and validated.
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_sizes.push((
+                    surface.clone(),(rect.width as usize,rect.height as usize)
+                ));
             }
         }
         println!("MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED={enabled}");
@@ -781,17 +787,14 @@ impl BridgeState {
         });
         top.send_pending_configure();
         if changed {
-            if let (Some(key),Some(rect))=(self.known_window_surfaces.id_of(&surface),rectangle) {
-                if self.dynamic_scene.geometry(key).is_some() &&
-                   self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
-                    self.note_scene_change();
-                    if self.continuous_kms_mode &&
-                       self.continuous_frame_count<self.continuous_frame_target {
-                        if let Err(error)=self.submit_continuous_frame() {
-                            eprintln!("managed xdg fullscreen repaint refused: {error}");
-                        }
-                    }
-                }
+            if let Some(rect)=rectangle {
+                // The configure is only a request. A previous wl_shm image
+                // must NOT be moved or submitted to KMS before the matching
+                // client buffer has been committed and validated.
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_sizes.push((
+                    surface.clone(),(rect.width as usize,rect.height as usize)
+                ));
             }
         }
         println!("MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN={enabled}");
@@ -847,6 +850,17 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     };
+                    // Refuse stale-size buffers during a managed role switch.
+                    // A successful client ACK alone did not provide pixels.
+                    if self.managed_xdg_mode {
+                        let expected=self.managed_pending_sizes.iter()
+                            .find(|(role,_)|role==surface).map(|(_,size)|*size);
+                        if !accepts_managed_role_buffer(expected,(pixels.width(),pixels.height())) {
+                            eprintln!("MELANIA_NATIVE_MANAGED_XDG_STALE_BUFFER_REJECTED=true");
+                            buffer.release();
+                            return;
+                        }
+                    }
                     // Keep the current position across later wl_shm commits.
                     let (x,y)=if self.managed_xdg_mode {
                         self.managed_windows.iter().find(|(role,_)|role==surface)
@@ -856,18 +870,22 @@ impl CompositorHandler for BridgeState {
                     } else {
                         self.dynamic_scene.position(key).unwrap_or(default_pos)
                     };
-                    if self.managed_xdg_mode {
-                        if let Some((_,window))=self.managed_windows.iter_mut()
-                            .find(|(role,_)|role==surface) {
-                            window.update_normal_geometry(WindowRect {
-                                x,y,width:pixels.width() as i32,height:pixels.height() as i32,
-                            });
-                        }
-                    }
+                    let width=pixels.width() as i32;
+                    let height=pixels.height() as i32;
                     if self.dynamic_scene.upsert(key,x,y,pixels).is_err() {
                         eprintln!("dynamic QEMU client image rejected");
                         buffer.release();
                         return;
+                    }
+                    if self.managed_xdg_mode {
+                        // Change the remembered normal geometry only after
+                        // the owned client pixels actually entered the scene.
+                        if let Some((_,window))=self.managed_windows.iter_mut()
+                            .find(|(role,_)|role==surface) {
+                            window.update_normal_geometry(WindowRect{x,y,width,height});
+                        }
+                        self.managed_pending_sizes.retain(|(role,_)|role!=surface);
+                        println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
                     }
                 } else {
                     let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
@@ -1155,6 +1173,7 @@ impl XdgShellHandler for BridgeState {
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
         self.managed_windows.retain(|(role,_)|role!=&surface);
+        self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
         if self.dynamic_xdg_resize_mode {
             self.dynamic_toplevels.retain(|existing|existing.wl_surface()!=&surface);
         }
@@ -1507,6 +1526,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_xdg_mode:std::env::var("MELANIA_NATIVE_MANAGED_XDG")
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
+        managed_pending_sizes:Vec::new(),
         window_interaction:WindowInteraction::default(),
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
@@ -1784,4 +1804,20 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         "QEMU Wayland input bridge incomplete: focused={} keys={} buttons={}",
         state.focused.is_some(),state.delivered_keys,state.delivered_buttons
     ).into())
+}
+
+#[cfg(test)]
+mod managed_role_commit_tests {
+    use super::accepts_managed_role_buffer;
+
+    #[test]
+    fn role_resize_refuses_stale_client_images_until_matching_wl_shm_arrives() {
+        assert!(accepts_managed_role_buffer(None,(360,224)));
+        assert!(accepts_managed_role_buffer(None,(400,240)));
+        assert!(!accepts_managed_role_buffer(Some((1280,800)),(360,224)));
+        assert!(!accepts_managed_role_buffer(Some((1280,800)),(1280,799)));
+        assert!(accepts_managed_role_buffer(Some((1280,800)),(1280,800)));
+        assert!(!accepts_managed_role_buffer(Some((360,224)),(1280,800)));
+        assert!(accepts_managed_role_buffer(Some((360,224)),(360,224)));
+    }
 }
