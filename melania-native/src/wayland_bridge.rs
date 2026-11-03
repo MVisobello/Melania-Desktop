@@ -295,6 +295,8 @@ impl BridgeState {
                     if delivered!=1 {
                         return Err("QEMU close KMS presentation did not complete survivor callback".into());
                     }
+                    self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
+                    println!("MELANIA_NATIVE_FRAME_CALLBACK_COUNT={}",self.frame_callback_count);
                     println!("MELANIA_NATIVE_CLOSE_FRAME_CALLBACK_DONE=true");
                     println!("MELANIA_NATIVE_CLOSE_FRAME_ACKED=5");
                 },
@@ -940,7 +942,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     println!("MELANIA_NATIVE_TWO_REAL_WINDOWS_COMPOSITED=true");
                 }
                 if state.frame_callbacks_probe {
-                    if state.frame_callback_count!=if state.drag_redraw_mode {3} else {state.pixel_frame_target as u32} {
+                    if state.frame_callback_count!=if state.close_redraw_mode {4} else if state.drag_redraw_mode {3} else {state.pixel_frame_target as u32} {
                         return Err("not all Wayland frame callbacks completed after KMS".into());
                     }
                     println!("MELANIA_NATIVE_FRAME_CALLBACKS_PRESENTED_PASS=true");
