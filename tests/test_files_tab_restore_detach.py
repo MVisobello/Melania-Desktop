@@ -22,7 +22,7 @@ class FilesTabRestoreDetach(unittest.TestCase):
             "fn remember_closed_files_tab(",
             "if remember { remember_closed_files_tab(recently_closed,&title); }",
             "fn reopen_closed_files_tab(",
-            "recently_closed.borrow_mut().pop()",
+            "history.borrow_mut().pop()",
         ):
             self.assertIn(token,FILES)
         self.assertNotIn("Vec<(GtkBox,ClosedFilesTab)>",FILES)
