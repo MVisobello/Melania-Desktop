@@ -772,6 +772,7 @@ dynamic_server_log="$(mktemp -t melania-dynamic-server-XXXXXX)"
 dynamic_kms_log="$(mktemp -t melania-dynamic-kms-XXXXXX)"
 dynamic_client_log="$(mktemp -t melania-dynamic-client-XXXXXX)"
 rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+rm -f /run/melania-native-qemu/dynamic-pointer-frame13-acked
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
 MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
@@ -781,6 +782,7 @@ MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
 MELANIA_NATIVE_XDG_RESIZE=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_POINTER_PROOF=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 83s \
   "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
   > "$dynamic_server_log" 2>&1 &
@@ -799,9 +801,10 @@ fi
 tail -n +1 -f -s 0.05 "$dynamic_kms_log" > /dev/ttyS0 &
 dynamic_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
-MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+MELANIA_QEMU_CONTINUOUS_FRAMES=13 \
 MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_DYNAMIC=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_DYNAMIC_POINTER=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 75s \
   "$continuous_kms" < /dev/tty1 > "$dynamic_kms_log" 2>&1 &
 dynamic_kms_pid=$!
@@ -818,6 +821,7 @@ fi
 if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
      MELANIA_QEMU_CONTINUOUS_DYNAMIC_CLIENT=YES_QEMU_VM \
      MELANIA_QEMU_XDG_RESIZE_CLIENT=YES_QEMU_VM \
+     MELANIA_QEMU_DYNAMIC_POINTER_CLIENT=YES_QEMU_VM \
      WAYLAND_DISPLAY="$dynamic_socket" \
   timeout --signal=TERM --kill-after=3s 68s \
   "$two_continuous_client" > "$dynamic_client_log" 2>&1; then
@@ -851,22 +855,31 @@ grep -q '^MELANIA_NATIVE_CLIENT_XDG_RESIZE_ACK_A=true' "$dynamic_client_log" ||
   fatal 'client_A_real_xdg_resize_ack_missing'
 grep -q '^MELANIA_NATIVE_CLIENT_XDG_RESIZE_ACK_B=true' "$dynamic_client_log" ||
   fatal 'client_B_real_xdg_resize_ack_missing'
-for index in $(seq 1 12); do
+grep -q '^MELANIA_NATIVE_DYNAMIC_POINTER_CLIENT_STAYED_ALIVE=true' "$dynamic_client_log" ||
+  fatal 'resized_wayland_clients_disconnected_before_real_pointer_KMS'
+for index in $(seq 1 13); do
   grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$dynamic_server_log" ||
     fatal "dynamic_KMS_scheduler_ACK_$index_missing"
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$dynamic_kms_log" ||
     fatal "dynamic_real_CRTC_frame_$index_missing"
 done
-grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12' "$dynamic_server_log" ||
-  fatal 'dynamic_Smithay_twelve_frame_callbacks_missing'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=13' "$dynamic_server_log" ||
+  fatal 'dynamic_Smithay_thirteen_frame_KMS_missing'
+grep -q '^MELANIA_NATIVE_DYNAMIC_POINTER_KMS13_ACKED=true' "$dynamic_server_log" ||
+  fatal 'dynamic_pointer_geometry_or_real_KMS_ACK_missing'
+grep -q '^MELANIA_NATIVE_DYNAMIC_POINTER_FRAME13_PASS=true' "$dynamic_server_log" ||
+  fatal 'dynamic_pointer_compositor_only_redraw_missing'
 grep -q '^MELANIA_RUST_CONTINUOUS_DYNAMIC_FRAME_VISIBLE=12' "$dynamic_kms_log" ||
   fatal 'dynamic_QMP_capture_frame_missing'
-grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$dynamic_kms_log" ||
-  fatal 'dynamic_KMS_twelve_frames_not_presented'
+grep -q '^MELANIA_RUST_CONTINUOUS_DYNAMIC_POINTER_FRAME_VISIBLE=13' "$dynamic_kms_log" ||
+  fatal 'resized_mouse_drag_never_reached_real_CRTC'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=13' "$dynamic_kms_log" ||
+  fatal 'dynamic_KMS_thirteen_frames_not_presented'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$dynamic_kms_log" ||
   fatal 'dynamic_real_KMS_original_CRTC_not_restored'
 rm -f "$dynamic_server_log" "$dynamic_kms_log" "$dynamic_client_log"
 report 'MELANIA_QEMU_NATIVE_DYNAMIC_TWO_SIZES_PASS=true'
+report 'MELANIA_QEMU_NATIVE_DYNAMIC_POINTER_KMS13_PASS=true'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'

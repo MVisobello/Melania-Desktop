@@ -286,6 +286,21 @@ fn main()->Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_DYNAMIC_PREMULTIPLIED_ARGB_CLIENT_PASS=true");
     }
     std::io::stdout().flush()?;
+    if std::env::var("MELANIA_QEMU_DYNAMIC_POINTER_CLIENT").as_deref()==Ok("YES_QEMU_VM") {
+        if !dynamic || !state.resize_acked_a || !state.resize_acked_b {
+            return Err("real pointer proof requires two xdg resized clients".into());
+        }
+        // Keep both real Wayland surfaces connected until the QMP tablet
+        // moves resized B and the actual virtual CRTC confirms frame13.
+        let ack=std::path::Path::new("/run/melania-native-qemu/dynamic-pointer-frame13-acked");
+        let deadline=Instant::now()+Duration::from_secs(24);
+        while !ack.exists() {
+            if Instant::now()>deadline {return Err("dynamic mouse KMS13 ACK absent".into());}
+            thread::sleep(Duration::from_millis(25));
+        }
+        println!("MELANIA_NATIVE_DYNAMIC_POINTER_CLIENT_STAYED_ALIVE=true");
+        std::io::stdout().flush()?;
+    }
     let reopen=std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
     if reopen {

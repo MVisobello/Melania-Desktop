@@ -231,10 +231,16 @@ fn run()->Result<(),Box<dyn Error>> {
                 std::io::stdout().flush()?;
             }
             if std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC")
-                    .as_deref()==Ok("YES_QEMU_VM") && index+1==total {
+                    .as_deref()==Ok("YES_QEMU_VM") && index+1==12 {
                 // QMP must capture two different-sized real client
                 // framebuffers while the virtual CRTC still scans them out.
                 println!("MELANIA_RUST_CONTINUOUS_DYNAMIC_FRAME_VISIBLE={}",index+1);
+                std::io::stdout().flush()?;
+            }
+            let pointer_proof=std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC_POINTER")
+                .as_deref()==Ok("YES_QEMU_VM");
+            if pointer_proof && index+1==13 {
+                println!("MELANIA_RUST_CONTINUOUS_DYNAMIC_POINTER_FRAME_VISIBLE=13");
                 std::io::stdout().flush()?;
             }
             let reopen=std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN")
@@ -250,6 +256,7 @@ fn run()->Result<(),Box<dyn Error>> {
             // seventh and twelfth presentations (not just its FB_ID).
             thread::sleep(Duration::from_millis(
                 if (reopen && (index==12 || index==13)) ||
+                   (pointer_proof && index==12) ||
                    index==6 || index==11 {2500} else {350}
             ));
             if index+1==total {rollback.restore()?;}

@@ -104,6 +104,8 @@ struct BridgeState {
     // Explicit, VM-only xdg_toplevel configure/ack resize protocol.
     // Unrelated nested Wayland applications use their existing policy.
     dynamic_xdg_resize_mode:bool,
+    // Real QMP tablet drag AFTER xdg resize; needs one compositor-only KMS frame.
+    dynamic_pointer_proof_mode:bool,
     dynamic_toplevels:Vec<ToplevelSurface>,
     window_interaction:WindowInteraction,
     known_window_surfaces:WindowSlots<WlSurface>,
@@ -236,6 +238,19 @@ impl BridgeState {
         }
         self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
         self.presented_layout_generation=planned.generation;
+        if self.dynamic_pointer_proof_mode && self.continuous_frame_count==13 {
+            let (x,y,width,height)=self.dynamic_scene.geometry(2)
+                .ok_or("QMP pointer drag lost resized client B")?;
+            if (x-740).abs()>3 || (y-270).abs()>3 ||
+               width!=220 || height!=180 || self.dynamic_scene.window_count()!=2 {
+                return Err("QMP pointer drag did not preserve resized B geometry".into());
+            }
+            // Signal only after the real CRTC FB_ID success ACK. Keep the
+            // client alive until this proof, otherwise disconnect clears B.
+            std::fs::write("/run/melania-native-qemu/dynamic-pointer-frame13-acked",b"real KMS ACK\n")?;
+            println!("MELANIA_NATIVE_DYNAMIC_POINTER_KMS13_ACKED=true");
+            let _=std::io::stdout().flush();
+        }
         if self.dynamic_xdg_resize_mode && self.continuous_frame_count==6 {
             // Before the next client commits, issue REAL xdg_toplevel
             // configure events. Clients must ack xdg_surface.configure
@@ -1264,7 +1279,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_client_ledger:ClientCommitLedger::new(),
         continuous_frame_count:0,
         continuous_frame_target:if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
-            .as_deref()==Ok("YES_QEMU_VM") {14} else {12},
+            .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
+            .as_deref()==Ok("YES_QEMU_VM") {13} else {12},
         continuous_reopen_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_close_frame_presented:false,
@@ -1289,6 +1305,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         dynamic_scene:DynamicWindowScene::new(1280,800,[58,33,27,0])
             .expect("bounded disposable QEMU output"),
         dynamic_xdg_resize_mode:std::env::var("MELANIA_NATIVE_XDG_RESIZE")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        dynamic_pointer_proof_mode:std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
             .as_deref()==Ok("YES_QEMU_VM"),
         dynamic_toplevels:Vec::new(),
         window_interaction:WindowInteraction::default(),
@@ -1367,6 +1385,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     if state.dynamic_xdg_resize_mode && !state.dynamic_window_mode {
         return Err("xdg resize configure is only permitted in disposable QEMU dynamic mode".into());
+    }
+    if state.dynamic_pointer_proof_mode &&
+       (!state.dynamic_xdg_resize_mode || !state.dynamic_window_mode ||
+        !state.continuous_kms_mode || state.continuous_reopen_mode) {
+        return Err("dynamic pointer frame13 requires real xdg resize and opt-in VM KMS".into());
     }
     if state.multi_window_mode && !state.continuous_kms_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
@@ -1453,7 +1476,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         display.flush_clients()?;
         if state.continuous_kms_mode &&
            state.continuous_frame_count==state.continuous_frame_target {
-            if u64::from(state.frame_callback_count)!=state.continuous_frame_target {
+            // Frame 13 in the optional tablet proof is compositor-owned
+            // damage: NO new client commit and therefore NO callback.
+            let expected_callbacks=if state.dynamic_pointer_proof_mode {12}
+                else {state.continuous_frame_target};
+            if u64::from(state.frame_callback_count)!=expected_callbacks {
                 return Err("Wayland callbacks not completed after continuous KMS".into());
             }
             if state.multi_window_mode && !state.continuous_two_window_presented {
@@ -1472,6 +1499,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                          state.continuous_frame_target);
                 if state.continuous_reopen_mode {
                     println!("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true");
+                }
+                if state.dynamic_pointer_proof_mode {
+                    println!("MELANIA_NATIVE_DYNAMIC_POINTER_FRAME13_PASS=true");
                 }
                 println!("MELANIA_NATIVE_SESSION_READY=false");
                 return Ok(());
