@@ -3098,10 +3098,19 @@ fn append_file_page(
         }));
     });
     let token_for_cancel=tab.widget_name().to_string();
-    drag_source.connect_drag_cancel(move |_,_,reason|
-        detach_dragged_files_tab(&token_for_cancel,reason));
+    drag_source.connect_drag_cancel(move |_,_,reason|{
+        if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+            eprintln!("MELANIA_FILES_TAB_DRAG_CANCEL token={} reason={reason:?}",token_for_cancel);
+        }
+        detach_dragged_files_tab(&token_for_cancel,reason)
+    });
     let token_for_end=tab.widget_name().to_string();
-    drag_source.connect_drag_end(move |_,_,_|clear_files_tab_drag(&token_for_end));
+    drag_source.connect_drag_end(move |_,_,delete_data|{
+        if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+            eprintln!("MELANIA_FILES_TAB_DRAG_END token={} delete={delete_data}",token_for_end);
+        }
+        clear_files_tab_drag(&token_for_end);
+    });
     tab.add_controller(drag_source);
     let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
     let weak_pages=notebook.downgrade();
