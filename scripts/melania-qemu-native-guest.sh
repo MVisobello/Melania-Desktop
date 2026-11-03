@@ -464,6 +464,18 @@ grep -q '^MELANIA_NATIVE_REOPEN_FRAME_VISIBLE=true' "$multi_server_log" ||
   fatal 'reopened_client_not_retained_through_KMS'
 grep -q '^MELANIA_RUST_REOPEN_FRAME6_PASS=true' "$multi_kms_log" ||
   fatal 'Rust_KMS_sixth_reopen_frame_not_presented'
+# Unlike a source-text-only check, these records are written by the
+# generation planner after the genuine DRM/KMS ACK. Expect exactly six
+# strictly increasing scene generations during the two-client VM exercise.
+if ! awk -F= '/^MELANIA_NATIVE_SCENE_GENERATION_ACK=/ {
+    generation=$2+0
+    if (count>0 && generation<=previous) bad=1
+    previous=generation
+    count++
+} END {if (count!=6 || bad) exit 1}' "$multi_server_log"; then
+  fatal 'native_scene_generation_sequence_not_acknowledged_by_KMS'
+fi
+report 'MELANIA_QEMU_SCENE_GENERATIONS_ACKED=6'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
   fatal 'two_window_KMS_original_CRTC_not_restored'
 for index in 1 2 3; do
