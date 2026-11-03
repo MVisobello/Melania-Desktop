@@ -3234,6 +3234,33 @@ fn create_files_window(app: &Application, explicitly_requested: Option<String>) 
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
     let recently_closed: Rc<RefCell<Vec<ClosedFilesTab>>> = Rc::new(RefCell::new(Vec::new()));
     let next_tab_location: Rc<RefCell<Option<ClosedFilesTab>>> = Rc::new(RefCell::new(None));
+    // Accept tab drops on empty titlebar space as well as directly on a tab.
+    // The same process-local ticket prevents file-copy drags and external
+    // strings from being interpreted as movable tab handles.
+    let rail_drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
+    let rail_pages=tabs.downgrade();
+    let rail_strip=tab_strip.downgrade();
+    let rail_window=window.downgrade();
+    let rail_add=add_button.downgrade();
+    let rail_headers=tab_headers.clone();
+    let rail_next=next_tab_location.clone();
+    rail_drop.connect_drop(move |_,value,_,_| {
+        let Ok(token)=value.get::<String>() else{return false;};
+        let (Some(pages),Some(strip),Some(window),Some(add))=(
+            rail_pages.upgrade(),rail_strip.upgrade(),rail_window.upgrade(),rail_add.upgrade())
+            else{return false;};
+        let Some(drag)=active_files_tab_drag(&token) else{return false;};
+        if drag.source_window.upgrade().as_ref()==Some(&window) {
+            let source=rail_headers.borrow().iter()
+                .find(|(_,heading,_)|heading.widget_name().as_str()==token)
+                .map(|(source,_,_)|source.clone());
+            let Some(source)=source else{return false;};
+            return reorder_files_tab(&pages,&strip,&rail_headers,&window,
+                                     &source,pages.n_pages().saturating_sub(1));
+        }
+        import_dragged_files_tab(&token,&window,&pages,&add,&rail_next)
+    });
+    tab_rail.add_controller(rail_drop);
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
     let scroll_for_switch = tab_scroll.clone();
