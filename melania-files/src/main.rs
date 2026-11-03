@@ -2934,12 +2934,19 @@ fn append_file_page(
         eprintln!("MELANIA_FILES_TAB_COUNT={}",headers.borrow().len());
     }
 
-    let tabs_for_title=notebook.clone();
-    let page_for_title=child.clone();
-    let window_for_title=window.clone();
+    // The title label is owned by this page: retaining the page here can
+    // create a reference cycle (label signal -> page -> browser -> label).
+    // Resolve only live widgets when a folder changes its displayed name.
+    let tabs_for_title=notebook.downgrade();
+    let page_for_title=child.downgrade();
+    let window_for_title=window.downgrade();
     text.connect_label_notify(move |label| {
-        if tabs_for_title.page_num(&page_for_title)==tabs_for_title.current_page() {
-            window_for_title.set_title(Some(&format!("{} — Melania Files",label.label())));
+        if let (Some(tabs), Some(page), Some(window))=(
+            tabs_for_title.upgrade(), page_for_title.upgrade(), window_for_title.upgrade()
+        ) {
+            if tabs.page_num(&page)==tabs.current_page() {
+                window.set_title(Some(&format!("{} — Melania Files",label.label())));
+            }
         }
     });
 
