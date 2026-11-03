@@ -71,6 +71,7 @@ struct BridgeState {
     multi_window_mode:bool,
     async_kms_mode:bool,
     drag_redraw_mode:bool,
+    coalesced_redraw_mode:bool,
     presented_layout_generation:u64,
     async_stream:Option<AsyncKmsWorker>,
     async_pending:Option<PendingAsyncFrame>,
@@ -167,7 +168,8 @@ impl BridgeState {
     /// retained scene without requiring an extra wl_surface.commit.
     /// Stage38 is intentionally limited to ONE additional frame (ordinal 4).
     fn submit_drag_frame(&mut self) -> Result<(),Box<dyn Error>> {
-        if !self.drag_redraw_mode || self.pixel_frame_count!=3 ||
+        if !self.drag_redraw_mode || self.pixel_frame_count<3 ||
+           self.pixel_frame_count>=self.pixel_frame_target ||
            self.async_pending.is_some() ||
            self.multi_scene.layout_generation()==self.presented_layout_generation {
             return Ok(());
@@ -181,15 +183,16 @@ impl BridgeState {
             .ok_or("QEMU drag presentation already in progress")?;
         let worker=self.async_stream.as_ref()
             .ok_or("QEMU drag KMS worker unavailable")?;
-        if worker.submit(FrameJob{ticket,ordinal:4,pixels:frame}).is_err() {
+        let next=self.pixel_frame_count+1;
+        if worker.submit(FrameJob{ticket,ordinal:next,pixels:frame}).is_err() {
             self.render_scheduler.fail_present(ticket);
             return Err("QEMU drag KMS queue rejected fourth frame".into());
         }
         self.async_pending=Some(PendingAsyncFrame{
-            client:None,ticket,ordinal:4,
+            client:None,ticket,ordinal:next,
             layout_generation:self.multi_scene.layout_generation(),
         });
-        println!("MELANIA_NATIVE_DRAG_FRAME_SUBMITTED=4");
+        println!("MELANIA_NATIVE_DRAG_FRAME_SUBMITTED={next}");
         std::io::stdout().flush()?;
         Ok(())
     }
@@ -237,10 +240,16 @@ impl BridgeState {
             }
             buffer.release();
         } else {
-            if pending.ordinal!=4 || !self.drag_redraw_mode {
+            if !(4..=5).contains(&pending.ordinal) || !self.drag_redraw_mode {
                 return Err("unexpected compositor-only KMS frame".into());
             }
-            println!("MELANIA_NATIVE_DRAG_FRAME_ACKED=4");
+            println!("MELANIA_NATIVE_DRAG_FRAME_ACKED={}",pending.ordinal);
+            if self.coalesced_redraw_mode && !self.pixel_ready {
+                // A later real pointer motion may have moved the window while
+                // KMS was presenting the previous snapshot. Only the latest
+                // generation is submitted, and only AFTER the ACK.
+                self.submit_drag_frame()?;
+            }
         }
         std::io::stdout().flush()?;
         Ok(())
@@ -669,8 +678,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         pixel_frame_count:0,
-        pixel_frame_target:if std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
-            .as_deref()==Ok("YES_QEMU_VM") {4} else if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_COALESCED_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM") {5}
+            else if std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM") {4}
+            else if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
             .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
         live_stream:std::env::var("MELANIA_NATIVE_LIVE_STREAM")
@@ -684,6 +696,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
         drag_redraw_mode:std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        coalesced_redraw_mode:std::env::var("MELANIA_NATIVE_COALESCED_REDRAW")
             .as_deref()==Ok("YES_QEMU_VM"),
         presented_layout_generation:0,
         async_stream:None,async_pending:None,
@@ -738,7 +752,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     if state.multi_window_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
-        state.pixel_frame_target!=if state.drag_redraw_mode {4} else {3}) {
+        state.pixel_frame_target!=if state.coalesced_redraw_mode {5}
+            else if state.drag_redraw_mode {4} else {3}) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
     if state.async_kms_mode && !state.multi_window_mode {
@@ -747,6 +762,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if state.drag_redraw_mode &&
        (!state.multi_window_mode || !state.async_kms_mode) {
         return Err("native layout redraw only supported with QEMU async two-window mode".into());
+    }
+    if state.coalesced_redraw_mode && !state.drag_redraw_mode {
+        return Err("coalesced drag redraw requires QEMU drag KMS opt-in".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -766,7 +784,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
     let deadline=Instant::now()+Duration::from_secs(
-        if state.drag_redraw_mode {45} else {27}
+        if state.coalesced_redraw_mode {55}
+        else if state.drag_redraw_mode {45} else {27}
     );
     let mut both_shell_roles_seen_at=None;
     let mut pixel_ready_since=None;
@@ -810,7 +829,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 println!("MELANIA_NATIVE_CLIENT_FRAME_SNAPSHOT_READY=true");
                 println!("MELANIA_NATIVE_CLIENT_FRAME_COUNT={}",state.pixel_frame_count.min(3));
                 if state.drag_redraw_mode {
-                    if state.pixel_frame_count!=4 ||
+                    if state.pixel_frame_count!=state.pixel_frame_target ||
                        state.multi_scene.layout_generation()!=state.presented_layout_generation {
                         return Err("QEMU drag scene not acknowledged by KMS".into());
                     }

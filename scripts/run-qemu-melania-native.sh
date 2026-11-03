@@ -48,6 +48,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QEMU real drag injector missing'
 [[ -f "$root/scripts/capture-qemu-drag-frame.py" ]] ||
   deny 'QEMU fourth-frame screendump verifier missing'
+[[ -f "$root/scripts/capture-qemu-drag-frame5.py" ]] ||
+  deny 'QEMU fifth-frame screendump verifier missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -149,6 +151,11 @@ python3 "$root/scripts/capture-qemu-drag-frame.py" \
   --output "$report/drag-window-frame4.ppm" --timeout 950 \
   > "$report/qmp-drag-frame.log" 2>&1 &
 drag_capture_pid=$!
+python3 "$root/scripts/capture-qemu-drag-frame5.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/drag-window-frame5.ppm" --timeout 950 \
+  > "$report/qmp-drag-frame5.log" 2>&1 &
+drag_capture5_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -185,11 +192,17 @@ wait "$drag_inject_pid"
 drag_inject_code=$?
 wait "$drag_capture_pid"
 drag_capture_code=$?
+wait "$drag_capture5_pid"
+drag_capture5_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$drag_capture5_code" -ne 0 ]] ||
    ! grep -q '^MELANIA_QEMU_REAL_POINTER_DRAG_TO_KMS=true' "$report/qmp-window-drag.log" ||
    ! grep -q '^MELANIA_QEMU_DRAG_FRAME4_PIXELS_VERIFIED=true' "$report/qmp-drag-frame.log" ||
+   ! grep -q '^MELANIA_QEMU_DRAG_FRAME5_PIXELS_VERIFIED=true' "$report/qmp-drag-frame5.log" ||
+   ! grep -q '^MELANIA_QEMU_COALESCED_SECOND_POINTER_MOVE_PASS=true' "$report/qmp-window-drag.log" ||
+   ! grep -q '^MELANIA_RUST_COALESCED_DRAG_FRAME5_PASS=true' "$serial" ||
+   ! test -s "$report/drag-window-frame5.ppm" ||
    ! test -s "$report/drag-window-frame4.ppm" ||
    ! grep -q '^MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true' "$serial" ||
    ! grep -q '^MELANIA_RUST_COMPOSITOR_DRAG_FRAME4_PASS=true' "$serial" ||
@@ -304,6 +317,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-two-window-focus.log" || true
   tail -n 30 "$report/qmp-window-drag.log" || true
   tail -n 30 "$report/qmp-drag-frame.log" || true
+  tail -n 30 "$report/qmp-drag-frame5.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -321,3 +335,4 @@ printf '%s\n' 'MELANIA_VM_TWO_REAL_WAYLAND_WINDOWS_QMP_PRESENTED=true' >> "$repo
 
 printf '%s\n' 'MELANIA_VM_TWO_WINDOWS_REAL_FOCUS_INPUT=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_POINTER_DRAG_FOURTH_KMS_FRAME=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_COALESCED_DRAG_FIFTH_KMS_FRAME=true' >> "$report/result.txt"
