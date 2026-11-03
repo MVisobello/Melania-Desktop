@@ -3098,9 +3098,12 @@ fn append_file_page(
         }));
     });
     let token_for_cancel=tab.widget_name().to_string();
-    drag_source.connect_drag_cancel(move |_,_,reason|{
+    drag_source.connect_drag_cancel(move |_,drag,reason|{
         if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
-            eprintln!("MELANIA_FILES_TAB_DRAG_CANCEL token={} reason={reason:?}",token_for_cancel);
+            let (hover,x,y)=drag.device().surface_at_position();
+            let off_source=hover.as_ref()!=Some(&drag.surface());
+            eprintln!("MELANIA_FILES_TAB_DRAG_CANCEL token={} reason={reason:?} surface_known={} off_source={} x={x:.1} y={y:.1}",
+                      token_for_cancel,hover.is_some(),off_source);
         }
         detach_dragged_files_tab(&token_for_cancel,reason)
     });
