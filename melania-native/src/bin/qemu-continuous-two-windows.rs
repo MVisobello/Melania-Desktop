@@ -275,7 +275,11 @@ fn main()->Result<(),Box<dyn Error>> {
         // The same disposable VM runs Stage48 before Stage49. Use a distinct
         // source filename in the reopen scenario: create_new must not
         // overwrite earlier client-owned wl_shm fixtures.
-        let path=if dynamic {
+        let path=if managed_role_pixels {
+            // Stage81B runs after Stage48 in the SAME QEMU guest: create_new
+            // must not collide with earlier two-window fixture filenames.
+            format!("/run/melania-native-qemu/managed-role-client-{index}.bgra")
+        } else if dynamic {
             format!("/run/melania-native-qemu/continuous-dynamic-client-{index}.bgra")
         } else if std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
             .as_deref()==Ok("YES_QEMU_VM") {
