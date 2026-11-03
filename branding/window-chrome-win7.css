@@ -19,9 +19,19 @@ headerbar.melania-win7-header .title {
   color: #173f68;
   font-weight: 700;
 }
+/* The controls touch the top and right edges of the outer headerbar:
+ * Aero has a 1px top/right frame border plus 8px right padding. Negative
+ * margins consume those offsets without altering button size or artwork. */
 headerbar.melania-win7-header .win7-window-controls {
   border-spacing: 0;
-  margin: 0 -6px 0 8px;
+  margin: -1px -9px 0 8px;
+}
+/* Light/Dark headers deliberately have no frame border: only the 8px
+ * end padding must be consumed, otherwise the controls overshoot by 1px. */
+headerbar.melania-win7-header.melania-theme-light .win7-window-controls,
+headerbar.melania-win7-header.melania-theme-dark .win7-window-controls {
+  margin-top: 0;
+  margin-right: -8px;
 }
 headerbar.melania-win7-header button.win7-minimize,
 headerbar.melania-win7-header button.win7-maximize,
