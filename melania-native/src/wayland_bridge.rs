@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -70,6 +70,12 @@ struct BridgeState {
     render_scheduler:RenderScheduler,
     continuous_redraw:ContinuousRedraw,
     continuous_pending:Option<PlannedSceneFrame>,
+    // Opt-in, disposable QEMU continuous renderer; the legacy proof is intact.
+    continuous_kms_mode:bool,
+    continuous_worker:Option<ContinuousKmsWorker>,
+    continuous_inflight:Option<(PlannedSceneFrame,Option<(WlSurface,wl_buffer::WlBuffer)>)>,
+    continuous_latest_client:Option<(WlSurface,wl_buffer::WlBuffer)>,
+    continuous_frame_count:u64,
     multi_window_mode:bool,
     async_kms_mode:bool,
     drag_redraw_mode:bool,
@@ -137,9 +143,84 @@ impl BridgeState {
     // this second, generation-based ledger audits its real ACKs before any
     // wl_surface.frame callback or buffer.release is emitted.
     fn note_scene_change(&mut self) {
-        if self.async_kms_mode {
+        if self.async_kms_mode || self.continuous_kms_mode {
             self.continuous_redraw.scene_changed(self.multi_scene.layout_generation());
         }
+    }
+
+    // Stage46: in this isolated mode ContinuousRedraw is authoritative.
+    // All DRM socket writes and ACK reads happen off the Smithay thread.
+    fn submit_continuous_frame(&mut self)->Result<(),Box<dyn Error>> {
+        if !self.continuous_kms_mode || self.continuous_inflight.is_some() {
+            return Ok(());
+        }
+        let Some(planned)=self.continuous_redraw.next_frame() else {return Ok(());};
+        if planned.generation!=self.multi_scene.layout_generation() {
+            self.continuous_redraw.failed(planned);
+            return Err("continuous KMS scene changed during planning".into());
+        }
+        let pixels=match self.multi_scene.composite() {
+            Ok(pixels)=>pixels,
+            Err(_)=>{
+                self.continuous_redraw.failed(planned);
+                return Err("continuous native scene composition failed".into());
+            }
+        };
+        let Some(worker)=self.continuous_worker.as_ref() else {
+            self.continuous_redraw.failed(planned);
+            return Err("continuous QEMU KMS transport unavailable".into());
+        };
+        if worker.submit(ContinuousKmsJob{planned,pixels}).is_err() {
+            self.continuous_redraw.failed(planned);
+            return Err("continuous QEMU KMS worker rejected frame".into());
+        }
+        self.continuous_inflight=Some((planned,self.continuous_latest_client.take()));
+        println!("MELANIA_NATIVE_CONTINUOUS_FRAME_SUBMITTED={} generation={}",
+                 planned.ticket.sequence,planned.generation);
+        let _=std::io::stdout().flush();
+        Ok(())
+    }
+
+    fn poll_continuous_kms(&mut self)->Result<(),Box<dyn Error>> {
+        if !self.continuous_kms_mode {return Ok(());}
+        let Some(worker)=self.continuous_worker.as_ref() else {return Ok(());};
+        let reply=match worker.try_result() {
+            Ok(Some(reply))=>reply,
+            Ok(None)=>return Ok(()),
+            Err(error)=>return Err(format!("continuous KMS worker disconnected: {error}").into()),
+        };
+        let (planned,client)=self.continuous_inflight.take()
+            .ok_or("continuous KMS reply with no pending frame")?;
+        if reply.planned!=planned {
+            self.continuous_redraw.failed(planned);
+            return Err("continuous QEMU KMS ACK ticket mismatch".into());
+        }
+        if let Err(error)=reply.status {
+            self.continuous_redraw.failed(planned);
+            return Err(format!("continuous KMS presentation rejected: {error}").into());
+        }
+        // The DRM receiver verifies the actual CRTC FB_ID before MLA1.
+        if !self.continuous_redraw.presented(planned) {
+            return Err("continuous KMS stale ACK after seat/output transition".into());
+        }
+        self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
+        self.presented_layout_generation=planned.generation;
+        if let Some((surface,buffer))=client {
+            if self.multi_scene.layout_generation()==planned.generation {
+                let delivered=complete_presented_frame(
+                    &surface,(self.continuous_frame_count as u32).saturating_mul(16)
+                );
+                self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
+            }
+            // Ownership of the copied wl_shm bytes ended after the DRM ACK.
+            buffer.release();
+        }
+        println!("MELANIA_NATIVE_CONTINUOUS_KMS_ACK={} generation={}",
+                 self.continuous_frame_count,planned.generation);
+        let _=std::io::stdout().flush();
+        // If more damage arrived while KMS was in flight, render the latest.
+        self.submit_continuous_frame()?;
+        Ok(())
     }
 
     fn begin_generation_proof(&mut self,expected:u64)->Result<(),Box<dyn Error>> {
@@ -455,6 +536,45 @@ impl CompositorHandler for BridgeState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
     }
     fn commit(&mut self,surface:&WlSurface) {
+        if self.continuous_kms_mode {
+            let assignment=with_states(surface,|states|{
+                states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
+            });
+            if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
+                let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                    native_client_frame::copy_client_shm(ptr,len,metadata)
+                });
+                let pixels=match imported {
+                    Ok(Ok(pixels))=>pixels,
+                    _=>{
+                        eprintln!("continuous QEMU client submitted invalid wl_shm");
+                        return;
+                    }
+                };
+                let key=match self.known_window_surfaces.register(surface.clone()) {
+                    Ok(key)=>key,
+                    Err(_)=>{
+                        eprintln!("continuous QEMU client has no free scene slot");
+                        return;
+                    }
+                };
+                if self.multi_scene.upsert(key,pixels).is_err() {
+                    eprintln!("continuous QEMU scene pixels rejected");
+                    return;
+                }
+                // Retain at most one not-yet-submitted client buffer. Its
+                // pixels were copied into the bounded retained scene.
+                if let Some((_,superseded))=self.continuous_latest_client.take() {
+                    superseded.release();
+                }
+                self.continuous_latest_client=Some((surface.clone(),buffer));
+                self.note_scene_change();
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("continuous QEMU KMS scheduling failed: {error}");
+                }
+            }
+            return;
+        }
         if self.reopen_redraw_mode && self.pixel_frame_count==5 {
             let assignment=with_states(surface,|states|{
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
@@ -939,6 +1059,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         frame_callback_count:0,
         render_scheduler:RenderScheduler::default(),
         continuous_redraw:ContinuousRedraw::default(),continuous_pending:None,
+        continuous_kms_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        continuous_worker:None,continuous_inflight:None,
+        continuous_latest_client:None,continuous_frame_count:0,
         multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM"),
         async_kms_mode:std::env::var("MELANIA_NATIVE_ASYNC_KMS")
@@ -1008,6 +1132,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if state.frame_callbacks_probe && !live_stream {
         return Err("frame presentation probe needs live VM Rust DRM stream".into());
     }
+    if state.continuous_kms_mode &&
+       (!live_stream || !state.frame_callbacks_probe ||
+        state.async_kms_mode || state.multi_window_mode) {
+        return Err("continuous KMS requires dedicated single-client QEMU probe".into());
+    }
     if state.multi_window_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
         state.pixel_frame_target!=if state.reopen_redraw_mode {6} else if state.close_redraw_mode {5} else if state.drag_redraw_mode {4} else {3}) {
@@ -1029,7 +1158,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         return Err("reopen redraw requires an isolated QEMU close-redraw test".into());
     }
     let frame_listener=if live_stream {
-        let path="/run/melania-native-qemu/frame-stream.sock";
+        let path=if state.continuous_kms_mode {
+            "/run/melania-native-qemu/continuous-frame-stream.sock"
+        } else {"/run/melania-native-qemu/frame-stream.sock"};
         let listener=UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
         println!("MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true");
@@ -1046,20 +1177,24 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
     let deadline=Instant::now()+Duration::from_secs(
-        if state.reopen_redraw_mode {68} else if state.close_redraw_mode {55} else if state.drag_redraw_mode {45} else {27}
+        if state.continuous_kms_mode {70} else if state.reopen_redraw_mode {68} else if state.close_redraw_mode {55} else if state.drag_redraw_mode {45} else {27}
     );
     let mut both_shell_roles_seen_at=None;
     let mut pixel_ready_since=None;
+    let mut continuous_ready_since=None;
     while Instant::now()<deadline {
         // Accept the Rust DRM consumer before processing client commits;
         // the socket is private to this disposable VM, not the host.
-        if state.live_stream && state.stream.is_none() && state.async_stream.is_none() {
+        if state.live_stream && state.stream.is_none() && state.async_stream.is_none() && state.continuous_worker.is_none() {
             if let Some(listener)=&frame_listener {
                 match listener.accept() {
                     Ok((stream,_))=>{
                         stream.set_write_timeout(Some(Duration::from_secs(7)))?;
                         stream.set_read_timeout(Some(Duration::from_secs(8)))?;
-                        if state.async_kms_mode {
+                        if state.continuous_kms_mode {
+                            state.continuous_worker=Some(ContinuousKmsWorker::spawn(stream));
+                            println!("MELANIA_NATIVE_CONTINUOUS_KMS_WORKER_STARTED=true");
+                        } else if state.async_kms_mode {
                             state.async_stream=Some(AsyncKmsWorker::spawn(stream));
                             println!("MELANIA_NATIVE_ASYNC_KMS_WORKER_STARTED=true");
                         } else {
@@ -1081,7 +1216,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         if state.async_kms_mode && state.async_stream.is_some() {
             state.poll_async_kms()?;
         }
+        if state.continuous_kms_mode && state.continuous_worker.is_some() {
+            state.poll_continuous_kms()?;
+        }
         display.flush_clients()?;
+        if state.continuous_kms_mode && state.continuous_frame_count==12 {
+            if state.frame_callback_count!=12 {
+                return Err("twelve Wayland callbacks not completed after KMS".into());
+            }
+            // Keep dispatching display.sync for the client after the last
+            // callback, rather than shutting down its socket prematurely.
+            let since=continuous_ready_since.get_or_insert_with(Instant::now);
+            if since.elapsed()>=Duration::from_secs(2) {
+                println!("MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12");
+                println!("MELANIA_NATIVE_SESSION_READY=false");
+                return Ok(());
+            }
+        }
         if state.pixel_probe && state.pixel_ready {
             let since=pixel_ready_since.get_or_insert_with(Instant::now);
             if since.elapsed()>=Duration::from_secs(

@@ -18,7 +18,10 @@ class ContinuousKmsWireContract(unittest.TestCase):
         self.assertIn("pub mod continuous_kms_stream;", LIB)
         self.assertIn("AsyncKmsWorker", BRIDGE)
         self.assertIn("!(1..=6).contains(&job.ordinal)", OLD)
-        self.assertNotIn("ContinuousKmsWorker", BRIDGE)
+        # Stage46 connects the new worker only behind an explicit QEMU opt-in.
+        self.assertIn("ContinuousKmsWorker", BRIDGE)
+        self.assertIn("MELANIA_NATIVE_CONTINUOUS_KMS", BRIDGE)
+        self.assertIn("if self.continuous_kms_mode", BRIDGE)
         self.assertIn("cargo test -p melania-native --all-targets", CI)
 
     def test_wire_checks_identity_and_does_not_touch_gpu(self):
