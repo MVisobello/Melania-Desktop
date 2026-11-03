@@ -75,6 +75,22 @@ def _theme_index(title:str, paths:set[str])->str:
         result.append('')
     return '\n'.join(result)
 
+def core_app_icon(name:str, category:str, variant:str, size:int)->str|None:
+    """Readable original Fluent app icons for light Start/taskbar surfaces.
+
+    The reference concept PNG cutouts for these two app IDs are nearly white
+    on transparent; in the actual light Start menu they disappear. Choose the
+    independently drawn, full-color Fluent files/gear artwork instead.
+    """
+    if category != 'apps': return None
+    aliases={
+        'org.melaniadesktop.Files':'system-file-manager',
+        'org.melaniadesktop.Settings':'preferences-system',
+    }
+    mapped=aliases.get(name)
+    return artwork(mapped,'apps',variant,size) if mapped else None
+
+
 def original_melania_logo() -> str:
     """The exact approved vector, never a generated generic application mark."""
     source = ROOT / 'branding' / 'icons' / 'melania-symbol.svg'
@@ -131,7 +147,8 @@ def build(dest:Path, paths:list[str], extra_sizes:bool=True)->dict:
             if key not in known_assets:
                 svg=(original_melania_logo() if category == 'apps' and name in
                      ('melania','start-here','distributor-logo','org.melaniadesktop.Preview') else
-                     shell_artwork(name,category,'dark' if variant=='dark' else 'light',size)
+                     core_app_icon(name,category,'dark' if variant=='dark' else 'light',size)
+                     or shell_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or approved_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or settings_artwork(name,category,'dark' if variant=='dark' else 'light',size)
                      or artwork(name,category,'dark' if variant=='dark' else 'light',size))
