@@ -33,8 +33,8 @@ class FilesTabDnD(unittest.TestCase):
             "if !detach_files_tab_on_cancel(reason)",
             "create_files_window(&app,Some(drag.location.location()))",
             "if app.windows().len()<=before{return false;}",
-            "gdk::DragCancelReason::UserCancelled",
-            "gdk::DragCancelReason::Error",
+            "DragCancelReason::UserCancelled",
+            "DragCancelReason::Error",
         ):
             self.assertIn(marker,SOURCE)
 
