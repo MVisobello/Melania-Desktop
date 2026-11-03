@@ -11,6 +11,7 @@ pub mod window_slots;
 pub mod window_interaction;
 pub mod async_kms_stream;
 pub mod render_scheduler;
+pub mod continuous_redraw;
 pub mod planes;
 pub mod frame_gate;
 pub mod kms_test;
