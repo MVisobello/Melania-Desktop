@@ -35,7 +35,7 @@ class NativeDragKmsStage38(unittest.TestCase):
         ): self.assertIn(token,BRIDGE)
         self.assertIn("self.submit_drag_frame()",BRIDGE)
         self.assertIn("layout_generation()",SCENE)
-        self.assertIn("!(1..=4).contains(&job.ordinal)",ASYNC)
+        self.assertIn("!(1..=5).contains(&job.ordinal)",ASYNC)
         self.assertIn("MELANIA_RUST_DRAG_FRAME_ACTIVE=true",STREAM)
         self.assertIn("MELANIA_RUST_COMPOSITOR_DRAG_FRAME4_PASS=true",STREAM)
         self.assertIn("rollback.restore()",STREAM)
