@@ -1,0 +1,1 @@
+Stage70 provides validated 120ths scale factors and deterministic coordinate/extent conversion for future fractional Wayland output scaling. 1x–4x are allowed, invalid and non-finite inputs fail closed, and integer extents use checked 64-bit arithmetic. No protocol advertisement is changed.
