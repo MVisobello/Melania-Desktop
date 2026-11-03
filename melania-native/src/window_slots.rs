@@ -47,6 +47,13 @@ impl<T:PartialEq> WindowSlots<T> {
         Ok(self.slots.len() as u64)
     }
 
+    /// Look up a compositor-owned slot without allocating one during an
+    /// xdg_toplevel request that may arrive before the first wl_shm commit.
+    pub fn id_of(&self,surface:&T)->Option<u64> {
+        self.slots.iter().position(|entry|entry.as_ref()==Some(surface))
+            .map(|index|index as u64+1)
+    }
+
     pub fn get(&self,id:u64)->Option<&T> {
         let index=id.checked_sub(1).and_then(|n|usize::try_from(n).ok())?;
         self.slots.get(index)?.as_ref()
@@ -74,6 +81,8 @@ mod tests {
     fn stable_ids_survive_removal_and_capacity_is_bounded() {
         let mut registry=WindowSlots::default();
         assert_eq!(registry.register("window-a"),Ok(1));
+        assert_eq!(registry.id_of(&"window-a"),Some(1));
+        assert_eq!(registry.id_of(&"not-mapped"),None);
         assert_eq!(registry.register("window-b"),Ok(2));
         assert_eq!(registry.register("window-a"),Ok(1));
         assert_eq!(registry.register("window-c"),Err(SlotError::CapacityExceeded));
