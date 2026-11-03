@@ -26,16 +26,20 @@ class FilesTabDnD(unittest.TestCase):
         ):
             self.assertIn(marker,SOURCE)
 
-    def test_tearoff_on_no_target_only_not_escape_or_error(self):
+    def test_tearoff_ignores_escape_and_in_app_transport_errors(self):
         for marker in (
-            "fn detach_files_tab_on_cancel(reason: gdk::DragCancelReason) -> bool",
+            "fn detach_files_tab_on_cancel(reason: gdk::DragCancelReason,outside_app:bool) -> bool",
             "matches!(reason,gdk::DragCancelReason::NoTarget)",
-            "fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason)",
-            "if !detach_files_tab_on_cancel(reason)",
+            "fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason,",
+            "if !detach_files_tab_on_cancel(reason,outside_app)",
             "create_files_window(&app,Some(drag.location.location()))",
             "if app.windows().len()<=before{return false;}",
             "DragCancelReason::UserCancelled",
             "DragCancelReason::Error",
+            "let outside_app=hover.is_none();",
+            "DragCancelReason::Error,false",
+            "DragCancelReason::Error,true",
+            "DragCancelReason::UserCancelled,true",
         ):
             self.assertIn(marker,SOURCE)
 
@@ -78,7 +82,7 @@ class FilesTabDnD(unittest.TestCase):
         self.assertNotIn("source.set_actions(gdk::DragAction::MOVE)",file_drag)
 
     def test_rust_covers_user_cancel_and_unregistered_tokens(self):
-        self.assertIn("fn escape_and_errors_do_not_tear_off_or_create_windows()",SOURCE)
+        self.assertIn("fn escape_and_in_app_errors_do_not_tear_off_or_create_windows()",SOURCE)
         self.assertIn("fn arbitrary_unregistered_string_cannot_trigger_tab_transfer()",SOURCE)
 
 
