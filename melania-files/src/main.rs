@@ -2953,6 +2953,7 @@ fn build_ui(app: &Application) {
     // Nautilus-style plus stays visible even before a full icon theme loads.
     let add_button = Button::with_label("+");
     add_button.add_css_class("files-new-tab");
+    add_button.add_css_class("files-new-tab-add");
     add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
     let tab_strip = GtkBox::new(Orientation::Horizontal, 0);
     tab_strip.add_css_class("files-top-tabs");
