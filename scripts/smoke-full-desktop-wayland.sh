@@ -52,6 +52,7 @@ trap cleanup EXIT
 # In this isolated test only, reveal Start before taking the true compositor
 # screenshot so its icon sizes and real layout can be visually reviewed.
 export MELANIA_PROFILE_FILES=1
+export MELANIA_SMOKE_FILES_TABS=1
 export MELANIA_PROFILE_SETTINGS=1
 export MELANIA_SMOKE_SETTINGS_LAZY=1
 export MELANIA_SMOKE_SETTINGS_SERVICES=1
@@ -461,6 +462,42 @@ if ! awk -F '\t' -v id="$SETTINGS_ID" '$1==id && $2=="attiva" {found=1} END {exi
   exit 1
 fi
 echo 'PASS: live Wayland minimized-window focus fallback and reactivation'
+# Real GTK tab controls, not a source-only assertion: send Ctrl+T and Ctrl+W
+# through the nested host window, assert page-count evidence and retain actual
+# pixels of three visible Nautilus-style tabs for UI review.
+target/debug/melania-winctl activate "$FILES_ID" >/dev/null
+xdotool windowfocus --sync "$HOST_WINDOW"
+for expected in 2 3; do
+  xdotool key --clearmodifiers ctrl+t
+  observed=0
+  for i in $(seq 1 45); do
+    if grep -q "MELANIA_FILES_TAB_COUNT=$expected" "$TEMP/compositor.log"; then
+      observed=1; break
+    fi
+    sleep .1
+  done
+  [[ "$observed" == 1 ]] || {
+    echo "FAIL: real GTK Ctrl+T did not create Files tab $expected" >&2
+    tail -80 "$TEMP/compositor.log" >&2
+    exit 1
+  }
+done
+sleep .35
+scrot -z -o reports/nested-wayland-files-tabs.png
+test -s reports/nested-wayland-files-tabs.png || {
+  echo 'FAIL: missing screenshot of actual three-tab GTK file manager' >&2; exit 1;
+}
+xdotool key --clearmodifiers ctrl+w
+for i in $(seq 1 45); do
+  [[ "$(grep -c 'MELANIA_FILES_TAB_COUNT=2' "$TEMP/compositor.log")" -ge 2 ]] && break
+  sleep .1
+done
+[[ "$(grep -c 'MELANIA_FILES_TAB_COUNT=2' "$TEMP/compositor.log")" -ge 2 ]] || {
+  echo 'FAIL: real GTK Ctrl+W did not close the third tab' >&2
+  tail -80 "$TEMP/compositor.log" >&2
+  exit 1
+}
+echo 'PASS: real GTK Ctrl+T opened three Nautilus-style tabs, screenshot captured, Ctrl+W closed one'
 # Verify a REAL running Melania taskbar accepts a changed user config and
 # moves from the bottom to the top edge without a restart or compositor exit.
 # The setting is isolated under the temporary CI XDG_CONFIG_HOME.
