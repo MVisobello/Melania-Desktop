@@ -225,6 +225,11 @@ fn run()->Result<(),Box<dyn Error>> {
             println!("MELANIA_RUST_CONTINUOUS_FRAME_VISIBLE={}",index+1);
             // Real-time serial QMP watcher must receive this while FB is live.
             std::io::stdout().flush()?;
+            if std::env::var("MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS")
+                    .as_deref()==Ok("YES_QEMU_VM") && index+1==total {
+                println!("MELANIA_RUST_CONTINUOUS_TWO_WINDOW_FRAME_VISIBLE={}",index+1);
+                std::io::stdout().flush()?;
+            }
             previous=Some(pixels);
             previous_identity=Some((epoch,sequence,generation));
             // Short observable hold for QMP; no 5-second delay per frame.

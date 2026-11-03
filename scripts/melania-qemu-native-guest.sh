@@ -579,6 +579,99 @@ rm -f "$continuous_server_log" "$continuous_kms_log" "$continuous_client_log"
 report 'MELANIA_QEMU_NATIVE_CONTINUOUS_12_REAL_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
+# Stage48: two INDEPENDENT xdg_toplevel surfaces alternate twelve real
+# wl_shm commits. Every one requires real KMS FB_ID, frame.done and release.
+# The final QMP screendump must show BOTH retained client images.
+two_continuous_client=/mnt/melania-native/melania-two-continuous-client
+[[ -x "$two_continuous_client" ]] || fatal 'two_window_continuous_client_missing'
+two_server_log="$(mktemp -t melania-continuous-two-server-XXXXXX)"
+two_kms_log="$(mktemp -t melania-continuous-two-kms-XXXXXX)"
+two_client_log="$(mktemp -t melania-continuous-two-client-XXXXXX)"
+rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 79s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$two_server_log" 2>&1 &
+two_server_pid=$!
+two_socket=''
+for attempt in $(seq 1 100); do
+  two_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$two_server_log" | head -n 1)"
+  [[ -n "$two_socket" && -S /run/melania-native-qemu/continuous-frame-stream.sock ]] && break
+  kill -0 "$two_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$two_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+  cat "$two_server_log"
+  fatal 'continuous_two_Wayland_bridge_unavailable'
+fi
+# A guest-to-serial tail exposes the live KMS activation to the host's QMP
+# watcher BEFORE the receiver retires this framebuffer and restores the CRTC.
+tail -n +1 -f -s 0.05 "$two_kms_log" > /dev/ttyS0 &
+two_tail_pid=$!
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 72s \
+  "$continuous_kms" < /dev/tty1 > "$two_kms_log" 2>&1 &
+two_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$two_kms_log" && break
+  kill -0 "$two_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$two_kms_log"; then
+  cat "$two_kms_log" "$two_server_log"
+  kill "$two_server_pid" "$two_kms_pid" 2>/dev/null || true
+  fatal 'continuous_two_Rust_KMS_unavailable'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM WAYLAND_DISPLAY="$two_socket" \
+  timeout --signal=TERM --kill-after=3s 68s \
+  "$two_continuous_client" > "$two_client_log" 2>&1; then
+  cat "$two_client_log" "$two_kms_log" "$two_server_log"
+  kill "$two_server_pid" "$two_kms_pid" 2>/dev/null || true
+  fatal 'two_real_continuous_Wayland_clients_failed'
+fi
+if ! wait "$two_kms_pid"; then
+  cat "$two_kms_log" "$two_server_log"
+  kill "$two_server_pid" 2>/dev/null || true
+  fatal 'two_real_continuous_KMS_receiver_failed'
+fi
+if ! wait "$two_server_pid"; then
+  cat "$two_server_log"
+  fatal 'two_real_continuous_Smithay_failed'
+fi
+kill "$two_tail_pid" 2>/dev/null || true
+wait "$two_tail_pid" 2>/dev/null || true
+cat "$two_client_log" "$two_kms_log" "$two_server_log"
+grep -q '^MELANIA_NATIVE_CONTINUOUS_TWO_XDG_CONFIGURED=true' "$two_client_log" ||
+  fatal 'two_distinct_xdg_toplevels_not_configured'
+for index in $(seq 1 12); do
+  expected_window=A
+  ((index%2==0)) && expected_window=B
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_ACKED=$index window=$expected_window$" "$two_client_log" ||
+    fatal "two_window_callback_$index_missing"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$two_server_log" ||
+    fatal "two_window_Rust_scheduler_ACK_$index_missing"
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$two_kms_log" ||
+    fatal "two_window_real_KMS_$index_missing"
+done
+grep -q '^MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_12_FRAMES_PASS=true' "$two_client_log" ||
+  fatal 'two_window_client_12_commits_incomplete'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12' "$two_server_log" ||
+  fatal 'two_window_Smithay_12_callbacks_incomplete'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$two_kms_log" ||
+  fatal 'two_window_KMS_12_FBs_not_presented'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$two_kms_log" ||
+  fatal 'two_window_original_CRTC_not_restored'
+rm -f "$two_server_log" "$two_kms_log" "$two_client_log"
+report 'MELANIA_QEMU_NATIVE_CONTINUOUS_TWO_WINDOWS_PASS=true'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
