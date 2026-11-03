@@ -157,6 +157,13 @@ fn taskbar_app_icon(app_id: &str) -> Image {
     if lower.contains("melania") && lower.contains("settings") {
         return icon_with_fallback("preferences-system","applications-system");
     }
+    // Prefer the current GTK theme, including the bundled Melania icon pack:
+    // the theme can resolve most app IDs without enumerating desktop launchers.
+    if gdk::Display::default().map(|display|
+        gtk::IconTheme::for_display(&display).has_icon(app_id)
+    ).unwrap_or(false) {
+        return Image::from_icon_name(app_id);
+    }
     // A full GIO desktop-app enumeration is expensive. Taskbar refreshes
     // must not repeat it for each window, especially during session startup.
     // Cache successful icon lookups on the GTK main thread for this session.
