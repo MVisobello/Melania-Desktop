@@ -27,6 +27,26 @@ pub fn recommended_mode(modes:&[DisplayMode]) -> Option<DisplayMode> {
     modes.iter().filter(|mode|mode.valid())
         .max_by_key(|mode|mode.score()).cloned()
 }
+
+/// Choose an EDID candidate only when the proposed number of CPU/GPU
+/// framebuffer copies fits the caller's budget. This is a planner, not a
+/// KMS modeset or a claim of memory actually allocated on the GPU.
+pub fn recommended_mode_for_budget(
+    modes:&[DisplayMode],buffer_count:usize,budget_bytes:usize
+)->Option<DisplayMode>{
+    if !(2..=4).contains(&buffer_count) || budget_bytes==0 {return None;}
+    modes.iter().filter(|mode|{
+        if !mode.valid() || mode.width>16384 || mode.height>16384 {
+            return false;
+        }
+        usize::try_from(mode.width).ok()
+            .and_then(|w|w.checked_mul(mode.height as usize))
+            .and_then(|p|p.checked_mul(4))
+            .and_then(|frame|frame.checked_mul(buffer_count))
+            .is_some_and(|required|required<=budget_bytes)
+    }).max_by_key(|mode|mode.score()).cloned()
+}
+
 #[derive(Debug,Clone,PartialEq,Eq)]
 pub struct ConnectorSnapshot {
     pub name: String,
@@ -90,6 +110,19 @@ mod tests {
         assert_eq!(recommended_mode(&modes),Some(mode(2560,1440,75)));
         assert_eq!(modes.len(),4);
     }
+    #[test]
+    fn rendering_budget_prevents_advertising_unallocatable_high_res_mode() {
+        let modes=[mode(1920,1080,60),mode(2560,1440,144),mode(7680,4320,60)];
+        let budget=1920*1080*4*3;
+        assert_eq!(recommended_mode_for_budget(&modes,3,budget),
+                   Some(mode(1920,1080,60)));
+        assert_eq!(recommended_mode_for_budget(&modes,3,100),None);
+        assert_eq!(recommended_mode_for_budget(&modes,0,budget),None);
+        assert_eq!(recommended_mode_for_budget(&modes,5,budget),None);
+        assert_eq!(recommended_mode_for_budget(&[mode(u32::MAX,u32::MAX,60)],
+                                               3,usize::MAX),None);
+    }
+
     #[test]
     fn zero_bogus_and_empty_modes_do_not_create_fake_outputs() {
         assert_eq!(recommended_mode(&[]),None);
