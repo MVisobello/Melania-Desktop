@@ -3562,7 +3562,7 @@ mod files_tab_drag_safety_tests {
     use gtk::gdk::DragCancelReason;
 
     #[test]
-    fn escape_and_errors_do_not_tear_off_or_create_windows() {
+    fn escape_and_in_app_errors_do_not_tear_off_or_create_windows() {
         assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget,true));
         assert!(detach_files_tab_on_cancel(DragCancelReason::NoTarget,false));
         assert!(!detach_files_tab_on_cancel(DragCancelReason::UserCancelled,true));
