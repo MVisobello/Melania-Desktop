@@ -146,14 +146,35 @@ fn icon_with_fallback(primary: &str, fallback: &str) -> Image {
     Image::from_icon_name(if available { primary } else { fallback })
 }
 
+// Window app IDs may be reverse-DNS names or executable names rather than
+// freedesktop icon names. Normalize our own apps and resolve installed desktop
+// launchers before falling back to a generic, visible taskbar glyph.
+fn taskbar_app_icon(app_id: &str) -> Image {
+    let lower=app_id.to_ascii_lowercase();
+    if lower.contains("melania") && lower.contains("files") || lower=="nautilus" || lower=="nemo" {
+        return icon_with_fallback("system-file-manager","folder");
+    }
+    if lower.contains("melania") && lower.contains("settings") {
+        return icon_with_fallback("preferences-system","applications-system");
+    }
+    if let Some(info)=gio::DesktopAppInfo::new(&format!("{app_id}.desktop")) {
+        if let Some(icon)=info.icon() {return Image::from_gicon(&icon);}
+    }
+    icon_with_fallback(app_id,"application-x-executable")
+}
+
 fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     let button = Button::new();
     button.add_css_class(class);
     let row = GtkBox::new(Orientation::Horizontal, 10);
-    let fallback = if icon_name == "org.melaniadesktop.Settings" { "preferences-system" }
-        else if icon_name == "org.melaniadesktop.Files" { "system-file-manager" }
-        else { "application-x-executable" };
-    let icon = icon_with_fallback(icon_name, fallback);
+    let resolved = match icon_name {
+        // These standard freedesktop names are shipped by Adwaita, Nemo and
+        // Nautilus icon themes, even when Melania app-ID aliases are absent.
+        "org.melaniadesktop.Settings" => "preferences-system",
+        "org.melaniadesktop.Files" => "system-file-manager",
+        other => other,
+    };
+    let icon = icon_with_fallback(resolved, "application-x-executable");
     icon.set_pixel_size(if class == "melania-shortcut" { 18 } else { 27 });
     icon.add_css_class("melania-menu-app-icon");
     row.append(&icon);
@@ -902,8 +923,8 @@ fn app_button(id:&str)->Option<Button> {
     b.add_css_class("melania-pin");
     let row=GtkBox::new(Orientation::Horizontal,6);
     let (name,icon)=match id {
-        "melania-files"=>("File".to_owned(),Image::from_icon_name("org.melaniadesktop.Files")),
-        "melania-settings"=>("Impostazioni".to_owned(),Image::from_icon_name("org.melaniadesktop.Settings")),
+        "melania-files"=>("File".to_owned(),icon_with_fallback("system-file-manager","folder")),
+        "melania-settings"=>("Impostazioni".to_owned(),icon_with_fallback("preferences-system","applications-system")),
         _=>{
             let app=info.as_ref()?;
             (app.name().to_string(),app.icon().map(|icon|Image::from_gicon(&icon))
@@ -1033,7 +1054,7 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                     if group.all_minimized() { menu.add_css_class("melania-window-minimized"); }
                     menu.set_tooltip_text(Some(&format!("{count} finestre — {}", group.app_id)));
                     let entry = gtk::Overlay::new();
-                    let icon = Image::from_icon_name(&first.app_id);
+                    let icon = taskbar_app_icon(&first.app_id);
                     icon.set_pixel_size(28);
                     entry.set_child(Some(&icon));
                     let count_badge = Label::new(Some(&count.to_string()));
@@ -1186,7 +1207,7 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                 let focus = Button::new();
                 focus.add_css_class("melania-window");
                 focus.add_css_class("melania-icon-only");
-                let window_icon = Image::from_icon_name(&window.app_id);
+                let window_icon = taskbar_app_icon(&window.app_id);
                 window_icon.set_pixel_size(28);
                 focus.set_child(Some(&window_icon));
                 focus.set_tooltip_text(Some(&format!("{} — {}",window.title,window.app_id)));
