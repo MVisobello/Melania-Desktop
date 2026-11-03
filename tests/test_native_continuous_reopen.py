@@ -38,6 +38,9 @@ class ReopenAfterTwelveKmsFrames(unittest.TestCase):
         self.assertIn("let _survivor_callback=second.frame(&qh,());",CLIENT)
         self.assertIn("first_top.destroy();",CLIENT)
         self.assertIn("while state.frame_done_count<13",CLIENT)
+        # Both scenarios run in ONE guest; create_new fixtures must not collide.
+        self.assertIn("continuous-reopen-seed-{index}.bgra",CLIENT)
+        self.assertIn("continuous-two-client-{index}.bgra",CLIENT)
         self.assertIn("let reopened=compositor.create_surface(&qh,());",CLIENT)
         self.assertIn("while state.frame_done_count<14 || !state.buffer_released",CLIENT)
         self.assertIn("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true",CLIENT)
