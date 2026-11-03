@@ -3001,7 +3001,7 @@ fn files_initial_size(screen_width: i32, screen_height: i32) -> (i32, i32) {
     (width,height)
 }
 
-fn build_ui(app: &Application) {
+fn create_files_window(app: &Application, explicitly_requested: Option<String>) {
     let startup_clock=Instant::now();
     install_files_ui_stall_probe();
     setup_melania_icon_theme();
@@ -3081,6 +3081,8 @@ fn build_ui(app: &Application) {
     loading.add_css_class("files-loading");
     tabs.append_page(&loading,None::<&gtk::Widget>);
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
+    let recently_closed: Rc<RefCell<Vec<ClosedFilesTab>>> = Rc::new(RefCell::new(Vec::new()));
+    let next_tab_location: Rc<RefCell<Option<ClosedFilesTab>>> = Rc::new(RefCell::new(None));
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
     let scroll_for_switch = tab_scroll.clone();
@@ -3095,10 +3097,13 @@ fn build_ui(app: &Application) {
     let weak_window=window.downgrade();
     let weak_add=add_button.downgrade();
     let headers_for_remote=tab_headers.clone();
+    let recent_for_remote=recently_closed.clone();
+    let next_for_remote=next_tab_location.clone();
     let open_remote:Rc<dyn Fn(String)>=Rc::new(move |uri:String| {
         if let (Some(tabs),Some(strip),Some(window),Some(add))=(
             weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),weak_add.upgrade()) {
-            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri,&add);
+            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri,&add,
+                              &recent_for_remote,&next_for_remote);
         }
     });
     let open_network=open_remote.clone();
@@ -3111,14 +3116,17 @@ fn build_ui(app: &Application) {
     let window_for_add = window.clone();
     let remote_for_add=open_remote.clone();
     let new_button_for_tab=add_button.clone();
+    let recent_for_add=recently_closed.clone();
+    let next_for_add=next_tab_location.clone();
     add_button.connect_clicked(move |_| {
         // A Nautilus new tab starts in the currently visible folder/URI,
         // rather than unexpectedly resetting to Home.
         let current=notebook.current_page();
-        let place=header_for_add.borrow().iter()
-            .find(|(page,_,_)|notebook.page_num(page)==current)
-            .and_then(|(_,_,title)|title.tooltip_text())
-            .map(|uri|uri.to_string());
+        let place=next_for_add.borrow_mut().take().map(|closed|closed.location())
+            .or_else(||header_for_add.borrow().iter()
+                .find(|(page,_,_)|notebook.page_num(page)==current)
+                .and_then(|(_,_,title)|title.tooltip_text())
+                .map(|uri|uri.to_string()));
         if let Some(uri)=place.as_deref().filter(|uri|uri.contains("://")){
             remote_for_add(uri.to_string());
         } else {
@@ -3126,7 +3134,8 @@ fn build_ui(app: &Application) {
             let title=path.file_name().map(|name|name.to_string_lossy().into_owned())
                 .filter(|name|!name.is_empty()).unwrap_or_else(||"Home".to_owned());
             append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
-                path, pending_for_add.clone(), &title, remote_for_add.clone(),&new_button_for_tab);
+                path, pending_for_add.clone(), &title, remote_for_add.clone(),
+                &new_button_for_tab,&recent_for_add,&next_for_add);
         }
     });
     frame.append(&tabs);
@@ -3139,6 +3148,8 @@ fn build_ui(app: &Application) {
     let tab_headers_for_keys = tab_headers.clone();
     let strip_for_keys = tab_strip.clone();
     let window_for_keys = window.clone();
+    let recent_for_keys=recently_closed.clone();
+    let next_for_keys=next_tab_location.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
         let ctrl=modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         let shift=modifiers.contains(gdk::ModifierType::SHIFT_MASK);
@@ -3154,15 +3165,28 @@ fn build_ui(app: &Application) {
         }
         if !ctrl{return glib::Propagation::Proceed;}
         if key == gdk::Key::t || key == gdk::Key::T {
-            if !shift{keys_add.emit_clicked();}
-            return if shift{glib::Propagation::Proceed}else{glib::Propagation::Stop};
+            if shift {
+                reopen_closed_files_tab(&recent_for_keys,&next_for_keys,&keys_add);
+            }else{keys_add.emit_clicked();}
+            return glib::Propagation::Stop;
+        }
+        if (key==gdk::Key::n || key==gdk::Key::N) && !shift {
+            let location=tab_headers_for_keys.borrow().iter()
+                .find(|(page,_,_)|keys_notebook.page_num(page)==keys_notebook.current_page())
+                .and_then(|(_,_,title)|title.tooltip_text())
+                .map(|text|text.to_string());
+            if let Some(app)=window_for_keys.application()
+                .and_then(|app|app.downcast::<Application>().ok()){
+                create_files_window(&app,location);
+            }
+            return glib::Propagation::Stop;
         }
         if key == gdk::Key::w || key == gdk::Key::W {
             if let Some(index)=keys_notebook.current_page(){
                 if let Some(page)=keys_notebook.nth_page(Some(index))
                     .and_then(|page|page.downcast::<GtkBox>().ok()){
                     close_files_tab(&keys_notebook,&strip_for_keys,&tab_headers_for_keys,
-                                    &window_for_keys,&page);
+                                    &window_for_keys,&page,&recent_for_keys,true);
                 }
             }
             return glib::Propagation::Stop;
@@ -3212,23 +3236,32 @@ fn build_ui(app: &Application) {
     let first_pending=shared_pending.clone();
     let first_remote=open_remote.clone();
     let first_add=add_button.clone();
+    let recent_first=recently_closed.clone();
+    let next_first=next_tab_location.clone();
+    let detached_window=explicitly_requested.is_some();
     glib::timeout_add_local_once(Duration::from_millis(55),move || {
         // Only now perform path probes and instantiate the complete browser
         // widget tree. Initial async listing and thumbnails remain separate.
-        let requested_uri=std::env::args_os().nth(1)
-            .and_then(|s|s.into_string().ok())
-            .filter(|s|s.contains("://"));
-        let starting=std::env::args_os().nth(1).map(PathBuf::from)
-            .filter(|p|p.is_dir()).unwrap_or_else(home);
+        let requested=explicitly_requested.or_else(||
+            std::env::args_os().nth(1).and_then(|s|s.into_string().ok()));
+        let requested_uri=requested.as_deref()
+            .filter(|value|value.contains("://")).map(ToOwned::to_owned);
+        let starting=requested.as_deref().filter(|value|!value.contains("://"))
+            .map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(home);
         let title=starting.file_name().map(|s|s.to_string_lossy().into_owned())
             .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_owned());
-        append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
-            starting,first_pending,&title,first_remote.clone(),&first_add);
-        // Drop only the temporary loading page; all genuine tabs remain.
+        if let Some(uri)=requested_uri {
+            first_remote(uri);
+        }else{
+            append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
+                starting,first_pending,&title,first_remote.clone(),&first_add,
+                &recent_first,&next_first);
+        }
         first_tabs.remove_page(Some(0));
-        if let Some(uri)=requested_uri {first_remote(uri);}
-        if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
-            if uri.starts_with("file:///") {first_remote(uri);}
+        if !detached_window {
+            if let Ok(uri)=std::env::var("MELANIA_SMOKE_GIO_FILE_URI") {
+                if uri.starts_with("file:///") {first_remote(uri);}
+            }
         }
         if files_profile_enabled() {
             eprintln!("MELANIA_FILES_FIRST_TAB_MS={}",startup_clock.elapsed().as_millis());
@@ -3237,6 +3270,10 @@ fn build_ui(app: &Application) {
 }
 
 
+
+fn build_ui(app:&Application) {
+    create_files_window(app,None);
+}
 
 /// Prefer Melania's freedesktop icon theme inside Melania applications.
 /// During development, assets can be loaded directly from the source tree;
