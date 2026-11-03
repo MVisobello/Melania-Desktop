@@ -138,8 +138,10 @@ fn main()->Result<(),Box<dyn Error>> {
     let qh=queue.handle();
     let _registry=connection.display().get_registry(&qh,());
     let mut state=Client::default();
-    state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
+    let managed_role_pixels=std::env::var("MELANIA_QEMU_MANAGED_ROLE_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
+    state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM") || managed_role_pixels;
     queue.roundtrip(&mut state)?;
     queue.roundtrip(&mut state)?;
     if !state.output_mode_received {
@@ -183,6 +185,36 @@ fn main()->Result<(),Box<dyn Error>> {
     }
     for index in 1..=12u32 {
         let surface=if index%2==1 {&first} else {&second};
+        if managed_role_pixels && matches!(index,3|5|7|9) {
+            // A real client request (not a state-model fixture) changes the
+            // xdg_toplevel role. Wait for the paired xdg_surface ack before
+            // attaching a new wl_shm image of exactly the configured size.
+            state.resize_requested_a=None;
+            state.resize_acked_a=false;
+            match index {
+                3=>first_top.set_maximized(),
+                5=>first_top.unset_maximized(),
+                7=>first_top.set_fullscreen(None),
+                9=>first_top.unset_fullscreen(),
+                _=>unreachable!(),
+            }
+            let deadline=Instant::now()+Duration::from_secs(10);
+            while !state.resize_acked_a {
+                if Instant::now()>=deadline {
+                    return Err(format!("managed role frame {index} configure/ACK timed out").into());
+                }
+                queue.roundtrip(&mut state)?;
+            }
+            let expected=if index==3 || index==7 {(1280,800)} else {(W,H)};
+            if state.resize_requested_a!=Some(expected) {
+                return Err(format!(
+                    "managed role frame {index} size {:?} not {expected:?}",
+                    state.resize_requested_a).into());
+            }
+            println!("MELANIA_NATIVE_MANAGED_ROLE_CLIENT_ACK={index} size={}x{}",
+                     expected.0,expected.1);
+            std::io::stdout().flush()?;
+        }
         // Frames 7 and 8 must honor the compositor's xdg_toplevel.configure
         // dimensions and the matching xdg_surface.ack_configure serial.
         // No buffer from the smaller geometry is submitted beforehand.
@@ -209,7 +241,10 @@ fn main()->Result<(),Box<dyn Error>> {
         }
         // Both clients replace their old wl_shm content with the requested
         // geometry and the CPU compositor clears the old pixels in QMP.
-        let (client_w,client_h)=if dynamic {
+        let (client_w,client_h)=if managed_role_pixels {
+            if index%2==1 {state.resize_requested_a.unwrap_or((W,H))}
+            else {(W,H)}
+        } else if dynamic {
             if index%2==1 {
                 if index<7 {(400usize,240usize)}
                 else if state.dynamic_xdg_resize {
@@ -276,11 +311,22 @@ fn main()->Result<(),Box<dyn Error>> {
         }
         println!("MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_ACKED={index} window={}",
                  if index%2==1 {"A"} else {"B"});
+        if managed_role_pixels {
+            // The client callback is delivered only after the actual Rust
+            // KMS worker confirms the virtual CRTC framebuffer.
+            println!("MELANIA_NATIVE_MANAGED_ROLE_KMS_CALLBACK={index}");
+        }
         std::io::stdout().flush()?;
         buffer.destroy();
         pool.destroy();
     }
     println!("MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_12_FRAMES_PASS=true");
+    if managed_role_pixels {
+        if !state.resize_acked_a || state.resize_requested_a!=Some((W,H)) {
+            return Err("final xdg unfullscreen restore configure was not ACKed".into());
+        }
+        println!("MELANIA_NATIVE_MANAGED_ROLE_12_KMS_FRAMES_PASS=true");
+    }
     if dynamic {
         println!("MELANIA_NATIVE_DYNAMIC_TWO_SIZES_12_KMS_FRAMES_PASS=true");
         println!("MELANIA_NATIVE_DYNAMIC_PREMULTIPLIED_ARGB_CLIENT_PASS=true");
