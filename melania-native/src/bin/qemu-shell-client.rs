@@ -179,6 +179,11 @@ fn main()->Result<(),Box<dyn Error>> {
         expect_managed_role(&mut events,&mut state,(360,224),
             None,Some(xdg_toplevel::State::Fullscreen))?;
         window_surface.commit();
+        // xdg_toplevel has no unminimize request; restoring a hidden
+        // window is the shell/taskbar's responsibility in a later stage.
+        top.set_minimized();
+        events.roundtrip(&mut state)?;
+        println!("MELANIA_NATIVE_XDG_MINIMIZE_REQUEST_SENT=true");
         println!("MELANIA_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true");
     }
     println!("MELANIA_NATIVE_XDG_CONFIGURE_ACK=true");
