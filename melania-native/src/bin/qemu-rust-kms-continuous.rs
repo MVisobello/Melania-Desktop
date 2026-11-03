@@ -223,10 +223,16 @@ fn run()->Result<(),Box<dyn Error>> {
             // Only verified CRTC scanout may produce a success ACK.
             wait_for_fb(&card,crtc_handle,framebuffer)?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_VISIBLE={}",index+1);
+            // Real-time serial QMP watcher must receive this while FB is live.
+            std::io::stdout().flush()?;
             previous=Some(pixels);
             previous_identity=Some((epoch,sequence,generation));
             // Short observable hold for QMP; no 5-second delay per frame.
-            thread::sleep(Duration::from_millis(350));
+            // QMP needs time to capture the actual framebuffer on the
+            // seventh and twelfth presentations (not just its FB_ID).
+            thread::sleep(Duration::from_millis(
+                if index==6 || index==11 {2500} else {350}
+            ));
             if index+1==total {rollback.restore()?;}
             let mut ack=[0u8;29];
             ack[..4].copy_from_slice(b"MLA1");
