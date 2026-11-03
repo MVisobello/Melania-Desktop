@@ -285,8 +285,19 @@ impl BridgeState {
             match pending.ordinal {
                 4 if self.drag_redraw_mode=>
                     println!("MELANIA_NATIVE_DRAG_FRAME_ACKED=4"),
-                5 if self.close_redraw_mode=>
-                    println!("MELANIA_NATIVE_CLOSE_FRAME_ACKED=5"),
+                5 if self.close_redraw_mode=>{
+                    // A surviving real wl_surface requested this callback
+                    // before A was destroyed. Only the fifth DRM FB_ID ACK
+                    // may complete it, not display.sync or an idle timer.
+                    let survivor=self.known_window_surfaces.get(2).cloned()
+                        .ok_or("QEMU surviving Wayland window unavailable after KMS ACK")?;
+                    let delivered=complete_presented_frame(&survivor,5*16);
+                    if delivered!=1 {
+                        return Err("QEMU close KMS presentation did not complete survivor callback".into());
+                    }
+                    println!("MELANIA_NATIVE_CLOSE_FRAME_CALLBACK_DONE=true");
+                    println!("MELANIA_NATIVE_CLOSE_FRAME_ACKED=5");
+                },
                 _=>return Err("unexpected compositor-only KMS frame".into()),
             }
         }
@@ -522,6 +533,9 @@ impl XdgShellHandler for BridgeState {
                 self.window_interaction.cancel();
             }
             println!("MELANIA_NATIVE_WINDOW_REMOVED={key}");
+            if self.close_redraw_mode && key==1 {
+                println!("MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true");
+            }
             let _=std::io::stdout().flush();
         }
         if self.focused.as_ref()==Some(&surface) {

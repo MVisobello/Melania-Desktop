@@ -266,20 +266,27 @@ fn main()->Result<(),Box<dyn Error>> {
     println!("MELANIA_NATIVE_CLIENT_XDG_WINDOW_DRAWN=true");
     std::io::stdout().flush()?;
     if close_redraw {
-        // Only the FIRST window is destroyed: the second client retains
-        // actual wl_shm pixels while the QEMU GPU repaints the background
-        // where A was. A fixed bounded hold is used only in this opt-in VM
-        // experiment; the compositor/KMS test itself checks the real ACK.
+        // Request a real frame callback on B before the first toplevel is
+        // destroyed. Unlike a guessed delay, that callback is delivered
+        // ONLY after the fifth DRM framebuffer has been presented.
+        let survivor=&secondary.as_ref().ok_or("second client window missing")?.0;
+        let _close_callback=survivor.frame(&qh,());
+        survivor.commit();
         toplevel.destroy();
         xdg.destroy();
         surface.destroy();
         connection.flush()?;
         println!("MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true");
         std::io::stdout().flush()?;
-        for _roundtrip in 0..70 {
+        let deadline=Instant::now()+Duration::from_secs(16);
+        while state.frame_done_count<4 {
             queue.roundtrip(&mut state)?;
-            thread::sleep(Duration::from_millis(200));
+            if Instant::now()>=deadline {
+                return Err("fifth native KMS frame did not complete the surviving client callback".into());
+            }
+            thread::sleep(Duration::from_millis(35));
         }
+        println!("MELANIA_NATIVE_CLIENT_CLOSE_CALLBACK_AFTER_KMS=true");
         println!("MELANIA_NATIVE_CLIENT_SECOND_WINDOW_HELD=true");
         if let Some((other,xdg_other,top_other))=secondary {
             top_other.destroy();

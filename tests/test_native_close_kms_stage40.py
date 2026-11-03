@@ -31,6 +31,7 @@ class NativeCloseKmsStage40(unittest.TestCase):
             'self.async_pending=Some(PendingAsyncFrame{',
             'MELANIA_NATIVE_CLOSE_FRAME_SUBMITTED=5',
             'MELANIA_NATIVE_CLOSE_FRAME_ACKED=5',
+            'MELANIA_NATIVE_CLOSE_FRAME_CALLBACK_DONE=true',
             'MELANIA_NATIVE_CLOSE_FRAME_VISIBLE=true',
             'self.close_frame_presented=true;',
             'self.multi_scene.remove(key)',
@@ -41,6 +42,10 @@ class NativeCloseKmsStage40(unittest.TestCase):
         self.assertIn('MELANIA_RUST_CLOSE_FRAME5_PASS=true',KMS)
         self.assertIn('MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true',CLIENT)
         self.assertIn('MELANIA_NATIVE_CLIENT_SECOND_WINDOW_HELD=true',CLIENT)
+        self.assertIn('MELANIA_NATIVE_CLIENT_CLOSE_CALLBACK_AFTER_KMS=true',CLIENT)
+        self.assertIn('let _close_callback=survivor.frame(&qh,());',CLIENT)
+        self.assertIn('while state.frame_done_count<4 {',CLIENT)
+        self.assertIn('complete_presented_frame(&survivor,5*16)',BRIDGE)
         self.assertIn('MELANIA_NATIVE_CLOSE_REDRAW=YES_QEMU_VM',GUEST)
         self.assertIn('MELANIA_QEMU_CLOSE_FRAME=YES_QEMU_VM',GUEST)
         self.assertIn('scripts/capture-qemu-close-frame.py',HOST)
