@@ -88,6 +88,11 @@ struct Browser {
     // GIO filesystem events refresh the active tab without polling.
     monitor: Rc<RefCell<Option<gio::FileMonitor>>>,
     refresh_pending: Rc<Cell<bool>>,
+    // Reject delayed monitor events and timers from folders already left.
+    monitor_epoch: Rc<Cell<u64>>,
+    // A navigation invalidates pending search-as-you-type debounce callbacks.
+    search_revision: Rc<Cell<u64>>,
+    suppress_search_refresh: Rc<Cell<bool>>,
     // Single coalescing filesystem worker per tab, with stale-result fencing.
     listing_generation: Rc<Cell<u64>>,
     listing_cancel: Rc<RefCell<Option<Arc<AtomicBool>>>>,
@@ -652,16 +657,24 @@ fn open_trash_window(browser: &Browser) {
 }
 
 fn watch_directory(browser: &Browser) {
-    // Drop the previous monitor when switching folders.
-    *browser.monitor.borrow_mut() = None;
+    // Cancel the old monitor and invalidate its pending debounced refreshes.
+    // An event queued for folder A must not reload folder B after navigation.
+    let epoch = browser.monitor_epoch.get().wrapping_add(1);
+    browser.monitor_epoch.set(epoch);
+    if let Some(previous) = browser.monitor.borrow_mut().take() { previous.cancel(); }
+    browser.refresh_pending.set(false);
     let dir = browser.current.borrow().clone();
-    if let Ok(monitor) = gio::File::for_path(dir).monitor_directory(
+    if let Ok(monitor) = gio::File::for_path(&dir).monitor_directory(
         gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>) {
         let state = browser.clone();
         monitor.connect_changed(move |_, _, _, _| {
+            if state.monitor_epoch.get() != epoch || *state.current.borrow() != dir { return; }
             if state.refresh_pending.replace(true) { return; }
             let update = state.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(220), move || {
+            let watched = dir.clone();
+            glib::timeout_add_local_once(Duration::from_millis(220), move || {
+                if update.monitor_epoch.get() != epoch ||
+                    *update.current.borrow() != watched { return; }
                 update.refresh_pending.set(false);
                 refresh(&update);
             });
@@ -1296,10 +1309,8 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
 
 // Keep a bounded navigation history, independent of the directory renderer.
 fn navigate(browser: &Browser, target: PathBuf, keep_history: bool) {
-    if !target.is_dir() {
-        browser.status.set_text(&format!("Non è una cartella: {}", target.display()));
-        return;
-    }
+    // Never synchronously stat a slow FUSE/GVfs-backed path on GTK's main loop.
+    // The cancellable GIO listing worker reports inaccessible/non-folder paths.
     let previous = browser.current.borrow().clone();
     if target == previous { return; }
     if keep_history {
@@ -1315,7 +1326,11 @@ fn navigate(browser: &Browser, target: PathBuf, keep_history: bool) {
     browser.preview.set_text("Seleziona un file per visualizzarne i dettagli.");
     browser.preview_image.set_visible(false);
     browser.preview_image.set_filename(None::<&std::path::Path>);
+    // Clearing the old search must not schedule a SECOND scan 150ms later.
+    browser.search_revision.set(browser.search_revision.get().wrapping_add(1));
+    browser.suppress_search_refresh.set(true);
     browser.search.set_text("");
+    browser.suppress_search_refresh.set(false);
     refresh(browser);
     watch_directory(browser);
 }
@@ -1916,6 +1931,9 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
         highlighted: Rc::new(RefCell::new(None)),
         monitor: Rc::new(RefCell::new(None)),
         refresh_pending: Rc::new(Cell::new(false)),
+        monitor_epoch: Rc::new(Cell::new(0)),
+        search_revision: Rc::new(Cell::new(0)),
+        suppress_search_refresh: Rc::new(Cell::new(false)),
         listing_generation: Rc::new(Cell::new(0)),
         listing_cancel: Rc::new(RefCell::new(None)),
         listing_running: Rc::new(Cell::new(false)),
@@ -2221,11 +2239,11 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     let state = browser.clone();
     // Search-as-you-type must not tear down and rebuild the entire FlowBox
     // on every single keystroke. Only the latest edit runs after a short pause.
-    let search_revision=Rc::new(Cell::new(0u64));
     browser.search.connect_changed(move |_| {
-        let ticket=search_revision.get().wrapping_add(1);
-        search_revision.set(ticket);
-        let current_revision=search_revision.clone();
+        let ticket=state.search_revision.get().wrapping_add(1);
+        state.search_revision.set(ticket);
+        if state.suppress_search_refresh.get() {return;}
+        let current_revision=state.search_revision.clone();
         let tab=state.clone();
         glib::timeout_add_local_once(Duration::from_millis(150),move || {
             if current_revision.get()==ticket {refresh(&tab);}
@@ -2438,6 +2456,25 @@ fn file_tab(start_dir: PathBuf, shared_pending: Rc<RefCell<Option<PendingTransfe
     root.add_controller(key_nav);
     // Drops from GTK/Qt file lists currently negotiate COPY only.
     attach_drop(&scroll, None, browser.clone());
+    // Releasing a notebook page must stop outstanding monitor callbacks and
+    // background reads; stale completions must not repaint a closed tab.
+    let closing=browser.clone();
+    root.connect_unrealize(move |_| {
+        closing.monitor_epoch.set(closing.monitor_epoch.get().wrapping_add(1));
+        if let Some(monitor)=closing.monitor.borrow_mut().take(){monitor.cancel();}
+        if let Some(cancel)=closing.listing_cancel.borrow_mut().take(){
+            cancel.store(true,Ordering::Release);
+        }
+        if let Some(cancel)=closing.thumbnail_cancel.borrow_mut().take(){
+            cancel.store(true,Ordering::Release);
+        }
+        if let Some(pending)=closing.listing_pending.borrow_mut().take(){
+            pending.cancelled.store(true,Ordering::Release);
+        }
+        if let Some(pending)=closing.thumbnail_pending.borrow_mut().take(){
+            pending.cancelled.store(true,Ordering::Release);
+        }
+    });
     refresh(&browser);
     watch_directory(&browser);
     root
