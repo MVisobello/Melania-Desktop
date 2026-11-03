@@ -23,7 +23,10 @@ class FilesIntegration015(unittest.TestCase):
         self.assertIn('start_local_mutation(&state,LocalMutationKind::Move', SOURCE)
         self.assertIn('source.set_actions(gdk::DragAction::COPY)', SOURCE)
         self.assertIn('gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY)', SOURCE)
-        self.assertNotIn('gdk::DragAction::MOVE)', SOURCE)
+        file_drag = SOURCE.split('fn attach_drag(',1)[1].split('fn show_properties(',1)[0]
+        self.assertNotIn('gdk::DragAction::MOVE)', file_drag)
+        # MOVE now belongs solely to tab reordering, not to file transfers.
+        self.assertIn('let drag_source=gtk::DragSource::new();',SOURCE)
         self.assertNotIn('remove_confirmed_source(', SOURCE)
 
     def test_trash_remains_recoverable(self):
