@@ -654,4 +654,4 @@ if kill -0 "$PID" 2>/dev/null; then echo 'FAIL: quit did not close compositor' >
 wait "$PID" || { echo 'FAIL: compositor exited with error' >&2; exit 1; }
 PID=''
 echo 'PASS: desktop layer, panel, Files, Settings, workspace switch, screenshot and clean quit'
-echo 'NOT TESTED: hardware DRM/seat, XWayland, HiDPI, drag-and-drop or production Aero.'
+echo 'NOT TESTED: hardware DRM/seat, XWayland, HiDPI, cross-window physical tab drop, file drag-and-drop or production Aero.'
