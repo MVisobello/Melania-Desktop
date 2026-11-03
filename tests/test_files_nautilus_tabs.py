@@ -29,7 +29,7 @@ class FilesNautilusTabs(unittest.TestCase):
 
     def test_both_backends_share_the_same_tab_actions(self):
         self.assertIn('append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button)',FILES)
-        self.assertIn('append_file_page(notebook,tab_strip,headers,window,title,child,"network-server-symbolic",new_button)',FILES)
+        self.assertIn('append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button)',FILES)
         self.assertIn("browser.tab_title.set_tooltip_text(Some(&directory.display().to_string()))",FILES)
         self.assertIn("remote.title.set_tooltip_text(Some(&uri));",REMOTE)
         self.assertIn('place.as_deref().filter(|uri|uri.contains("://"))',FILES)
@@ -86,7 +86,9 @@ class FilesNautilusTabs(unittest.TestCase):
                        "window.melania-theme-aero .files-top-tab"):
             self.assertIn(marker,CSS)
         self.assertIn("border-radius:10px 10px 0 0",CSS)
-        self.assertIn("opacity:0.15",CSS)
+        self.assertIn("opacity:0.92",CSS)
+        self.assertIn('let close = Button::with_label("×");',FILES)
+        self.assertIn('let add_button = Button::with_label("+");',FILES)
 
 
 if __name__=="__main__":
