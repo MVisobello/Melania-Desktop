@@ -333,7 +333,7 @@ fn run_local_mutation(kind: LocalMutationKind, sources: Vec<PathBuf>,
         let operation: Result<(),String> = match kind {
             LocalMutationKind::Move => transfer::move_local(path,
                 destination.as_ref().expect("move requires a destination"))
-                .map_err(|e|e.to_string()),
+                .map(|_|()).map_err(|e|e.to_string()),
             LocalMutationKind::Trash => {
                 let uri=gio::File::for_path(path).uri();
                 gio_backend::move_to_trash(&uri)
