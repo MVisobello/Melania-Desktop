@@ -609,10 +609,12 @@ echo 'PASS: real GTK Ctrl+Shift+T reopened a closed tab and Ctrl+N created a sec
 # have been proven usable first.
 xdotool windowfocus --sync "$HOST_WINDOW"
 prior_tearoffs="$(grep -c 'MELANIA_FILES_TAB_TEAROFF=success' "$TEMP/compositor.log" || true)"
-xdotool mousemove --window "$HOST_WINDOW" 270 85
+# Ctrl+N has placed a fresh single-tab Files window in front: its sole
+# Nautilus handle occupies x≈80–220, not x≈270 (blank headerbar).
+xdotool mousemove --window "$HOST_WINDOW" 143 85
 xdotool mousedown 1
 sleep .08
-xdotool mousemove --sync --window "$HOST_WINDOW" 315 85
+xdotool mousemove --sync --window "$HOST_WINDOW" 210 88
 sleep .1
 xdotool mousemove --sync --window "$HOST_WINDOW" 24 330
 sleep .18
