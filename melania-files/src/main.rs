@@ -2946,7 +2946,7 @@ fn build_ui(app: &Application) {
     let add_button = Button::from_icon_name("list-add-symbolic");
     add_button.add_css_class("files-new-tab");
     add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
-    let tab_strip = GtkBox::new(Orientation::Horizontal, 4);
+    let tab_strip = GtkBox::new(Orientation::Horizontal, 0);
     tab_strip.add_css_class("files-top-tabs");
     let tab_scroll = ScrolledWindow::new();
     tab_scroll.add_css_class("files-tab-scroll");
@@ -2979,18 +2979,22 @@ fn build_ui(app: &Application) {
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
+    let scroll_for_switch = tab_scroll.clone();
+    let strip_for_switch = tab_strip.clone();
     tabs.connect_switch_page(move |notebook, _, _| {
         sync_tab_highlights(notebook, &headers_for_switch, &window_for_switch);
+        reveal_active_files_tab(notebook,&strip_for_switch,&headers_for_switch,&scroll_for_switch);
     });
 
     let weak_tabs=tabs.downgrade();
     let weak_strip=tab_strip.downgrade();
     let weak_window=window.downgrade();
+    let weak_add=add_button.downgrade();
     let headers_for_remote=tab_headers.clone();
     let open_remote:Rc<dyn Fn(String)>=Rc::new(move |uri:String| {
-        if let (Some(tabs),Some(strip),Some(window))=(
-            weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade()) {
-            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri);
+        if let (Some(tabs),Some(strip),Some(window),Some(add))=(
+            weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),weak_add.upgrade()) {
+            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri,&add);
         }
     });
     let open_network=open_remote.clone();
@@ -3002,13 +3006,29 @@ fn build_ui(app: &Application) {
     let rail_for_add = tab_strip.clone();
     let window_for_add = window.clone();
     let remote_for_add=open_remote.clone();
+    let new_button_for_tab=add_button.clone();
     add_button.connect_clicked(move |_| {
-        append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
-            home(), pending_for_add.clone(), "Home", remote_for_add.clone());
+        // A Nautilus new tab starts in the currently visible folder/URI,
+        // rather than unexpectedly resetting to Home.
+        let current=notebook.current_page();
+        let place=header_for_add.borrow().iter()
+            .find(|(page,_,_)|notebook.page_num(page)==current)
+            .and_then(|(_,_,title)|title.tooltip_text())
+            .map(|uri|uri.to_string());
+        if let Some(uri)=place.as_deref().filter(|uri|uri.contains("://")){
+            remote_for_add(uri.to_string());
+        } else {
+            let path=place.map(PathBuf::from).unwrap_or_else(home);
+            let title=path.file_name().map(|name|name.to_string_lossy().into_owned())
+                .filter(|name|!name.is_empty()).unwrap_or_else(||"Home".to_owned());
+            append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
+                path, pending_for_add.clone(), &title, remote_for_add.clone(),&new_button_for_tab);
+        }
     });
     frame.append(&tabs);
 
-    // Browser keyboard conventions: Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab.
+    // GNOME/Nautilus tab shortcuts. Within-file shortcuts remain attached
+    // to their own page; these only act on the window's tab view.
     let keys = gtk::EventControllerKey::new();
     let keys_notebook = tabs.clone();
     let keys_add = add_button.clone();
@@ -3016,36 +3036,61 @@ fn build_ui(app: &Application) {
     let strip_for_keys = tab_strip.clone();
     let window_for_keys = window.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
-        if !modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
-            return glib::Propagation::Proceed;
+        let ctrl=modifiers.contains(gdk::ModifierType::CONTROL_MASK);
+        let shift=modifiers.contains(gdk::ModifierType::SHIFT_MASK);
+        if modifiers.contains(gdk::ModifierType::ALT_MASK) && !ctrl {
+            if let Some(digit)=key.to_unicode().and_then(|c|c.to_digit(10)){
+                let count=keys_notebook.n_pages();
+                if count>0{
+                    let index=if digit==0{count-1}else{digit-1};
+                    if index<count {keys_notebook.set_current_page(Some(index));}
+                    return glib::Propagation::Stop;
+                }
+            }
         }
+        if !ctrl{return glib::Propagation::Proceed;}
         if key == gdk::Key::t || key == gdk::Key::T {
-            keys_add.emit_clicked();
-            return glib::Propagation::Stop;
+            if !shift{keys_add.emit_clicked();}
+            return if shift{glib::Propagation::Proceed}else{glib::Propagation::Stop};
         }
         if key == gdk::Key::w || key == gdk::Key::W {
-            if keys_notebook.n_pages() > 1 {
-                if let Some(index) = keys_notebook.current_page() {
-                    if let Some((_, heading, _)) = tab_headers_for_keys.borrow().iter()
-                        .find(|(page, _, _)| keys_notebook.page_num(page) == Some(index)).cloned() {
-                        strip_for_keys.remove(&heading);
-                    }
-                    tab_headers_for_keys.borrow_mut()
-                        .retain(|(page, _, _)| keys_notebook.page_num(page) != Some(index));
-                    keys_notebook.remove_page(Some(index));
-                    sync_tab_highlights(&keys_notebook, &tab_headers_for_keys, &window_for_keys);
+            if let Some(index)=keys_notebook.current_page(){
+                if let Some(page)=keys_notebook.nth_page(Some(index))
+                    .and_then(|page|page.downcast::<GtkBox>().ok()){
+                    close_files_tab(&keys_notebook,&strip_for_keys,&tab_headers_for_keys,
+                                    &window_for_keys,&page);
                 }
             }
             return glib::Propagation::Stop;
         }
-        if key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab {
-            let count = keys_notebook.n_pages();
-            if count > 1 {
-                let index = keys_notebook.current_page().unwrap_or(0);
-                let backwards = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
-                let next = if backwards { (index + count - 1) % count } else { (index + 1) % count };
-                keys_notebook.set_current_page(Some(next));
+        let count=keys_notebook.n_pages();
+        if count<=1{return glib::Propagation::Proceed;}
+        let current=keys_notebook.current_page().unwrap_or(0);
+        if (key==gdk::Key::Page_Up || key==gdk::Key::Page_Down) && shift{
+            let target=if key==gdk::Key::Page_Up{
+                current.saturating_sub(1)
+            }else{(current+1).min(count-1)};
+            if let Some(page)=keys_notebook.nth_page(Some(current))
+                .and_then(|page|page.downcast::<GtkBox>().ok()){
+                reorder_files_tab(&keys_notebook,&strip_for_keys,&tab_headers_for_keys,
+                                  &window_for_keys,&page,target);
             }
+            return glib::Propagation::Stop;
+        }
+        if key==gdk::Key::Home {
+            keys_notebook.set_current_page(Some(0));
+            return glib::Propagation::Stop;
+        }
+        if key==gdk::Key::End {
+            keys_notebook.set_current_page(Some(count-1));
+            return glib::Propagation::Stop;
+        }
+        if key==gdk::Key::Tab || key==gdk::Key::ISO_Left_Tab ||
+            key==gdk::Key::Page_Up || key==gdk::Key::Page_Down {
+            let backwards=(key==gdk::Key::Tab && shift) ||
+                key==gdk::Key::ISO_Left_Tab || key==gdk::Key::Page_Up;
+            let next=if backwards{(current+count-1)%count}else{(current+1)%count};
+            keys_notebook.set_current_page(Some(next));
             return glib::Propagation::Stop;
         }
         glib::Propagation::Proceed
@@ -3062,6 +3107,7 @@ fn build_ui(app: &Application) {
     let first_window=window.clone();
     let first_pending=shared_pending.clone();
     let first_remote=open_remote.clone();
+    let first_add=add_button.clone();
     glib::timeout_add_local_once(Duration::from_millis(55),move || {
         // Only now perform path probes and instantiate the complete browser
         // widget tree. Initial async listing and thumbnails remain separate.
@@ -3073,7 +3119,7 @@ fn build_ui(app: &Application) {
         let title=starting.file_name().map(|s|s.to_string_lossy().into_owned())
             .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_owned());
         append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
-            starting,first_pending,&title,first_remote.clone());
+            starting,first_pending,&title,first_remote.clone(),&first_add);
         // Drop only the temporary loading page; all genuine tabs remain.
         first_tabs.remove_page(Some(0));
         if let Some(uri)=requested_uri {first_remote(uri);}
