@@ -20,7 +20,7 @@ jobs:
       - name: Install GTK and software display dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb xauth libgtk-4-dev libgtk4-layer-shell-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libwayland-dev libxkbcommon-dev libgbm-dev scrot x11-utils python3-pil dbus dbus-x11
+          sudo apt-get install -y -qq xvfb xauth libgtk-4-dev libgtk4-layer-shell-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libgbm-dev scrot x11-utils python3-pil dbus dbus-x11
       - name: Install actual Melania icon theme
         run: |
           python3 tools/build_melania_fluent_themes.py --output dist/melania-fluent-icons
