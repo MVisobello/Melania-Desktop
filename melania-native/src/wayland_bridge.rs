@@ -1310,7 +1310,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_kms_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_worker:None,continuous_inflight:None,
-        continuous_client_ledger:ClientCommitLedger::new(),
+        continuous_client_ledger:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+            .as_deref()==Ok("YES_QEMU_VM") {
+                ClientCommitLedger::with_capacity(16).expect("bounded QEMU receipts")
+            } else {ClientCommitLedger::new()}, 
         continuous_frame_count:0,
         continuous_frame_target:if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
@@ -1346,7 +1349,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         dynamic_toplevels:Vec::new(),
         window_interaction:WindowInteraction::default(),
-        known_window_surfaces:WindowSlots::default(),
+        known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+            .as_deref()==Ok("YES_QEMU_VM") {
+                WindowSlots::with_capacity(16).expect("bounded QEMU window registry")
+            } else {WindowSlots::default()}, 
         stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
