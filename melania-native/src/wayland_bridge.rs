@@ -40,9 +40,12 @@ use smithay::{
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
-                           LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
+                           LayerSurface as WlrLayerSurface,Layer as WlrLayer,
+                           Anchor as WlrAnchor}},
     },
 };
+use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
+use melania_native::scene::Layer as SceneLayer;
 use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -124,6 +127,9 @@ struct BridgeState {
     pixel_frame_target:u8,
     xdg_shell: XdgShellState,
     layer_shell: WlrLayerShellState,
+    // Real wlr-layer wl_shm is opt-in in a disposable QEMU guest only.
+    layer_pixels_mode:bool,
+    layer_surfaces:Vec<WlrLayerSurface>,
     xdg_toplevel_count: u32,
     layer_surface_count: u32,
     seats: SeatState<Self>,
@@ -810,6 +816,106 @@ impl CompositorHandler for BridgeState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
     }
     fn commit(&mut self,surface:&WlSurface) {
+        if self.layer_pixels_mode {
+            if let Some(role)=self.layer_surfaces.iter().find(|r|r.wl_surface()==surface).cloned() {
+                // A protocol configure is NOT pixel evidence. Only a client
+                // wl_shm buffer copied out of Smithay's live mapping enters
+                // the native retained scene and the Rust KMS worker.
+                let assignment=with_states(surface,|states|{
+                    states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
+                });
+                if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
+                    let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                        melania_native::owned_shm::copy_bounded_client_shm(ptr,len,metadata)
+                    });
+                    let pixels=match imported {
+                        Ok(Ok(image))=>match WindowPixels::from_owned_shm(image) {
+                            Ok(image)=>image,
+                            Err(_)=>{
+                                eprintln!("MELANIA_NATIVE_LAYER_SHM_INVALID=true");
+                                buffer.release();
+                                return;
+                            }
+                        },
+                        _=>{
+                            eprintln!("MELANIA_NATIVE_LAYER_SHM_INVALID=true");
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    let attrs=role.with_cached_state(|cached|*cached);
+                    let shell_layer=match attrs.layer {
+                        WlrLayer::Background=>ShellLayer::Background,
+                        WlrLayer::Bottom=>ShellLayer::Bottom,
+                        WlrLayer::Top=>ShellLayer::Top,
+                        WlrLayer::Overlay=>ShellLayer::Overlay,
+                    };
+                    let requested=LayerRequest {
+                        layer:shell_layer,
+                        anchors:Anchors{
+                            top:attrs.anchor.contains(WlrAnchor::TOP),
+                            bottom:attrs.anchor.contains(WlrAnchor::BOTTOM),
+                            left:attrs.anchor.contains(WlrAnchor::LEFT),
+                            right:attrs.anchor.contains(WlrAnchor::RIGHT),
+                        },
+                        width:attrs.size.w.max(0) as u32,
+                        height:attrs.size.h.max(0) as u32,
+                        margins:Insets{top:attrs.margin.top,right:attrs.margin.right,
+                                       bottom:attrs.margin.bottom,left:attrs.margin.left},
+                        exclusive_zone:i32::from(attrs.exclusive_zone),
+                    };
+                    let placement=match layer_surface_layout::place(requested,1280,800) {
+                        Ok(v)=>v,
+                        Err(error)=>{
+                            eprintln!("MELANIA_NATIVE_LAYER_LAYOUT_REJECTED={error:?}");
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    if pixels.width()!=placement.rect.width as usize ||
+                       pixels.height()!=placement.rect.height as usize {
+                        eprintln!("MELANIA_NATIVE_LAYER_CONFIGURE_BUFFER_MISMATCH=true");
+                        buffer.release();
+                        return;
+                    }
+                    // Restrict allocation to the dynamic QEMU scene, and
+                    // retain the layer's z-index for render and pointer hits.
+                    let key=match self.known_window_surfaces.register(surface.clone()) {
+                        Ok(key)=>key,
+                        Err(_)=>{
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    let role_layer:SceneLayer=placement.layer.scene_layer();
+                    if self.dynamic_scene.upsert_in_layer(
+                        key,placement.rect.x,placement.rect.y,role_layer,pixels
+                    ).is_err() {
+                        eprintln!("MELANIA_NATIVE_LAYER_SCENE_REJECTED=true");
+                        buffer.release();
+                        return;
+                    }
+                    match self.continuous_client_ledger.stage(surface.clone(),buffer) {
+                        Ok(Some(previous))=>previous.release(),
+                        Ok(None)=>{},
+                        Err((_,rejected))=>{
+                            rejected.release();
+                            eprintln!("MELANIA_NATIVE_LAYER_KMS_QUEUE_FULL=true");
+                            return;
+                        }
+                    }
+                    self.note_scene_change();
+                    if let Err(error)=self.submit_continuous_frame() {
+                        eprintln!("MELANIA_NATIVE_LAYER_KMS_SUBMIT_FAILED={error}");
+                    } else {
+                        println!("MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED={}x{} layer={role_layer:?}",
+                                 placement.rect.width,placement.rect.height);
+                    }
+                }
+                // Never autofocus noninteractive taskbars on wl_surface.commit.
+                return;
+            }
+        }
         if self.continuous_kms_mode {
             let assignment=with_states(surface,|states|{
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
@@ -1241,10 +1347,36 @@ impl WlrLayerShellHandler for BridgeState {
     fn new_layer_surface(&mut self,surface:WlrLayerSurface,
                          _:Option<WlOutput>,_:WlrLayer,_:String) {
         self.layer_surface_count=self.layer_surface_count.saturating_add(1);
+        if self.layer_pixels_mode {
+            if self.layer_surfaces.len()>=2 {
+                surface.send_close();
+                return;
+            }
+            // A bounded 1280x800 output is the only opt-in scanout here.
+            // The client's normal Wayland configure/ack precedes wl_shm.
+            surface.with_pending_state(|pending|{
+                pending.size=Some((1280,40).into());
+            });
+            self.layer_surfaces.push(surface.clone());
+        }
         surface.send_configure();
         println!("MELANIA_NATIVE_LAYER_SURFACE_CONFIGURE_SENT=true");
     }
-    fn layer_destroyed(&mut self,_:WlrLayerSurface){}
+    fn layer_destroyed(&mut self,role:WlrLayerSurface){
+        if !self.layer_pixels_mode {return;}
+        let surface=role.wl_surface().clone();
+        self.layer_surfaces.retain(|existing|existing.wl_surface()!=&surface);
+        if let Some(key)=self.known_window_surfaces.remove(&surface) {
+            if self.dynamic_scene.remove(key) {
+                self.note_scene_change();
+                // The layer's old pixels must be invalidated and replaced
+                // by a subsequently ACKed native KMS frame.
+                if self.continuous_frame_count<self.continuous_frame_target {
+                    let _=self.submit_continuous_frame();
+                }
+            }
+        }
+    }
 }
 delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
@@ -1535,6 +1667,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         stream:None,
         xdg_shell:XdgShellState::new::<BridgeState>(&handle),
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
+        layer_pixels_mode:std::env::var("MELANIA_NATIVE_LAYER_PIXELS")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        layer_surfaces:Vec::new(),
         xdg_toplevel_count:0,layer_surface_count:0,
         seats,seat,focused:None,pointer_position:(0.0,0.0).into(),
         lifecycle:NativeLifecycle::default(),delivered_keys:0,
@@ -1603,6 +1738,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.continuous_kms_mode || !state.multi_window_mode ||
         state.continuous_reopen_mode || !continuous_two_windows) {
         return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
+    }
+    if state.layer_pixels_mode &&
+       (!state.dynamic_window_mode || !state.continuous_kms_mode ||
+        !state.multi_window_mode || !state.frame_callbacks_probe ||
+        state.continuous_reopen_mode) {
+        return Err("native layer pixels require isolated QEMU dynamic multi-client KMS");
     }
     if state.managed_xdg_mode && !state.dynamic_window_mode &&
        std::env::var("MELANIA_NATIVE_SHELL_PROBE").as_deref()!=Ok("YES_QEMU_VM") {
