@@ -998,7 +998,19 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
     let list_mode = browser.list_mode.get();
     let mut thumbnail_targets:Vec<(PathBuf,GtkBox)>=Vec::new();
     let max_thumbnails=thumbnail_budget();
-    for entry in entries {
+    // Each GTK idle slice constructs only a bounded group of entries. This
+    // keeps pointer/keyboard input responsive in directories with many files.
+    // An obsolete slice must never add rows to a new location or search.
+    let generation=browser.listing_generation.get();
+    let browser=browser.clone();
+    let dir=dir.to_path_buf();
+    let mut remaining=std::collections::VecDeque::from(entries);
+    glib::idle_add_local(move ||{
+        if browser.listing_generation.get()!=generation {
+            return glib::ControlFlow::Break;
+        }
+        for _ in 0..24 {
+            let Some(entry)=remaining.pop_front() else {break;};
         let type_name = file_type_label(&entry);
         let file_size = if entry.is_directory {"—".to_string()} else {human_size(entry.size)};
         let changed = modified_time_label(entry.modified);
@@ -1240,7 +1252,10 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         });
         button.add_controller(secondary_click);
         browser.tiles.insert(&button, -1);
-    }
+        }
+        if !remaining.is_empty() {
+            return glib::ControlFlow::Continue;
+        }
     let queued_thumbnails=thumbnail_targets.len();
     if !list_mode && !thumbnail_targets.is_empty() {
         let cancelled=Arc::new(AtomicBool::new(false));
@@ -1275,6 +1290,8 @@ fn render_listing(browser: &Browser,dir:&Path,entries:Vec<model::Entry>) {
         let line=format!("MELANIA_FILES_LISTING_READY count={count}\n");
         let _=std::io::stderr().write_all(line.as_bytes());
     }
+    glib::ControlFlow::Break
+    });
 }
 
 // Keep a bounded navigation history, independent of the directory renderer.
