@@ -9,7 +9,11 @@ class ReleaseInvariants(unittest.TestCase):
     def test_drag_drop_targets_only_copy(self):
         source = (ROOT/'melania-files/src/main.rs').read_text()
         self.assertIn('gdk::DragAction::COPY', source)
-        self.assertNotIn('source.set_actions(gdk::DragAction::MOVE)', source)
+        file_drag = source.split('fn attach_drag(',1)[1].split('fn show_properties(',1)[0]
+        self.assertNotIn('source.set_actions(gdk::DragAction::MOVE)',file_drag)
+        self.assertIn('source.set_actions(gdk::DragAction::COPY)',file_drag)
+        # Only GTK tab handles can negotiate MOVE; files remain COPY-only.
+        self.assertIn('drag_source.set_actions(gdk::DragAction::MOVE)',source)
         self.assertNotIn('remove_confirmed_source(', source)
 
     def test_file_operations_prevent_overwrite(self):

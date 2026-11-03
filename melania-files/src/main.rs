@@ -10,7 +10,9 @@ use melania_transfer as transfer;
 use melania_files_core as model;
 use model::nautilus_features as nautilus;
 use gtk::{Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, FlowBox, Image, Label, Orientation, Picture, ScrolledWindow};
-use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command, rc::Rc, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command, rc::Rc, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}, time::{Duration, Instant}};
+
+static NEXT_FILES_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 struct PendingTransfer { paths: Vec<PathBuf>, is_move: bool }
@@ -1088,6 +1090,9 @@ fn refresh(browser: &Browser) {
         .map(|n|n.to_string_lossy().into_owned())
         .unwrap_or_else(||directory.display().to_string());
     browser.tab_title.set_text(&caption);
+    // Hovering a tab exposes its actual location, not just its abbreviated title.
+    // The new-tab action reuses this URI/path to open beside the active tab.
+    browser.tab_title.set_tooltip_text(Some(&directory.display().to_string()));
     // Stale rows and paths must not remain actionable while another folder
     // or search filter is loading; never allow deleting a hidden old item.
     browser.highlighted.borrow_mut().take();
@@ -2592,6 +2597,93 @@ fn sync_tab_highlights(
     }
 }
 
+/// Close a tab by its page identity rather than a saved numeric index.
+fn close_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
+                   headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                   window:&ApplicationWindow,page:&GtkBox) {
+    // Melania retains the final open tab instead of unexpectedly closing the
+    // whole file manager. Both the X and Ctrl+W use this exact same rule.
+    if notebook.n_pages()<=1{return;}
+    let Some(index)=notebook.page_num(page) else{return;};
+    let heading=headers.borrow().iter()
+        .find(|(candidate,_,_)|candidate==page)
+        .map(|(_,heading,_)|heading.clone());
+    if let Some(heading)=heading{strip.remove(&heading);}
+    headers.borrow_mut().retain(|(candidate,_,_)|candidate!=page);
+    notebook.remove_page(Some(index));
+    sync_tab_highlights(notebook,headers,window);
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_TAB_COUNT={}",headers.borrow().len());
+    }
+}
+
+/// One source of truth for keyboard, context-menu and pointer tab reorder.
+/// The hidden Notebook and the visible titlebar rail must never disagree.
+fn reorder_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
+                     headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                     window:&ApplicationWindow,page:&GtkBox,destination:u32) -> bool {
+    let Some(origin)=notebook.page_num(page) else{return false;};
+    let destination=destination.min(notebook.n_pages().saturating_sub(1));
+    if origin==destination{return false;}
+    notebook.reorder_child(page,Some(destination));
+    let (heading,previous)={
+        let registered=headers.borrow();
+        let heading=registered.iter().find(|(p,_,_)|p==page).map(|(_,h,_)|h.clone());
+        let previous=if destination==0{None}else{
+            registered.iter()
+                .find(|(p,_,_)|notebook.page_num(p)==Some(destination-1))
+                .map(|(_,h,_)|h.clone())
+        };
+        (heading,previous)
+    };
+    if let Some(heading)=heading {
+        strip.reorder_child_after(&heading,previous.as_ref());
+    }
+    sync_tab_highlights(notebook,headers,window);
+    true
+}
+
+/// A drop on the left/right half of a tab selects the adjacent insertion
+/// slot. Removing a source from before that slot shifts the index by one.
+fn tab_drop_destination(source:u32,target:u32,after:bool)->u32 {
+    let insertion=target.saturating_add(u32::from(after));
+    if source<insertion{insertion-1}else{insertion}
+}
+
+fn close_other_files_tabs(notebook:&gtk::Notebook,strip:&GtkBox,
+                          headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                          window:&ApplicationWindow,keep:&GtkBox,right_only:bool){
+    let keep_index=notebook.page_num(keep).unwrap_or(0);
+    let to_close:Vec<GtkBox>=headers.borrow().iter()
+        .filter(|(page,_,_)|page!=keep &&
+            (!right_only || notebook.page_num(page).is_some_and(|index|index>keep_index)))
+        .map(|(page,_,_)|page.clone()).collect();
+    for page in to_close{close_files_tab(notebook,strip,headers,window,&page);}
+}
+
+/// Reveal the active tab when the rail is narrower than the total set.
+fn reveal_active_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
+                           headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                           scroll:&ScrolledWindow) {
+    let active=notebook.current_page();
+    let target=headers.borrow().iter().find(|(page,_,_)|notebook.page_num(page)==active)
+        .map(|(_,tab,_)|tab.clone());
+    let Some(tab)=target else{return;};
+    let scroller=scroll.clone();
+    let rail=strip.clone();
+    glib::idle_add_local_once(move ||{
+        let Some((x,_))=tab.translate_coordinates(&rail,0.0,0.0) else{return;};
+        let adjustment=scroller.hadjustment();
+        let left=adjustment.value();
+        let visible=adjustment.page_size();
+        if visible<=0.0{return;}
+        if x<left {adjustment.set_value(x);}
+        else if x+f64::from(tab.width())>left+visible{
+            adjustment.set_value(x+f64::from(tab.width())-visible);
+        }
+    });
+}
+
 /// Append the new tab AFTER the existing ones. "+" remains the first item.
 fn append_browser_tab(
     notebook: &gtk::Notebook,
@@ -2602,10 +2694,11 @@ fn append_browser_tab(
     pending: Rc<RefCell<Option<PendingTransfer>>>,
     title: &str,
     open_remote: Rc<dyn Fn(String)>,
+    new_button: &Button,
 ) {
     let text = Label::new(Some(title));
     let child = file_tab(path, pending, text.clone(), open_remote);
-    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic");
+    append_file_page(notebook,tab_strip,headers,window,text,child,"folder-symbolic",new_button);
 }
 fn append_remote_tab(
     notebook: &gtk::Notebook,
@@ -2613,12 +2706,17 @@ fn append_remote_tab(
     headers: &Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>>,
     window: &ApplicationWindow,
     uri: &str,
+    new_button: &Button,
 ) {
     let title=Label::new(Some("Rete"));
     let child=gio_remote::create(uri,title.clone());
-    append_file_page(notebook,tab_strip,headers,window,title,child,"network-server-symbolic");
+    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button);
 }
-/// Shared Melania tab rail for local and GVfs pages.
+/// Shared Nautilus-style tab bar for local and GVfs pages. The GTK Notebook
+/// still owns actual pages, while the compact headerbar renders their handles.
+#[derive(Clone,Copy)]
+enum FilesTabAction { Select, New, Close, CloseOthers, CloseRight, MoveLeft, MoveRight }
+
 fn append_file_page(
     notebook: &gtk::Notebook,
     tab_strip: &GtkBox,
@@ -2627,63 +2725,179 @@ fn append_file_page(
     text: Label,
     child: GtkBox,
     icon_name: &str,
+    new_button: &Button,
 ) {
-    let tab = GtkBox::new(Orientation::Horizontal, 3);
+    let tab = GtkBox::new(Orientation::Horizontal, 2);
     tab.add_css_class("files-top-tab");
+    tab.set_valign(Align::End);
+    tab.set_widget_name(&format!("melania-tab-{}",NEXT_FILES_TAB_ID.fetch_add(1,Ordering::Relaxed)));
     let tab_button = Button::new();
     tab_button.add_css_class("files-top-tab-select");
-    let tab_contents = GtkBox::new(Orientation::Horizontal, 6);
+    tab_button.set_hexpand(true);
+    let tab_contents = GtkBox::new(Orientation::Horizontal, 7);
     let icon = Image::from_icon_name(icon_name);
     icon.set_pixel_size(16);
     text.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    text.set_max_width_chars(16);
+    text.set_max_width_chars(17);
+    text.set_hexpand(true);
+    text.set_xalign(0.0);
     tab_contents.append(&icon);
     tab_contents.append(&text);
     tab_button.set_child(Some(&tab_contents));
-    let close = Button::from_icon_name("window-close-symbolic");
+    // Text glyph avoids missing symbolic icons in isolated custom icon themes.
+    let close = Button::with_label("×");
     close.add_css_class("files-tab-close");
-    close.set_tooltip_text(Some("Chiudi scheda"));
+    close.set_tooltip_text(Some("Chiudi scheda (Ctrl+W)"));
     tab.append(&tab_button);
     tab.append(&close);
-    let index = notebook.append_page(&child, None::<&gtk::Widget>);
-    headers.borrow_mut().push((child.clone(), tab.clone(), text.clone()));
+
+    // Nautilus opens a new tab immediately to the right of the active page.
+    // The plus button itself stays at the far end of the scrollable tab rail.
+    let previous=notebook.current_page();
+    let index=notebook.append_page(&child,None::<&gtk::Widget>);
+    headers.borrow_mut().push((child.clone(),tab.clone(),text.clone()));
     tab_strip.append(&tab);
-    notebook.set_current_page(Some(index));
-    sync_tab_highlights(notebook, headers, window);
-    let tabs_for_title = notebook.clone();
-    let page_for_title = child.clone();
-    let window_for_title = window.clone();
+    if let Some(active)=previous {
+        let after=(active+1).min(index);
+        if after<index {
+            reorder_files_tab(notebook,tab_strip,headers,window,&child,after);
+        }
+    }
+    notebook.set_current_page(notebook.page_num(&child));
+    sync_tab_highlights(notebook,headers,window);
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_TAB_COUNT={}",headers.borrow().len());
+    }
+
+    let tabs_for_title=notebook.clone();
+    let page_for_title=child.clone();
+    let window_for_title=window.clone();
     text.connect_label_notify(move |label| {
-        if tabs_for_title.page_num(&page_for_title) == tabs_for_title.current_page() {
-            window_for_title.set_title(Some(&format!("{} — Melania Files", label.label())));
+        if tabs_for_title.page_num(&page_for_title)==tabs_for_title.current_page() {
+            window_for_title.set_title(Some(&format!("{} — Melania Files",label.label())));
         }
     });
 
-    let pages = notebook.clone();
-    let selected_page = child.clone();
-    tab_button.connect_clicked(move |_| {
-        if let Some(number) = pages.page_num(&selected_page) {
-            pages.set_current_page(Some(number));
-        }
-    });
-
-    let pages = notebook.clone();
-    let heading_list = headers.clone();
-    let strip = tab_strip.clone();
-    let window_after_close = window.clone();
-    close.connect_clicked(move |_| {
-        // Never silently close the last browser. Ctrl+W follows the same rule.
-        if pages.n_pages() <= 1 { return; }
-        if let Some(index) = pages.page_num(&child) {
-            if let Some(position) = heading_list.borrow().iter()
-                .position(|(page, _, _)| page == &child) {
-                heading_list.borrow_mut().remove(position);
+    // Only weak references are captured by tab controls, so closing a tab
+    // does not keep its file monitors and GTK widgets alive indefinitely.
+    let weak_pages=notebook.downgrade();
+    let weak_strip=tab_strip.downgrade();
+    let weak_window=window.downgrade();
+    let weak_page=child.downgrade();
+    let weak_new=new_button.downgrade();
+    let weak_headers=Rc::downgrade(headers);
+    let dispatch:Rc<dyn Fn(FilesTabAction)>=Rc::new(move |action|{
+        let (Some(pages),Some(strip),Some(window),Some(page),Some(headers))=(
+            weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
+            weak_page.upgrade(),weak_headers.upgrade()) else{return;};
+        match action {
+            FilesTabAction::Select=>{
+                if let Some(index)=pages.page_num(&page){pages.set_current_page(Some(index));}
+            },
+            FilesTabAction::New=>{
+                if let Some(index)=pages.page_num(&page){pages.set_current_page(Some(index));}
+                if let Some(button)=weak_new.upgrade(){button.emit_clicked();}
+            },
+            FilesTabAction::Close=>close_files_tab(&pages,&strip,&headers,&window,&page),
+            FilesTabAction::CloseOthers=>{
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,false)
+            },
+            FilesTabAction::CloseRight=>{
+                close_other_files_tabs(&pages,&strip,&headers,&window,&page,true)
+            },
+            FilesTabAction::MoveLeft|FilesTabAction::MoveRight=>{
+                if let Some(index)=pages.page_num(&page){
+                    let target=if matches!(action,FilesTabAction::MoveLeft) {
+                        index.saturating_sub(1)
+                    }else{(index+1).min(pages.n_pages().saturating_sub(1))};
+                    reorder_files_tab(&pages,&strip,&headers,&window,&page,target);
+                }
             }
-            strip.remove(&tab);
-            pages.remove_page(Some(index));
-            sync_tab_highlights(&pages, &heading_list, &window_after_close);
         }
     });
+    let select=dispatch.clone();
+    tab_button.connect_clicked(move |_|select(FilesTabAction::Select));
+    let close_action=dispatch.clone();
+    close.connect_clicked(move |_|close_action(FilesTabAction::Close));
+
+    let middle=gtk::GestureClick::new();
+    middle.set_button(2);
+    let close_middle=dispatch.clone();
+    middle.connect_released(move |_,_,_,_|close_middle(FilesTabAction::Close));
+    tab.add_controller(middle);
+
+    // A native GTK popover presents the familiar Nautilus tab operations.
+    let menu=gtk::Popover::new();
+    menu.add_css_class("files-tab-menu");
+    menu.set_has_arrow(false);
+    menu.set_autohide(true);
+    menu.set_parent(&tab);
+    let actions=GtkBox::new(Orientation::Vertical,3);
+    actions.add_css_class("files-tab-menu-items");
+    for (caption,command) in [
+        ("Nuova scheda",FilesTabAction::New),
+        ("Sposta scheda a sinistra",FilesTabAction::MoveLeft),
+        ("Sposta scheda a destra",FilesTabAction::MoveRight),
+        ("Chiudi scheda",FilesTabAction::Close),
+        ("Chiudi altre schede",FilesTabAction::CloseOthers),
+        ("Chiudi schede a destra",FilesTabAction::CloseRight),
+    ] {
+        let button=Button::with_label(caption);
+        button.add_css_class("files-tab-menu-item");
+        button.set_halign(Align::Fill);
+        let dispatch=dispatch.clone();
+        let weak_menu=menu.downgrade();
+        button.connect_clicked(move |_| {
+            if let Some(popover)=weak_menu.upgrade(){popover.popdown();}
+            dispatch(command);
+        });
+        actions.append(&button);
+    }
+    menu.set_child(Some(&actions));
+    let right_click=gtk::GestureClick::new();
+    right_click.set_button(3);
+    let weak_menu=menu.downgrade();
+    right_click.connect_pressed(move |_,_,x,y|{
+        if let Some(popover)=weak_menu.upgrade(){
+            popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32,y as i32,1,1)));
+            popover.popup();
+        }
+    });
+    tab.add_controller(right_click);
+
+    // Drag a tab onto either half of another tab to reorder it. This
+    // represents TAB handles only; no file DnD/clipboard payload is changed.
+    let drag_source=gtk::DragSource::new();
+    drag_source.set_actions(gdk::DragAction::MOVE);
+    let drag_token=tab.widget_name().to_string();
+    drag_source.connect_prepare(move |_,_,_|{
+        Some(gdk::ContentProvider::for_value(&drag_token.to_value()))
+    });
+    tab.add_controller(drag_source);
+    let drop=gtk::DropTarget::new(String::static_type(),gdk::DragAction::MOVE);
+    let weak_pages=notebook.downgrade();
+    let weak_strip=tab_strip.downgrade();
+    let weak_window=window.downgrade();
+    let weak_page=child.downgrade();
+    let weak_tab=tab.downgrade();
+    let weak_headers=Rc::downgrade(headers);
+    drop.connect_drop(move |_,value,x,_|{
+        let Ok(token)=value.get::<String>() else{return false;};
+        if !token.starts_with("melania-tab-"){return false;}
+        let (Some(pages),Some(strip),Some(window),Some(page),Some(tab),Some(headers))=(
+            weak_pages.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),
+            weak_page.upgrade(),weak_tab.upgrade(),weak_headers.upgrade()) else{return false;};
+        let source=headers.borrow().iter()
+            .find(|(_,heading,_)|heading.widget_name().as_str()==token)
+            .map(|(source,_,_)|source.clone());
+        let Some(source)=source else{return false;};
+        let (Some(from),Some(target))=(pages.page_num(&source),pages.page_num(&page))
+            else{return false;};
+        let right_half=x>f64::from(tab.width())/2.0;
+        let destination=tab_drop_destination(from,target,right_half);
+        reorder_files_tab(&pages,&strip,&headers,&window,&source,destination)
+    });
+    tab.add_controller(drop);
 }
 
 /// The nested Wayland compositor does not yet expose a formal panel work area.
@@ -2736,24 +2950,29 @@ fn build_ui(app: &Application) {
     // the tabs ARE the titlebar, never add a duplicate app title.
     let no_title = GtkBox::new(Orientation::Horizontal, 0);
     aero_header.set_title_widget(Some(&no_title));
-    let add_button = Button::from_icon_name("list-add-symbolic");
+    // Nautilus-style plus stays visible even before a full icon theme loads.
+    let add_button = Button::with_label("+");
     add_button.add_css_class("files-new-tab");
+    add_button.add_css_class("files-new-tab-add");
     add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
-    let tab_strip = GtkBox::new(Orientation::Horizontal, 4);
+    let tab_strip = GtkBox::new(Orientation::Horizontal, 0);
     tab_strip.add_css_class("files-top-tabs");
     let tab_scroll = ScrolledWindow::new();
     tab_scroll.add_css_class("files-tab-scroll");
     tab_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
     tab_scroll.set_min_content_width(160);
-    tab_scroll.set_max_content_width(650);
+    tab_scroll.set_max_content_width(850);
+    tab_scroll.set_propagate_natural_width(true);
     tab_scroll.set_child(Some(&tab_strip));
     // One tab rail: open tabs followed by [+], never the reverse.
     let tab_rail = GtkBox::new(Orientation::Horizontal, 3);
     tab_rail.add_css_class("files-tab-rail");
     tab_rail.append(&tab_scroll);
     tab_rail.append(&add_button);
-    let network_button=Button::from_icon_name("network-server-symbolic");
+    // A readable label avoids a missing-icon square on incomplete icon themes.
+    let network_button=Button::with_label("Rete");
     network_button.add_css_class("files-new-tab");
+    network_button.add_css_class("files-network-tab");
     network_button.set_tooltip_text(Some("Rete e server SMB/SFTP/WebDAV (GVfs)"));
     tab_rail.append(&network_button);
     aero_header.pack_start(&tab_rail);
@@ -2772,18 +2991,22 @@ fn build_ui(app: &Application) {
     let tab_headers: Rc<RefCell<Vec<(GtkBox, GtkBox, Label)>>> = Rc::new(RefCell::new(Vec::new()));
     let headers_for_switch = tab_headers.clone();
     let window_for_switch = window.clone();
+    let scroll_for_switch = tab_scroll.clone();
+    let strip_for_switch = tab_strip.clone();
     tabs.connect_switch_page(move |notebook, _, _| {
         sync_tab_highlights(notebook, &headers_for_switch, &window_for_switch);
+        reveal_active_files_tab(notebook,&strip_for_switch,&headers_for_switch,&scroll_for_switch);
     });
 
     let weak_tabs=tabs.downgrade();
     let weak_strip=tab_strip.downgrade();
     let weak_window=window.downgrade();
+    let weak_add=add_button.downgrade();
     let headers_for_remote=tab_headers.clone();
     let open_remote:Rc<dyn Fn(String)>=Rc::new(move |uri:String| {
-        if let (Some(tabs),Some(strip),Some(window))=(
-            weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade()) {
-            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri);
+        if let (Some(tabs),Some(strip),Some(window),Some(add))=(
+            weak_tabs.upgrade(),weak_strip.upgrade(),weak_window.upgrade(),weak_add.upgrade()) {
+            append_remote_tab(&tabs,&strip,&headers_for_remote,&window,&uri,&add);
         }
     });
     let open_network=open_remote.clone();
@@ -2795,13 +3018,29 @@ fn build_ui(app: &Application) {
     let rail_for_add = tab_strip.clone();
     let window_for_add = window.clone();
     let remote_for_add=open_remote.clone();
+    let new_button_for_tab=add_button.clone();
     add_button.connect_clicked(move |_| {
-        append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
-            home(), pending_for_add.clone(), "Home", remote_for_add.clone());
+        // A Nautilus new tab starts in the currently visible folder/URI,
+        // rather than unexpectedly resetting to Home.
+        let current=notebook.current_page();
+        let place=header_for_add.borrow().iter()
+            .find(|(page,_,_)|notebook.page_num(page)==current)
+            .and_then(|(_,_,title)|title.tooltip_text())
+            .map(|uri|uri.to_string());
+        if let Some(uri)=place.as_deref().filter(|uri|uri.contains("://")){
+            remote_for_add(uri.to_string());
+        } else {
+            let path=place.map(PathBuf::from).unwrap_or_else(home);
+            let title=path.file_name().map(|name|name.to_string_lossy().into_owned())
+                .filter(|name|!name.is_empty()).unwrap_or_else(||"Home".to_owned());
+            append_browser_tab(&notebook, &rail_for_add, &header_for_add, &window_for_add,
+                path, pending_for_add.clone(), &title, remote_for_add.clone(),&new_button_for_tab);
+        }
     });
     frame.append(&tabs);
 
-    // Browser keyboard conventions: Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab.
+    // GNOME/Nautilus tab shortcuts. Within-file shortcuts remain attached
+    // to their own page; these only act on the window's tab view.
     let keys = gtk::EventControllerKey::new();
     let keys_notebook = tabs.clone();
     let keys_add = add_button.clone();
@@ -2809,36 +3048,61 @@ fn build_ui(app: &Application) {
     let strip_for_keys = tab_strip.clone();
     let window_for_keys = window.clone();
     keys.connect_key_pressed(move |_, key, _, modifiers| {
-        if !modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
-            return glib::Propagation::Proceed;
+        let ctrl=modifiers.contains(gdk::ModifierType::CONTROL_MASK);
+        let shift=modifiers.contains(gdk::ModifierType::SHIFT_MASK);
+        if modifiers.contains(gdk::ModifierType::ALT_MASK) && !ctrl {
+            if let Some(digit)=key.to_unicode().and_then(|c|c.to_digit(10)){
+                let count=keys_notebook.n_pages();
+                if count>0{
+                    let index=if digit==0{count-1}else{digit-1};
+                    if index<count {keys_notebook.set_current_page(Some(index));}
+                    return glib::Propagation::Stop;
+                }
+            }
         }
+        if !ctrl{return glib::Propagation::Proceed;}
         if key == gdk::Key::t || key == gdk::Key::T {
-            keys_add.emit_clicked();
-            return glib::Propagation::Stop;
+            if !shift{keys_add.emit_clicked();}
+            return if shift{glib::Propagation::Proceed}else{glib::Propagation::Stop};
         }
         if key == gdk::Key::w || key == gdk::Key::W {
-            if keys_notebook.n_pages() > 1 {
-                if let Some(index) = keys_notebook.current_page() {
-                    if let Some((_, heading, _)) = tab_headers_for_keys.borrow().iter()
-                        .find(|(page, _, _)| keys_notebook.page_num(page) == Some(index)).cloned() {
-                        strip_for_keys.remove(&heading);
-                    }
-                    tab_headers_for_keys.borrow_mut()
-                        .retain(|(page, _, _)| keys_notebook.page_num(page) != Some(index));
-                    keys_notebook.remove_page(Some(index));
-                    sync_tab_highlights(&keys_notebook, &tab_headers_for_keys, &window_for_keys);
+            if let Some(index)=keys_notebook.current_page(){
+                if let Some(page)=keys_notebook.nth_page(Some(index))
+                    .and_then(|page|page.downcast::<GtkBox>().ok()){
+                    close_files_tab(&keys_notebook,&strip_for_keys,&tab_headers_for_keys,
+                                    &window_for_keys,&page);
                 }
             }
             return glib::Propagation::Stop;
         }
-        if key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab {
-            let count = keys_notebook.n_pages();
-            if count > 1 {
-                let index = keys_notebook.current_page().unwrap_or(0);
-                let backwards = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
-                let next = if backwards { (index + count - 1) % count } else { (index + 1) % count };
-                keys_notebook.set_current_page(Some(next));
+        let count=keys_notebook.n_pages();
+        if count<=1{return glib::Propagation::Proceed;}
+        let current=keys_notebook.current_page().unwrap_or(0);
+        if (key==gdk::Key::Page_Up || key==gdk::Key::Page_Down) && shift{
+            let target=if key==gdk::Key::Page_Up{
+                current.saturating_sub(1)
+            }else{(current+1).min(count-1)};
+            if let Some(page)=keys_notebook.nth_page(Some(current))
+                .and_then(|page|page.downcast::<GtkBox>().ok()){
+                reorder_files_tab(&keys_notebook,&strip_for_keys,&tab_headers_for_keys,
+                                  &window_for_keys,&page,target);
             }
+            return glib::Propagation::Stop;
+        }
+        if key==gdk::Key::Home {
+            keys_notebook.set_current_page(Some(0));
+            return glib::Propagation::Stop;
+        }
+        if key==gdk::Key::End {
+            keys_notebook.set_current_page(Some(count-1));
+            return glib::Propagation::Stop;
+        }
+        if key==gdk::Key::Tab || key==gdk::Key::ISO_Left_Tab ||
+            key==gdk::Key::Page_Up || key==gdk::Key::Page_Down {
+            let backwards=(key==gdk::Key::Tab && shift) ||
+                key==gdk::Key::ISO_Left_Tab || key==gdk::Key::Page_Up;
+            let next=if backwards{(current+count-1)%count}else{(current+1)%count};
+            keys_notebook.set_current_page(Some(next));
             return glib::Propagation::Stop;
         }
         glib::Propagation::Proceed
@@ -2855,6 +3119,7 @@ fn build_ui(app: &Application) {
     let first_window=window.clone();
     let first_pending=shared_pending.clone();
     let first_remote=open_remote.clone();
+    let first_add=add_button.clone();
     glib::timeout_add_local_once(Duration::from_millis(55),move || {
         // Only now perform path probes and instantiate the complete browser
         // widget tree. Initial async listing and thumbnails remain separate.
@@ -2866,7 +3131,7 @@ fn build_ui(app: &Application) {
         let title=starting.file_name().map(|s|s.to_string_lossy().into_owned())
             .filter(|s|!s.is_empty()).unwrap_or_else(||"Home".to_owned());
         append_browser_tab(&first_tabs,&first_strip,&first_headers,&first_window,
-            starting,first_pending,&title,first_remote.clone());
+            starting,first_pending,&title,first_remote.clone(),&first_add);
         // Drop only the temporary loading page; all genuine tabs remain.
         first_tabs.remove_page(Some(0));
         if let Some(uri)=requested_uri {first_remote(uri);}
@@ -2953,6 +3218,28 @@ mod software_preview_performance_tests {
     fn bound_thumbnail_decoding_on_software_renderers() {
         assert_eq!(thumbnail_budget_for(Some("cairo"),false),16);
         assert_eq!(thumbnail_budget_for(None,true),16);
+    }
+}
+
+#[cfg(test)]
+mod nautilus_tab_reorder_tests {
+    use super::tab_drop_destination;
+
+    #[test]
+    fn dropping_before_and_after_uses_the_correct_notebook_index() {
+        assert_eq!(tab_drop_destination(0,2,false),1);
+        assert_eq!(tab_drop_destination(0,2,true),2);
+        assert_eq!(tab_drop_destination(3,1,false),1);
+        assert_eq!(tab_drop_destination(3,1,true),2);
+        assert_eq!(tab_drop_destination(1,1,false),1);
+        assert_eq!(tab_drop_destination(1,1,true),1);
+    }
+
+    #[test]
+    fn repeated_drag_does_not_reorder_into_an_invalid_negative_slot() {
+        assert_eq!(tab_drop_destination(0,0,false),0);
+        assert_eq!(tab_drop_destination(0,0,true),0);
+        assert_eq!(tab_drop_destination(9,0,false),0);
     }
 }
 
