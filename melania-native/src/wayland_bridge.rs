@@ -8,7 +8,10 @@
 //! roundtrips without claiming these clients are displayed.
 use std::{
     error::Error,
+    fs,
     io::{Read,Write},
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
     os::unix::net::{UnixListener,UnixStream},
     sync::Arc,
     time::{Duration,Instant},
@@ -38,7 +41,7 @@ use smithay::{
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         output::{OutputHandler,OutputManagerState},
-        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
+        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
@@ -47,6 +50,13 @@ use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderSchedu
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
+use melania_control::{Command as ControlCommand,WindowInfo,ACK,read_command,
+    respond_list,respond_workspace,respond_error};
+
+struct ControlSocketCleanup(PathBuf);
+impl Drop for ControlSocketCleanup {
+    fn drop(&mut self) {let _=fs::remove_file(&self.0);}
+}
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -795,6 +805,102 @@ impl BridgeState {
             }
         }
         println!("MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN={enabled}");
+    }
+}
+
+impl BridgeState {
+    /// Reuse the exact Melania Panel IPC protocol in the isolated native VM.
+    /// ACTIVATE restores a retained minimized surface, making Stage81 usable
+    /// from the existing panel without introducing a second wire format.
+    fn control_command(&mut self,command:ControlCommand)->String {
+        match command {
+            ControlCommand::List=>{
+                let windows=self.managed_windows.iter().filter_map(|(surface,model)| {
+                    let id=self.known_window_surfaces.id_of(surface)?;
+                    let (title,app_id)=with_states(surface,|states| {
+                        states.data_map.get::<XdgToplevelSurfaceData>()
+                            .map(|data| {
+                                let data=data.lock().unwrap();
+                                (data.title.clone(),data.app_id.clone())
+                            })
+                            .unwrap_or((None,None))
+                    });
+                    Some(WindowInfo {
+                        id,
+                        title:title.filter(|s|!s.is_empty())
+                            .unwrap_or_else(||format!("Finestra {id}"))
+                            .chars().take(96).collect(),
+                        app_id:app_id.unwrap_or_else(||"applicazione-wayland".into())
+                            .chars().take(96).collect(),
+                        active:self.focused.as_ref()==Some(surface),
+                        minimized:model.state()==WindowDisplayState::Minimized,
+                    })
+                }).collect::<Vec<_>>();
+                respond_list(&windows)
+            },
+            ControlCommand::Status=>respond_workspace(1),
+            ControlCommand::Activate(id)=>{
+                let Some(surface)=self.known_window_surfaces.get(id).cloned() else {
+                    return respond_error("Finestra non trovata");
+                };
+                let Some((_,model))=self.managed_windows.iter_mut()
+                    .find(|(role,_)|role==&surface) else {
+                    return respond_error("Ruolo finestra non trovato");
+                };
+                let was_minimized=model.state()==WindowDisplayState::Minimized;
+                if was_minimized {model.restore();}
+                let rect=model.geometry();
+                let mut scene_changed=false;
+                if self.dynamic_scene.geometry(id).is_some() {
+                    if was_minimized {
+                        scene_changed|=self.dynamic_scene.set_visible(id,true).unwrap_or(false);
+                    }
+                    if let Some(rect)=rect {
+                        if self.dynamic_scene.position(id)!=Some((rect.x,rect.y)) {
+                            scene_changed|=self.dynamic_scene.move_to(id,rect.x,rect.y).is_ok();
+                        }
+                    }
+                    scene_changed|=self.dynamic_scene.raise(id).unwrap_or(false);
+                }
+                if scene_changed {
+                    self.note_scene_change();
+                    if self.continuous_kms_mode &&
+                       self.continuous_frame_count<self.continuous_frame_target {
+                        if let Err(error)=self.submit_continuous_frame() {
+                            eprintln!("native panel restore KMS rejected: {error}");
+                        }
+                    }
+                }
+                if let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface) {
+                    top.with_pending_state(|pending| {
+                        pending.states.set(xdg_toplevel::State::Activated);
+                        if let Some(rect)=rect {
+                            pending.size=Some((rect.width,rect.height).into());
+                        }
+                    });
+                    top.send_pending_configure();
+                }
+                let keyboard=self.seat.get_keyboard().expect("keyboard");
+                keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+                self.focused=Some(surface);
+                println!("MELANIA_NATIVE_CONTROL_ACTIVATED={id}");
+                ACK.into()
+            },
+            ControlCommand::Minimize(id) | ControlCommand::Close(id)=>{
+                let top=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|self.known_window_surfaces.id_of(top.wl_surface())==Some(id))
+                    .cloned();
+                let Some(top)=top else {return respond_error("Finestra non trovata");};
+                if matches!(command,ControlCommand::Minimize(_)) {
+                    <BridgeState as XdgShellHandler>::minimize_request(self,top);
+                } else {
+                    top.send_close();
+                }
+                ACK.into()
+            },
+            _=>respond_error("Comando non supportato nel compositore nativo QEMU"),
+        }
     }
 }
 
