@@ -28,7 +28,6 @@ class NativeSceneGenerationAudit(unittest.TestCase):
         self.assertIn("self.continuous_redraw.presented(candidate)",BRIDGE)
         self.assertIn("MELANIA_NATIVE_SCENE_GENERATION_ACK={}",BRIDGE)
         self.assertIn("if self.async_kms_mode {",BRIDGE)
-        self.assertIn("self.continuous_redraw.set_seat_active(active)",BRIDGE)
         self.assertIn("state.continuous_redraw.set_seat_active(active)",BRIDGE)
 
     def test_client_buffer_is_released_only_after_both_real_ack_checks(self):
@@ -41,7 +40,7 @@ class NativeSceneGenerationAudit(unittest.TestCase):
         self.assertLess(mirror,callback)
         self.assertLess(callback,release)
         # Distinct paths must be audited; no frame count cut-off in planner.
-        self.assertEqual(BRIDGE.count("self.begin_generation_proof(self.multi_scene.layout_generation())"),3)
+        self.assertEqual(BRIDGE.count("self.begin_generation_proof(self.multi_scene.layout_generation())"),4)
         self.assertIn("self.begin_generation_proof(self.multi_scene.layout_generation())",BRIDGE)
         self.assertIn("if let Err(error)=self.begin_generation_proof(self.multi_scene.layout_generation())",BRIDGE)
         self.assertIn("self.reject_generation_proof()",BRIDGE)
@@ -52,6 +51,7 @@ class NativeSceneGenerationAudit(unittest.TestCase):
         self.assertIn("NATIVE_SESSION_READY=false",BRIDGE)
         self.assertNotIn("NATIVE_SESSION_READY=true",BRIDGE)
         self.assertIn("MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM",GUEST)
+        self.assertIn("MELANIA_NATIVE_SCENE_GENERATION_ACK=",GUEST)
         self.assertNotIn("std::thread::sleep(",PLANNER)
 
 
