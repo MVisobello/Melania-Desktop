@@ -104,6 +104,21 @@ mod tests {
         assert!(!window.update_normal_geometry(WindowRect{x:-1,..updated}));
     }
     #[test]
+    fn fullscreen_after_maximize_restores_normal_client_geometry() {
+        let mut w=ManagedWindow::new(window(),1280,800).unwrap();
+        let moved=WindowRect{x:240,y:160,width:360,height:220};
+        assert!(w.update_normal_geometry(moved));
+        assert!(w.maximize());
+        assert!(w.fullscreen());
+        assert_eq!(w.state(),WindowDisplayState::Fullscreen);
+        assert_eq!(w.geometry(),Some(WindowRect{x:0,y:0,width:1280,height:800}));
+        assert!(!w.fullscreen());
+        assert!(!w.update_normal_geometry(WindowRect{x:0,y:0,width:1280,height:800}));
+        assert!(w.restore());
+        assert_eq!(w.state(),WindowDisplayState::Normal);
+        assert_eq!(w.geometry(),Some(moved));
+    }
+    #[test]
     fn fullscreen_and_mode_change_clip_restore_position() {
         let mut w=ManagedWindow::new(window(),1280,800).unwrap();
         assert!(w.fullscreen());
