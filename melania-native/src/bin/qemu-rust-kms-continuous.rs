@@ -269,6 +269,12 @@ fn run()->Result<(),Box<dyn Error>> {
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_ACKED={} generation={}",index+1,generation);
+            if pointer_proof && index+1==12 {
+                // This exact scenario marker is delivered LIVE to the QMP
+                // host via the serial tail of the KMS log; the Smithay
+                // server log is only cat-ed later, after the client exits.
+                println!("MELANIA_RUST_CONTINUOUS_DYNAMIC_POINTER_READY_AFTER_KMS12=true");
+            }
             std::io::stdout().flush()?;
         }
         Ok(())
