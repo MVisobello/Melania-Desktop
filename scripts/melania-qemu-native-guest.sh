@@ -500,6 +500,10 @@ continuous_client=/mnt/melania-native/melania-continuous-client
 continuous_server_log="$(mktemp -t melania-continuous-server-XXXXXX)"
 continuous_kms_log="$(mktemp -t melania-continuous-kms-XXXXXX)"
 continuous_client_log="$(mktemp -t melania-continuous-client-XXXXXX)"
+# Emit frame-visible markers WHILE the DRM framebuffer is still active.
+# QMP on the host observes the real pixels before the CRTC is restored.
+tail -n +1 -f -s 0.05 "$continuous_kms_log" > /dev/ttyS0 &
+continuous_tail_pid=$!
 rm -f /run/melania-native-qemu/continuous-frame-stream.sock
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
@@ -552,6 +556,8 @@ if ! wait "$continuous_server_pid"; then
   cat "$continuous_server_log"
   fatal 'continuous_Smithay_bridge_failed'
 fi
+kill "$continuous_tail_pid" 2>/dev/null || true
+wait "$continuous_tail_pid" 2>/dev/null || true
 cat "$continuous_client_log" "$continuous_kms_log" "$continuous_server_log"
 for index in $(seq 1 12); do
   grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$continuous_client_log" ||
