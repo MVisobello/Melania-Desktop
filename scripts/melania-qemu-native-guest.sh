@@ -1004,6 +1004,100 @@ grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$managed_kms_log" ||
 rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
 report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
 
+# Stage82D: two genuine Wayland roles share one Rust KMS stream.
+# The xdg toplevel sends odd frames; bottom Top-layer panel sends evens.
+layer_client=/mnt/melania-native/melania-layer-panel-client
+[[ -x "$layer_client" ]] || fatal 'real_layer_panel_client_missing'
+layer_server_log="$(mktemp -t melania-real-layer-server-XXXXXX)"
+layer_client_log="$(mktemp -t melania-real-layer-client-XXXXXX)"
+layer_kms_log="$(mktemp -t melania-real-layer-kms-XXXXXX)"
+rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_LAYER_PIXELS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 78s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$layer_server_log" 2>&1 &
+layer_server_pid=$!
+layer_socket=''
+for attempt in $(seq 1 100); do
+  layer_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$layer_server_log" | head -n 1)"
+  [[ -n "$layer_socket" && -S /run/melania-native-qemu/continuous-frame-stream.sock ]] && break
+  kill -0 "$layer_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$layer_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+  cat "$layer_server_log"
+  fatal 'real_layer_wayland_socket_missing'
+fi
+# The QMP host monitor must observe the framebuffer BEFORE CRTC restore.
+tail -n +1 -f -s 0.05 "$layer_kms_log" > /dev/ttyS0 &
+layer_tail_pid=$!
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_QEMU_REAL_LAYER_PANEL=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 72s \
+  "$continuous_kms" < /dev/tty1 > "$layer_kms_log" 2>&1 &
+layer_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$layer_kms_log" && break
+  kill -0 "$layer_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$layer_kms_log"; then
+  cat "$layer_server_log" "$layer_kms_log"
+  kill "$layer_server_pid" "$layer_kms_pid" 2>/dev/null || true
+  fatal 'real_layer_KMS_worker_missing'
+fi
+if ! MELANIA_QEMU_LAYER_PANEL_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$layer_socket" \
+  timeout --signal=TERM --kill-after=3s 66s "$layer_client" \
+  > "$layer_client_log" 2>&1; then
+  cat "$layer_client_log" "$layer_kms_log" "$layer_server_log"
+  kill "$layer_server_pid" "$layer_kms_pid" 2>/dev/null || true
+  fatal 'real_layer_client_failed'
+fi
+if ! wait "$layer_kms_pid"; then
+  cat "$layer_kms_log" "$layer_server_log"
+  kill "$layer_server_pid" 2>/dev/null || true
+  fatal 'real_layer_CRTC_worker_failed'
+fi
+if ! wait "$layer_server_pid"; then
+  cat "$layer_server_log"
+  fatal 'real_layer_Smithay_failed'
+fi
+kill "$layer_tail_pid" 2>/dev/null || true
+wait "$layer_tail_pid" 2>/dev/null || true
+cat "$layer_client_log" "$layer_kms_log" "$layer_server_log"
+grep -q '^MELANIA_NATIVE_REAL_LAYER_AND_XDG_CONFIGURED=true' "$layer_client_log" ||
+  fatal 'real_xdg_and_layer_roles_not_configured'
+for index in $(seq 1 12); do
+  role=xdg
+  ((index%2==0)) && role=layer
+  grep -q "^MELANIA_NATIVE_REAL_LAYER_KMS_CALLBACK=$index role=$role$" "$layer_client_log" ||
+    fatal "real_layer_callback_$index_missing"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$layer_server_log" ||
+    fatal "real_layer_Smithay_KMS_ack_$index_missing"
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$layer_kms_log" ||
+    fatal "real_layer_CRTC_frame_$index_missing"
+done
+grep -q '^MELANIA_RUST_CONTINUOUS_LAYER_FRAME_VISIBLE=12' "$layer_kms_log" ||
+  fatal 'real_layer_QMP_frame12_marker_absent'
+grep -q '^MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED=1280x40 layer=Top' "$layer_server_log" ||
+  fatal 'real_layer_owned_client_pixels_not_imported'
+grep -q '^MELANIA_NATIVE_REAL_LAYER_12_KMS_FRAMES_PASS=true' "$layer_client_log" ||
+  fatal 'real_layer_client_frames_incomplete'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$layer_kms_log" ||
+  fatal 'real_layer_original_CRTC_not_restored'
+rm -f "$layer_client_log" "$layer_kms_log" "$layer_server_log"
+report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
