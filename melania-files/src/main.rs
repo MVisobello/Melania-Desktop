@@ -2638,6 +2638,94 @@ fn remember_closed_files_tab(
     push_closed_file_tab(&mut recently_closed.borrow_mut(),location);
 }
 
+/// A drag ticket is kept only for the duration of one active GTK gesture.
+/// The process-local registry prevents external text/URI drops from spoofing
+/// a tab move and keeps the file drag-and-drop protocol COPY-only.
+#[derive(Clone)]
+struct FilesTabDrag {
+    token: String,
+    location: ClosedFilesTab,
+    source_window: glib::WeakRef<ApplicationWindow>,
+    source_page: glib::WeakRef<GtkBox>,
+    source_notebook: glib::WeakRef<gtk::Notebook>,
+    finish_move: Rc<dyn Fn()>,
+}
+impl FilesTabDrag {
+    fn source_is_alive(&self) -> bool {
+        let (Some(page),Some(notebook),Some(_window))=(
+            self.source_page.upgrade(),
+            self.source_notebook.upgrade(),
+            self.source_window.upgrade(),
+        ) else{return false;};
+        notebook.page_num(&page).is_some()
+    }
+}
+thread_local! {
+    static ACTIVE_FILES_TAB_DRAG: RefCell<Option<FilesTabDrag>> = const { RefCell::new(None) };
+}
+
+fn active_files_tab_drag(token: &str) -> Option<FilesTabDrag> {
+    ACTIVE_FILES_TAB_DRAG.with(|state|
+        state.borrow().as_ref()
+            .filter(|drag|drag.token==token && drag.source_is_alive())
+            .cloned())
+}
+fn clear_files_tab_drag(token: &str) {
+    ACTIVE_FILES_TAB_DRAG.with(|state| {
+        if state.borrow().as_ref().is_some_and(|drag|drag.token==token) {
+            state.borrow_mut().take();
+        }
+    });
+}
+fn detach_files_tab_on_cancel(reason: gdk::DragCancelReason) -> bool {
+    matches!(reason,gdk::DragCancelReason::NoTarget)
+}
+
+/// A successful destination tab must exist before the source is closed.
+/// This copies only the navigated location, not a GTK widget or file content.
+fn import_dragged_files_tab(
+    token: &str,
+    target_window: &ApplicationWindow,
+    target_notebook: &gtk::Notebook,
+    target_add: &Button,
+    target_next: &Rc<RefCell<Option<ClosedFilesTab>>>,
+) -> bool {
+    let Some(drag)=active_files_tab_drag(token) else{return false;};
+    if drag.source_window.upgrade().as_ref()==Some(target_window){return false;}
+    let before=target_notebook.n_pages();
+    *target_next.borrow_mut()=Some(drag.location.clone());
+    target_add.emit_clicked();
+    if target_notebook.n_pages()<=before {
+        target_next.borrow_mut().take();
+        return false;
+    }
+    clear_files_tab_drag(token);
+    (drag.finish_move)();
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_CROSS_WINDOW_TAB_MOVE=success");
+    }
+    true
+}
+
+/// GtkDragSource emits NoTarget when a tab is released on the desktop, but
+/// UserCancelled (Escape) and Error MUST NOT create a window.
+fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason) -> bool {
+    if !detach_files_tab_on_cancel(reason){clear_files_tab_drag(token);return false;}
+    let Some(drag)=active_files_tab_drag(token) else{return false;};
+    let Some(window)=drag.source_window.upgrade() else{return false;};
+    let Some(app)=window.application().and_then(|app|app.downcast::<Application>().ok())
+        else{return false;};
+    let before=app.windows().len();
+    create_files_window(&app,Some(drag.location.location()));
+    if app.windows().len()<=before{return false;}
+    clear_files_tab_drag(token);
+    (drag.finish_move)();
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_TAB_TEAROFF=success");
+    }
+    true
+}
+
 /// A closed tab is restored by opening its URI again. No GTK resources or
 /// running transfer workers survive the previous page's lifetime.
 fn reopen_closed_files_tab(history:&Rc<RefCell<Vec<ClosedFilesTab>>>,
