@@ -179,3 +179,4 @@ mod tests {
     }
 }
 pub mod output_pointer;
+pub mod output_scale;
