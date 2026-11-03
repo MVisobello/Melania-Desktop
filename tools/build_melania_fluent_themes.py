@@ -76,19 +76,31 @@ def _theme_index(title:str, paths:set[str])->str:
     return '\n'.join(result)
 
 def core_app_icon(name:str, category:str, variant:str, size:int)->str|None:
-    """Readable original Fluent app icons for light Start/taskbar surfaces.
+    """Small, self-contained Fluent app drawings safe for GTK/librsvg.
 
-    The reference concept PNG cutouts for these two app IDs are nearly white
-    on transparent; in the actual light Start menu they disappear. Choose the
-    independently drawn, full-color Fluent files/gear artwork instead.
+    These two app IDs have exact theme icons, not generic Adwaita/Cairo
+    stand-ins. Use only standard SVG fills and strokes: the full-color
+    app icons must remain legible over Start's pale background, without
+    expensive raster-in-SVG decoding or filter/shadow pipelines at boot.
     """
     if category != 'apps': return None
-    aliases={
-        'org.melaniadesktop.Files':'system-file-manager',
-        'org.melaniadesktop.Settings':'preferences-system',
-    }
-    mapped=aliases.get(name)
-    return artwork(mapped,'apps',variant,size) if mapped else None
+    header='<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">'
+    if name == 'org.melaniadesktop.Files':
+        return (header+
+          '<path d="M9 29q0-8 8-8h25l10 9h27q8 0 8 8v35q0 8-8 8H17q-8 0-8-8Z" fill="#2477B9"/>'
+          '<path d="M12 39q0-6 6-6h59q7 0 7 7v30q0 8-8 8H19q-7 0-7-7Z" fill="#55BDF2"/>'
+          '<path d="M19 39h55q4 0 4 4v3H18v-3q0-4 1-4Z" fill="#9BDEFC"/>'
+          '<path d="M22 54h51" stroke="#DDF6FF" stroke-width="3" stroke-linecap="round" opacity=".8"/>'
+          '</svg>')
+    if name == 'org.melaniadesktop.Settings':
+        # Eight broad teeth, robust at 16–27 px with no CSS masks or SVG filters.
+        return (header+
+          '<path d="M39 7h18l3 12 10 5 11-5 10 16-9 9v10l9 9-10 16-11-5-10 5-3 12H39l-3-12-10-5-11 5L5 63l9-9V44l-9-9 10-16 11 5 10-5Z" fill="#648AA7"/>'
+          '<circle cx="48" cy="49" r="24" fill="#9FC3DD"/>'
+          '<circle cx="48" cy="49" r="12" fill="#EFF8FF"/>'
+          '<circle cx="48" cy="49" r="6" fill="#608EBA"/>'
+          '</svg>')
+    return None
 
 
 def original_melania_logo() -> str:
