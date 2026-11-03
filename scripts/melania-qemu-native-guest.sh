@@ -926,9 +926,14 @@ if [[ -z "$managed_socket" || ! -S /run/melania-native-qemu/continuous-frame-str
   cat "$managed_server_log"
   fatal 'managed_role_live_Wayland_stream_unavailable'
 fi
+# The host cannot inspect restored or replayed frames: stream each live
+# KMS-visible marker to serial while its framebuffer is still active.
+tail -n +1 -f -s 0.05 "$managed_kms_log" > /dev/ttyS0 &
+managed_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
 MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_MANAGED_ROLE_QMP=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 76s \
   "$continuous_kms" < /dev/tty1 > "$managed_kms_log" 2>&1 &
 managed_kms_pid=$!
@@ -960,7 +965,13 @@ if ! wait "$managed_server_pid"; then
   cat "$managed_server_log"
   fatal 'managed_role_Smithay_live_stream_failed'
 fi
+kill "$managed_tail_pid" 2>/dev/null || true
+wait "$managed_tail_pid" 2>/dev/null || true
 cat "$managed_client_log" "$managed_kms_log" "$managed_server_log"
+for index in 3 5 7 9; do
+  grep -q "^MELANIA_RUST_CONTINUOUS_MANAGED_ROLE_FRAME_VISIBLE=$index$" "$managed_kms_log" ||
+    fatal "managed_role_real_CRTC_QMP_capture_marker_$index_missing"
+done
 for index in $(seq 1 12); do
   grep -q "^MELANIA_NATIVE_MANAGED_ROLE_KMS_CALLBACK=$index$" "$managed_client_log" ||
     fatal "managed_role_client_KMS_callback_$index_missing"

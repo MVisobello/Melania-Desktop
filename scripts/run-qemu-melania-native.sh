@@ -70,6 +70,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
 [[ -f "$root/scripts/inject-qemu-dynamic-pointer.py" &&
    -f "$root/scripts/capture-qemu-dynamic-pointer.py" ]] ||
   deny 'QEMU resized-client real tablet drag proof missing'
+[[ -f "$root/scripts/capture-qemu-managed-xdg-roles.py" ]] ||
+  deny 'QMP xdg maximize/fullscreen real framebuffer verifier missing'
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-native}"
 mkdir -p "$report"
 report="$(realpath "$report")"
@@ -212,6 +214,11 @@ python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --output "$report/dynamic-pointer-frame13.ppm" --timeout 950 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
+python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --out-dir "$report" --timeout 950 \
+  > "$report/qmp-managed-xdg-roles.log" 2>&1 &
+managed_role_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -264,9 +271,21 @@ wait "$dynamic_pointer_input_pid"
 dynamic_pointer_input_code=$?
 wait "$dynamic_pointer_capture_pid"
 dynamic_pointer_capture_code=$?
+wait "$managed_role_capture_pid"
+managed_role_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 ]] ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FOUR_FRAMES_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME3_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME5_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME7_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME9_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! test -s "$report/managed-role-frame3.ppm" ||
+    ! test -s "$report/managed-role-frame5.ppm" ||
+    ! test -s "$report/managed-role-frame7.ppm" ||
+    ! test -s "$report/managed-role-frame9.ppm" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_DYNAMIC_LIBINPUT_DRAG_FRAME13=true' "$report/qmp-dynamic-pointer-input.log" ||
    ! grep -q '^MELANIA_QEMU_DYNAMIC_POINTER_FRAME13_PIXELS=true' "$report/qmp-dynamic-pointer-frame13.log" ||
    ! test -s "$report/dynamic-pointer-frame13.ppm" ||
@@ -416,6 +435,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-drag-frame.log" || true
   tail -n 30 "$report/qmp-close-frame.log" || true
   tail -n 30 "$report/qmp-reopen-frame.log" || true
+  tail -n 30 "$report/qmp-managed-xdg-roles.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -424,6 +444,7 @@ printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_FRAME7_12_PIXELS=true' >> "$report/r
 printf '%s\n' 'MELANIA_VM_NATIVE_TWO_CONTINUOUS_WINDOWS_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_CLOSE_REOPEN_14_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_VARIABLE_CLIENT_SIZES_GPU_QMP=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_NATIVE_MANAGED_XDG_FOUR_QMP_FRAMES=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_WAYLAND_REAL_INPUT_DELIVERY=true' >> "$report/result.txt"
