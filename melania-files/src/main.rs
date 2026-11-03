@@ -10,7 +10,9 @@ use melania_transfer as transfer;
 use melania_files_core as model;
 use model::nautilus_features as nautilus;
 use gtk::{Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, FlowBox, Image, Label, Orientation, Picture, ScrolledWindow};
-use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command, rc::Rc, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command, rc::Rc, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}, time::{Duration, Instant}};
+
+static NEXT_FILES_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 struct PendingTransfer { paths: Vec<PathBuf>, is_move: bool }
@@ -1088,6 +1090,9 @@ fn refresh(browser: &Browser) {
         .map(|n|n.to_string_lossy().into_owned())
         .unwrap_or_else(||directory.display().to_string());
     browser.tab_title.set_text(&caption);
+    // Hovering a tab exposes its actual location, not just its abbreviated title.
+    // The new-tab action reuses this URI/path to open beside the active tab.
+    browser.tab_title.set_tooltip_text(Some(&directory.display().to_string()));
     // Stale rows and paths must not remain actionable while another folder
     // or search filter is loading; never allow deleting a hidden old item.
     browser.highlighted.borrow_mut().take();
@@ -2590,6 +2595,90 @@ fn sync_tab_highlights(
             tab.remove_css_class("files-tab-active");
         }
     }
+}
+
+/// Close a tab by its page identity rather than a saved numeric index.
+fn close_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
+                   headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                   window:&ApplicationWindow,page:&GtkBox) {
+    // Melania retains the final open tab instead of unexpectedly closing the
+    // whole file manager. Both the X and Ctrl+W use this exact same rule.
+    if notebook.n_pages()<=1{return;}
+    let Some(index)=notebook.page_num(page) else{return;};
+    let heading=headers.borrow().iter()
+        .find(|(candidate,_,_)|candidate==page)
+        .map(|(_,heading,_)|heading.clone());
+    if let Some(heading)=heading{strip.remove(&heading);}
+    headers.borrow_mut().retain(|(candidate,_,_)|candidate!=page);
+    notebook.remove_page(Some(index));
+    sync_tab_highlights(notebook,headers,window);
+}
+
+/// One source of truth for keyboard, context-menu and pointer tab reorder.
+/// The hidden Notebook and the visible titlebar rail must never disagree.
+fn reorder_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
+                     headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                     window:&ApplicationWindow,page:&GtkBox,destination:u32) -> bool {
+    let Some(origin)=notebook.page_num(page) else{return false;};
+    let destination=destination.min(notebook.n_pages().saturating_sub(1));
+    if origin==destination{return false;}
+    notebook.reorder_child(page,Some(destination));
+    let (heading,previous)={
+        let registered=headers.borrow();
+        let heading=registered.iter().find(|(p,_,_)|p==page).map(|(_,h,_)|h.clone());
+        let previous=if destination==0{None}else{
+            registered.iter()
+                .find(|(p,_,_)|notebook.page_num(p)==Some(destination-1))
+                .map(|(_,h,_)|h.clone())
+        };
+        (heading,previous)
+    };
+    if let Some(heading)=heading {
+        strip.reorder_child_after(&heading,previous.as_ref());
+    }
+    sync_tab_highlights(notebook,headers,window);
+    true
+}
+
+/// A drop on the left/right half of a tab selects the adjacent insertion
+/// slot. Removing a source from before that slot shifts the index by one.
+fn tab_drop_destination(source:u32,target:u32,after:bool)->u32 {
+    let insertion=target.saturating_add(u32::from(after));
+    if source<insertion{insertion-1}else{insertion}
+}
+
+fn close_other_files_tabs(notebook:&gtk::Notebook,strip:&GtkBox,
+                          headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                          window:&ApplicationWindow,keep:&GtkBox,right_only:bool){
+    let keep_index=notebook.page_num(keep).unwrap_or(0);
+    let to_close:Vec<GtkBox>=headers.borrow().iter()
+        .filter(|(page,_,_)|page!=keep &&
+            (!right_only || notebook.page_num(page).is_some_and(|index|index>keep_index)))
+        .map(|(page,_,_)|page.clone()).collect();
+    for page in to_close{close_files_tab(notebook,strip,headers,window,&page);}
+}
+
+/// Reveal the active tab when the rail is narrower than the total set.
+fn reveal_active_files_tab(notebook:&gtk::Notebook,strip:&GtkBox,
+                           headers:&Rc<RefCell<Vec<(GtkBox,GtkBox,Label)>>>,
+                           scroll:&ScrolledWindow) {
+    let active=notebook.current_page();
+    let target=headers.borrow().iter().find(|(page,_,_)|notebook.page_num(page)==active)
+        .map(|(_,tab,_)|tab.clone());
+    let Some(tab)=target else{return;};
+    let scroller=scroll.clone();
+    let rail=strip.clone();
+    glib::idle_add_local_once(move ||{
+        let Some((x,_))=tab.translate_coordinates(&rail,0.0,0.0) else{return;};
+        let adjustment=scroller.hadjustment();
+        let left=adjustment.value();
+        let visible=adjustment.page_size();
+        if visible<=0.0{return;}
+        if x<left {adjustment.set_value(x);}
+        else if x+f64::from(tab.width())>left+visible{
+            adjustment.set_value(x+f64::from(tab.width())-visible);
+        }
+    });
 }
 
 /// Append the new tab AFTER the existing ones. "+" remains the first item.
