@@ -99,17 +99,39 @@ fn start_listing_worker(remote:&Remote) {
                             let count=listing.items.len();
                             *ui.visible_uris.borrow_mut()=listing.items.iter()
                                 .map(|item|item.uri.clone()).collect();
-                            for item in listing.items{render_row(&ui,item);}
-                            watch_current_directory(&ui);
-                            ui.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
-                                if listing.truncated{" (limite visualizzazione raggiunto)"}else{""}));
-                            if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some(){
-                                // stdout/stderr from nested clients share a pipe.
-                                // Write one whole proof line so Wayland diagnostics
-                                // cannot interleave in the middle of its count.
-                                let marker=format!("MELANIA_GIO_LISTING_READY count={count}\n");
-                                let _=std::io::Write::write_all(&mut std::io::stderr(),marker.as_bytes());
-                            }
+                            // Large GVfs folders used to create every row in a
+                            // single GTK callback, freezing input and tab switching.
+                            // Yield after 24 rows and abort obsolete renderers.
+                            let mut pending=std::collections::VecDeque::from(listing.items);
+                            let state=ui.clone();
+                            let truncated=listing.truncated;
+                            let started=std::time::Instant::now();
+                            glib::idle_add_local(move ||{
+                                if state.generation.get()!=gen {
+                                    return glib::ControlFlow::Break;
+                                }
+                                for _ in 0..24 {
+                                    let Some(item)=pending.pop_front() else {break;};
+                                    render_row(&state,item);
+                                }
+                                if !pending.is_empty(){
+                                    return glib::ControlFlow::Continue;
+                                }
+                                watch_current_directory(&state);
+                                state.status.set_text(&format!("{count} elementi{} · GIO/GVfs",
+                                    if truncated{" (limite visualizzazione raggiunto)"}else{""}));
+                                if super::files_profile_enabled(){
+                                    eprintln!("MELANIA_FILES_GVFS_RENDER_MS={} entries={count}",
+                                        started.elapsed().as_millis());
+                                }
+                                if std::env::var_os("MELANIA_SMOKE_GIO_FILE_URI").is_some(){
+                                    // Preserve the existing CI proof only once
+                                    // the complete GTK listing has been built.
+                                    let marker=format!("MELANIA_GIO_LISTING_READY count={count}\n");
+                                    let _=std::io::Write::write_all(&mut std::io::stderr(),marker.as_bytes());
+                                }
+                                glib::ControlFlow::Break
+                            });
                         },
                         Err(error)=>ui.status.set_text(&error),
                     }
