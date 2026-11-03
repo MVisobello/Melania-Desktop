@@ -883,36 +883,42 @@ fn start_local_thumbnail_worker(browser:&Browser) {
     let targets=request.targets;
     let cancelled=request.cancelled;
     let generation=request.generation;
-    glib::timeout_add_local(Duration::from_millis(55),move ||{
-        match rx.try_recv(){
-            Ok((index,Ok(thumbnail)))=>{
-                // Discard outdated decoded buffers without touching old tiles.
-                if !cancelled.load(Ordering::Acquire) &&
-                    ui.listing_generation.get()==generation{
-                    if let Some((_,frame))=targets.get(index){
-                        let bytes=glib::Bytes::from_owned(thumbnail.rgba);
-                        let texture=gdk::MemoryTexture::new(
-                            thumbnail.width as i32,thumbnail.height as i32,
-                            gdk::MemoryFormat::R8g8b8a8,&bytes,
-                            thumbnail.width as usize*4);
-                        let picture=Picture::new();
-                        picture.set_size_request(112,84);
-                        picture.set_content_fit(gtk::ContentFit::Contain);
-                        picture.set_paintable(Some(&texture));
-                        while let Some(child)=frame.first_child(){frame.remove(&child);}
-                        frame.append(&picture);
+    // The old 55 ms timer applied one thumbnail per tick: 48 pictures could
+    // take >2.6 seconds to appear even when the worker had already decoded
+    // them. Drain a SMALL batch each frame and yield to GTK between batches.
+    glib::timeout_add_local(Duration::from_millis(16),move ||{
+        for _ in 0..4 {
+            match rx.try_recv(){
+                Ok((index,Ok(thumbnail)))=>{
+                    // Discard outdated decoded buffers without touching old tiles.
+                    if !cancelled.load(Ordering::Acquire) &&
+                        ui.listing_generation.get()==generation{
+                        if let Some((_,frame))=targets.get(index){
+                            let bytes=glib::Bytes::from_owned(thumbnail.rgba);
+                            let texture=gdk::MemoryTexture::new(
+                                thumbnail.width as i32,thumbnail.height as i32,
+                                gdk::MemoryFormat::R8g8b8a8,&bytes,
+                                thumbnail.width as usize*4);
+                            let picture=Picture::new();
+                            picture.set_size_request(112,84);
+                            picture.set_content_fit(gtk::ContentFit::Contain);
+                            picture.set_paintable(Some(&texture));
+                            while let Some(child)=frame.first_child(){frame.remove(&child);}
+                            frame.append(&picture);
+                        }
                     }
-                }
-                glib::ControlFlow::Continue
-            },
-            Ok((_,Err(_)))=>glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Empty)=>glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
-                ui.thumbnail_running.set(false);
-                start_local_thumbnail_worker(&ui);
-                glib::ControlFlow::Break
-            },
+                },
+                Ok((_,Err(_)))=>{},
+                Err(std::sync::mpsc::TryRecvError::Empty)=>
+                    return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{
+                    ui.thumbnail_running.set(false);
+                    start_local_thumbnail_worker(&ui);
+                    return glib::ControlFlow::Break;
+                },
+            }
         }
+        glib::ControlFlow::Continue
     });
 }
 
