@@ -6,7 +6,7 @@
 //! session. All images are owned copies; a borrowed client wl_shm pointer
 //! never enters this scene. Output compositing still uses the tested
 //! CPU scene::compose path and explicitly represents alpha semantics.
-use crate::scene::{self, Layer, Pixels, Surface};
+use crate::{damage_regions::DamageRegions,scene::{self, Layer, Pixels, Surface}};
 
 pub const MAX_DYNAMIC_WINDOWS: usize=16;
 pub const MAX_WINDOW_SIDE: usize=8192;
@@ -86,6 +86,7 @@ pub struct DynamicWindowScene {
     windows:Vec<Window>,
     used_bytes:usize,
     generation:u64,
+    damage:DamageRegions,
 }
 
 impl DynamicWindowScene {
@@ -102,13 +103,24 @@ impl DynamicWindowScene {
             return Err(DynamicSceneError::InvalidOutput);
         }
         Ok(Self {width,height,background,windows:Vec::new(),
-            used_bytes:0,generation:0})
+            used_bytes:0,generation:0,
+            damage:DamageRegions::new(width as u32,height as u32)
+                .map_err(|_|DynamicSceneError::InvalidOutput)?})
     }
 
     pub fn output_size(&self)->(usize,usize) {(self.width,self.height)}
     pub fn window_count(&self)->usize {self.windows.len()}
     pub fn used_bytes(&self)->usize {self.used_bytes}
     pub fn generation(&self)->u64 {self.generation}
+    pub fn damage_regions(&self)->&DamageRegions {&self.damage}
+
+    /// Retire damaged pixels only after a REAL KMS ACK of this exact scene.
+    /// A newer compositor update keeps its invalidated rectangles intact.
+    pub fn confirm_presented_damage(&mut self,ack_generation:u64)->bool {
+        if ack_generation!=self.generation {return false;}
+        self.damage.clear_after_presented();
+        true
+    }
 
     fn dirty(&mut self) {
         // Serial numbers are only advisory to the renderer; never accept
@@ -125,6 +137,8 @@ impl DynamicWindowScene {
         if self.width!=width || self.height!=height {
             self.width=width;
             self.height=height;
+            self.damage.resize_output(width as u32,height as u32)
+                .map_err(|_|DynamicSceneError::InvalidOutput)?;
             self.dirty();
         }
         Ok(())
@@ -147,6 +161,11 @@ impl DynamicWindowScene {
         if next>MAX_TOTAL_CLIENT_BYTES {
             return Err(DynamicSceneError::ClientMemoryBudget);
         }
+        let old_rect=previous.map(|n|{
+            let previous=&self.windows[n];
+            (previous.x,previous.y,previous.image.width,previous.image.height)
+        });
+        let new_rect=(x,y,image.width,image.height);
         self.used_bytes=next;
         if let Some(n)=previous {
             let existing=&mut self.windows[n];
@@ -156,6 +175,10 @@ impl DynamicWindowScene {
         } else {
             self.windows.push(Window {key,x,y,image});
         }
+        if let Some((ox,oy,ow,oh))=old_rect {
+            self.damage.invalidate(ox,oy,ow,oh);
+        }
+        self.damage.invalidate(new_rect.0,new_rect.1,new_rect.2,new_rect.3);
         self.dirty();
         Ok(())
     }
@@ -166,7 +189,11 @@ impl DynamicWindowScene {
         let window=self.windows.iter_mut().find(|w|w.key==key)
             .ok_or(DynamicSceneError::UnknownWindow)?;
         if window.x!=x || window.y!=y {
-            window.x=x;window.y=y;self.dirty();
+            let old=(window.x,window.y,window.image.width,window.image.height);
+            let new=(x,y,window.image.width,window.image.height);
+            window.x=x;window.y=y;
+            self.damage.window_moved(old,new);
+            self.dirty();
         }
         Ok(())
     }
@@ -176,6 +203,7 @@ impl DynamicWindowScene {
             .ok_or(DynamicSceneError::UnknownWindow)?;
         if n+1==self.windows.len() {return Ok(false);}
         let entry=self.windows.remove(n);
+        self.damage.invalidate(entry.x,entry.y,entry.image.width,entry.image.height);
         self.windows.push(entry);
         self.dirty();
         Ok(true)
@@ -187,6 +215,7 @@ impl DynamicWindowScene {
         };
         let removed=self.windows.remove(n);
         self.used_bytes-=removed.image.bytes();
+        self.damage.invalidate(removed.x,removed.y,removed.image.width,removed.image.height);
         self.dirty();
         true
     }
@@ -345,4 +374,44 @@ mod tests {
         assert_eq!(s.output_size(),(50,50));
         assert!(!s.remove(900));
     }
+
+    #[test]
+    fn dynamic_damage_keeps_old_and_new_window_extents() {
+        let mut s=DynamicWindowScene::new(100,80,[1,2,3,0]).unwrap();
+        assert!(s.damage_regions().is_clean());
+        s.upsert(1,10,10,solid(20,15,[10,20,30,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(s.damage_regions().regions()[0],
+            crate::damage_regions::DamageRect{x:10,y:10,width:20,height:15});
+        let first=s.generation();
+        assert!(!s.confirm_presented_damage(first+1));
+        assert!(!s.damage_regions().is_clean());
+        assert!(s.confirm_presented_damage(first));
+        assert!(s.damage_regions().is_clean());
+        s.move_to(1,40,30).unwrap();
+        assert_eq!(s.damage_regions().regions().len(),2);
+        s.upsert(1,40,30,solid(10,8,[10,20,30,0],DynamicAlpha::Opaque)).unwrap();
+        assert!(!s.confirm_presented_damage(first));
+        assert!(!s.damage_regions().is_clean());
+        assert!(s.remove(1));
+        assert_eq!(s.window_count(),0);
+        assert!(s.confirm_presented_damage(s.generation()));
+        assert!(s.damage_regions().is_clean());
+    }
+
+    #[test]
+    fn dynamic_damage_focus_and_output_change_are_conservative() {
+        let mut s=DynamicWindowScene::new(100,80,[0;4]).unwrap();
+        s.upsert(1,5,5,solid(20,20,[1,2,3,0],DynamicAlpha::Opaque)).unwrap();
+        s.upsert(2,10,10,solid(20,20,[4,5,6,0],DynamicAlpha::Opaque)).unwrap();
+        s.confirm_presented_damage(s.generation());
+        assert!(s.raise(1).unwrap());
+        assert!(!s.damage_regions().is_clean());
+        s.confirm_presented_damage(s.generation());
+        assert!(!s.raise(1).unwrap());
+        assert!(s.damage_regions().is_clean());
+        s.resize_output(150,100).unwrap();
+        assert!(s.damage_regions().is_full());
+        assert_eq!(s.damage_regions().output_size(),(150,100));
+    }
+
 }
