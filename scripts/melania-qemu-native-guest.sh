@@ -489,6 +489,90 @@ report 'MELANIA_QEMU_REAL_WINDOW_CLOSE_KMS_FRAME5_PASS=true'
 report 'MELANIA_QEMU_REAL_WINDOW_REOPEN_KMS_FRAME6_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
+# Stage46: a SEPARATE disposable QEMU test must prove more than six
+# successive *real* Wayland wl_shm commits, KMS CRTC FB_ID acknowledgements
+# and frame.done/buffer.release pairs. Legacy stages 1–6 remain unchanged.
+continuous_server=/mnt/melania-native/melania-native
+continuous_kms=/mnt/melania-native/melania-continuous-kms
+continuous_client=/mnt/melania-native/melania-continuous-client
+[[ -x "$continuous_kms" && -x "$continuous_client" ]] ||
+  fatal 'continuous_VM_executables_missing'
+continuous_server_log="$(mktemp -t melania-continuous-server-XXXXXX)"
+continuous_kms_log="$(mktemp -t melania-continuous-kms-XXXXXX)"
+continuous_client_log="$(mktemp -t melania-continuous-client-XXXXXX)"
+rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 72s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$continuous_server_log" 2>&1 &
+continuous_server_pid=$!
+continuous_socket=''
+for attempt in $(seq 1 100); do
+  continuous_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$continuous_server_log" | head -n 1)"
+  [[ -n "$continuous_socket" && -S /run/melania-native-qemu/continuous-frame-stream.sock ]] && break
+  kill -0 "$continuous_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$continuous_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+  cat "$continuous_server_log"
+  fatal 'continuous_Wayland_bridge_never_listened'
+fi
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+  timeout --signal=TERM --kill-after=3s 65s \
+  "$continuous_kms" < /dev/tty1 > "$continuous_kms_log" 2>&1 &
+continuous_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$continuous_kms_log" && break
+  kill -0 "$continuous_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$continuous_kms_log"; then
+  cat "$continuous_kms_log" "$continuous_server_log"
+  kill "$continuous_server_pid" "$continuous_kms_pid" 2>/dev/null || true
+  fatal 'continuous_Rust_KMS_not_connected'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$continuous_socket" \
+  timeout --signal=TERM --kill-after=3s 62s \
+  "$continuous_client" > "$continuous_client_log" 2>&1; then
+  cat "$continuous_client_log" "$continuous_kms_log" "$continuous_server_log"
+  kill "$continuous_server_pid" "$continuous_kms_pid" 2>/dev/null || true
+  fatal 'continuous_real_Wayland_client_failed'
+fi
+if ! wait "$continuous_kms_pid"; then
+  cat "$continuous_kms_log" "$continuous_server_log"
+  kill "$continuous_server_pid" 2>/dev/null || true
+  fatal 'continuous_real_KMS_receiver_failed'
+fi
+if ! wait "$continuous_server_pid"; then
+  cat "$continuous_server_log"
+  fatal 'continuous_Smithay_bridge_failed'
+fi
+cat "$continuous_client_log" "$continuous_kms_log" "$continuous_server_log"
+for index in $(seq 1 12); do
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$continuous_client_log" ||
+    fatal "continuous_client_callback_$index_not_presented"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$continuous_server_log" ||
+    fatal "continuous_Smithay_generation_$index_not_acknowledged"
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$continuous_kms_log" ||
+    fatal "continuous_real_CRTC_frame_$index_not_verified"
+done
+grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12' "$continuous_server_log" ||
+  fatal 'continuous_Wayland_KMS_twelve_frames_not_completed'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_CLIENT_12_FRAMES_PASS=true' "$continuous_client_log" ||
+  fatal 'continuous_client_did_not_finish_twelve_commits'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$continuous_kms_log" ||
+  fatal 'continuous_Rust_CRTC_verification_incomplete'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$continuous_kms_log" ||
+  fatal 'continuous_original_CRTC_not_restored'
+rm -f "$continuous_server_log" "$continuous_kms_log" "$continuous_client_log"
+report 'MELANIA_QEMU_NATIVE_CONTINUOUS_12_REAL_FRAMES_PASS=true'
+report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
