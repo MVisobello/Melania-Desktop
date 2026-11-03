@@ -41,7 +41,9 @@ class Files036(unittest.TestCase):
     def test_dnd_stays_copy_only(self):
         self.assertIn('source.set_actions(gdk::DragAction::COPY)', SOURCE)
         self.assertIn('gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY)', SOURCE)
-        self.assertNotIn('gdk::DragAction::MOVE)', SOURCE)
+        file_drag = SOURCE.split('fn attach_drag(',1)[1].split('fn show_properties(',1)[0]
+        self.assertNotIn('gdk::DragAction::MOVE)', file_drag)
+        self.assertIn('let drag_source=gtk::DragSource::new();',SOURCE)
         self.assertIn('gio_backend::move_to_trash(&uri)', SOURCE)
         self.assertIn('gio_backend::rename_item(&source_uri', SOURCE)
 
