@@ -467,11 +467,18 @@ echo 'PASS: live Wayland minimized-window focus fallback and reactivation'
 # pixels of three visible Nautilus-style tabs for UI review.
 target/debug/melania-winctl activate "$FILES_ID" >/dev/null
 xdotool windowfocus --sync "$HOST_WINDOW"
-for expected in 2 3; do
+# The session can already have a local and a GVfs probe tab; assert
+# changes relative to its actual current count instead of assuming one tab.
+initial_tabs="$(grep -oE 'MELANIA_FILES_TAB_COUNT=[0-9]+' "$TEMP/compositor.log" | tail -1 | cut -d= -f2)"
+[[ "$initial_tabs" =~ ^[0-9]+$ ]] && (( initial_tabs >= 1 )) || {
+  echo 'FAIL: initial real GTK tab count unavailable' >&2; exit 1;
+}
+for delta in 1 2; do
+  expected=$((initial_tabs+delta))
   xdotool key --clearmodifiers ctrl+t
   observed=0
   for i in $(seq 1 45); do
-    if grep -q "MELANIA_FILES_TAB_COUNT=$expected" "$TEMP/compositor.log"; then
+    if grep -q "MELANIA_FILES_TAB_COUNT=$expected$" "$TEMP/compositor.log"; then
       observed=1; break
     fi
     sleep .1
@@ -485,19 +492,20 @@ done
 sleep .35
 scrot -z -o reports/nested-wayland-files-tabs.png
 test -s reports/nested-wayland-files-tabs.png || {
-  echo 'FAIL: missing screenshot of actual three-tab GTK file manager' >&2; exit 1;
+  echo 'FAIL: missing screenshot of real multiple-tab GTK file manager' >&2; exit 1;
 }
 xdotool key --clearmodifiers ctrl+w
+expected_after_close=$((initial_tabs+1))
 for i in $(seq 1 45); do
-  [[ "$(grep -c 'MELANIA_FILES_TAB_COUNT=2' "$TEMP/compositor.log")" -ge 2 ]] && break
+  [[ "$(grep -c "MELANIA_FILES_TAB_COUNT=$expected_after_close$" "$TEMP/compositor.log")" -ge 2 ]] && break
   sleep .1
 done
-[[ "$(grep -c 'MELANIA_FILES_TAB_COUNT=2' "$TEMP/compositor.log")" -ge 2 ]] || {
-  echo 'FAIL: real GTK Ctrl+W did not close the third tab' >&2
+[[ "$(grep -c "MELANIA_FILES_TAB_COUNT=$expected_after_close$" "$TEMP/compositor.log")" -ge 2 ]] || {
+  echo 'FAIL: real GTK Ctrl+W did not close the active tab' >&2
   tail -80 "$TEMP/compositor.log" >&2
   exit 1
 }
-echo 'PASS: real GTK Ctrl+T opened three Nautilus-style tabs, screenshot captured, Ctrl+W closed one'
+echo 'PASS: real GTK Ctrl+T opened two additional tabs, screenshot captured, Ctrl+W closed one'
 # Verify a REAL running Melania taskbar accepts a changed user config and
 # moves from the bottom to the top edge without a restart or compositor exit.
 # The setting is isolated under the temporary CI XDG_CONFIG_HOME.
