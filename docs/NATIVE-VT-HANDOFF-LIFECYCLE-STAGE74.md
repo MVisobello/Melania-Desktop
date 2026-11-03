@@ -1,0 +1,1 @@
+Stage74 introduces a VT handoff state machine: acquired, suspending, suspended, restoring and active again only after resources have been restored. Every transition invalidates old rendering permits. This is not VT ioctl integration or DRM-master management; it prevents stale frame permissions from surviving a future seat switch.
