@@ -34,7 +34,7 @@ class FilesNonblockingInteractions(unittest.TestCase):
         self.assertIn("gio_backend::move_to_trash(&uri)",worker)
         self.assertIn("p.is_move && &p.paths==original",delivery)
         self.assertIn("report.remaining.clone()",delivery)
-        self.assertIn('state.transfer_cancel.set_label("Annulla operazione")',delivery)
+        self.assertIn('browser.transfer_cancel.set_label("Annulla operazione")',delivery)
         self.assertIn("fn local_cut_never_overwrites_destination()",LOCAL)
 
     def test_local_navigation_avoids_blocking_stat_and_double_refresh(self):
@@ -54,7 +54,8 @@ class FilesNonblockingInteractions(unittest.TestCase):
         for code in (local,remote):
             self.assertIn("monitor_epoch",code)
             self.assertIn("cancel();",code)
-            self.assertGreaterEqual(code.count("!=epoch"),2)
+            import re
+            self.assertGreaterEqual(len(re.findall(r"!=\s*epoch", code)),2)
             self.assertIn("refresh_pending.set(false)",code)
         self.assertIn("root.connect_unrealize(move |_|",LOCAL)
         self.assertIn("root.connect_unrealize(move |_|",REMOTE)
