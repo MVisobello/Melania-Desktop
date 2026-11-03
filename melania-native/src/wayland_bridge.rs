@@ -41,7 +41,7 @@ use smithay::{
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer,
-                           Anchor as WlrAnchor}},
+                           Anchor as WlrAnchor,LayerSurfaceCachedState}},
     },
 };
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
@@ -843,7 +843,9 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     };
-                    let attrs=role.with_cached_state(|cached|*cached);
+                    let attrs=with_states(surface,|states|{
+                        *states.cached_state.get::<LayerSurfaceCachedState>().current()
+                    });
                     let shell_layer=match attrs.layer {
                         WlrLayer::Background=>ShellLayer::Background,
                         WlrLayer::Bottom=>ShellLayer::Bottom,
@@ -1743,7 +1745,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.dynamic_window_mode || !state.continuous_kms_mode ||
         !state.multi_window_mode || !state.frame_callbacks_probe ||
         state.continuous_reopen_mode) {
-        return Err("native layer pixels require isolated QEMU dynamic multi-client KMS");
+        return Err("native layer pixels require isolated QEMU dynamic multi-client KMS".into());
     }
     if state.managed_xdg_mode && !state.dynamic_window_mode &&
        std::env::var("MELANIA_NATIVE_SHELL_PROBE").as_deref()!=Ok("YES_QEMU_VM") {
