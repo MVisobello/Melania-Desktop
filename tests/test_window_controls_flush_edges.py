@@ -33,8 +33,8 @@ class WindowControlsFlushEdges(unittest.TestCase):
         self.assertIn("border: 1px solid #c6e9ff;", CHROME)
         self.assertRegex(
             CHROME,
-            r"headerbar\\.melania-win7-header \\.win7-window-controls\\s*"
-            r"\\{[^}]*margin: -1px -9px 0 8px;",
+            r"headerbar\.melania-win7-header \.win7-window-controls\s*"
+            r"\{[^}]*margin: -1px -9px 0 8px;",
         )
 
     def test_borderless_light_dark_are_exactly_flush(self):
@@ -42,8 +42,8 @@ class WindowControlsFlushEdges(unittest.TestCase):
         self.assertIn("headerbar.melania-win7-header.melania-theme-dark .win7-window-controls", CHROME)
         self.assertRegex(
             CHROME,
-            r"headerbar\\.melania-win7-header\\.melania-theme-dark \\.win7-window-controls\\s*"
-            r"\\{\\s*margin-top: 0;\\s*margin-right: -8px;",
+            r"headerbar\.melania-win7-header\.melania-theme-dark \.win7-window-controls\s*"
+            r"\{\s*margin-top: 0;\s*margin-right: -8px;",
         )
         for theme in ("light", "dark"):
             self.assertIn(f"headerbar.melania-win7-header.melania-theme-{theme}:backdrop", CHROME)
