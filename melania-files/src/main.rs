@@ -3210,6 +3210,28 @@ mod software_preview_performance_tests {
 }
 
 #[cfg(test)]
+mod nautilus_tab_reorder_tests {
+    use super::tab_drop_destination;
+
+    #[test]
+    fn dropping_before_and_after_uses_the_correct_notebook_index() {
+        assert_eq!(tab_drop_destination(0,2,false),1);
+        assert_eq!(tab_drop_destination(0,2,true),2);
+        assert_eq!(tab_drop_destination(3,1,false),1);
+        assert_eq!(tab_drop_destination(3,1,true),2);
+        assert_eq!(tab_drop_destination(1,1,false),1);
+        assert_eq!(tab_drop_destination(1,1,true),1);
+    }
+
+    #[test]
+    fn repeated_drag_does_not_reorder_into_an_invalid_negative_slot() {
+        assert_eq!(tab_drop_destination(0,0,false),0);
+        assert_eq!(tab_drop_destination(0,0,true),0);
+        assert_eq!(tab_drop_destination(9,0,false),0);
+    }
+}
+
+#[cfg(test)]
 mod window_size_tests {
     use super::files_initial_size;
     #[test]
