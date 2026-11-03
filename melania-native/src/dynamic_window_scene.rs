@@ -242,6 +242,38 @@ impl DynamicWindowScene {
         }).map(|w|w.key)
     }
 
+    /// Patch only changed pixels in an owned frame from the most recent
+    /// acknowledged presentation; never use an unconfirmed KMS candidate.
+    /// The caller owns frame lifetime and confirms damage separately.
+    pub fn composite_damaged_into(&self,frame:&mut [u8])
+        ->Result<(),DynamicSceneError>
+    {
+        let size=self.width.checked_mul(self.height)
+            .and_then(|n|n.checked_mul(4)).ok_or(DynamicSceneError::RenderFailed)?;
+        if frame.len()!=size {return Err(DynamicSceneError::RenderFailed);}
+        if self.damage.is_clean() {return Ok(());}
+        if self.damage.is_full() {
+            frame.copy_from_slice(&self.composite()?);
+            return Ok(());
+        }
+        let surfaces=self.windows.iter().map(|w|Surface {
+            x:w.x,y:w.y,width:w.image.width,height:w.image.height,
+            layer:Layer::Normal,
+            pixels:match w.image.alpha {
+                DynamicAlpha::Opaque=>Pixels::OpaqueBgra {
+                    data:&w.image.data,stride:w.image.width*4
+                },
+                DynamicAlpha::Premultiplied=>Pixels::PremultipliedAlphaBgra {
+                    data:&w.image.data,stride:w.image.width*4
+                },
+            },
+        }).collect::<Vec<_>>();
+        crate::region_compositor::compose_regions_into(
+            self.width,self.height,self.background,&surfaces,
+            self.damage.regions(),frame
+        ).map_err(|_|DynamicSceneError::RenderFailed)
+    }
+
     /// CPU reference renderer. Geometry clips to the selected output and
     /// per-window alpha uses the Wayland premultiplied semantics, without
     /// altering the live fixed-size QEMU compositor or grabbing DRM master.
@@ -412,6 +444,41 @@ mod tests {
         s.resize_output(150,100).unwrap();
         assert!(s.damage_regions().is_full());
         assert_eq!(s.damage_regions().output_size(),(150,100));
+    }
+
+
+    #[test]
+    fn damaged_composition_equals_full_after_move_shrink_close_and_alpha() {
+        let mut s=DynamicWindowScene::new(90,70,[10,20,30,0]).unwrap();
+        s.upsert(1,10,10,solid(30,30,[70,80,90,0],DynamicAlpha::Opaque)).unwrap();
+        s.upsert(2,20,20,solid(20,20,[12,18,24,128],DynamicAlpha::Premultiplied)).unwrap();
+        let mut last=s.composite().unwrap();
+        s.confirm_presented_damage(s.generation());
+        s.move_to(2,35,28).unwrap();
+        s.composite_damaged_into(&mut last).unwrap();
+        assert_eq!(last,s.composite().unwrap());
+        s.confirm_presented_damage(s.generation());
+        s.upsert(1,10,10,solid(9,7,[40,50,60,0],DynamicAlpha::Opaque)).unwrap();
+        s.composite_damaged_into(&mut last).unwrap();
+        assert_eq!(last,s.composite().unwrap());
+        s.confirm_presented_damage(s.generation());
+        assert!(s.remove(2));
+        s.composite_damaged_into(&mut last).unwrap();
+        assert_eq!(last,s.composite().unwrap());
+        s.resize_output(110,80).unwrap();
+        let mut bigger=vec![99u8;110*80*4];
+        s.composite_damaged_into(&mut bigger).unwrap();
+        assert_eq!(bigger,s.composite().unwrap());
+    }
+
+    #[test]
+    fn clean_frame_skips_repainting_and_rejects_wrong_size() {
+        let mut s=DynamicWindowScene::new(10,10,[1,2,3,0]).unwrap();
+        let mut frame=vec![37u8;10*10*4];
+        s.composite_damaged_into(&mut frame).unwrap();
+        assert!(frame.iter().all(|b|*b==37));
+        assert_eq!(s.composite_damaged_into(&mut frame[..20]),
+                   Err(DynamicSceneError::RenderFailed));
     }
 
 }
