@@ -137,11 +137,23 @@ fn xdg_shortcut_directory(kind: &str) -> PathBuf {
     home
 }
 
+// Prefer Melania artwork, but never leave a blank GTK image when a theme
+// variant or a portable preview does not ship the requested icon name.
+fn icon_with_fallback(primary: &str, fallback: &str) -> Image {
+    let available = gdk::Display::default()
+        .map(|display| gtk::IconTheme::for_display(&display).has_icon(primary))
+        .unwrap_or(false);
+    Image::from_icon_name(if available { primary } else { fallback })
+}
+
 fn icon_row(text: &str, icon_name: &str, class: &str) -> Button {
     let button = Button::new();
     button.add_css_class(class);
     let row = GtkBox::new(Orientation::Horizontal, 10);
-    let icon = Image::from_icon_name(icon_name);
+    let fallback = if icon_name == "org.melaniadesktop.Settings" { "preferences-system" }
+        else if icon_name == "org.melaniadesktop.Files" { "system-file-manager" }
+        else { "application-x-executable" };
+    let icon = icon_with_fallback(icon_name, fallback);
     icon.set_pixel_size(if class == "melania-shortcut" { 18 } else { 27 });
     icon.add_css_class("melania-menu-app-icon");
     row.append(&icon);
@@ -1489,7 +1501,14 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         bar.add_css_class("high-contrast");
     }
     let menu=Button::new();menu.add_css_class("melania-start");
-    let logo=Image::from_icon_name("melania");logo.set_pixel_size(30);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
+    let logo=if gdk::Display::default()
+        .map(|display| gtk::IconTheme::for_display(&display).has_icon("melania"))
+        .unwrap_or(false) {
+        Image::from_icon_name("melania")
+    } else {
+        Image::from_file(ICON)
+    };
+    logo.set_pixel_size(30);menu.set_child(Some(&logo));menu.set_tooltip_text(Some("Menu Melania"));
     menu.set_size_request(43,43); // only Start is circular; other task buttons stay rectangular.
     let sm=start.clone();let qs=quick.clone();let nt=notifications.clone();
     menu.connect_clicked(move |_|{hide_popup_surface(&nt);toggle_surface(&sm,&qs);});
@@ -1563,7 +1582,14 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
         // These are real SVG images, not GTK -symbolic masks; the latter
         // flattened the Bluetooth rune into an opaque circle.
         let asset=if light_tray { format!("{icon_name}-light") } else { icon_name.to_string() };
-        let icon=Image::from_icon_name(&asset);
+        let fallback=match icon_name {
+            "melania-tray-wifi" => "network-wireless",
+            "melania-tray-bluetooth" => "bluetooth-active",
+            "melania-tray-volume" => "audio-volume-high",
+            "melania-tray-battery" => "battery-full",
+            _ => "dialog-information",
+        };
+        let icon=icon_with_fallback(&asset,fallback);
         icon.set_pixel_size(22);
         icon.add_css_class("melania-tray-symbol");
         icon.add_css_class(icon_class);
@@ -1577,7 +1603,7 @@ fn taskbar(app:&Application,start:&ApplicationWindow,quick:&ApplicationWindow,no
     notification_button.add_css_class("melania-tray-button");
     let notification_row=GtkBox::new(Orientation::Horizontal,4);
     let notification_asset=if light_tray { "melania-tray-notifications-light" } else { "melania-tray-notifications" };
-    let notice_icon=Image::from_icon_name(notification_asset);
+    let notice_icon=icon_with_fallback(notification_asset,"preferences-system-notifications");
     notice_icon.set_pixel_size(22);
     notice_icon.add_css_class("melania-tray-symbol");
     notification_row.append(&notice_icon);
