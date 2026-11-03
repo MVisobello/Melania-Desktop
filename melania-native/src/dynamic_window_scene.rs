@@ -75,6 +75,7 @@ struct Window {
     key:u64,
     x:i32,
     y:i32,
+    layer:Layer,
     image:WindowPixels,
 }
 
@@ -149,6 +150,16 @@ impl DynamicWindowScene {
     pub fn upsert(&mut self,key:u64,x:i32,y:i32,image:WindowPixels)
         ->Result<(),DynamicSceneError>
     {
+        self.upsert_in_layer(key,x,y,Layer::Normal,image)
+    }
+
+    /// The default upsert above remains unchanged for all existing QEMU
+    /// xdg_toplevel clients. A future real layer-shell wl_shm handler can
+    /// supply its role here, without allowing a normal window to paint over
+    /// the taskbar or wallpaper to paint over a toplevel.
+    pub fn upsert_in_layer(&mut self,key:u64,x:i32,y:i32,layer:Layer,image:WindowPixels)
+        ->Result<(),DynamicSceneError>
+    {
         if key==0 {return Err(DynamicSceneError::InvalidClient);}
         let previous=self.windows.iter().position(|w|w.key==key);
         if previous.is_none() && self.windows.len()==MAX_DYNAMIC_WINDOWS {
@@ -171,9 +182,10 @@ impl DynamicWindowScene {
             let existing=&mut self.windows[n];
             existing.x=x;
             existing.y=y;
+            existing.layer=layer;
             existing.image=image;
         } else {
-            self.windows.push(Window {key,x,y,image});
+            self.windows.push(Window {key,x,y,layer,image});
         }
         if let Some((ox,oy,ow,oh))=old_rect {
             self.damage.invalidate(ox,oy,ow,oh);
@@ -234,12 +246,21 @@ impl DynamicWindowScene {
     pub fn hit_test(&self,x:f64,y:f64)->Option<u64> {
         if !x.is_finite() || !y.is_finite() || x<0.0 || y<0.0 ||
            x>=self.width as f64 || y>=self.height as f64 {return None;}
-        self.windows.iter().rev().find(|w|{
-            let left=f64::from(w.x);let top=f64::from(w.y);
-            x>=left && y>=top &&
-            x<left+w.image.width as f64 &&
-            y<top+w.image.height as f64
-        }).map(|w|w.key)
+        // Match scene::compose: higher layer wins, then later insertion
+        // order within the same layer. Do not allow a normal toplevel to
+        // steal a panel's pointer hit merely because it committed later.
+        let mut target:Option<&Window>=None;
+        for window in &self.windows {
+            let left=f64::from(window.x);
+            let top=f64::from(window.y);
+            if x>=left && y>=top &&
+               x<left+window.image.width as f64 &&
+               y<top+window.image.height as f64 &&
+               target.is_none_or(|old|window.layer>=old.layer) {
+                target=Some(window);
+            }
+        }
+        target.map(|window|window.key)
     }
 
     /// Patch only changed pixels in an owned frame from the most recent
@@ -258,7 +279,7 @@ impl DynamicWindowScene {
         }
         let surfaces=self.windows.iter().map(|w|Surface {
             x:w.x,y:w.y,width:w.image.width,height:w.image.height,
-            layer:Layer::Normal,
+            layer:w.layer,
             pixels:match w.image.alpha {
                 DynamicAlpha::Opaque=>Pixels::OpaqueBgra {
                     data:&w.image.data,stride:w.image.width*4
@@ -282,7 +303,7 @@ impl DynamicWindowScene {
             Surface {
                 x:w.x,y:w.y,
                 width:w.image.width,height:w.image.height,
-                layer:Layer::Normal,
+                layer:w.layer,
                 pixels:match w.image.alpha {
                     DynamicAlpha::Opaque=>Pixels::OpaqueBgra {
                         data:&w.image.data,stride:w.image.width*4
@@ -479,6 +500,56 @@ mod tests {
         assert!(frame.iter().all(|b|*b==37));
         assert_eq!(s.composite_damaged_into(&mut frame[..20]),
                    Err(DynamicSceneError::RenderFailed));
+    }
+
+    #[test]
+    fn top_panel_overrides_newer_normal_window_in_pixels_and_hit_testing() {
+        let mut s=DynamicWindowScene::new(60,40,[1,2,3,0]).unwrap();
+        // Taskbar is inserted FIRST, before the normal window. Logical
+        // scene z-order, not insertion order alone, must keep it in front.
+        s.upsert_in_layer(11,0,0,Layer::Top,
+            solid(60,8,[120,130,140,0],DynamicAlpha::Opaque)).unwrap();
+        s.upsert(22,4,2,solid(30,20,[40,50,60,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(px(&s.composite().unwrap(),60,10,4),[120,130,140]);
+        assert_eq!(s.hit_test(10.0,4.0),Some(11));
+        assert_eq!(s.hit_test(10.0,10.0),Some(22));
+        assert_eq!(s.raise(22),Ok(false));
+        assert_eq!(px(&s.composite().unwrap(),60,10,4),[120,130,140]);
+    }
+
+    #[test]
+    fn role_layer_reordering_invalidates_pixels_until_presented_ack() {
+        let mut s=DynamicWindowScene::new(30,20,[1,2,3,0]).unwrap();
+        s.upsert_in_layer(1,0,0,Layer::Top,
+            solid(30,6,[80,90,100,0],DynamicAlpha::Opaque)).unwrap();
+        s.upsert(2,0,0,solid(30,20,[30,40,50,0],DynamicAlpha::Opaque)).unwrap();
+        let previous_presented=s.composite().unwrap();
+        let acknowledged=s.generation();
+        assert!(s.confirm_presented_damage(acknowledged));
+        assert!(s.damage_regions().is_clean());
+        s.upsert_in_layer(1,0,0,Layer::Bottom,
+            solid(30,6,[80,90,100,0],DynamicAlpha::Opaque)).unwrap();
+        assert!(!s.damage_regions().is_clean());
+        assert!(!s.confirm_presented_damage(acknowledged));
+        assert_eq!(px(&s.composite().unwrap(),30,4,4),[30,40,50]);
+        assert_eq!(s.hit_test(4.0,4.0),Some(2));
+        let mut candidate=previous_presented;
+        s.composite_damaged_into(&mut candidate).unwrap();
+        assert_eq!(candidate,s.composite().unwrap());
+        assert!(s.confirm_presented_damage(s.generation()));
+    }
+
+    #[test]
+    fn overlay_premultiplied_alpha_blends_over_normal_window_once() {
+        let mut s=DynamicWindowScene::new(12,12,[0,0,0,0]).unwrap();
+        s.upsert(1,0,0,
+            solid(12,12,[60,70,80,0],DynamicAlpha::Opaque)).unwrap();
+        s.upsert_in_layer(2,0,0,Layer::Overlay,
+            solid(12,4,[20,30,40,128],DynamicAlpha::Premultiplied)).unwrap();
+        assert_eq!(px(&s.composite().unwrap(),12,2,2),[50,65,80]);
+        assert_eq!(s.hit_test(2.0,2.0),Some(2));
+        assert!(s.remove(2));
+        assert_eq!(px(&s.composite().unwrap(),12,2,2),[60,70,80]);
     }
 
 }
