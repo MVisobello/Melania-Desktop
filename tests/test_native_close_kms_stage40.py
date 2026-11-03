@@ -37,7 +37,7 @@ class NativeCloseKmsStage40(unittest.TestCase):
             'self.multi_scene.remove(key)',
         ):
             self.assertIn(marker,BRIDGE)
-        self.assertIn('!(1..=5).contains(&job.ordinal)',WORKER)
+        self.assertIn('!(1..=6).contains(&job.ordinal)',WORKER)
         self.assertIn('MELANIA_RUST_CLOSE_FRAME5_ACTIVE=true',KMS)
         self.assertIn('MELANIA_RUST_CLOSE_FRAME5_PASS=true',KMS)
         self.assertIn('MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true',CLIENT)

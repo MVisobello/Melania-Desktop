@@ -362,7 +362,8 @@ MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_ASYNC_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_DRAG_REDRAW=YES_QEMU_VM \
 MELANIA_NATIVE_CLOSE_REDRAW=YES_QEMU_VM \
-  timeout --signal=TERM --kill-after=3s 54s \
+MELANIA_NATIVE_REOPEN_REDRAW=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 74s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$multi_server_log" 2>&1 &
 multi_server_pid=$!
 # Expose the REAL compositor's markers on the QEMU serial console while
@@ -387,7 +388,8 @@ MELANIA_QEMU_RUST_LIVE_STREAM_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_QEMU_DRAG_FRAME=YES_QEMU_VM \
 MELANIA_QEMU_CLOSE_FRAME=YES_QEMU_VM \
-  timeout --signal=TERM --kill-after=3s 53s \
+MELANIA_QEMU_REOPEN_FRAME=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 73s \
   "$stream_binary" < /dev/tty1 2>&1 | tee "$multi_kms_log" &
 multi_kms_pid=$!
 for attempt in $(seq 1 100); do
@@ -403,8 +405,9 @@ fi
 if ! MELANIA_NATIVE_THREE_FRAMES=YES_QEMU_VM \
   MELANIA_NATIVE_WAIT_PRESENT_CALLBACK=YES_QEMU_VM \
   MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
-  MELANIA_NATIVE_CLOSE_REDRAW=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
-  timeout --signal=TERM --kill-after=3s 31s "$pixel_client"; then
+  MELANIA_NATIVE_CLOSE_REDRAW=YES_QEMU_VM \
+  MELANIA_NATIVE_REOPEN_REDRAW=YES_QEMU_VM WAYLAND_DISPLAY="$multi_socket" \
+  timeout --signal=TERM --kill-after=3s 53s "$pixel_client"; then
   cat "$multi_server_log"
   kill "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
   wait "$multi_server_pid" "$multi_kms_pid" 2>/dev/null || true
@@ -447,6 +450,20 @@ grep -q '^MELANIA_NATIVE_CLOSE_FRAME_VISIBLE=true' "$multi_server_log" ||
   fatal 'fifth_close_scene_not_verified_by_Smithay'
 grep -q '^MELANIA_RUST_CLOSE_FRAME5_PASS=true' "$multi_kms_log" ||
   fatal 'Rust_KMS_fifth_close_frame_not_presented'
+grep -q '^MELANIA_NATIVE_CLIENT_REOPENED_XDG_COMMITTED=true' "$multi_server_log" ||
+  fatal 'real_new_client_xdg_toplevel_not_committed'
+grep -q '^MELANIA_NATIVE_REOPEN_WINDOW_SLOT=1' "$multi_server_log" ||
+  fatal 'new_Wayland_client_did_not_reuse_freed_slot_one'
+grep -q '^MELANIA_NATIVE_REOPEN_FRAME_SUBMITTED=6' "$multi_server_log" ||
+  fatal 'sixth_reopen_frame_not_scheduled'
+grep -q '^MELANIA_NATIVE_REOPEN_FRAME_ACKED=6' "$multi_server_log" ||
+  fatal 'sixth_reopen_frame_not_acknowledged'
+grep -q '^MELANIA_NATIVE_REOPEN_FRAME_CALLBACK_DONE=true' "$multi_server_log" ||
+  fatal 'real_reopened_Wayland_client_callback_not_dispatched_after_KMS'
+grep -q '^MELANIA_NATIVE_REOPEN_FRAME_VISIBLE=true' "$multi_server_log" ||
+  fatal 'reopened_client_not_retained_through_KMS'
+grep -q '^MELANIA_RUST_REOPEN_FRAME6_PASS=true' "$multi_kms_log" ||
+  fatal 'Rust_KMS_sixth_reopen_frame_not_presented'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$multi_kms_log" ||
   fatal 'two_window_KMS_original_CRTC_not_restored'
 for index in 1 2 3; do
@@ -457,6 +474,7 @@ rm -f "$multi_server_log" "$multi_kms_log"
 report 'MELANIA_QEMU_TWO_REAL_WINDOWS_COMPOSITED_PASS=true'
 report 'MELANIA_QEMU_NONBLOCKING_KMS_WORKER_PASS=true'
 report 'MELANIA_QEMU_REAL_WINDOW_CLOSE_KMS_FRAME5_PASS=true'
+report 'MELANIA_QEMU_REAL_WINDOW_REOPEN_KMS_FRAME6_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'

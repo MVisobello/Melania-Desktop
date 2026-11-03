@@ -143,6 +143,11 @@ fn main()->Result<(),Box<dyn Error>> {
     if close_redraw && !two_windows {
         return Err("QEMU close-redraw probe requires two real xdg windows".into());
     }
+    let reopen_redraw=std::env::var("MELANIA_NATIVE_REOPEN_REDRAW")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if reopen_redraw && !close_redraw {
+        return Err("QEMU reopen frame requires first a verified window closure".into());
+    }
     // A second genuine xdg_toplevel has its OWN wl_surface and wl_shm
     // commits. Frame 2 changes only this surface; the first stays mapped.
     let secondary=if two_windows {
@@ -287,6 +292,61 @@ fn main()->Result<(),Box<dyn Error>> {
             thread::sleep(Duration::from_millis(35));
         }
         println!("MELANIA_NATIVE_CLIENT_CLOSE_CALLBACK_AFTER_KMS=true");
+        if reopen_redraw {
+            // A is gone; create a DIFFERENT genuine xdg_toplevel to prove
+            // that compositor slot 1 is reusable while B is still mapped.
+            state.xdg_acked=false;
+            let reopened=compositor.create_surface(&qh,());
+            let reopened_xdg=wm.get_xdg_surface(&reopened,&qh,());
+            let reopened_top=reopened_xdg.get_toplevel(&qh,());
+            reopened_top.set_title("Melania QEMU reopened real window".into());
+            reopened.commit();
+            for _ in 0..4 {
+                queue.roundtrip(&mut state)?;
+                if state.xdg_acked {break;}
+            }
+            if !state.xdg_acked {
+                return Err("reopened QEMU xdg_toplevel was not configured".into());
+            }
+            let mut pixels=vec![0u8;W*H*4];
+            for (index,pixel) in pixels.chunks_exact_mut(4).enumerate() {
+                let (red,green,blue)=if index%W<W/2 {
+                    (190u8,80u8,160u8)
+                } else {(245u8,175u8,55u8)};
+                pixel.copy_from_slice(&[blue,green,red,0]);
+            }
+            let mut file=OpenOptions::new().create_new(true).read(true).write(true)
+                .open("/run/melania-native-qemu/reopen-live-6.bin")?;
+            file.write_all(&pixels)?;
+            file.sync_all()?;
+            let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
+            let buffer=pool.create_buffer(
+                0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
+            );
+            state.buffer_released=false;
+            let _reopen_callback=reopened.frame(&qh,());
+            reopened.attach(Some(&buffer),0,0);
+            reopened.damage_buffer(0,0,W as i32,H as i32);
+            reopened.commit();
+            println!("MELANIA_NATIVE_CLIENT_REOPENED_XDG_COMMITTED=true");
+            std::io::stdout().flush()?;
+            let deadline=Instant::now()+Duration::from_secs(16);
+            while state.frame_done_count<5 || !state.buffer_released {
+                queue.roundtrip(&mut state)?;
+                if Instant::now()>=deadline {
+                    return Err("reopened real wl_shm client never received sixth KMS ACK".into());
+                }
+                thread::sleep(Duration::from_millis(35));
+            }
+            println!("MELANIA_NATIVE_CLIENT_REOPEN_CALLBACK_AFTER_KMS=true");
+            println!("MELANIA_NATIVE_CLIENT_REOPENED_SLOT1=true");
+            std::io::stdout().flush()?;
+            buffer.destroy();
+            pool.destroy();
+            reopened_top.destroy();
+            reopened_xdg.destroy();
+            reopened.destroy();
+        }
         println!("MELANIA_NATIVE_CLIENT_SECOND_WINDOW_HELD=true");
         if let Some((other,xdg_other,top_other))=secondary {
             top_other.destroy();
