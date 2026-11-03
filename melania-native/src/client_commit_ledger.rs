@@ -12,10 +12,16 @@
 //!
 //! Backend-neutral: no DRM device, Wayland handle or IO.
 pub const MAX_PENDING_CLIENTS: usize = 2;
+pub const MAX_DYNAMIC_PENDING_CLIENTS: usize = 16;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ClientCommitLedger<K, V> {
     waiting: Vec<(K, V)>,
+    capacity:usize,
+}
+
+impl<K,V> Default for ClientCommitLedger<K,V> {
+    fn default()->Self {Self {waiting:Vec::new(),capacity:MAX_PENDING_CLIENTS}}
 }
 
 #[derive(Debug)]
@@ -26,7 +32,12 @@ pub struct CompletedClient<K, V> {
 }
 
 impl<K: PartialEq, V> ClientCommitLedger<K, V> {
-    pub fn new() -> Self { Self { waiting: Vec::new() } }
+    pub fn new() -> Self { Self::default() }
+    pub fn with_capacity(capacity:usize)->Option<Self> {
+        if capacity==0 || capacity>MAX_DYNAMIC_PENDING_CLIENTS {return None;}
+        Some(Self {waiting:Vec::new(),capacity})
+    }
+    pub fn capacity(&self)->usize {self.capacity}
     pub fn waiting_len(&self) -> usize { self.waiting.len() }
 
     /// The caller releases the returned old buffer: its pixels are already
@@ -37,7 +48,7 @@ impl<K: PartialEq, V> ClientCommitLedger<K, V> {
             .position(|(stored, _)| stored == &key) {
             return Ok(Some(std::mem::replace(&mut self.waiting[index].1, resource)));
         }
-        if self.waiting.len() >= MAX_PENDING_CLIENTS {
+        if self.waiting.len() >= self.capacity {
             return Err((key, resource));
         }
         self.waiting.push((key, resource));
@@ -96,6 +107,22 @@ mod tests {
         assert_eq!(ledger.waiting_len(),2);
         assert_eq!(ledger.take_for_presentation().len(),2);
         assert_eq!(ledger.waiting_len(),0);
+    }
+
+    #[test]
+    fn sixteen_independent_wayland_clients_survive_one_kms_frame() {
+        let mut ledger=ClientCommitLedger::with_capacity(16).unwrap();
+        for id in 1..=16 {assert_eq!(ledger.stage(id,id*10),Ok(None));}
+        assert_eq!(ledger.stage(17,170),Err((17,170)));
+        let previous=ledger.take_for_presentation();
+        assert_eq!(previous.len(),16);
+        ledger.stage(1,11).unwrap();
+        let acknowledged=ledger.acknowledged(previous);
+        assert_eq!(acknowledged.len(),16);
+        assert!(!acknowledged[0].notify_frame);
+        assert!(acknowledged[1..].iter().all(|c|c.notify_frame));
+        assert!(ClientCommitLedger::<u32,u32>::with_capacity(0).is_none());
+        assert!(ClientCommitLedger::<u32,u32>::with_capacity(17).is_none());
     }
 
     #[test]
