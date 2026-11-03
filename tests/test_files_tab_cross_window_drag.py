@@ -5,6 +5,7 @@ drag/drop. Rust tests cover cancel reasons; the nested Wayland workflow must
 still validate actual gesture dispatch before merging this feature.
 """
 import pathlib
+import subprocess
 import unittest
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -61,6 +62,15 @@ class FilesTabDnD(unittest.TestCase):
                 self.assertIn("target_notebook.n_pages()<=before",action)
             else:
                 self.assertIn(marker,action)
+
+    def test_nested_wayland_drag_smoke_is_valid_shell(self):
+        result=subprocess.run(
+            ["bash","-n",str(ROOT/"scripts/smoke-full-desktop-wayland.sh")],
+            capture_output=True,text=True,check=False)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn("xdotool mousedown 1",SMOKE)
+        self.assertIn("xdotool mouseup 1",SMOKE)
+        self.assertIn("MELANIA_FILES_TAB_TEAROFF=success",SMOKE)
 
     def test_file_drag_remains_copy_only(self):
         file_drag=SOURCE.split("fn attach_drag(",1)[1].split("fn show_properties(",1)[0]
