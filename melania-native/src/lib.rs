@@ -13,6 +13,7 @@ pub mod async_kms_stream;
 pub mod render_scheduler;
 pub mod continuous_redraw;
 pub mod continuous_kms_stream;
+pub mod client_commit_ledger;
 pub mod planes;
 pub mod frame_gate;
 pub mod kms_test;

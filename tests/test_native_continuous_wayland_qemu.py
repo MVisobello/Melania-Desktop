@@ -33,7 +33,9 @@ class TwelveRealFramesContract(unittest.TestCase):
         block=BRIDGE[start:end]
         ack=block.index('self.continuous_redraw.presented(planned)')
         callback=block.index('complete_presented_frame(')
-        release=block.index('buffer.release();')
+        # Stage50 holds each submitted client receipt, then releases its
+        # buffer only after the verified KMS ACK.
+        release=block.index('completed.resource.release();')
         self.assertLess(ack,callback)
         self.assertLess(callback,release)
         self.assertNotIn('pixel_frame_count<3',block)
