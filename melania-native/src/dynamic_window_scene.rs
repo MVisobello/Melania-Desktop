@@ -76,6 +76,7 @@ struct Window {
     x:i32,
     y:i32,
     image:WindowPixels,
+    visible:bool,
 }
 
 #[derive(Debug)]
@@ -173,7 +174,7 @@ impl DynamicWindowScene {
             existing.y=y;
             existing.image=image;
         } else {
-            self.windows.push(Window {key,x,y,image});
+            self.windows.push(Window {key,x,y,image,visible:true});
         }
         if let Some((ox,oy,ow,oh))=old_rect {
             self.damage.invalidate(ox,oy,ow,oh);
@@ -181,6 +182,25 @@ impl DynamicWindowScene {
         self.damage.invalidate(new_rect.0,new_rect.1,new_rect.2,new_rect.3);
         self.dirty();
         Ok(())
+    }
+
+    /// Minimized clients retain their owned last buffer and stable slot,
+    /// but do not paint or receive pointer focus until restored by the shell.
+    /// This is a visual compositor state, not a Wayland protocol event.
+    pub fn set_visible(&mut self,key:u64,visible:bool)
+        ->Result<bool,DynamicSceneError>
+    {
+        let window=self.windows.iter_mut().find(|w|w.key==key)
+            .ok_or(DynamicSceneError::UnknownWindow)?;
+        if window.visible==visible {return Ok(false);}
+        window.visible=visible;
+        self.damage.invalidate(window.x,window.y,window.image.width,window.image.height);
+        self.dirty();
+        Ok(true)
+    }
+
+    pub fn is_visible(&self,key:u64)->Option<bool> {
+        self.windows.iter().find(|w|w.key==key).map(|w|w.visible)
     }
 
     pub fn move_to(&mut self,key:u64,x:i32,y:i32)
@@ -192,7 +212,7 @@ impl DynamicWindowScene {
             let old=(window.x,window.y,window.image.width,window.image.height);
             let new=(x,y,window.image.width,window.image.height);
             window.x=x;window.y=y;
-            self.damage.window_moved(old,new);
+            if window.visible {self.damage.window_moved(old,new);}
             self.dirty();
         }
         Ok(())
@@ -203,7 +223,9 @@ impl DynamicWindowScene {
             .ok_or(DynamicSceneError::UnknownWindow)?;
         if n+1==self.windows.len() {return Ok(false);}
         let entry=self.windows.remove(n);
-        self.damage.invalidate(entry.x,entry.y,entry.image.width,entry.image.height);
+        if entry.visible {
+            self.damage.invalidate(entry.x,entry.y,entry.image.width,entry.image.height);
+        }
         self.windows.push(entry);
         self.dirty();
         Ok(true)
@@ -215,7 +237,9 @@ impl DynamicWindowScene {
         };
         let removed=self.windows.remove(n);
         self.used_bytes-=removed.image.bytes();
-        self.damage.invalidate(removed.x,removed.y,removed.image.width,removed.image.height);
+        if removed.visible {
+            self.damage.invalidate(removed.x,removed.y,removed.image.width,removed.image.height);
+        }
         self.dirty();
         true
     }
@@ -234,7 +258,7 @@ impl DynamicWindowScene {
     pub fn hit_test(&self,x:f64,y:f64)->Option<u64> {
         if !x.is_finite() || !y.is_finite() || x<0.0 || y<0.0 ||
            x>=self.width as f64 || y>=self.height as f64 {return None;}
-        self.windows.iter().rev().find(|w|{
+        self.windows.iter().rev().filter(|w|w.visible).find(|w|{
             let left=f64::from(w.x);let top=f64::from(w.y);
             x>=left && y>=top &&
             x<left+w.image.width as f64 &&
@@ -256,7 +280,7 @@ impl DynamicWindowScene {
             frame.copy_from_slice(&self.composite()?);
             return Ok(());
         }
-        let surfaces=self.windows.iter().map(|w|Surface {
+        let surfaces=self.windows.iter().filter(|w|w.visible).map(|w|Surface {
             x:w.x,y:w.y,width:w.image.width,height:w.image.height,
             layer:Layer::Normal,
             pixels:match w.image.alpha {
@@ -278,7 +302,7 @@ impl DynamicWindowScene {
     /// per-window alpha uses the Wayland premultiplied semantics, without
     /// altering the live fixed-size QEMU compositor or grabbing DRM master.
     pub fn composite(&self)->Result<Vec<u8>,DynamicSceneError> {
-        let surfaces=self.windows.iter().map(|w| {
+        let surfaces=self.windows.iter().filter(|w|w.visible).map(|w| {
             Surface {
                 x:w.x,y:w.y,
                 width:w.image.width,height:w.image.height,
@@ -311,6 +335,40 @@ mod tests {
     fn px(frame:&[u8],width:usize,x:usize,y:usize)->[u8;3] {
         let n=(y*width+x)*4;
         [frame[n],frame[n+1],frame[n+2]]
+    }
+
+    #[test]
+    fn minimizing_hides_without_losing_owned_pixels_or_pointer_state() {
+        let mut scene=DynamicWindowScene::new(120,80,[1,2,3,0]).unwrap();
+        scene.upsert(1,10,10,solid(20,20,[70,80,90,0],DynamicAlpha::Opaque)).unwrap();
+        scene.upsert(2,18,18,solid(20,20,[20,30,40,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(scene.hit_test(20.0,20.0),Some(2));
+        let original_bytes=scene.used_bytes();
+        assert_eq!(scene.set_visible(2,false),Ok(true));
+        assert_eq!(scene.is_visible(2),Some(false));
+        assert_eq!(scene.hit_test(20.0,20.0),Some(1));
+        assert_eq!(px(&scene.composite().unwrap(),120,21,21),[70,80,90]);
+        assert_eq!(scene.used_bytes(),original_bytes);
+        assert_eq!(scene.set_visible(2,false),Ok(false));
+        assert!(scene.confirm_presented_damage(scene.generation()));
+        assert_eq!(scene.set_visible(2,true),Ok(true));
+        assert_eq!(scene.hit_test(20.0,20.0),Some(2));
+        assert_eq!(px(&scene.composite().unwrap(),120,21,21),[20,30,40]);
+        assert_eq!(scene.used_bytes(),original_bytes);
+        assert_eq!(scene.set_visible(999,false),Err(DynamicSceneError::UnknownWindow));
+    }
+
+    #[test]
+    fn minimized_client_commits_remain_unpainted_until_explicit_restore() {
+        let mut scene=DynamicWindowScene::new(40,40,[1,2,3,0]).unwrap();
+        scene.upsert(1,5,5,solid(12,12,[40,50,60,0],DynamicAlpha::Opaque)).unwrap();
+        scene.set_visible(1,false).unwrap();
+        scene.upsert(1,5,5,solid(12,12,[80,90,100,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(scene.is_visible(1),Some(false));
+        assert_eq!(scene.hit_test(7.0,7.0),None);
+        assert_eq!(px(&scene.composite().unwrap(),40,7,7),[1,2,3]);
+        scene.set_visible(1,true).unwrap();
+        assert_eq!(px(&scene.composite().unwrap(),40,7,7),[80,90,100]);
     }
 
     #[test]
