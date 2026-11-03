@@ -2901,7 +2901,8 @@ fn setup_melania_icon_theme() {
 
 #[cfg(test)]
 mod software_preview_performance_tests {
-    use super::thumbnail_budget_for;
+    use super::{thumbnail_budget_for,LocalMutationKind,run_local_mutation};
+    use std::sync::{Arc,atomic::AtomicBool};
 
 
     #[test]
