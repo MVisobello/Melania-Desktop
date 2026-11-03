@@ -10,8 +10,8 @@ or permission to start a native graphical login session.
    and **B 220×180**.
 2. The existing frame-12 real Rust DRM/KMS CRTC ACK occurs with client A and B
    retained, and the QMP host watcher verifies their old screen positions.
-3. After the VM-only **unique** `MELANIA_NATIVE_DYNAMIC_POINTER_READY_AFTER_KMS12=true`
-   server signal (not a generic ordinal-12 message shared by earlier stages),
+3. After the VM-only **unique** `MELANIA_RUST_CONTINUOUS_DYNAMIC_POINTER_READY_AFTER_KMS12=true`
+   KMS-presenter signal forwarded live to the VM serial port (not a generic ordinal-12 message shared by earlier stages),
    the *host* injects USB-tablet motion and a physical left button through QMP:
    start (760,200) inside B's resized top strip, move to (850,280), release.
    The Smithay/libinput bridge uses **current** B geometry, grants Wayland focus,
