@@ -625,3 +625,12 @@ window.melania-theme-dark .files-tab-menu-item:hover { background:#495669; }
 window.melania-theme-aero .files-top-tab.files-tab-active {
   color:#153b60; background:#f7fbff; border-color:#8fb8dd; box-shadow:none;
 }
+
+/* Robust tab sizing and glyph controls, including minimal custom icon themes. */
+.files-top-tab { min-width:145px; }
+.files-top-tab-select { min-width:103px; }
+.files-top-tab .files-tab-close { font-size:19px; font-weight:500; opacity:0.23; }
+.files-top-tab.files-tab-active .files-tab-close { opacity:0.92; }
+.files-tab-rail .files-new-tab-add {
+  font-size:23px; font-weight:400; padding:0 2px 2px; min-width:31px; min-height:31px;
+}
