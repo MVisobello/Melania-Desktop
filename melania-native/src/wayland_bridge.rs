@@ -71,6 +71,8 @@ struct BridgeState {
     multi_window_mode:bool,
     async_kms_mode:bool,
     drag_redraw_mode:bool,
+    close_redraw_mode:bool,
+    close_frame_presented:bool,
     presented_layout_generation:u64,
     // Store proof of a successful KMS presentation separately from the
     // current scene: a client may destroy its toplevel after the frame ACK.
@@ -198,6 +200,35 @@ impl BridgeState {
         Ok(())
     }
 
+    /// QEMU-only fifth presentation: remove the destroyed client's old
+    /// pixels from the *actual* KMS framebuffer while its peer stays alive.
+    /// The fourth-frame ticket must have been acknowledged first.
+    fn submit_close_frame(&mut self) -> Result<(),Box<dyn Error>> {
+        if !self.close_redraw_mode || self.pixel_frame_count!=4 ||
+           self.async_pending.is_some() ||
+           self.multi_scene.window_count()!=1 ||
+           !self.render_scheduler.needs_redraw() {
+            return Err("QEMU close frame not ready: missing live survivor or damage".into());
+        }
+        let frame=self.multi_scene.composite()
+            .map_err(|_|"QEMU close scene compose failed")?;
+        let ticket=self.render_scheduler.begin_frame()
+            .ok_or("QEMU close frame could not acquire next KMS ticket")?;
+        let worker=self.async_stream.as_ref()
+            .ok_or("QEMU close frame KMS worker unavailable")?;
+        if worker.submit(FrameJob{ticket,ordinal:5,pixels:frame}).is_err() {
+            self.render_scheduler.fail_present(ticket);
+            return Err("QEMU close frame was not accepted by KMS worker".into());
+        }
+        self.async_pending=Some(PendingAsyncFrame{
+            client:None,ticket,ordinal:5,
+            layout_generation:self.multi_scene.layout_generation(),
+        });
+        println!("MELANIA_NATIVE_CLOSE_FRAME_SUBMITTED=5");
+        std::io::stdout().flush()?;
+        Ok(())
+    }
+
     /// Poll the worker without blocking the Smithay/calloop dispatcher.
     /// No callback, buffer.release(), or frame counter is issued before the
     /// worker has read the genuine KMS ACK from the VM Rust DRM process.
@@ -231,6 +262,9 @@ impl BridgeState {
         if self.drag_redraw_mode && pending.ordinal==4 {
             self.drag_frame_presented=true;
         }
+        if self.close_redraw_mode && pending.ordinal==5 {
+            self.close_frame_presented=true;
+        }
         println!("MELANIA_NATIVE_LIVE_KMS_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_SCHEDULED_FRAME_ACK={}",pending.ordinal);
         println!("MELANIA_NATIVE_ASYNC_FRAME_COMPLETED={}",pending.ordinal);
@@ -248,10 +282,16 @@ impl BridgeState {
             }
             buffer.release();
         } else {
-            if pending.ordinal!=4 || !self.drag_redraw_mode {
-                return Err("unexpected compositor-only KMS frame".into());
+            match pending.ordinal {
+                4 if self.drag_redraw_mode=>
+                    println!("MELANIA_NATIVE_DRAG_FRAME_ACKED=4"),
+                5 if self.close_redraw_mode=>
+                    println!("MELANIA_NATIVE_CLOSE_FRAME_ACKED=5"),
+                _=>return Err("unexpected compositor-only KMS frame".into()),
             }
-            println!("MELANIA_NATIVE_DRAG_FRAME_ACKED=4");
+        }
+        if self.close_redraw_mode && pending.ordinal==4 {
+            self.submit_close_frame()?;
         }
         std::io::stdout().flush()?;
         Ok(())
@@ -468,7 +508,16 @@ impl XdgShellHandler for BridgeState {
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             // The retained pixel copy and stable slot belong to this client.
             // Never leave a closed window occupying the limited QEMU scene.
-            self.multi_scene.remove(key);
+            if self.multi_scene.remove(key) && self.close_redraw_mode &&
+               self.multi_scene.window_count()==1 && self.pixel_frame_count>=3 {
+                // Defer the redraw until the outstanding fourth KMS frame
+                // receives its ACK. The scheduler coalesces this damage.
+                if !self.render_scheduler.damage() {
+                    eprintln!("QEMU native close damage ignored on paused seat");
+                } else {
+                    println!("MELANIA_NATIVE_CLOSE_DAMAGE_QUEUED=true");
+                }
+            }
             if self.window_interaction.active_key()==Some(key) {
                 self.window_interaction.cancel();
             }
@@ -705,7 +754,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),pixel_ready:false,
         pixel_frame_count:0,
-        pixel_frame_target:if std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
+        pixel_frame_target:if std::env::var("MELANIA_NATIVE_CLOSE_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM") {5} else if std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
             .as_deref()==Ok("YES_QEMU_VM") {4} else if std::env::var("MELANIA_NATIVE_LIVE_STREAM")
             .as_deref()==Ok("YES_QEMU_VM") {3} else if std::env::var("MELANIA_NATIVE_CLIENT_UPDATES")
             .as_deref()==Ok("YES_QEMU_VM") {2} else {1},
@@ -721,6 +771,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         drag_redraw_mode:std::env::var("MELANIA_NATIVE_DRAG_REDRAW")
             .as_deref()==Ok("YES_QEMU_VM"),
+        close_redraw_mode:std::env::var("MELANIA_NATIVE_CLOSE_REDRAW")
+            .as_deref()==Ok("YES_QEMU_VM"),close_frame_presented:false,
         presented_layout_generation:0,
         drag_frame_presented:false,two_window_frame_presented:false,
         async_stream:None,async_pending:None,
@@ -775,7 +827,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     if state.multi_window_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
-        state.pixel_frame_target!=if state.drag_redraw_mode {4} else {3}) {
+        state.pixel_frame_target!=if state.close_redraw_mode {5} else if state.drag_redraw_mode {4} else {3}) {
         return Err("two real windows require bounded QEMU streaming and callbacks".into());
     }
     if state.async_kms_mode && !state.multi_window_mode {
@@ -784,6 +836,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if state.drag_redraw_mode &&
        (!state.multi_window_mode || !state.async_kms_mode) {
         return Err("native layout redraw only supported with QEMU async two-window mode".into());
+    }
+    if state.close_redraw_mode &&
+       (!state.drag_redraw_mode || !state.async_kms_mode || !state.live_stream) {
+        return Err("close redraw needs QEMU two-window async KMS drag mode".into());
     }
     let frame_listener=if live_stream {
         let path="/run/melania-native-qemu/frame-stream.sock";
@@ -803,7 +859,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
     let deadline=Instant::now()+Duration::from_secs(
-        if state.drag_redraw_mode {45} else {27}
+        if state.close_redraw_mode {55} else if state.drag_redraw_mode {45} else {27}
     );
     let mut both_shell_roles_seen_at=None;
     let mut pixel_ready_since=None;
@@ -849,10 +905,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 if state.drag_redraw_mode {
                     // Destruction dirties the next scene, but cannot undo the
                     // fourth frame which KMS already acknowledged.
-                    if state.pixel_frame_count!=4 || !state.drag_frame_presented {
+                    if state.pixel_frame_count<4 || !state.drag_frame_presented {
                         return Err("QEMU drag frame not acknowledged by KMS".into());
                     }
                     println!("MELANIA_NATIVE_DRAG_FRAME_VISIBLE=true");
+                }
+                if state.close_redraw_mode {
+                    if state.pixel_frame_count!=5 || !state.close_frame_presented {
+                        return Err("QEMU close redraw not acknowledged by KMS".into());
+                    }
+                    println!("MELANIA_NATIVE_CLOSE_FRAME_VISIBLE=true");
                 }
                 if state.live_stream {
                     println!("MELANIA_NATIVE_KMS_STREAM_THREE_FRAMES=true");
