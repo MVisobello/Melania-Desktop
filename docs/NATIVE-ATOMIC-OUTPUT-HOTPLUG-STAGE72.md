@@ -1,0 +1,1 @@
+Stage72 implements all-or-nothing topology replacement for monitor hotplug. Duplicate connector IDs, overlapping displays and invalid rectangles reject the entire new topology without disturbing pointer routing. Identical reordered outputs do not falsely invalidate a frame. Pure CPU policy; no DRM modeset, input forwarding or login.

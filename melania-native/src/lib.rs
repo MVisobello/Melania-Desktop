@@ -180,3 +180,4 @@ mod tests {
 }
 pub mod output_pointer;
 pub mod output_scale;
+pub mod output_hotplug;
