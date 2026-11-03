@@ -195,6 +195,13 @@ impl DynamicWindowScene {
         self.windows.iter().find(|w|w.key==key).map(|w|(w.x,w.y))
     }
 
+    /// Window geometry is taken from the currently retained client pixels,
+    /// never from Stage48's hard-coded 360x224 test window dimensions.
+    pub fn geometry(&self,key:u64)->Option<(i32,i32,usize,usize)> {
+        self.windows.iter().find(|w|w.key==key)
+            .map(|w|(w.x,w.y,w.image.width,w.image.height))
+    }
+
     pub fn hit_test(&self,x:f64,y:f64)->Option<u64> {
         if !x.is_finite() || !y.is_finite() || x<0.0 || y<0.0 ||
            x>=self.width as f64 || y>=self.height as f64 {return None;}
@@ -297,6 +304,23 @@ mod tests {
         assert!(s.generation()>generation);
         assert_eq!(s.composite().unwrap().len(),16*12*4);
         assert_eq!(px(&s.composite().unwrap(),16,15,11),[1,2,3]);
+    }
+
+    #[test]
+    fn pointer_geometry_uses_updated_owned_client_size() {
+        let mut s=DynamicWindowScene::new(1280,800,[0,0,0,0]).unwrap();
+        s.upsert(1,160,120,solid(400,240,[30,60,90,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(s.geometry(1),Some((160,120,400,240)));
+        assert_eq!(s.hit_test(520.0,330.0),Some(1));
+        s.upsert(1,160,120,solid(320,192,[45,70,100,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(s.geometry(1),Some((160,120,320,192)));
+        assert_eq!(s.hit_test(520.0,330.0),None);
+        s.move_to(1,240,230).unwrap();
+        assert_eq!(s.geometry(1),Some((240,230,320,192)));
+        assert_eq!(s.hit_test(270.0,250.0),Some(1));
+        assert!(!s.remove(2));
+        assert!(s.remove(1));
+        assert_eq!(s.geometry(1),None);
     }
 
     #[test]
