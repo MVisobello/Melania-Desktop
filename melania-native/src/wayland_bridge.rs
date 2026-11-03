@@ -101,6 +101,10 @@ struct BridgeState {
     // window scene and its verified KMS experiments remain unchanged.
     dynamic_window_mode:bool,
     dynamic_scene:DynamicWindowScene,
+    // Stage62 only reuses pixels from the last verified CRTC ACK;
+    // an in-flight framebuffer is never used as a partial-paint base.
+    dynamic_confirmed_frame:Option<Vec<u8>>,
+    dynamic_submitted_frame:Option<Vec<u8>>,
     // Explicit, VM-only xdg_toplevel configure/ack resize protocol.
     // Unrelated nested Wayland applications use their existing policy.
     dynamic_xdg_resize_mode:bool,
@@ -186,7 +190,13 @@ impl BridgeState {
             return Err("continuous KMS scene changed during planning".into());
         }
         let composed=if self.dynamic_window_mode {
-            self.dynamic_scene.composite().map_err(|_|"dynamic scene failed")
+            if let Some(previous)=self.dynamic_confirmed_frame.as_ref() {
+                let mut next=previous.clone();
+                self.dynamic_scene.composite_damaged_into(&mut next)
+                    .map(|_|next).map_err(|_|"dynamic partial composition failed")
+            } else {
+                self.dynamic_scene.composite().map_err(|_|"dynamic scene failed")
+            }
         } else {
             self.multi_scene.composite().map_err(|_|"fixed scene failed")
         };
@@ -201,10 +211,14 @@ impl BridgeState {
             self.continuous_redraw.failed(planned);
             return Err("continuous QEMU KMS transport unavailable".into());
         };
+        // The submitted image is retained separately and only becomes a
+        // valid partial-paint baseline after a verified real DRM/KMS ACK.
+        let candidate=if self.dynamic_window_mode {Some(pixels.clone())}else{None};
         if worker.submit(ContinuousKmsJob{planned,pixels}).is_err() {
             self.continuous_redraw.failed(planned);
             return Err("continuous QEMU KMS worker rejected frame".into());
         }
+        self.dynamic_submitted_frame=candidate;
         self.continuous_inflight=Some((
             planned,self.continuous_client_ledger.take_for_presentation()
         ));
@@ -225,16 +239,23 @@ impl BridgeState {
         let (planned,clients)=self.continuous_inflight.take()
             .ok_or("continuous KMS reply with no pending frame")?;
         if reply.planned!=planned {
+            self.dynamic_submitted_frame=None;
             self.continuous_redraw.failed(planned);
             return Err("continuous QEMU KMS ACK ticket mismatch".into());
         }
         if let Err(error)=reply.status {
+            self.dynamic_submitted_frame=None;
             self.continuous_redraw.failed(planned);
             return Err(format!("continuous KMS presentation rejected: {error}").into());
         }
         // The DRM receiver verifies the actual CRTC FB_ID before MLA1.
         if !self.continuous_redraw.presented(planned) {
+            self.dynamic_submitted_frame=None;
+            self.dynamic_confirmed_frame=None;
             return Err("continuous KMS stale ACK after seat/output transition".into());
+        }
+        if self.dynamic_window_mode {
+            self.dynamic_confirmed_frame=self.dynamic_submitted_frame.take();
         }
         // Stage59: a damage snapshot is retired only after the real KMS
         // CRTC FB_ID receiver verified this exact frame. A newer client
@@ -1317,6 +1338,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         dynamic_scene:DynamicWindowScene::new(1280,800,[58,33,27,0])
             .expect("bounded disposable QEMU output"),
+        dynamic_confirmed_frame:None,
+        dynamic_submitted_frame:None,
         dynamic_xdg_resize_mode:std::env::var("MELANIA_NATIVE_XDG_RESIZE")
             .as_deref()==Ok("YES_QEMU_VM"),
         dynamic_pointer_proof_mode:std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
