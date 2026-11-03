@@ -523,6 +523,7 @@ mod tests {
         s.upsert_in_layer(1,0,0,Layer::Top,
             solid(30,6,[80,90,100,0],DynamicAlpha::Opaque)).unwrap();
         s.upsert(2,0,0,solid(30,20,[30,40,50,0],DynamicAlpha::Opaque)).unwrap();
+        let previous_presented=s.composite().unwrap();
         let acknowledged=s.generation();
         assert!(s.confirm_presented_damage(acknowledged));
         assert!(s.damage_regions().is_clean());
@@ -532,7 +533,7 @@ mod tests {
         assert!(!s.confirm_presented_damage(acknowledged));
         assert_eq!(px(&s.composite().unwrap(),30,4,4),[30,40,50]);
         assert_eq!(s.hit_test(4.0,4.0),Some(2));
-        let mut candidate=vec![0u8;30*20*4];
+        let mut candidate=previous_presented;
         s.composite_damaged_into(&mut candidate).unwrap();
         assert_eq!(candidate,s.composite().unwrap());
         assert!(s.confirm_presented_damage(s.generation()));
