@@ -276,7 +276,7 @@ fn main()->Result<(),Box<dyn Error>> {
         connection.flush()?;
         println!("MELANIA_NATIVE_CLIENT_FIRST_WINDOW_DESTROYED=true");
         std::io::stdout().flush()?;
-        for _ in 0..70 {
+        for _roundtrip in 0..70 {
             queue.roundtrip(&mut state)?;
             thread::sleep(Duration::from_millis(200));
         }
