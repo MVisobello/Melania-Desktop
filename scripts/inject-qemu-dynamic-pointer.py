@@ -63,7 +63,9 @@ def main() -> int:
     args = parser.parse_args()
     until = time.monotonic() + args.timeout
     # The resized B is now 220x180 at (650,190), not the old 360x224.
-    wait_marker(args.serial, "MELANIA_RUST_CONTINUOUS_FRAME_ACKED=12 ", until)
+    # Earlier stages in the SAME guest also ACK frame12; this unique
+    # marker is emitted only AFTER the dynamic scene reached real KMS ACK12.
+    wait_marker(args.serial, "MELANIA_NATIVE_DYNAMIC_POINTER_READY_AFTER_KMS12=true", until)
     tablet(args.qmp, 760, 200)
     time.sleep(.12)
     tablet(args.qmp, 760, 200, "press")
