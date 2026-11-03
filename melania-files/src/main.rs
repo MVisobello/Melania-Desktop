@@ -2713,8 +2713,9 @@ fn import_dragged_files_tab(
     true
 }
 
-/// GtkDragSource emits NoTarget when a tab is released on the desktop, but
-/// UserCancelled (Escape) and Error MUST NOT create a window.
+/// GTK may classify a desktop release as NoTarget or (on Wayland) Error.
+/// Escape is always ignored, and an Error is accepted only when the pointer
+/// is outside every surface of the Files process.
 fn detach_dragged_files_tab(token: &str,reason: gdk::DragCancelReason,
                               outside_app:bool) -> bool {
     if !detach_files_tab_on_cancel(reason,outside_app) {
