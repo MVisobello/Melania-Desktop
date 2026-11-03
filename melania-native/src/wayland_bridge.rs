@@ -101,6 +101,10 @@ struct BridgeState {
     // window scene and its verified KMS experiments remain unchanged.
     dynamic_window_mode:bool,
     dynamic_scene:DynamicWindowScene,
+    // Explicit, VM-only xdg_toplevel configure/ack resize protocol.
+    // Unrelated nested Wayland applications use their existing policy.
+    dynamic_xdg_resize_mode:bool,
+    dynamic_toplevels:Vec<ToplevelSurface>,
     window_interaction:WindowInteraction,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
@@ -232,6 +236,24 @@ impl BridgeState {
         }
         self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
         self.presented_layout_generation=planned.generation;
+        if self.dynamic_xdg_resize_mode && self.continuous_frame_count==6 {
+            // Before the next client commits, issue REAL xdg_toplevel
+            // configure events. Clients must ack xdg_surface.configure
+            // before attaching the corresponding smaller wl_shm images.
+            if self.dynamic_toplevels.len()!=2 {
+                return Err("xdg resize: expected two configured toplevel roles".into());
+            }
+            for (index,top) in self.dynamic_toplevels.iter().enumerate() {
+                let (width,height)=if index==0 {(320,192)} else {(220,180)};
+                top.with_pending_state(|state| {
+                    state.size=Some((width,height).into());
+                    state.states.set(xdg_toplevel::State::Resizing);
+                });
+                top.send_pending_configure();
+            }
+            println!("MELANIA_NATIVE_DYNAMIC_XDG_RESIZE_CONFIGURES_SENT=true");
+            let _=std::io::stdout().flush();
+        }
         // Keep the proof at the verified FB_ID ACK, since the clients may
         // destroy their xdg_toplevels after receiving frame.done.
         let two_visible=if self.dynamic_window_mode {
@@ -894,6 +916,11 @@ impl XdgShellHandler for BridgeState {
     fn xdg_shell_state(&mut self)->&mut XdgShellState {&mut self.xdg_shell}
     fn new_toplevel(&mut self,top:ToplevelSurface) {
         self.xdg_toplevel_count=self.xdg_toplevel_count.saturating_add(1);
+        if self.dynamic_xdg_resize_mode {
+            // Preserve original role order for A/B even before either has
+            // attached pixels. The Stage54 QEMU client labels them explicitly.
+            self.dynamic_toplevels.push(top.clone());
+        }
         top.send_configure();
         println!("MELANIA_NATIVE_XDG_TOPLEVEL_CONFIGURE_SENT=true");
     }
@@ -908,6 +935,9 @@ impl XdgShellHandler for BridgeState {
     fn minimize_request(&mut self,_:ToplevelSurface){}
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
+        if self.dynamic_xdg_resize_mode {
+            self.dynamic_toplevels.retain(|existing|existing.wl_surface()!=&surface);
+        }
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             // The retained pixel copy and stable slot belong to this client.
             // Never leave a closed window occupying the limited QEMU scene.
@@ -1217,6 +1247,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         dynamic_scene:DynamicWindowScene::new(1280,800,[58,33,27,0])
             .expect("bounded disposable QEMU output"),
+        dynamic_xdg_resize_mode:std::env::var("MELANIA_NATIVE_XDG_RESIZE")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        dynamic_toplevels:Vec::new(),
         window_interaction:WindowInteraction::default(),
         known_window_surfaces:WindowSlots::default(),
         stream:None,
@@ -1290,6 +1323,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.continuous_kms_mode || !state.multi_window_mode ||
         state.continuous_reopen_mode || !continuous_two_windows) {
         return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
+    }
+    if state.dynamic_xdg_resize_mode && !state.dynamic_window_mode {
+        return Err("xdg resize configure is only permitted in disposable QEMU dynamic mode".into());
     }
     if state.multi_window_mode && !state.continuous_kms_mode &&
        (!live_stream || !state.frame_callbacks_probe ||

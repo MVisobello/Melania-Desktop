@@ -780,6 +780,7 @@ MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_XDG_RESIZE=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 83s \
   "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
   > "$dynamic_server_log" 2>&1 &
@@ -816,6 +817,7 @@ if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$dynamic_kms_log"; t
 fi
 if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
      MELANIA_QEMU_CONTINUOUS_DYNAMIC_CLIENT=YES_QEMU_VM \
+     MELANIA_QEMU_XDG_RESIZE_CLIENT=YES_QEMU_VM \
      WAYLAND_DISPLAY="$dynamic_socket" \
   timeout --signal=TERM --kill-after=3s 68s \
   "$two_continuous_client" > "$dynamic_client_log" 2>&1; then
@@ -843,6 +845,12 @@ grep -q '^MELANIA_NATIVE_DYNAMIC_TWO_SIZES_12_KMS_FRAMES_PASS=true' "$dynamic_cl
   fatal 'dynamic_client_real_callbacks_missing'
 grep -q '^MELANIA_NATIVE_DYNAMIC_PREMULTIPLIED_ARGB_CLIENT_PASS=true' "$dynamic_client_log" ||
   fatal 'dynamic_real_premultiplied_Wayland_ARGB_missing'
+grep -q '^MELANIA_NATIVE_DYNAMIC_XDG_RESIZE_CONFIGURES_SENT=true' "$dynamic_server_log" ||
+  fatal 'compositor_real_xdg_resize_configures_missing'
+grep -q '^MELANIA_NATIVE_CLIENT_XDG_RESIZE_ACK_A=true' "$dynamic_client_log" ||
+  fatal 'client_A_real_xdg_resize_ack_missing'
+grep -q '^MELANIA_NATIVE_CLIENT_XDG_RESIZE_ACK_B=true' "$dynamic_client_log" ||
+  fatal 'client_B_real_xdg_resize_ack_missing'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$dynamic_server_log" ||
     fatal "dynamic_KMS_scheduler_ACK_$index_missing"
