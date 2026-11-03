@@ -2625,15 +2625,17 @@ impl ClosedFilesTab {
         }
     }
 }
+fn push_closed_file_tab(history:&mut Vec<ClosedFilesTab>,location:ClosedFilesTab) {
+    if history.len()==MAX_RECENT_FILES_TABS {history.remove(0);}
+    history.push(location);
+}
 fn remember_closed_files_tab(
     recently_closed: &Rc<RefCell<Vec<ClosedFilesTab>>>,
     title: &Label,
 ) {
     let Some(location) = title.tooltip_text()
         .and_then(|text| ClosedFilesTab::from_location(&text)) else{return;};
-    let mut recent = recently_closed.borrow_mut();
-    if recent.len() == MAX_RECENT_FILES_TABS { recent.remove(0); }
-    recent.push(location);
+    push_closed_file_tab(&mut recently_closed.borrow_mut(),location);
 }
 
 /// A closed tab is restored by opening its URI again. No GTK resources or
@@ -3226,6 +3228,9 @@ fn create_files_window(app: &Application, explicitly_requested: Option<String>) 
     window.add_controller(keys);
     window.set_child(Some(&frame));
     window.present();
+    if std::env::var_os("MELANIA_SMOKE_FILES_TABS").is_some() {
+        eprintln!("MELANIA_FILES_WINDOW_CREATED count={}",app.windows().len());
+    }
     if files_profile_enabled() {
         eprintln!("MELANIA_FILES_FIRST_WINDOW_MS={}",startup_clock.elapsed().as_millis());
     }
@@ -3347,6 +3352,33 @@ mod software_preview_performance_tests {
     fn bound_thumbnail_decoding_on_software_renderers() {
         assert_eq!(thumbnail_budget_for(Some("cairo"),false),16);
         assert_eq!(thumbnail_budget_for(None,true),16);
+    }
+}
+
+#[cfg(test)]
+mod nautilus_tab_restore_tests {
+    use super::{ClosedFilesTab,push_closed_file_tab,MAX_RECENT_FILES_TABS};
+    use std::path::PathBuf;
+
+    #[test]
+    fn remembers_local_and_remote_locations_without_any_gtk_resources() {
+        assert_eq!(
+            ClosedFilesTab::from_location("/tmp/melania/documents"),
+            Some(ClosedFilesTab::Local(PathBuf::from("/tmp/melania/documents"))));
+        assert_eq!(
+            ClosedFilesTab::from_location("sftp://host/share"),
+            Some(ClosedFilesTab::Remote("sftp://host/share".to_owned())));
+        assert!(ClosedFilesTab::from_location("../relative").is_none());
+    }
+    #[test]
+    fn only_the_last_sixteen_closed_tabs_are_kept_in_lifo_order() {
+        let mut history=Vec::new();
+        for i in 0..(MAX_RECENT_FILES_TABS+3) {
+            push_closed_file_tab(&mut history,ClosedFilesTab::Local(PathBuf::from(format!("/tmp/{i}"))));
+        }
+        assert_eq!(history.len(),MAX_RECENT_FILES_TABS);
+        assert_eq!(history.first(),Some(&ClosedFilesTab::Local(PathBuf::from("/tmp/3"))));
+        assert_eq!(history.pop(),Some(ClosedFilesTab::Local(PathBuf::from("/tmp/18"))));
     }
 }
 
