@@ -9,6 +9,7 @@ pub mod scene;
 pub mod multi_window_scene;
 pub mod dynamic_window_scene;
 pub mod damage_regions;
+pub mod region_compositor;
 pub mod window_slots;
 pub mod window_interaction;
 pub mod async_kms_stream;
