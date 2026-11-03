@@ -1,0 +1,1 @@
+Stage76 adds a bounded watchdog accounting API for asynchronous DRM frames. It recognizes stale/wrong tickets, rejects late ACKs, resets on seat/output epochs and handles clock overflow. It does not produce DRM acknowledgements or change the proven existing KMS flow; actual integration and timeout policy remain future work.

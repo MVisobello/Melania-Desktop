@@ -184,3 +184,4 @@ pub mod output_hotplug;
 pub mod session_prerequisites;
 pub mod vt_handoff;
 pub mod session_lock;
+pub mod kms_watchdog;
