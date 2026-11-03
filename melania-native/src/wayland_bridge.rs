@@ -1584,8 +1584,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         state.continuous_reopen_mode || !continuous_two_windows) {
         return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
     }
-    if state.managed_xdg_mode && !state.dynamic_window_mode {
-        return Err("managed xdg requires isolated QEMU dynamic Wayland/KMS mode".into());
+    if state.managed_xdg_mode && !state.dynamic_window_mode &&
+       std::env::var("MELANIA_NATIVE_SHELL_PROBE").as_deref()!=Ok("YES_QEMU_VM") {
+        return Err("managed xdg requires QEMU dynamic KMS or role-only shell probe".into());
     }
     if state.dynamic_xdg_resize_mode && !state.dynamic_window_mode {
         return Err("xdg resize configure is only permitted in disposable QEMU dynamic mode".into());

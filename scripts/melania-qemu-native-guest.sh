@@ -152,7 +152,9 @@ report 'MELANIA_QEMU_NATIVE_WAYLAND_RENDER_READY=false'
 shell_client=/mnt/melania-native/melania-shell-client
 [[ -x "$shell_client" ]] || fatal 'real_xdg_layer_protocol_client_missing'
 shell_log="$(mktemp -t melania-wayland-shell-XXXXXX)"
+shell_client_log="$(mktemp -t melania-wayland-role-client-XXXXXX)"
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
 MELANIA_NATIVE_SHELL_PROBE=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 32s \
   "$binary" --experimental-wayland-seat < /dev/tty1 > "$shell_log" 2>&1 &
@@ -170,9 +172,9 @@ if [[ -z "$shell_socket" ]]; then
   wait "$shell_pid" 2>/dev/null || true
   fatal 'native_xdg_layer_socket_unavailable'
 fi
-if ! WAYLAND_DISPLAY="$shell_socket" \
-  timeout --signal=TERM --kill-after=3s 19s "$shell_client"; then
-  cat "$shell_log"
+if ! MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM WAYLAND_DISPLAY="$shell_socket" \
+  timeout --signal=TERM --kill-after=3s 19s "$shell_client" > "$shell_client_log" 2>&1; then
+  cat "$shell_client_log" "$shell_log"
   kill "$shell_pid" 2>/dev/null || true
   wait "$shell_pid" 2>/dev/null || true
   fatal 'real_xdg_layer_configure_ack_failed'
@@ -181,12 +183,22 @@ if ! wait "$shell_pid"; then
   cat "$shell_log"
   fatal 'native_wayland_shell_server_failed'
 fi
-cat "$shell_log"
+cat "$shell_client_log" "$shell_log"
+grep -q '^MELANIA_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true' "$shell_client_log" ||
+  fatal 'real_xdg_maximize_fullscreen_client_ACK_missing'
+for role_event in \
+  'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=true' \
+  'MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED=false' \
+  'MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN=true' \
+  'MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN=false'; do
+  grep -q "^$role_event$" "$shell_log" || fatal "real_xdg_role_server_event_missing:$role_event"
+done
 grep -q '^MELANIA_NATIVE_SHELL_PROTOCOLS_READY=true' "$shell_log" ||
   fatal 'native_xdg_layer_shell_server_not_configured'
 grep -q '^MELANIA_NATIVE_SHELL_RENDERED=false' "$shell_log" ||
   fatal 'native_wayland_shell_claimed_graphical_rendering'
-rm -f "$shell_log"
+rm -f "$shell_log" "$shell_client_log"
+report 'MELANIA_QEMU_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true'
 report 'MELANIA_QEMU_NATIVE_SHELL_PROBE_PASS=true'
 
 # Stage 26: The Rust native Smithay server accepts an actual Wayland xdg
