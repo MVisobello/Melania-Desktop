@@ -13,6 +13,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 RUST=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
 FRAME=(ROOT/"melania-native/src/native_client_frame.rs").read_text()
+OWNED=(ROOT/"melania-native/src/owned_shm.rs").read_text()
 CLIENT=(ROOT/"melania-native/src/bin/qemu-client-window.rs").read_text()
 C=(ROOT/"scripts/melania-qemu-client-window-scanout.c").read_text()
 GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
@@ -67,7 +68,11 @@ class ClientPixelStage26(unittest.TestCase):
                        "delegate_shm!(BridgeState)",
                        "MELANIA_NATIVE_CLIENT_FRAME_COMPOSED=true"):
             self.assertIn(marker,RUST)
-        self.assertIn("std::ptr::read_volatile",FRAME)
+        # The fixed QEMU path now delegates to the generic checked importer.
+        # The volatile reads remain inside Smithay's live SHM pool callback.
+        self.assertIn("melania_native::owned_shm::copy_bounded_client_shm",FRAME)
+        self.assertIn("std::ptr::read_volatile",OWNED)
+        self.assertIn("ptr.is_null() || end>pool_len",OWNED)
         self.assertIn("format:wl_shm::Format::Xrgb8888",FRAME)
         self.assertIn("FRAME_PATH",FRAME)
         self.assertNotIn("245,108,34",FRAME.split("#[cfg(test)]")[0])

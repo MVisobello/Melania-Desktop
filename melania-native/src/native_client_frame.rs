@@ -19,6 +19,9 @@ pub const FRAME_PATH:&str="/run/melania-native-qemu/client-frame.bgra";
 pub fn copy_client_shm(ptr:*const u8,len:usize,meta:BufferData)
     ->Result<Vec<u8>,String>
 {
+    // The proven legacy QEMU scenario deliberately retains its fixed client
+    // dimensions and opaque format, while sharing the NEW hardened importer
+    // with the future variable-geometry native scene.
     if meta.format!=wl_shm::Format::Xrgb8888 {
         return Err("only XRGB8888 wl_shm buffers are accepted by the QEMU probe".into());
     }
@@ -28,34 +31,12 @@ pub fn copy_client_shm(ptr:*const u8,len:usize,meta:BufferData)
     {
         return Err("unexpected client surface dimensions, stride or offset".into());
     }
-    let start=meta.offset as usize;
-    let stride=meta.stride as usize;
-    let row_size=WIN_W*4;
-    let last=start.checked_add((WIN_H-1)*stride)
-        .and_then(|p|p.checked_add(row_size))
-        .ok_or("client surface address overflow")?;
-    if last>len || ptr.is_null() {
-        return Err("wl_shm pool does not contain requested client pixels".into());
+    let owned=melania_native::owned_shm::copy_bounded_client_shm(ptr,len,meta)
+        .map_err(|error|format!("invalid client wl_shm backing storage: {error:?}"))?;
+    if owned.width!=WIN_W || owned.height!=WIN_H {
+        return Err("QEMU client dimensions changed after validation".into());
     }
-    // Copy untrusted wl_shm bytes into owned memory while Smithay holds the
-    // mapping. Never retain a borrowed client pointer across a redraw.
-    let mut client=vec![0u8;WIN_W*WIN_H*4];
-    for y in 0..WIN_H {
-        let in_row=start+y*stride;
-        let out_row=y*WIN_W*4;
-        for x in 0..WIN_W {
-            let p=in_row+x*4;
-            let q=out_row+x*4;
-            // SAFETY: all reads are inside the validated wl_shm range, and
-            // the mapping remains valid for the entire callback. Volatile
-            // reads avoid assuming the mutable client buffer is immutable.
-            for c in 0..3 {
-                client[q+c]=unsafe {std::ptr::read_volatile(ptr.add(p+c))};
-            }
-            client[q+3]=0;
-        }
-    }
-    Ok(client)
+    Ok(owned.data)
 }
 
 pub fn compose_from_shm(ptr:*const u8,len:usize,meta:BufferData)

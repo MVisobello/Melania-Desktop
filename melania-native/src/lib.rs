@@ -15,6 +15,7 @@ pub mod render_scheduler;
 pub mod continuous_redraw;
 pub mod continuous_kms_stream;
 pub mod client_commit_ledger;
+pub mod owned_shm;
 pub mod planes;
 pub mod frame_gate;
 pub mod kms_test;
