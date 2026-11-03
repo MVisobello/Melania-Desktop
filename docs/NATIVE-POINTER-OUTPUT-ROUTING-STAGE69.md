@@ -1,0 +1,1 @@
+Stage69 adds an independent, bounded output-pointer routing state machine. Physical coordinates are mapped to monitor-local positions, while moving across monitor boundaries or unplugging a monitor produces a deterministic focus transition. No fake input events are forwarded to the host.
