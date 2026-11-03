@@ -76,6 +76,10 @@ struct BridgeState {
     continuous_inflight:Option<(PlannedSceneFrame,Option<(WlSurface,wl_buffer::WlBuffer)>)>,
     continuous_latest_client:Option<(WlSurface,wl_buffer::WlBuffer)>,
     continuous_frame_count:u64,
+    continuous_frame_target:u64,
+    continuous_reopen_mode:bool,
+    continuous_close_frame_presented:bool,
+    continuous_reopen_frame_presented:bool,
     continuous_two_window_presented:bool,
     multi_window_mode:bool,
     async_kms_mode:bool,
@@ -208,10 +212,31 @@ impl BridgeState {
         self.presented_layout_generation=planned.generation;
         // Keep the proof at the verified FB_ID ACK, since the clients may
         // destroy their xdg_toplevels after receiving frame.done.
-        if self.multi_window_mode && self.continuous_frame_count==12 &&
-           self.multi_scene.window_count()==2 &&
+        if self.multi_window_mode && self.multi_scene.window_count()==2 &&
            self.known_window_surfaces.live_count()==2 {
-            self.continuous_two_window_presented=true;
+            if self.continuous_frame_count==12 {
+                self.continuous_two_window_presented=true;
+            }
+            if self.continuous_reopen_mode && self.continuous_frame_count==14 {
+                self.continuous_reopen_frame_presented=true;
+            }
+        }
+        if self.continuous_reopen_mode && self.continuous_frame_count==13 {
+            if self.multi_scene.window_count()!=1 ||
+               self.known_window_surfaces.get(1).is_some() {
+                return Err("continuous close KMS ACK did not remove slot one".into());
+            }
+            // The surviving B client explicitly requested a frame callback
+            // before A was destroyed. Never complete it before KMS FB_ID ACK.
+            let survivor=self.known_window_surfaces.get(2).cloned()
+                .ok_or("continuous close removed the surviving client")?;
+            let delivered=complete_presented_frame(&survivor,13*16);
+            if delivered!=1 {
+                return Err("continuous close did not complete survivor callback".into());
+            }
+            self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
+            self.continuous_close_frame_presented=true;
+            println!("MELANIA_NATIVE_CONTINUOUS_CLOSE_FRAME13_CALLBACK=true");
         }
         if let Some((surface,buffer))=client {
             if self.multi_scene.layout_generation()==planned.generation {
@@ -805,6 +830,14 @@ impl XdgShellHandler for BridgeState {
             // Never leave a closed window occupying the limited QEMU scene.
             let removed=self.multi_scene.remove(key);
             if removed { self.note_scene_change(); }
+            if removed && self.continuous_kms_mode &&
+               self.continuous_frame_count<self.continuous_frame_target {
+                // A destroyed xdg surface changes retained pixels even if
+                // no surviving client submits a new wl_shm buffer.
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("continuous close KMS frame not scheduled: {error}");
+                }
+            }
             if removed && self.close_redraw_mode &&
                self.multi_scene.window_count()==1 && self.pixel_frame_count>=3 {
                 // Defer the redraw until the outstanding fourth KMS frame
@@ -1071,6 +1104,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_worker:None,continuous_inflight:None,
         continuous_latest_client:None,continuous_frame_count:0,
+        continuous_frame_target:if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
+            .as_deref()==Ok("YES_QEMU_VM") {14} else {12},
+        continuous_reopen_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        continuous_close_frame_presented:false,
+        continuous_reopen_frame_presented:false,
         continuous_two_window_presented:false,
         multi_window_mode:std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM"),
@@ -1150,6 +1189,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if state.continuous_kms_mode &&
        (state.multi_window_mode != continuous_two_windows) {
         return Err("continuous QEMU window layout flags must agree".into());
+    }
+    if state.continuous_reopen_mode &&
+       (!state.continuous_kms_mode || !state.multi_window_mode) {
+        return Err("continuous reopen requires two real windows in disposable QEMU".into());
     }
     if state.multi_window_mode && !state.continuous_kms_mode &&
        (!live_stream || !state.frame_callbacks_probe ||
@@ -1234,18 +1277,28 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.poll_continuous_kms()?;
         }
         display.flush_clients()?;
-        if state.continuous_kms_mode && state.continuous_frame_count==12 {
-            if state.frame_callback_count!=12 {
-                return Err("twelve Wayland callbacks not completed after KMS".into());
+        if state.continuous_kms_mode &&
+           state.continuous_frame_count==state.continuous_frame_target {
+            if u64::from(state.frame_callback_count)!=state.continuous_frame_target {
+                return Err("Wayland callbacks not completed after continuous KMS".into());
             }
             if state.multi_window_mode && !state.continuous_two_window_presented {
                 return Err("continuous KMS did not present both retained windows".into());
+            }
+            if state.continuous_reopen_mode &&
+               (!state.continuous_close_frame_presented ||
+                !state.continuous_reopen_frame_presented) {
+                return Err("continuous close and reopen never reached the real CRTC".into());
             }
             // Keep dispatching display.sync for the client after the last
             // callback, rather than shutting down its socket prematurely.
             let since=continuous_ready_since.get_or_insert_with(Instant::now);
             if since.elapsed()>=Duration::from_secs(2) {
-                println!("MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12");
+                println!("MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS={}",
+                         state.continuous_frame_target);
+                if state.continuous_reopen_mode {
+                    println!("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true");
+                }
                 println!("MELANIA_NATIVE_SESSION_READY=false");
                 return Ok(());
             }

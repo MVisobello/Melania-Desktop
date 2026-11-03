@@ -672,6 +672,99 @@ grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$two_kms_log" ||
 rm -f "$two_server_log" "$two_kms_log" "$two_client_log"
 report 'MELANIA_QEMU_NATIVE_CONTINUOUS_TWO_WINDOWS_PASS=true'
 
+# Stage49: true xdg destruction after frame12, compositor-only close frame13,
+# and a different xdg_toplevel in recycled slot1 on frame14. B must survive.
+reopen_server_log="$(mktemp -t melania-continuous-reopen-server-XXXXXX)"
+reopen_kms_log="$(mktemp -t melania-continuous-reopen-kms-XXXXXX)"
+reopen_client_log="$(mktemp -t melania-continuous-reopen-client-XXXXXX)"
+rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_REOPEN=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 85s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$reopen_server_log" 2>&1 &
+reopen_server_pid=$!
+reopen_socket=''
+for attempt in $(seq 1 100); do
+  reopen_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$reopen_server_log" | head -n 1)"
+  [[ -n "$reopen_socket" && -S /run/melania-native-qemu/continuous-frame-stream.sock ]] && break
+  kill -0 "$reopen_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$reopen_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+  cat "$reopen_server_log"
+  fatal 'continuous_reopen_Wayland_bridge_unavailable'
+fi
+# Serial marker is emitted while the virtual CRTC still scans out frames13/14.
+tail -n +1 -f -s 0.05 "$reopen_kms_log" > /dev/ttyS0 &
+reopen_tail_pid=$!
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=14 \
+MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_REOPEN=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 77s \
+  "$continuous_kms" < /dev/tty1 > "$reopen_kms_log" 2>&1 &
+reopen_kms_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$reopen_kms_log" && break
+  kill -0 "$reopen_kms_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$reopen_kms_log"; then
+  cat "$reopen_kms_log" "$reopen_server_log"
+  kill "$reopen_server_pid" "$reopen_kms_pid" 2>/dev/null || true
+  fatal 'continuous_reopen_Rust_KMS_unavailable'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
+     MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT=YES_QEMU_VM \
+     WAYLAND_DISPLAY="$reopen_socket" \
+  timeout --signal=TERM --kill-after=3s 72s \
+  "$two_continuous_client" > "$reopen_client_log" 2>&1; then
+  cat "$reopen_client_log" "$reopen_kms_log" "$reopen_server_log"
+  kill "$reopen_server_pid" "$reopen_kms_pid" 2>/dev/null || true
+  fatal 'continuous_real_close_reopen_client_failed'
+fi
+if ! wait "$reopen_kms_pid"; then
+  cat "$reopen_kms_log" "$reopen_server_log"
+  kill "$reopen_server_pid" 2>/dev/null || true
+  fatal 'continuous_close_reopen_KMS_receiver_failed'
+fi
+if ! wait "$reopen_server_pid"; then
+  cat "$reopen_server_log"
+  fatal 'continuous_close_reopen_Smithay_failed'
+fi
+kill "$reopen_tail_pid" 2>/dev/null || true
+wait "$reopen_tail_pid" 2>/dev/null || true
+cat "$reopen_client_log" "$reopen_kms_log" "$reopen_server_log"
+for index in $(seq 1 14); do
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$reopen_server_log" ||
+    fatal "continuous_reopen_scheduler_$index_not_acked"
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$reopen_kms_log" ||
+    fatal "continuous_reopen_CRTC_$index_not_verified"
+done
+grep -q '^MELANIA_NATIVE_CONTINUOUS_CLOSE_FRAME13_CALLBACK=true' "$reopen_server_log" ||
+  fatal 'continuous_close_KMS_missing_survivor_callback'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_CLOSE_FRAME13_ACKED=true' "$reopen_client_log" ||
+  fatal 'continuous_survivor_did_not_receive_callback'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_REOPEN_FRAME14_ACKED=true' "$reopen_client_log" ||
+  fatal 'continuous_reopened_client_not_acknowledged'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true' "$reopen_server_log" ||
+  fatal 'continuous_Smithay_close_reopen_not_verified'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true' "$reopen_client_log" ||
+  fatal 'continuous_reopened_client_failed'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=14' "$reopen_kms_log" ||
+  fatal 'continuous_KMS_14_frame_sequence_failed'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$reopen_kms_log" ||
+  fatal 'continuous_close_reopen_original_CRTC_not_restored'
+rm -f "$reopen_server_log" "$reopen_kms_log" "$reopen_client_log"
+report 'MELANIA_QEMU_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'

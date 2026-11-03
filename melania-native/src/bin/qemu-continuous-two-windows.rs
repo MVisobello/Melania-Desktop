@@ -152,7 +152,15 @@ fn main()->Result<(),Box<dyn Error>> {
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[blue,green,red,0]);
         }
-        let path=format!("/run/melania-native-qemu/continuous-two-client-{index}.bgra");
+        // The same disposable VM runs Stage48 before Stage49. Use a distinct
+        // source filename in the reopen scenario: create_new must not
+        // overwrite earlier client-owned wl_shm fixtures.
+        let path=if std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
+            .as_deref()==Ok("YES_QEMU_VM") {
+            format!("/run/melania-native-qemu/continuous-reopen-seed-{index}.bgra")
+        } else {
+            format!("/run/melania-native-qemu/continuous-two-client-{index}.bgra")
+        };
         let mut file=OpenOptions::new().create_new(true).read(true).write(true).open(path)?;
         file.write_all(&pixels)?;
         file.sync_all()?;
@@ -184,9 +192,88 @@ fn main()->Result<(),Box<dyn Error>> {
     }
     println!("MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_12_FRAMES_PASS=true");
     std::io::stdout().flush()?;
-    first_top.destroy();
-    first_xdg.destroy();
-    first.destroy();
+    let reopen=std::env::var("MELANIA_QEMU_CONTINUOUS_REOPEN_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if reopen {
+        // A true compositor-only update: B requests a frame callback, but
+        // does NOT attach a new buffer. Destroying A must repaint its old
+        // pixels away while keeping B's last real wl_shm pixels visible.
+        let _survivor_callback=second.frame(&qh,());
+        second.commit();
+        first_top.destroy();
+        first_xdg.destroy();
+        first.destroy();
+        connection.flush()?;
+        let deadline=Instant::now()+Duration::from_secs(14);
+        while state.frame_done_count<13 {
+            queue.roundtrip(&mut state)?;
+            if Instant::now()>=deadline {
+                return Err("KMS close frame 13 never completed survivor callback".into());
+            }
+            thread::sleep(Duration::from_millis(12));
+        }
+        if state.frame_done_count!=13 {
+            return Err("duplicate or premature continuous close frame callback".into());
+        }
+        println!("MELANIA_NATIVE_CONTINUOUS_CLOSE_FRAME13_ACKED=true");
+        std::io::stdout().flush()?;
+
+        // Create a DIFFERENT xdg_toplevel after the old A is gone. Smithay
+        // must recycle stable slot 1 without moving the retained B window.
+        state.xdg_acked=false;
+        let reopened=compositor.create_surface(&qh,());
+        let reopened_xdg=wm.get_xdg_surface(&reopened,&qh,());
+        let reopened_top=reopened_xdg.get_toplevel(&qh,());
+        reopened_top.set_title("Melania QEMU continuous reopened A".into());
+        reopened.commit();
+        for _ in 0..5 {
+            queue.roundtrip(&mut state)?;
+            if state.xdg_acked {break;}
+        }
+        if !state.xdg_acked {
+            return Err("reopened client missing real xdg configure".into());
+        }
+        let mut pixels=vec![0u8;W*H*4];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[160,80,190,0]);
+        }
+        let mut file=OpenOptions::new().create_new(true).read(true).write(true)
+            .open("/run/melania-native-qemu/continuous-reopened-client14.bgra")?;
+        file.write_all(&pixels)?;
+        file.sync_all()?;
+        let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
+        let buffer=pool.create_buffer(
+            0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
+        );
+        state.buffer_released=false;
+        let _reopen_callback=reopened.frame(&qh,());
+        reopened.attach(Some(&buffer),0,0);
+        reopened.damage_buffer(0,0,W as i32,H as i32);
+        reopened.commit();
+        let deadline=Instant::now()+Duration::from_secs(14);
+        while state.frame_done_count<14 || !state.buffer_released {
+            queue.roundtrip(&mut state)?;
+            if Instant::now()>=deadline {
+                return Err("KMS reopen frame 14 never released real wl_shm client".into());
+            }
+            thread::sleep(Duration::from_millis(12));
+        }
+        if state.frame_done_count!=14 {
+            return Err("duplicate or premature continuous reopened frame callback".into());
+        }
+        println!("MELANIA_NATIVE_CONTINUOUS_REOPEN_FRAME14_ACKED=true");
+        println!("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true");
+        std::io::stdout().flush()?;
+        buffer.destroy();
+        pool.destroy();
+        reopened_top.destroy();
+        reopened_xdg.destroy();
+        reopened.destroy();
+    } else {
+        first_top.destroy();
+        first_xdg.destroy();
+        first.destroy();
+    }
     second_top.destroy();
     second_xdg.destroy();
     second.destroy();
