@@ -41,7 +41,7 @@ class NativeDynamicWindowGeometry(unittest.TestCase):
         self.assertIn("PremultipliedAlphaBgra",COMPOSITOR)
         self.assertIn("StraightAlphaBgra",COMPOSITOR)
         self.assertIn("u32::from(color[c]).min(a)",COMPOSITOR)
-        self.assertIn("pixels:Pixels::PremultipliedAlphaBgra",SCENE)
+        self.assertIn("DynamicAlpha::Premultiplied=>Pixels::PremultipliedAlphaBgra",SCENE)
         self.assertIn("blends_wayland_premultiplied_argb_without_double_alpha",COMPOSITOR)
 
     def test_rust_functional_contract_tests_cover_geometry_and_retention(self):
