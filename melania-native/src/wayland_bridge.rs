@@ -730,7 +730,11 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     };
-                    let (x,y)=if key==1 {(160,120)} else {(650,190)};
+                    let Some((x,y))=melania_native::window_placement::default_position(key,1280,800) else {
+                        eprintln!("dynamic QEMU client outside bounded placement policy");
+                        buffer.release();
+                        return;
+                    };
                     if self.dynamic_scene.upsert(key,x,y,pixels).is_err() {
                         eprintln!("dynamic QEMU client image rejected");
                         buffer.release();
