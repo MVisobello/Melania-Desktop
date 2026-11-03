@@ -43,7 +43,7 @@ use smithay::{
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer}},
     },
 };
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
+use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
@@ -73,8 +73,9 @@ struct BridgeState {
     // Opt-in, disposable QEMU continuous renderer; the legacy proof is intact.
     continuous_kms_mode:bool,
     continuous_worker:Option<ContinuousKmsWorker>,
-    continuous_inflight:Option<(PlannedSceneFrame,Option<(WlSurface,wl_buffer::WlBuffer)>)>,
-    continuous_latest_client:Option<(WlSurface,wl_buffer::WlBuffer)>,
+    // Keep one pending wl_shm buffer per real client surface, not globally.
+    continuous_inflight:Option<(PlannedSceneFrame,Vec<(WlSurface,wl_buffer::WlBuffer)>)>,
+    continuous_client_ledger:ClientCommitLedger<WlSurface,wl_buffer::WlBuffer>,
     continuous_frame_count:u64,
     continuous_frame_target:u64,
     continuous_reopen_mode:bool,
@@ -179,7 +180,9 @@ impl BridgeState {
             self.continuous_redraw.failed(planned);
             return Err("continuous QEMU KMS worker rejected frame".into());
         }
-        self.continuous_inflight=Some((planned,self.continuous_latest_client.take()));
+        self.continuous_inflight=Some((
+            planned,self.continuous_client_ledger.take_for_presentation()
+        ));
         println!("MELANIA_NATIVE_CONTINUOUS_FRAME_SUBMITTED={} generation={}",
                  planned.ticket.sequence,planned.generation);
         let _=std::io::stdout().flush();
@@ -194,7 +197,7 @@ impl BridgeState {
             Ok(None)=>return Ok(()),
             Err(error)=>return Err(format!("continuous KMS worker disconnected: {error}").into()),
         };
-        let (planned,client)=self.continuous_inflight.take()
+        let (planned,clients)=self.continuous_inflight.take()
             .ok_or("continuous KMS reply with no pending frame")?;
         if reply.planned!=planned {
             self.continuous_redraw.failed(planned);
@@ -238,15 +241,18 @@ impl BridgeState {
             self.continuous_close_frame_presented=true;
             println!("MELANIA_NATIVE_CONTINUOUS_CLOSE_FRAME13_CALLBACK=true");
         }
-        if let Some((surface,buffer))=client {
-            if self.multi_scene.layout_generation()==planned.generation {
+        // Each surface is independently eligible for a callback. Newer
+        // commits of A must not starve an already presented B.
+        for completed in self.continuous_client_ledger.acknowledged(clients) {
+            let is_live=(1..=MAX_PENDING_CLIENTS as u64)
+                .any(|slot|self.known_window_surfaces.get(slot)==Some(&completed.key));
+            if completed.notify_frame && is_live {
                 let delivered=complete_presented_frame(
-                    &surface,(self.continuous_frame_count as u32).saturating_mul(16)
+                    &completed.key,(self.continuous_frame_count as u32).saturating_mul(16)
                 );
                 self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
             }
-            // Ownership of the copied wl_shm bytes ended after the DRM ACK.
-            buffer.release();
+            completed.resource.release();
         }
         println!("MELANIA_NATIVE_CONTINUOUS_KMS_ACK={} generation={}",
                  self.continuous_frame_count,planned.generation);
@@ -597,10 +603,15 @@ impl CompositorHandler for BridgeState {
                 }
                 // Retain at most one not-yet-submitted client buffer. Its
                 // pixels were copied into the bounded retained scene.
-                if let Some((_,superseded))=self.continuous_latest_client.take() {
-                    superseded.release();
+                match self.continuous_client_ledger.stage(surface.clone(),buffer) {
+                    Ok(Some(superseded))=>superseded.release(),
+                    Ok(None)=>{},
+                    Err((_,rejected))=>{
+                        rejected.release();
+                        eprintln!("continuous Wayland client receipt capacity exceeded");
+                        return;
+                    }
                 }
-                self.continuous_latest_client=Some((surface.clone(),buffer));
                 self.note_scene_change();
                 if let Err(error)=self.submit_continuous_frame() {
                     eprintln!("continuous QEMU KMS scheduling failed: {error}");
@@ -1103,7 +1114,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_kms_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_worker:None,continuous_inflight:None,
-        continuous_latest_client:None,continuous_frame_count:0,
+        continuous_client_ledger:ClientCommitLedger::new(),
+        continuous_frame_count:0,
         continuous_frame_target:if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM") {14} else {12},
         continuous_reopen_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
