@@ -527,3 +527,101 @@ window.melania-theme-dark .files-nav-button { background: #394552; border-color:
 window.melania-theme-dark .files-list-view .files-list-row.files-tile-selected {
   background: #304d6c; border-color: #76afe2;
 }
+
+
+/* Nautilus-style integrated tab rail; classic Melania window buttons stay unchanged. */
+headerbar.files-aero-header { min-height:45px; padding:2px 8px 0; }
+.files-tab-rail { border-spacing:3px; }
+.files-top-tabs { border-spacing:1px; }
+.files-tab-scroll { min-height:38px; background:transparent; }
+.files-tab-scroll > viewport { background:transparent; }
+.files-top-tab {
+  min-width:115px; min-height:37px; padding:0 3px 0 1px; margin:0;
+  border:1px solid transparent; border-bottom:0;
+  border-radius:10px 10px 0 0; background:transparent; box-shadow:none; color:#31516e;
+}
+.files-top-tab:hover:not(.files-tab-active) {
+  background:rgba(255,255,255,0.38); border-color:rgba(125,156,186,0.20);
+}
+.files-top-tab.files-tab-active {
+  background:#f7fbff; border-color:rgba(147,176,206,0.72);
+  border-bottom:0; box-shadow:none; color:#173c5c;
+}
+.files-top-tab-select,.files-top-tab-select:hover {
+  min-height:34px; min-width:75px; padding:2px 6px 2px 9px;
+  border:0; border-radius:8px 8px 0 0; box-shadow:none;
+  background:transparent; color:inherit; font-weight:500;
+}
+.files-top-tab.files-tab-active .files-top-tab-select { font-weight:650; }
+.files-top-tab-select label { color:inherit; }
+.files-top-tab .files-tab-close {
+  min-height:23px; min-width:23px; padding:2px; margin:0 3px 0 0;
+  border:0; border-radius:6px; background:transparent;
+  color:inherit; box-shadow:none; opacity:0.15;
+}
+.files-top-tab.files-tab-active .files-tab-close { opacity:0.67; }
+.files-top-tab:hover .files-tab-close,
+.files-top-tab .files-tab-close:hover,
+.files-top-tab .files-tab-close:focus-visible { opacity:1; }
+.files-top-tab .files-tab-close:hover { background:rgba(94,134,172,0.19); }
+.files-top-tab-select:focus-visible,.files-tab-close:focus-visible,
+.files-tab-rail .files-new-tab:focus-visible {
+  outline:2px solid #357fc9; outline-offset:-2px;
+}
+.files-tab-rail .files-new-tab {
+  min-width:30px; min-height:30px; margin:3px 1px; padding:2px;
+  border-radius:8px; border:1px solid transparent;
+  box-shadow:none; background:transparent; color:#36546f;
+}
+.files-tab-rail .files-new-tab:hover {
+  background:rgba(255,255,255,0.5); border-color:rgba(125,156,186,0.2);
+}
+popover.files-tab-menu > contents {
+  padding:6px; border-radius:11px; background:#fbfdff;
+  border:1px solid #d5e0eb; box-shadow:0 8px 20px rgba(32,62,95,0.14);
+}
+.files-tab-menu-items { border-spacing:2px; }
+.files-tab-menu-item {
+  min-height:30px; min-width:192px; padding:5px 12px; border:0;
+  border-radius:6px; background:transparent; box-shadow:none;
+  color:#283f58; font-weight:500;
+}
+.files-tab-menu-item:hover,.files-tab-menu-item:focus-visible { background:#e8f2ff; }
+/* Neutral GNOME-inspired Light scheme. */
+window.melania-theme-light .files-top-tab {
+  color:#52565c; background:transparent; border-color:transparent; box-shadow:none;
+}
+window.melania-theme-light .files-top-tab:hover:not(.files-tab-active) { background:#eceff3; }
+window.melania-theme-light .files-top-tab.files-tab-active {
+  color:#232a31; background:#fdfdfd; border-color:#d3d6dc; box-shadow:none;
+}
+window.melania-theme-light .files-tab-rail .files-new-tab {
+  color:#4c5661; background:transparent; border-color:transparent;
+}
+window.melania-theme-light .files-tab-rail .files-new-tab:hover { background:#e5e8ec; }
+window.melania-theme-light popover.files-tab-menu > contents {
+  background:#fcfcfd; border-color:#d8dbe0;
+}
+/* Low-contrast GNOME-inspired Dark scheme. */
+window.melania-theme-dark .files-top-tab {
+  color:#bdc5ce; background:transparent; border-color:transparent; box-shadow:none;
+}
+window.melania-theme-dark .files-top-tab:hover:not(.files-tab-active) { background:#424952; }
+window.melania-theme-dark .files-top-tab.files-tab-active {
+  color:#f0f4f8; background:#2b3038; border-color:#56606d; box-shadow:none;
+}
+window.melania-theme-dark .files-top-tab-select { color:inherit; }
+window.melania-theme-dark .files-tab-rail .files-new-tab {
+  color:#e7edf5; background:transparent; border-color:transparent;
+}
+window.melania-theme-dark .files-tab-rail .files-new-tab:hover { background:#434b56; }
+window.melania-theme-dark .files-top-tab .files-tab-close:hover { background:#526172; }
+window.melania-theme-dark popover.files-tab-menu > contents {
+  background:#323840; border-color:#4f5966;
+}
+window.melania-theme-dark .files-tab-menu-item { color:#e8edf3; }
+window.melania-theme-dark .files-tab-menu-item:hover { background:#495669; }
+/* Aero preserves the blue titlebar, but tab geometry stays GNOME-style. */
+window.melania-theme-aero .files-top-tab.files-tab-active {
+  color:#153b60; background:#f7fbff; border-color:#8fb8dd; box-shadow:none;
+}
