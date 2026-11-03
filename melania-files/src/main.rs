@@ -2710,7 +2710,7 @@ fn append_remote_tab(
 ) {
     let title=Label::new(Some("Rete"));
     let child=gio_remote::create(uri,title.clone());
-    append_file_page(notebook,tab_strip,headers,window,title,child,"network-server-symbolic",new_button);
+    append_file_page(notebook,tab_strip,headers,window,title,child,"folder-symbolic",new_button);
 }
 /// Shared Nautilus-style tab bar for local and GVfs pages. The GTK Notebook
 /// still owns actual pages, while the compact headerbar renders their handles.
@@ -2744,7 +2744,8 @@ fn append_file_page(
     tab_contents.append(&icon);
     tab_contents.append(&text);
     tab_button.set_child(Some(&tab_contents));
-    let close = Button::from_icon_name("window-close-symbolic");
+    // Text glyph avoids missing symbolic icons in isolated custom icon themes.
+    let close = Button::with_label("×");
     close.add_css_class("files-tab-close");
     close.set_tooltip_text(Some("Chiudi scheda (Ctrl+W)"));
     tab.append(&tab_button);
@@ -2949,7 +2950,8 @@ fn build_ui(app: &Application) {
     // the tabs ARE the titlebar, never add a duplicate app title.
     let no_title = GtkBox::new(Orientation::Horizontal, 0);
     aero_header.set_title_widget(Some(&no_title));
-    let add_button = Button::from_icon_name("list-add-symbolic");
+    // Nautilus-style plus stays visible even before a full icon theme loads.
+    let add_button = Button::with_label("+");
     add_button.add_css_class("files-new-tab");
     add_button.set_tooltip_text(Some("Nuova scheda (Ctrl+T)"));
     let tab_strip = GtkBox::new(Orientation::Horizontal, 0);
@@ -2958,14 +2960,15 @@ fn build_ui(app: &Application) {
     tab_scroll.add_css_class("files-tab-scroll");
     tab_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
     tab_scroll.set_min_content_width(160);
-    tab_scroll.set_max_content_width(650);
+    tab_scroll.set_max_content_width(850);
+    tab_scroll.set_propagate_natural_width(true);
     tab_scroll.set_child(Some(&tab_strip));
     // One tab rail: open tabs followed by [+], never the reverse.
     let tab_rail = GtkBox::new(Orientation::Horizontal, 3);
     tab_rail.add_css_class("files-tab-rail");
     tab_rail.append(&tab_scroll);
     tab_rail.append(&add_button);
-    let network_button=Button::from_icon_name("network-server-symbolic");
+    let network_button=Button::from_icon_name("network-server");
     network_button.add_css_class("files-new-tab");
     network_button.set_tooltip_text(Some("Rete e server SMB/SFTP/WebDAV (GVfs)"));
     tab_rail.append(&network_button);
