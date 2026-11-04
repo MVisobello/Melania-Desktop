@@ -8,6 +8,15 @@ set -euo pipefail
 : "${LABWC_PID:?}"
 ROOT="$MELANIA_ROOT"
 BIN="$MELANIA_BIN_DIR"
+# D-Bus activated portal backends need the real compositor socket and the
+# Melania desktop selector. Update only the CURRENT private session bus;
+# in a full login, also publish it to the user systemd manager.
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+  dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || true
+  if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then
+    dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || true
+  fi
+fi
 child_pids=()
 cleanup() {
   trap - EXIT INT TERM HUP
