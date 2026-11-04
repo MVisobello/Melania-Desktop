@@ -54,7 +54,7 @@ use melania_native::scene::Layer as SceneLayer;
 use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
-use crate::native_client_frame;
+use crate::{native_client_frame,qemu_continuous_receiver};
 use melania_control::{start_toggle_socket_path,SOCKET_ENV};
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
@@ -2093,7 +2093,36 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.close_redraw_mode || !state.multi_window_mode) {
         return Err("reopen redraw requires an isolated QEMU close-redraw test".into());
     }
-    let frame_listener=if live_stream {
+    // SINGLE-PROCESS QEMU CHECKPOINT: use a private UnixStream pair to pass
+    // the live Smithay wl_shm frames to the real Rust DRM/KMS presenter.
+    // The presenter is compiled into this executable, not an external KMS
+    // process. This is still a disposable VM proof, NOT a libseat-owned
+    // production GPU, atomic rollback or login-manager session.
+    let integrated_kms=std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if integrated_kms && (
+        !state.continuous_kms_mode || !state.live_stream ||
+        !state.frame_callbacks_probe || state.async_kms_mode ||
+        std::env::var("MELANIA_QEMU_CONTINUOUS_KMS").as_deref()
+            !=Ok("YES_DISPOSABLE_QEMU") ||
+        std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
+            .ok().as_deref()!=Some(state.continuous_frame_target.to_string().as_str())
+    ) {
+        return Err("in-process KMS requires matching QEMU frame targets and explicit safeguards".into());
+    }
+    let mut integrated_thread=None;
+    if integrated_kms {
+        let (sender,receiver)=UnixStream::pair()?;
+        sender.set_read_timeout(Some(Duration::from_secs(8)))?;
+        sender.set_write_timeout(Some(Duration::from_secs(7)))?;
+        state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender));
+        integrated_thread=Some(std::thread::spawn(move || {
+            qemu_continuous_receiver::run_embedded(receiver)
+                .map_err(|error|error.to_string())
+        }));
+        println!("MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true");
+    }
+    let frame_listener=if live_stream && !integrated_kms {
         let path=if state.continuous_kms_mode {
             "/run/melania-native-qemu/continuous-frame-stream.sock"
         } else {"/run/melania-native-qemu/frame-stream.sock"};
@@ -2241,6 +2270,13 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 }
                 if state.dynamic_pointer_proof_mode {
                     println!("MELANIA_NATIVE_DYNAMIC_POINTER_FRAME13_PASS=true");
+                }
+                if let Some(join)=integrated_thread.take() {
+                    let outcome=join.join()
+                        .map_err(|_|"in-process KMS presenter panicked during rollback")?;
+                    outcome.map_err(|e|format!("in-process KMS presenter failed: {e}"))?;
+                    println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}",
+                             state.continuous_frame_target);
                 }
                 println!("MELANIA_NATIVE_SESSION_READY=false");
                 return Ok(());
