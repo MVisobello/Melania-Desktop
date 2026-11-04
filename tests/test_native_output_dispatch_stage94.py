@@ -24,7 +24,7 @@ class NativeOutputDispatchStage94(unittest.TestCase):
 
     def test_submission_is_issued_only_with_recovery_and_watchdog(self):
         start = SOURCE.index("pub fn dispatch(")
-        end = SOURCE.index("pub fn presented(", start)
+        end = SOURCE.index("pub fn verify_and_present(", start)
         block = SOURCE[start:end]
         self.assertIn("RecoveryPhase::Active", block)
         self.assertIn("self.redraw.next_frame()", block)
