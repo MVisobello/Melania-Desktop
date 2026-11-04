@@ -1,6 +1,7 @@
 //! Stage 46: real Wayland wl_shm updates beyond the old sixth frame.
 //! VM-only scenario; every buffer release and callback requires a KMS ACK.
 use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd,thread,time::{Duration,Instant}};
+use melania_native::native_frame_budget::frame_budget;
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
@@ -127,7 +128,10 @@ fn main()->Result<(),Box<dyn Error>> {
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("continuous client xdg configure missing".into());}
-    for index in 1..=12u32 {
+    let total=frame_budget(
+        std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES").ok().as_deref(),12
+    )? as u32;
+    for index in 1..=total {
         // Every frame has a different real client-owned wl_shm image.
         let mut pixels=vec![0u8;W*H*4];
         let red=(30+(index*17)%200) as u8;
@@ -166,7 +170,11 @@ fn main()->Result<(),Box<dyn Error>> {
         buffer.destroy();
         pool.destroy();
     }
-    println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_12_FRAMES_PASS=true");
+    if total==12 {
+        println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_12_FRAMES_PASS=true");
+    } else {
+        println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS={total}");
+    }
     std::io::stdout().flush()?;
     toplevel.destroy();
     xdg.destroy();

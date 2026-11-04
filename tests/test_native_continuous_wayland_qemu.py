@@ -43,7 +43,10 @@ class TwelveRealFramesContract(unittest.TestCase):
         self.assertIn('self.submit_continuous_frame()?',block)
 
     def test_disposable_guest_requires_all_twelve_real_callbacks(self):
-        self.assertIn('for index in 1..=12u32',CLIENT)
+        self.assertIn('for index in 1..=total',CLIENT)
+        self.assertIn('MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES',CLIENT)
+        self.assertIn('frame_budget(',CLIENT)
+        self.assertIn('as_deref(),12',CLIENT)
         self.assertIn('surface.frame(&qh,())',CLIENT)
         self.assertIn('state.buffer_released',CLIENT)
         self.assertIn('state.frame_done_count<index',CLIENT)
