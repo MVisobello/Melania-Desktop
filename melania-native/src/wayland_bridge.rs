@@ -922,6 +922,12 @@ impl CompositorHandler for BridgeState {
                 return;
             }
         }
+        // A role-only GTK handshake must never focus hidden/noninteractive
+        // layers; it does not attach a wl_shm image or simulate a GTK frame.
+        if self.gtk_layer_mode && !self.layer_pixels_mode &&
+           self.layer_surfaces.iter().any(|(_,r)|r.wl_surface()==surface) {
+            return;
+        }
         if self.continuous_kms_mode {
             let assignment=with_states(surface,|states|{
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
@@ -1352,7 +1358,7 @@ impl WlrLayerShellHandler for BridgeState {
     fn shell_state(&mut self)->&mut WlrLayerShellState {&mut self.layer_shell}
     fn new_layer_surface(&mut self,surface:WlrLayerSurface,
                          _:Option<WlOutput>,layer:WlrLayer,namespace:String) {
-        if self.layer_pixels_mode {
+        if self.layer_pixels_mode || self.gtk_layer_mode {
             // Keep Stage82/83A's original 2-surface QEMU behavior unless
             // explicitly exercising the real five-namespace GTK shell.
             let configured=if self.gtk_layer_mode {
@@ -1394,7 +1400,7 @@ impl WlrLayerShellHandler for BridgeState {
         println!("MELANIA_NATIVE_LAYER_SURFACE_CONFIGURE_SENT=true");
     }
     fn layer_destroyed(&mut self,role:WlrLayerSurface){
-        if !self.layer_pixels_mode {return;}
+        if !self.layer_pixels_mode && !self.gtk_layer_mode {return;}
         let surface=role.wl_surface().clone();
         self.layer_surfaces.retain(|(_,existing)|existing.wl_surface()!=&surface);
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
@@ -1772,8 +1778,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         state.continuous_reopen_mode || !continuous_two_windows) {
         return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
     }
-    if state.gtk_layer_mode && !state.layer_pixels_mode {
-        return Err("native GTK multisurface requires explicit QEMU layer pixels".into());
+    let gtk_role_protocol_only=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if state.gtk_layer_mode && !state.layer_pixels_mode && !gtk_role_protocol_only {
+        return Err("native GTK multisurface requires QEMU layer pixels or role-only smoke".into());
     }
     if state.layer_pixels_mode &&
        (!state.dynamic_window_mode || !state.continuous_kms_mode ||
@@ -1956,7 +1964,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Ok(());
             }
         }
-        if shell_probe && state.xdg_toplevel_count>0 && state.layer_surface_count>0 {
+        if shell_probe && (if state.gtk_layer_mode {
+            state.layer_surface_count>=gtk_layer_geometry::MAX_GTK_LAYER_SURFACES as u32
+        } else {state.xdg_toplevel_count>0 && state.layer_surface_count>0}) {
             let since=both_shell_roles_seen_at.get_or_insert_with(Instant::now);
             // Let the real client receive, ack and finish its configure
             // roundtrips before closing the Wayland server.
