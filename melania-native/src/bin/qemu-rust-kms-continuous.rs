@@ -173,13 +173,17 @@ fn run()->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     let real_gtk_two_frame=real_gtk_panel && std::env::var("MELANIA_QEMU_GTK_TWO_FRAME_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
+    let real_gtk_start=real_gtk_two_frame &&
+        std::env::var("MELANIA_QEMU_GTK_START_KMS")
+            .as_deref()==Ok("YES_QEMU_VM");
     let total: u64=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
         .ok().and_then(|value|value.parse().ok())
         .filter(|count:&u64|(8..=64).contains(count) ||
                 (real_gtk_panel && *count==1) ||
-                (real_gtk_two_frame && *count==2))
+                (real_gtk_two_frame && *count==2) ||
+                (real_gtk_start && *count==3))
         .unwrap_or(12);
-    if real_gtk_panel && total!=if real_gtk_two_frame {2} else {1} {
+    if real_gtk_panel && total!=if real_gtk_start {3} else if real_gtk_two_frame {2} else {1} {
         return Err("real GTK KMS experiment has invalid VM-only frame count".into());
     }
     let attempt=(||->Result<(),Box<dyn Error>> {
@@ -241,6 +245,11 @@ fn run()->Result<(),Box<dyn Error>> {
             }
             if real_gtk_two_frame {
                 println!("MELANIA_RUST_REAL_GTK_TWO_FRAME_VISIBLE={}",index+1);
+            }
+            if real_gtk_start && index==2 {
+                // Unique serial event after the THIRD actual kernel CRTC FB_ID
+                // is observed: the host must screendump before CRTC restore.
+                println!("MELANIA_RUST_REAL_GTK_START_FRAME_VISIBLE=3");
             }
             // Only the disposable managed-role run emits these markers.
             // The host reads the *actual* QMP GPU framebuffer during the
@@ -323,6 +332,9 @@ fn run()->Result<(),Box<dyn Error>> {
         println!("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}");
         if real_gtk_two_frame {
             println!("MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true");
+        }
+        if real_gtk_start {
+            println!("MELANIA_RUST_REAL_GTK_START_OVERLAY_KMS_PASS=true");
         }
         println!("MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false");
         println!("MELANIA_NATIVE_SESSION_READY=false");
