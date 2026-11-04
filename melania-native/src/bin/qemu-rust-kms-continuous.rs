@@ -98,9 +98,18 @@ impl Restore<'_> {
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
                            &[self.connector],old.mode())?;
         let observed=self.card.get_crtc(old.handle())?;
+        // A matching FB_ID alone does not prove that the original connector
+        // is still attached to this CRTC. Verify the encoder -> CRTC route
+        // after the restoring modeset, before destroying the guest buffers.
+        let connector_attached=self.card.get_connector(self.connector,false)?
+            .current_encoder()
+            .and_then(|encoder|self.card.get_encoder(encoder).ok())
+            .and_then(|encoder|encoder.crtc())==Some(old.handle());
         self.restored=observed.framebuffer()==old.framebuffer()
             && observed.position()==old.position()
-            && observed.mode()==old.mode();
+            && observed.mode()==old.mode()
+            && connector_attached;
+        println!("MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED={connector_attached}");
         println!("MELANIA_RUST_KMS_RESTORE_VERIFIED={}",self.restored);
         if !self.restored {return Err("Rust KMS CRTC restore mismatch".into());}
         Ok(())
@@ -227,9 +236,11 @@ fn run()->Result<(),Box<dyn Error>> {
                 }
             }
             if index==0 {
+                // Treat any attempt to change scanout as requiring rollback:
+                // even a failed ioctl must not bypass the recovery guard.
+                rollback.submitted=true;
                 card.set_crtc(crtc_handle,Some(framebuffer),
                     original.position(),&connected,Some(mode))?;
-                rollback.submitted=true;
             } else {
                 // VirtIO DRM may still have the previous asynchronous flip
                 // pending even after its FB_ID becomes visible. EAGAIN is
