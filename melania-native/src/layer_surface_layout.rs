@@ -150,6 +150,22 @@ mod tests {
                    Ok(Rect{x:0,y:40,width:1280,height:760}));
     }
     #[test]
+    fn gtk_taskbar_52px_stretches_and_reserves_bottom_work_area() {
+        let request=LayerRequest {
+            layer:ShellLayer::Top,
+            anchors:Anchors{bottom:true,left:true,right:true,top:false},
+            width:0,height:52,margins:Insets::default(),exclusive_zone:52,
+        };
+        let placed=place(request,1280,800).unwrap();
+        assert_eq!(placed.rect,Rect{x:0,y:748,width:1280,height:52});
+        assert_eq!(placed.reservation,
+                   Some(Reservation{edge:Edge::Bottom,pixels:52}));
+        let mut work=WorkAreaReservations::default();
+        work.add(placed.reservation);
+        assert_eq!(work.normal_area(1280,800),
+                   Ok(Rect{x:0,y:0,width:1280,height:748}));
+    }
+    #[test]
     fn bottom_taskbar_margins_and_exclusive_zone() {
         let mut r=panel();
         r.anchors=Anchors{bottom:true,left:true,right:true,top:false};
