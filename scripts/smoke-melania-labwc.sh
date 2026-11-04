@@ -201,6 +201,27 @@ sample=image.resize((256,160))
 assert len(sample.getcolors(256*160) or [])>80, "display is blank or nearly monochrome"
 print("MELANIA_LABWC_REAL_SESSION_SCREENSHOT=" + str(path))
 print("MELANIA_LABWC_REAL_PIXELS_VERIFIED=true")
+# On the fixed 1280x800 Xvfb display, Start's first rows occupy these
+# known areas. Require actual high-contrast COLOR pixels, not an empty white
+# symbolic glyph drawn over the nearly white Windows 7-style Start column.
+def colorful_pixels(box):
+    count=0
+    for r,g,b in image.crop(box).getdata():
+        if max(r,g,b)>125 and max(r,g,b)-min(r,g,b)>46:
+            count+=1
+    return count
+
+files_pixels=colorful_pixels((39,201,77,240))
+settings_pixels=colorful_pixels((39,239,77,275))
+assert files_pixels>=18, ("Melania Files Start icon invisible",files_pixels)
+assert settings_pixels>=18, ("Melania Settings Start icon invisible",settings_pixels)
+# The live Files taskbar icon must no longer be a near-black glyph.
+running_pixels=colorful_pixels((145,720,187,760))
+assert running_pixels>=15, ("Running Files taskbar icon too dark",running_pixels)
+print(f"MELANIA_LABWC_START_FILES_ICON_COLOR_PIXELS={files_pixels}")
+print(f"MELANIA_LABWC_START_SETTINGS_ICON_COLOR_PIXELS={settings_pixels}")
+print(f"MELANIA_LABWC_RUNNING_ICON_COLOR_PIXELS={running_pixels}")
+print("MELANIA_LABWC_ICON_VISIBILITY_PASS=true")
 PYSHOT
 
 python3 - "$socket_path" <<'PY'
