@@ -12,6 +12,7 @@ mod xfce_panel;
 mod xfce_desktop;
 mod symbols;
 mod sensors;
+mod input_controls;
 mod system_integrations;
 #[path = "../../branding/window_controls.rs"]
 mod window_controls;
