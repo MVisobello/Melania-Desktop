@@ -1178,6 +1178,59 @@ done
 rm -f "$gtk_client_log" "$gtk_server_log"
 report 'MELANIA_QEMU_GTK_FIVE_REAL_LAYER_ROLE_ACK_PASS=true'
 
+# Stage83G: launch the actual Rust/GTK4 melania-panel executable, not a
+# fabricated Wayland client. The QEMU bridge checks for its genuine Top layer
+# role; GtkApplication's own startup profile proves that widgets were built.
+# This is intentionally NOT a GTK frame / QMP / input / login claim.
+gtk_smoke_server_log="$(mktemp -t melania-real-gtk-server-XXXXXX)"
+gtk_smoke_client_log="$(mktemp -t melania-real-gtk-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_GTK_MULTISURFACE=YES_QEMU_VM \
+MELANIA_NATIVE_SHELL_PROBE=YES_QEMU_VM \
+MELANIA_NATIVE_REAL_GTK_SMOKE=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 26s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 \
+  > "$gtk_smoke_server_log" 2>&1 &
+gtk_smoke_server_pid=$!
+gtk_smoke_socket=''
+for attempt in $(seq 1 100); do
+  gtk_smoke_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$gtk_smoke_server_log" | head -n 1)"
+  [[ -n "$gtk_smoke_socket" ]] && break
+  kill -0 "$gtk_smoke_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$gtk_smoke_socket" ]]; then
+  cat "$gtk_smoke_server_log"
+  kill "$gtk_smoke_server_pid" 2>/dev/null || true
+  wait "$gtk_smoke_server_pid" 2>/dev/null || true
+  fatal 'real_gtk_panel_wayland_socket_missing'
+fi
+mkdir -p /run/melania-native-qemu/config
+LD_LIBRARY_PATH=/mnt/melania-native \
+GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
+GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
+WAYLAND_DISPLAY="$gtk_smoke_socket" MELANIA_PROFILE_START=1 \
+  timeout --signal=TERM --kill-after=3s 20s "$gtk_panel" \
+  > "$gtk_smoke_client_log" 2>&1 &
+gtk_smoke_client_pid=$!
+if ! wait "$gtk_smoke_server_pid"; then
+  cat "$gtk_smoke_client_log" "$gtk_smoke_server_log"
+  kill "$gtk_smoke_client_pid" 2>/dev/null || true
+  wait "$gtk_smoke_client_pid" 2>/dev/null || true
+  fatal 'real_gtk_panel_native_wayland_server_failed'
+fi
+kill "$gtk_smoke_client_pid" 2>/dev/null || true
+wait "$gtk_smoke_client_pid" 2>/dev/null || true
+cat "$gtk_smoke_client_log" "$gtk_smoke_server_log"
+grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_smoke_client_log" ||
+  fatal 'real_gtk_panel_widget_build_not_confirmed'
+grep -q '^MELANIA_NATIVE_GTK_LAYER_CONFIGURED=melania-panel size=1280x52' "$gtk_smoke_server_log" ||
+  fatal 'real_gtk_panel_top_layer_not_configured'
+grep -q '^MELANIA_NATIVE_REAL_GTK_PANEL_LAYER_CONFIGURED=true' "$gtk_smoke_server_log" ||
+  fatal 'real_gtk_panel_native_layer_not_seen'
+rm -f "$gtk_smoke_client_log" "$gtk_smoke_server_log"
+report 'MELANIA_QEMU_REAL_GTK_PANEL_STARTUP_PASS=true'
+
 # Stage 26: The Rust native Smithay server accepts an actual Wayland xdg
 # client's wl_shm XRGB8888 buffer and composes the client's pixels into
 # an immutable QEMU-only framebuffer snapshot. A separate short-lived
