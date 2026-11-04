@@ -81,7 +81,7 @@ def send_usb_search_key(qmp: Path) -> None:
                 for down in (True, False)
             ),
         ]:
-            stream.write((json.dumps(request) + "\\n").encode("utf-8"))
+            stream.write((json.dumps(request) + "\n").encode("utf-8"))
             for _ in range(50):
                 answer = json.loads(stream.readline())
                 if "error" in answer:
