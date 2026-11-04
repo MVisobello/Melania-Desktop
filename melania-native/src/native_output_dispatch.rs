@@ -10,6 +10,8 @@
 //! or missed deadline invalidates all outstanding permission to release
 //! Wayland buffers or send client frame callbacks.
 
+use drm::control::{connector, crtc, framebuffer, Device as ControlDevice};
+
 use crate::{
     continuous_redraw::{ContinuousRedraw, PlannedSceneFrame},
     kms_watchdog::{KmsFrameWatchdog, WatchdogError},
@@ -107,11 +109,59 @@ impl NativeOutputDispatch {
         Ok(Some(submission))
     }
 
-    /// Returns true ONLY when the matching kernel-verified presentation also
-    /// passes the watchdog and BOTH independent ticket ledgers.
-    /// The caller supplies 'kernel_presented' only after inspecting the CRTC;
-    /// an IPC reply alone must not be treated as kernel presentation.
-    pub fn presented(
+    /// Verify a presentation against REAL DRM kernel state, including the
+    /// connector -> encoder -> CRTC route, rather than trusting a socket ACK
+    /// or allowing an external boolean to release Wayland client buffers.
+    ///
+    /// The caller must own this device through an active libseat session and
+    /// must not call after a pause/hotplug. The caller also owns the lifetime
+    /// and scanout compatibility of the expected framebuffer.
+    ///
+    /// Stale submissions are discarded without probing or cancelling the
+    /// current frame. Missing routing or FB_ID permanently invalidates the
+    /// pending output generation.
+    pub fn verify_and_present(
+        &mut self,
+        card: &impl ControlDevice,
+        connector: connector::Handle,
+        crtc: crtc::Handle,
+        expected_fb: framebuffer::Handle,
+        submission: OutputSubmission,
+        now_ms: u64,
+    ) -> Result<bool, String> {
+        if self.resources.phase() != RecoveryPhase::Active ||
+            self.inflight != Some(submission) {
+            return Ok(false);
+        }
+        // The interface calls the drm-rs control ioctls directly. Only a
+        // real CRTC FB_ID AND a live encoder route may grant a frame callback.
+        let verified = (|| -> Result<bool, String> {
+            let observed = card.get_crtc(crtc)
+                .map_err(|error| format!("DRM get_crtc failed: {error}"))?;
+            let attached = card.get_connector(connector, false)
+                .map_err(|error| format!("DRM get_connector failed: {error}"))?;
+            let Some(encoder) = attached.current_encoder() else {
+                return Ok(false);
+            };
+            let routed = card.get_encoder(encoder)
+                .map_err(|error| format!("DRM get_encoder failed: {error}"))?;
+            Ok(observed.framebuffer() == Some(expected_fb) &&
+                routed.crtc() == Some(crtc))
+        })();
+        match verified {
+            Ok(kernel_presented) => Ok(self.presented(
+                submission, now_ms, kernel_presented,
+            )),
+            Err(error) => {
+                self.fail_closed();
+                Err(error)
+            }
+        }
+    }
+
+    /// Internal-only commit path. External backends cannot claim a
+    /// successful presentation from an unverified boolean.
+    fn presented(
         &mut self, submission: OutputSubmission,
         now_ms: u64, kernel_presented: bool,
     ) -> bool {
