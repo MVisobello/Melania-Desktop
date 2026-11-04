@@ -32,7 +32,12 @@ class NativeRecoveryStage92(unittest.TestCase):
     def test_login_script_remains_blocked_until_real_backend(self):
         launcher = (ROOT / "scripts/melania-session").read_text()
         self.assertIn("NATIVE_BACKEND_UNAVAILABLE", launcher)
-        self.assertNotIn("/usr/share/wayland-sessions", launcher.split("--check-native", 1)[-1].split("--probe-native", 1)[0])
+        self.assertIn("  --check-native)", launcher)
+        self.assertIn("  --probe-native)", launcher)
+        native_case = launcher.split("  --check-native)", 1)[1].split("  --probe-native)", 1)[0]
+        self.assertIn("exit 78", native_case)
+        self.assertNotIn("exec ", native_case)
+        self.assertNotIn("/usr/share/wayland-sessions", native_case)
 
 
 if __name__ == "__main__":
