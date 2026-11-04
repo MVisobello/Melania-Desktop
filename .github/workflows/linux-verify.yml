@@ -179,6 +179,21 @@ jobs:
             exit 1
           fi
           grep -q 'NATIVE_STAGE12_BLOCKED' native-stage12-denied.log
+      - name: Install independent labwc Wayland session smoke dependencies
+        run: sudo apt-get install -y labwc wlrctl xvfb xauth dbus-x11 xwayland
+      - name: Test actual Melania desktop on nested labwc (real Wayland)
+        run: |
+          set -euo pipefail
+          cargo build -p melania-notifyd
+          bash scripts/smoke-melania-labwc.sh 2>&1 | tee labwc-session-smoke.log
+          grep -q 'MELANIA_LABWC_REAL_NESTED_SESSION_PASS=true' labwc-session-smoke.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: melania-labwc-session-evidence
+          path: |
+            labwc-session-smoke.log
+            reports/melania-labwc-session.log
       - uses: actions/upload-artifact@v4
         if: success()
         with:

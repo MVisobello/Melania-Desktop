@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Executed by an explicit labwc keybinding, not by a global input grab.
+set -euo pipefail
+: "${MELANIA_ROOT:?}"
+exec python3 "$MELANIA_ROOT/scripts/melania-labwc-control.py" --toggle-start

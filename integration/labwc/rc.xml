@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Isolated Melania keybindings: labwc -C this/directory.
+     Never writes ~/.config/labwc or Cinnamon configuration.
+     W-space toggles Melania Start; a bare Super key is not promised yet. -->
+<labwc_config>
+  <keyboard>
+    <default />
+    <keybind key="W-space">
+      <action name="Execute"><command>melania-labwc-hotkey</command></action>
+    </keybind>
+    <keybind key="W-e">
+      <action name="Execute"><command>melania-files</command></action>
+    </keybind>
+    <keybind key="W-i">
+      <action name="Execute"><command>melania-settings</command></action>
+    </keybind>
+    <keybind key="W-Return">
+      <action name="Execute"><command>x-terminal-emulator</command></action>
+    </keybind>
+    <keybind key="A-F4">
+      <action name="Close"/>
+    </keybind>
+    <keybind key="A-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+  </keyboard>
+  <mouse><default /></mouse>
+</labwc_config>

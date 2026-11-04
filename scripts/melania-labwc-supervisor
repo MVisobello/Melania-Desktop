@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Supervise ONLY the processes spawned for this Melania/labwc session.
+set -euo pipefail
+: "${MELANIA_ROOT:?}"
+: "${MELANIA_BIN_DIR:?}"
+: "${MELANIA_CONTROL_SOCKET:?}"
+: "${WAYLAND_DISPLAY:?}"
+: "${LABWC_PID:?}"
+ROOT="$MELANIA_ROOT"
+BIN="$MELANIA_BIN_DIR"
+child_pids=()
+cleanup() {
+  trap - EXIT INT TERM HUP
+  for pid in "${child_pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  for pid in "${child_pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+
+python3 "$ROOT/scripts/melania-labwc-control.py" --serve "$MELANIA_CONTROL_SOCKET" &
+adapter=$!
+child_pids+=("$adapter")
+ready=0
+for _ in {1..35}; do
+  [[ -S "$MELANIA_CONTROL_SOCKET" ]] && { ready=1; break; }
+  kill -0 "$adapter" 2>/dev/null || break
+  sleep .1
+done
+(( ready )) || { echo "MELANIA_LABWC_FATAL=control_adapter_not_ready" >&2; exit 1; }
+
+"$BIN/melania-desktop-surface" &
+desktop=$!
+child_pids+=("$desktop")
+"$BIN/melania-panel" &
+panel=$!
+child_pids+=("$panel")
+"$BIN/melania-notifyd" &
+notify=$!
+child_pids+=("$notify")
+# Only in the disposable Linux CI smoke: map one real xdg_toplevel
+# to prove that the panel socket adapter enumerates Wayland windows.
+if [[ "${MELANIA_LABWC_SMOKE_OPEN_FILES:-0}" == 1 ]]; then
+  "$BIN/melania-files" &
+  child_pids+=("$!")
+  echo "MELANIA_LABWC_SMOKE_FILES_PROCESS_STARTED=true"
+fi
+echo "MELANIA_LABWC_SHELL_STARTED=true"
+
+# Keep the session alive only while both essential graphical layers and
+# the compositor are alive. A crash requests logout, never a system reboot.
+while :; do
+  sleep 1
+  if ! kill -0 "$LABWC_PID" 2>/dev/null; then break; fi
+  if ! kill -0 "$panel" 2>/dev/null ||
+     ! kill -0 "$desktop" 2>/dev/null ||
+     ! kill -0 "$adapter" 2>/dev/null; then
+    echo "MELANIA_LABWC_SHELL_FAILURE=critical_component_exited" >&2
+    if [[ -r "/proc/$LABWC_PID/comm" &&
+          "$(cat "/proc/$LABWC_PID/comm")" == labwc ]]; then
+      kill -TERM "$LABWC_PID" 2>/dev/null || true
+    fi
+    break
+  fi
+done
