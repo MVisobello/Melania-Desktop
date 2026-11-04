@@ -46,7 +46,8 @@ class SecureLabwcSession(unittest.TestCase):
         self.assertIn('MELANIA_NESTED_SESSION=1',LAUNCH)
         self.assertIn('<keybind key="W-l">',XML)
         self.assertIn('<command>melania-sessionctl lock</command>',XML)
-        self.assertIn('cargo build -p melania-compositor -p melania-control -p melania-services',CI)
+        self.assertIn('cargo build -p melania-compositor -p melania-control -p melania-files',CI)
+        self.assertIn('-p melania-services',CI)
         self.assertIn('target/debug/melania-sessionctl',CI)
 
     def test_unchanged_native_login_policy_still_protects_host(self):
