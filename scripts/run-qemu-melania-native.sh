@@ -107,8 +107,14 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # The binary is built on Ubuntu 24.04; transfer it through an ISO that is
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
+# QEMU-only real Fluent artwork, built from the approved SVG generators.
+fluent_icons="$root/target/melania-qemu-fluent-icons"
+[[ -f "$fluent_icons/Melania-Fluent-Light/index.theme" &&
+   -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/melania.svg" &&
+   -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/org.melaniadesktop.Files.svg" ]] ||
+  deny 'genuine Melania Fluent theme must be built before assembling VM ISO'
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-layer-panel-client=$layer_client" "melania-gtk-five-roles=$gtk_five_client" "melania-panel=$gtk_panel" "libgtk4-layer-shell.so.0=$gtk_layer_lib"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-layer-panel-client=$layer_client" "melania-gtk-five-roles=$gtk_five_client" "melania-panel=$gtk_panel" "libgtk4-layer-shell.so.0=$gtk_layer_lib" "icons=$fluent_icons"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
