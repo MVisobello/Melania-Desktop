@@ -2136,6 +2136,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     let mut integrated_thread=None;
     let mut integrated_drm:Option<OwnedSeatCard>=None;
+    // Include every fallible initialization in the cleanup boundary. An error
+    // while binding the Wayland socket, creating the DRM worker, or flushing
+    // startup output must join the embedded presenter before libseat closes
+    // the original DRM descriptor; not just errors in the dispatch loop.
+    let run_result=(||->Result<(),Box<dyn Error>> {
     if integrated_kms {
         if !session.is_active() || !state.lifecycle.seat_active() {
             return Err("cannot acquire QEMU DRM card from an inactive libseat session".into());
@@ -2207,7 +2212,6 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // Always unwind the integrated renderer before libseat drops its FD.
     // A client error, libseat pause or Wayland dispatch failure must NOT
     // bypass KMS rollback by returning directly from this function.
-    let run_result=(||->Result<(),Box<dyn Error>> {
     while Instant::now()<deadline {
         // Accept the Rust DRM consumer before processing client commits;
         // the socket is private to this disposable VM, not the host.
