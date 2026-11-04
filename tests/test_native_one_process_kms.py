@@ -41,6 +41,13 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
 
     def test_all_wayland_errors_unwind_kms_before_libseat_fd_close(self):
         self.assertIn('let run_result=(||->Result<(),Box<dyn Error>> {', BRIDGE)
+        # Resource acquisition and all fallible Wayland startup must share
+        # the cleanup boundary: a failed socket bind cannot leak the KMS
+        # worker or release the libseat card while scanout is still active.
+        boundary=BRIDGE.index('let run_result=(||->Result<(),Box<dyn Error>> {')
+        self.assertLess(boundary,BRIDGE.index('let fd=session.open(',boundary))
+        self.assertLess(boundary,BRIDGE.index('let listener=ListeningSocket::bind_auto(',boundary))
+        self.assertLess(boundary,BRIDGE.index('std::io::stdout().flush()?',boundary))
         self.assertIn('if integrated_kms && run_result.is_err()', BRIDGE)
         cleanup=BRIDGE[BRIDGE.index('if integrated_kms && run_result.is_err()'):]
         self.assertLess(cleanup.index('state.continuous_worker.take()'),
