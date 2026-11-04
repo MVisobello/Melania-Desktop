@@ -39,6 +39,17 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertLess(BRIDGE.index('let outcome=join.join()'),
                         BRIDGE.index('MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}'))
 
+    def test_all_wayland_errors_unwind_kms_before_libseat_fd_close(self):
+        self.assertIn('let run_result=(||->Result<(),Box<dyn Error>> {', BRIDGE)
+        self.assertIn('if integrated_kms && run_result.is_err()', BRIDGE)
+        cleanup=BRIDGE[BRIDGE.index('if integrated_kms && run_result.is_err()'):]
+        self.assertLess(cleanup.index('state.continuous_worker.take()'),
+                        cleanup.index('join.join()'))
+        self.assertLess(cleanup.index('join.join()'),
+                        cleanup.index('owner.release()'))
+        self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS_ERROR_CLEANUP_ATTEMPTED=true', cleanup)
+        self.assertTrue(cleanup.index('run_result') >= 0)
+
     def test_qemu_only_optin_and_original_login_block_remain(self):
         for required in (
             'MELANIA_NATIVE_IN_PROCESS_KMS',
