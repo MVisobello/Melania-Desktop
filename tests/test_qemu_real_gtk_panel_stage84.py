@@ -25,7 +25,7 @@ def frame(with_panel: bool) -> bytes:
                 # This unit-test-only image checks pixel logic, never
                 # substitutes for the required QMP screendump in CI.
                 pixels[i:i+3] = bytes((30 + x % 40, 46 + y % 40, 72 + x % 60))
-    return f"P6\\n{w} {h}\\n255\\n".encode() + pixels
+    return f"P6\n{w} {h}\n255\n".encode() + pixels
 
 
 class GtkKmsScreenshotValidation(unittest.TestCase):
@@ -35,7 +35,7 @@ class GtkKmsScreenshotValidation(unittest.TestCase):
 
     def test_requires_exact_native_qemu_dimensions(self):
         with self.assertRaisesRegex(ValueError, "1280x800"):
-            verifier.validate_ppm(b"P6\\n32 32\\n255\\n" + b"\\0" * (32 * 32 * 3))
+            verifier.validate_ppm(b"P6\n32 32\n255\n" + b"\0" * (32 * 32 * 3))
 
     def test_accepts_only_panel_region_with_real_variation(self):
         changed, tones = verifier.validate_ppm(frame(True))
