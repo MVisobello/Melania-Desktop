@@ -209,6 +209,24 @@ impl BridgeState {
         if !self.continuous_kms_mode || self.continuous_inflight.is_some() {
             return Ok(());
         }
+        // Stage86 is a bounded *three-frame* VM proof. GTK may repaint the
+        // taskbar more than once after frame two, before its Start layer is
+        // mapped. Do not consume the third KMS slot with another taskbar-only
+        // frame: wait until Smithay actually owns the Start wl_shm surface.
+        // Once the third CRTC ACK has arrived, never submit a fourth frame
+        // into the deliberately terminating DRM receiver.
+        if self.real_gtk_pixel_kms_mode {
+            let start_proof=std::env::var("MELANIA_NATIVE_REAL_GTK_START_KMS")
+                .as_deref()==Ok("YES_QEMU_VM");
+            if self.continuous_frame_count>=self.continuous_frame_target ||
+                (start_proof && self.continuous_frame_count>=2 &&
+                 !self.layer_surfaces.iter().any(|(name,role)|{
+                     name=="melania-start" &&
+                     self.known_window_surfaces.get(2)==Some(role.wl_surface())
+                 })) {
+                return Ok(());
+            }
+        }
         let Some(planned)=self.continuous_redraw.next_frame() else {return Ok(());};
         let generation=if self.dynamic_window_mode {
             self.dynamic_scene.generation()
