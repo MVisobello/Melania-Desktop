@@ -261,6 +261,15 @@ fn run()->Result<(),Box<dyn Error>> {
             }
             // Only verified CRTC scanout may produce a success ACK.
             wait_for_fb(&card,crtc_handle,framebuffer)?;
+            // Stage96 exercises the SAME kernel-backed verifier exported to
+            // the future native output loop: framebuffer ID plus the live
+            // connector -> encoder -> CRTC route, not an IPC-only ACK.
+            if !melania_native::native_kms_scanout::verify_kernel_scanout(
+                &card,crtc_handle,connected[0],framebuffer,
+            )? {
+                return Err("QEMU continuous KMS scanout lost connector/CRTC route".into());
+            }
+            println!("MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED={}",index+1);
             println!("MELANIA_RUST_CONTINUOUS_FRAME_VISIBLE={}",index+1);
             if real_gtk_panel && index==0 {
                 // The host QMP verifier must capture the LIVE guest CRTC,
