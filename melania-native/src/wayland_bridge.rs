@@ -1482,9 +1482,22 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceRemoved {device} =>
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device)),
         InputEvent::Keyboard {event} => {
-            if state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
-                return;
+            let device_registered=state.lifecycle.input_registry_mut()
+                .event(&InputDevice::id(&event.device())).is_ok();
+            // QEMU-only diagnostics: input-send-event succeeding does NOT
+            // prove that the guest kernel or libinput delivered a key.
+            // Emit the raw evdev code before applying our Start shortcut,
+            // including whether libseat accepted the keyboard event.
+            if state.real_gtk_pixel_kms_mode &&
+               std::env::var("MELANIA_NATIVE_REAL_GTK_START_INPUT")
+                   .as_deref()==Ok("YES_QEMU_VM") {
+                let raw:u32=event.key_code().into();
+                println!("MELANIA_NATIVE_GTK_QEMU_KEY_RAW={} state={:?} registered={} panel_owned={}",
+                         raw,event.state(),device_registered,
+                         state.known_window_surfaces.get(1).is_some());
+                let _=std::io::stdout().flush();
             }
+            if !device_registered {return;}
             // Stage87: ACTUAL USB-keyboard -> libinput -> private GTK Start IPC.
             // The isolated QEMU shell has no initial keyboard-focused xdg
             // client, so the legacy focused-only filter would drop Super.
