@@ -388,6 +388,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! grep -q '^MELANIA_QEMU_CONTINUOUS_FRAME12_PIXELS_VERIFIED=true' "$report/qmp-continuous-frames.log" ||
    ! test -s "$report/continuous-frame7.ppm" ||
    ! test -s "$report/continuous-frame12.ppm" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_CONTINUOUS_12_REAL_FRAMES_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_REOPEN_FRAME_VISIBLE=true' "$serial" ||
    ! grep -q '^MELANIA_NATIVE_CLIENT_REOPEN_CALLBACK_AFTER_KMS=true' "$serial" ||
