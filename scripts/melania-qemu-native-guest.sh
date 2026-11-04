@@ -411,8 +411,11 @@ wait "$gtk_kms_tail_pid" 2>/dev/null || true
 cat "$gtk_kms_client_log" "$gtk_kms_drm_log" "$gtk_kms_server_log"
 grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_kms_client_log" ||
   fatal 'real_gtk_KMS_app_did_not_build_widgets'
-grep -q '^MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED=1280x52 layer=Top' "$gtk_kms_server_log" ||
-  fatal 'real_gtk_KMS_client_buffer_not_imported'
+# The real GTK4 client negotiates a 52px layer configure but its existing
+# theme's natural widget minimum is 60px. Verify the ACTUAL owned buffer
+# rather than silently treating configured geometry as a screenshot.
+grep -q '^MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED=1280x60 layer=Top' "$gtk_kms_server_log" ||
+  fatal 'real_gtk_KMS_client_buffer_not_imported_or_wrong_geometry'
 grep -Fqx 'MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK=1' "$gtk_kms_server_log" ||
   fatal 'real_gtk_KMS_native_scene_ACK_missing'
 grep -Fqx 'MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1' "$gtk_kms_drm_log" ||
