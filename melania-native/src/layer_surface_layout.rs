@@ -166,6 +166,40 @@ mod tests {
                    Ok(Rect{x:0,y:0,width:1280,height:748}));
     }
     #[test]
+    fn real_gtk_shell_five_surfaces_fit_virtual_output_without_stealing_work_area() {
+        // Values come from melania-panel/src/main.rs make_surface calls.
+        // This tests placement only; no GTK process or Wayland buffer is used.
+        let cases=[
+            ("taskbar",ShellLayer::Top,Anchors{bottom:true,left:true,right:true,top:false},
+             0,52,0,0,52,Rect{x:0,y:748,width:1280,height:52}),
+            ("start",ShellLayer::Overlay,Anchors{left:true,bottom:true,top:false,right:false},
+             510,565,8,6,0,Rect{x:8,y:229,width:510,height:565}),
+            ("quick",ShellLayer::Overlay,Anchors{right:true,bottom:true,top:false,left:false},
+             350,430,0,65,12,Rect{x:930,y:305,width:350,height:430}),
+            ("notifications",ShellLayer::Overlay,Anchors{right:true,bottom:true,top:false,left:false},
+             380,440,0,65,12,Rect{x:900,y:295,width:380,height:440}),
+            ("calendar",ShellLayer::Overlay,Anchors{right:true,bottom:true,top:false,left:false},
+             330,315,0,58,12,Rect{x:950,y:427,width:330,height:315}),
+        ];
+        let mut work=WorkAreaReservations::default();
+        for (name,layer,anchors,width,height,left,bottom,zone,expected) in cases {
+            let request=LayerRequest {
+                layer,anchors,width,height,
+                margins:Insets{left,bottom,..Insets::default()},
+                exclusive_zone:zone,
+            };
+            let placed=place(request,1280,800).unwrap();
+            assert_eq!(placed.rect,expected,"{name} geometry changed");
+            if name=="taskbar" {
+                work.add(placed.reservation);
+            } else {
+                assert_eq!(placed.reservation,None,"{name} must not reserve workspace");
+            }
+        }
+        assert_eq!(work.normal_area(1280,800),
+                   Ok(Rect{x:0,y:0,width:1280,height:748}));
+    }
+    #[test]
     fn bottom_taskbar_margins_and_exclusive_zone() {
         let mut r=panel();
         r.anchors=Anchors{bottom:true,left:true,right:true,top:false};
