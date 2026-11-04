@@ -25,7 +25,8 @@ class NativeContinuousFrameBudget(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_CONTINUOUS_CLIENT_12_FRAMES_PASS=true",client)
         self.assertIn("MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS={total}",client)
         self.assertIn('MELANIA_QEMU_CONTINUOUS_FRAMES',receiver)
-        self.assertIn("(8..=64).contains(count)",receiver)
+        self.assertIn("native_frame_budget::receiver_frame_budget(",receiver)
+        self.assertIn("pub fn receiver_frame_budget(",(ROOT/"melania-native/src/native_frame_budget.rs").read_text())
         self.assertIn('extended native frames require plain QEMU continuous KMS',bridge)
 
     def test_no_native_login_or_host_gpu_opt_out(self):
