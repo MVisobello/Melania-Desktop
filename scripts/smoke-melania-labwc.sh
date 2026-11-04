@@ -7,11 +7,16 @@ cd "$ROOT"
 for tool in labwc wlrctl Xvfb dbus-run-session python3 scrot; do
   command -v "$tool" >/dev/null || { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$tool" >&2; exit 3; }
 done
-for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd; do
+for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart; do
   [[ -x "$ROOT/target/debug/$bin" ]] ||
     { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$bin" >&2; exit 3; }
 done
 bash "$ROOT/scripts/melania-labwc-session" --stage >/dev/null
+portal="$ROOT/target/melania-labwc-session/share/xdg-desktop-portal/melania-portals.conf"
+[[ -f "$portal" ]] || { echo "MELANIA_LABWC_SMOKE_FAIL=portal_config_not_staged" >&2; exit 1; }
+grep -q "^org.freedesktop.impl.portal.ScreenCast=wlr$" "$portal"
+grep -q "^org.freedesktop.impl.portal.Screenshot=wlr$" "$portal"
+
 
 temp="$(mktemp -d -t melania-labwc-ci-XXXXXX)"
 mkdir -m 700 "$temp/runtime" "$temp/config" "$temp/data"
