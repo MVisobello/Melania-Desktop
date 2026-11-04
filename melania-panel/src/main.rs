@@ -1902,6 +1902,17 @@ fn build(app:&Application){
             }
         });
     }
+    // Stage86 VM-only: show the actual existing Windows 7-style Start
+    // ApplicationWindow after the previous two real GTK4/KMS presentations.
+    // This is GTK's genuine layer-shell wl_shm overlay, not a mock bitmap.
+    if std::env::var("MELANIA_QEMU_GTK_SHOW_START_AFTER_PAINT").as_deref()
+        ==Ok("YES_DISPOSABLE_QEMU") {
+        let native_start=start.clone();
+        glib::timeout_add_local_once(Duration::from_millis(8500),move || {
+            native_start.present();
+            eprintln!("MELANIA_QEMU_GTK_START_OVERLAY_PRESENTED=true");
+        });
+    }
     if std::env::var_os("MELANIA_PROFILE_START").is_some() {
         eprintln!(
             "MELANIA_PANEL_BOOT_MS theme={} start={} notifications={} quick={} calendar={} taskbar={} present={} total={}",
