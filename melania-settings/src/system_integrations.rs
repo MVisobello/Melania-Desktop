@@ -3,7 +3,7 @@
 //! Only an independent Melania labwc login may open these host-mutating
 //! tools. Each executable is a static whitelist entry; no shell, user string,
 //! desktop file or remote IPC may select arbitrary commands.
-use gtk::{Box as GtkBox,Button,Label,Orientation,prelude::*};
+use gtk::{Box as GtkBox,Button,Label,prelude::*};
 use std::{env,fs,os::unix::fs::PermissionsExt,process::Command};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -92,16 +92,18 @@ pub fn append_tool(parent:&GtkBox,tool:Tool){
     feedback.set_xalign(0.0);
     feedback.set_wrap(true);
     feedback.add_css_class("settings-row-description");
+    let status=feedback.clone();
     button.connect_clicked(move |_|{
         // No shell expansion; spawned process is independently managed by
         // the OS and is never killed when the Settings window is closed.
         let command=tool.program();
         match Command::new(command).spawn(){
-            Ok(_)=>feedback.set_text("Strumento di configurazione avviato."),
-            Err(error)=>feedback.set_text(&format!("Impossibile aprire {command}: {error}")),
+            Ok(_)=>status.set_text("Strumento di configurazione avviato."),
+            Err(error)=>status.set_text(&format!("Impossibile aprire {command}: {error}")),
         }
     });
     row.append(&button);
+    row.append(&feedback);
     parent.append(&row);
 }
 
