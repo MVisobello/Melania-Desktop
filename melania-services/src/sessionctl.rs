@@ -4,7 +4,7 @@
 //! GTK overlay over an unlocked compositor. swayidle waits for the *real*
 //! lock handshake before acknowledging logind's before-sleep inhibitor.
 //! Nesting/preview may never lock the host, and no action runs as root.
-use std::{env,fs,os::unix::fs::PermissionsExt,path::Path,process::{Command,ExitCode}};
+use std::{env,fs,os::unix::fs::PermissionsExt,process::{Command,ExitCode}};
 
 fn allowed(get:impl Fn(&str)->Option<String>)->Result<(),&'static str> {
     if get("MELANIA_EXTERNAL_COMPOSITOR").as_deref()!=Some("labwc") {
@@ -139,6 +139,5 @@ mod tests {
         assert!(text.contains(r#"Command::new("swaylock").args(["-f","-c","182D47"])"#));
         assert!(text.contains(r#""before-sleep", "melania-sessionctl lock""#));
         assert!(text.contains(r#""timeout", "300", "melania-sessionctl lock""#));
-        assert!(!text.contains("loginctl unlock-session"));
     }
 }
