@@ -1916,6 +1916,36 @@ fn setup_melania_icon_theme() {
     if let Some(settings)=gtk::Settings::default() {
         settings.set_property("gtk-icon-theme-name",selected_theme);
     }
+    // GTK's per-display resolver must adopt the selected Melania theme now,
+    // before the real taskbar buttons/icons are constructed. This is local
+    // to this process/display and never modifies host desktop preferences.
+    if let Some(display)=gtk::gdk::Display::default() {
+        let icons=gtk::IconTheme::for_display(&display);
+        icons.set_theme_name(Some(selected_theme));
+        if std::env::var("MELANIA_QEMU_VERIFY_FLUENT_LOOKUP").as_deref()
+            ==Ok("YES_DISPOSABLE_QEMU") {
+            // This is a runtime GTK4 icon lookup, not a manifest/filename
+            // check. A valid index.theme with missing artwork must fail CI.
+            const REQUIRED:[&str;5]=[
+                "melania",
+                "org.melaniadesktop.Files",
+                "org.melaniadesktop.Settings",
+                "melania-tray-wifi",
+                "network-wireless-signal-excellent-symbolic",
+            ];
+            let missing:Vec<_>=REQUIRED.into_iter()
+                .filter(|name|!icons.has_icon(name)).collect();
+            if selected_theme!="Melania-Fluent-Light" || !missing.is_empty() {
+                eprintln!("MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=false theme={selected_theme} missing={missing:?}");
+                std::process::exit(53);
+            }
+            eprintln!("MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true");
+        }
+    } else if std::env::var("MELANIA_QEMU_VERIFY_FLUENT_LOOKUP").as_deref()
+        ==Ok("YES_DISPOSABLE_QEMU") {
+        eprintln!("MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=false display_missing");
+        std::process::exit(54);
+    }
 }
 
 fn main()->glib::ExitCode {
