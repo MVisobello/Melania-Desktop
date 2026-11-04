@@ -3,7 +3,7 @@
 //! Only an independent Melania labwc login may open these host-mutating
 //! tools. Each executable is a static whitelist entry; no shell, user string,
 //! desktop file or remote IPC may select arbitrary commands.
-use gtk::{Box as GtkBox,Button,Label,prelude::*};
+use gtk::{Box as GtkBox,Button,Label,Orientation,prelude::*};
 use std::{env,fs,os::unix::fs::PermissionsExt,process::Command};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
