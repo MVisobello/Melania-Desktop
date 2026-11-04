@@ -115,7 +115,12 @@ class LabwcStandaloneSession(unittest.TestCase):
             stage.STAGE=Path(temp)/"staging"
             try:
                 created=stage.stage(Path(temp)/"bin")
-                self.assertEqual(len(created),3)
+                self.assertEqual(len(created),4)
+                portal=created[3].read_text()
+                self.assertIn("[preferred]\n",portal)
+                self.assertIn("default=gtk\n",portal)
+                self.assertIn("org.freedesktop.impl.portal.ScreenCast=wlr",portal)
+                self.assertIn("org.freedesktop.impl.portal.Screenshot=wlr",portal)
                 entry=created[0].read_text()
                 self.assertIn("Name=Melania Desktop (Labwc)",entry)
                 self.assertIn(" --run\n",entry)

@@ -12,6 +12,7 @@ mod xfce_panel;
 mod xfce_desktop;
 mod symbols;
 mod sensors;
+mod system_integrations;
 #[path = "../../branding/window_controls.rs"]
 mod window_controls;
 use gtk::prelude::*;
@@ -144,6 +145,7 @@ fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
 fn network_page()->GtkBox {
     let network=page("Rete");
     connectivity_controls::append_wifi(&network);
+    system_integrations::append_tool(&network,system_integrations::Tool::NetworkProfiles);
     let live_network=text("Rilevamento connessioni in corso…","settings-row-description");
     live_network.add_css_class("settings-card");
     network.append(&live_network);

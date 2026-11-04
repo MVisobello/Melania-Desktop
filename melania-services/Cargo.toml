@@ -11,3 +11,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "melania-control"
 path = "src/main.rs"
+
+[[bin]]
+name = "melania-sessionctl"
+path = "src/sessionctl.rs"
