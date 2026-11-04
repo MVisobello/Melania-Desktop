@@ -45,6 +45,7 @@ use smithay::{
     },
 };
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
+use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
 use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
@@ -129,7 +130,9 @@ struct BridgeState {
     layer_shell: WlrLayerShellState,
     // Real wlr-layer wl_shm is opt-in in a disposable QEMU guest only.
     layer_pixels_mode:bool,
-    layer_surfaces:Vec<WlrLayerSurface>,
+    // Five named GTK surfaces are accepted only in the explicit QEMU opt-in.
+    gtk_layer_mode:bool,
+    layer_surfaces:Vec<(String,WlrLayerSurface)>,
     xdg_toplevel_count: u32,
     layer_surface_count: u32,
     seats: SeatState<Self>,
@@ -817,7 +820,8 @@ impl CompositorHandler for BridgeState {
     }
     fn commit(&mut self,surface:&WlSurface) {
         if self.layer_pixels_mode {
-            if let Some(role)=self.layer_surfaces.iter().find(|r|r.wl_surface()==surface).cloned() {
+            if let Some(role)=self.layer_surfaces.iter().find(|(_,r)|r.wl_surface()==surface)
+                .map(|(_,r)|r.clone()) {
                 // A protocol configure is NOT pixel evidence. Only a client
                 // wl_shm buffer copied out of Smithay's live mapping enters
                 // the native retained scene and the Rust KMS worker.
@@ -1347,27 +1351,52 @@ impl XdgShellHandler for BridgeState {
 impl WlrLayerShellHandler for BridgeState {
     fn shell_state(&mut self)->&mut WlrLayerShellState {&mut self.layer_shell}
     fn new_layer_surface(&mut self,surface:WlrLayerSurface,
-                         _:Option<WlOutput>,_:WlrLayer,_:String) {
-        self.layer_surface_count=self.layer_surface_count.saturating_add(1);
+                         _:Option<WlOutput>,layer:WlrLayer,namespace:String) {
         if self.layer_pixels_mode {
-            if self.layer_surfaces.len()>=2 {
-                surface.send_close();
-                return;
-            }
-            // A bounded 1280x800 output is the only opt-in scanout here.
-            // The client's normal Wayland configure/ack precedes wl_shm.
+            // Keep Stage82/83A's original 2-surface QEMU behavior unless
+            // explicitly exercising the real five-namespace GTK shell.
+            let configured=if self.gtk_layer_mode {
+                let requested=match layer {
+                    WlrLayer::Background=>ShellLayer::Background,
+                    WlrLayer::Bottom=>ShellLayer::Bottom,
+                    WlrLayer::Top=>ShellLayer::Top,
+                    WlrLayer::Overlay=>ShellLayer::Overlay,
+                };
+                let Some(spec)=gtk_layer_geometry::permit(
+                    &namespace,requested,
+                    self.layer_surfaces.iter().map(|(name,_)|name.as_str())
+                ) else {
+                    eprintln!("MELANIA_NATIVE_GTK_LAYER_ROLE_REJECTED={namespace}");
+                    surface.send_close();
+                    return;
+                };
+                (spec.configured_width as i32,spec.configured_height as i32)
+            } else {
+                if self.layer_surfaces.len()>=2 {
+                    surface.send_close();
+                    return;
+                }
+                (1280,52)
+            };
+            // Configure based on the real GTK namespace, not one uniform
+            // 1280x52 buffer. Each accepted role retains its own identity.
             surface.with_pending_state(|pending|{
-                pending.size=Some((1280,52).into());
+                pending.size=Some(configured.into());
             });
-            self.layer_surfaces.push(surface.clone());
+            self.layer_surfaces.push((namespace.clone(),surface.clone()));
+            if self.gtk_layer_mode {
+                println!("MELANIA_NATIVE_GTK_LAYER_CONFIGURED={namespace} size={}x{}",
+                         configured.0,configured.1);
+            }
         }
+        self.layer_surface_count=self.layer_surface_count.saturating_add(1);
         surface.send_configure();
         println!("MELANIA_NATIVE_LAYER_SURFACE_CONFIGURE_SENT=true");
     }
     fn layer_destroyed(&mut self,role:WlrLayerSurface){
         if !self.layer_pixels_mode {return;}
         let surface=role.wl_surface().clone();
-        self.layer_surfaces.retain(|existing|existing.wl_surface()!=&surface);
+        self.layer_surfaces.retain(|(_,existing)|existing.wl_surface()!=&surface);
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             if self.dynamic_scene.remove(key) {
                 self.note_scene_change();
@@ -1671,6 +1700,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         layer_shell:WlrLayerShellState::new::<BridgeState>(&handle),
         layer_pixels_mode:std::env::var("MELANIA_NATIVE_LAYER_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),
+        gtk_layer_mode:std::env::var("MELANIA_NATIVE_GTK_MULTISURFACE")
+            .as_deref()==Ok("YES_QEMU_VM"),
         layer_surfaces:Vec::new(),
         xdg_toplevel_count:0,layer_surface_count:0,
         seats,seat,focused:None,pointer_position:(0.0,0.0).into(),
@@ -1740,6 +1771,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.continuous_kms_mode || !state.multi_window_mode ||
         state.continuous_reopen_mode || !continuous_two_windows) {
         return Err("dynamic KMS requires dedicated two-window QEMU proof".into());
+    }
+    if state.gtk_layer_mode && !state.layer_pixels_mode {
+        return Err("native GTK multisurface requires explicit QEMU layer pixels".into());
     }
     if state.layer_pixels_mode &&
        (!state.dynamic_window_mode || !state.continuous_kms_mode ||
