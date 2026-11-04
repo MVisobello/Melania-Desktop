@@ -147,7 +147,7 @@ fn main()->Result<(),Box<dyn Error>> {
         let path=format!("/run/melania-native-qemu/continuous-client-{}-{index}.bgra",
                          std::process::id());
         let mut file=OpenOptions::new().create_new(true).read(true).write(true)
-            .open(path)?;
+            .open(&path)?;
         file.write_all(&pixels)?;
         file.sync_all()?;
         let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
