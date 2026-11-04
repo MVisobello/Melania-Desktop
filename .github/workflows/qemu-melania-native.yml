@@ -159,8 +159,34 @@ jobs:
             build-essential pkg-config libwayland-dev libxkbcommon-dev \
             libegl1-mesa-dev libgles2-mesa-dev libudev-dev libseat-dev \
             libdrm-dev libgbm-dev libinput-dev qemu-system-x86 \
-            qemu-utils cloud-image-utils genisoimage curl
+            qemu-utils cloud-image-utils genisoimage curl \
+            libgtk-4-dev wayland-protocols meson ninja-build
           cargo test -p melania-native --all-targets
+          # Ubuntu 24.04 has GTK4 headers but no gtk4-layer-shell C dev package.
+          # Build pinned upstream v1.1.1 from source, with nonessential
+          # introspection / docs / tests disabled; verify Git revision.
+          git clone --depth 1 --branch v1.1.1 \
+            https://github.com/wmww/gtk4-layer-shell.git /tmp/melania-gtk4-layer-shell
+          test "$(git -C /tmp/melania-gtk4-layer-shell rev-parse HEAD)" = \
+            "4867d7b85cdf1e829fc1fd6f1d5f04c42cc99389"
+          meson setup /tmp/melania-gtk4-layer-shell/build \
+            /tmp/melania-gtk4-layer-shell \
+            --prefix=/usr/local -Dintrospection=false -Dvapi=false \
+            -Dtests=false -Dsmoke-tests=false -Ddocs=false -Dexamples=false
+          ninja -C /tmp/melania-gtk4-layer-shell/build
+          sudo ninja -C /tmp/melania-gtk4-layer-shell/build install
+          sudo ldconfig
+          export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          # Stage83B preflight: compile the actual panel, not a mock client.
+          pkg-config --modversion gtk4 gtk4-layer-shell-0
+          cargo build -p melania-panel --bin melania-panel
+          test -x target/debug/melania-panel
+          ldd target/debug/melania-panel | tee gtk-panel-runtime-libs.txt
+          if grep -q 'not found' gtk-panel-runtime-libs.txt; then
+            echo 'MELANIA_NATIVE_GTK_PANEL_LINK_READY=false'
+            exit 1
+          fi
+          echo 'MELANIA_NATIVE_GTK_PANEL_LINK_READY=true'
           cargo build -p melania-native --bins
           test -x target/debug/qemu-layer-panel-client
           test -x target/debug/qemu-shell-client
@@ -199,4 +225,5 @@ jobs:
           path: |
             reports/qemu-native/
             native-runtime-libs.txt
+            gtk-panel-runtime-libs.txt
           if-no-files-found: warn
