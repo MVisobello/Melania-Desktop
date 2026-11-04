@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Independent Melania desktop on the proven labwc/wlroots Wayland backend.
+# Keeps Cinnamon and the experimental Rust compositor entirely untouched.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+MODE="${1:---check}"
+STAGE="$ROOT/target/melania-labwc-session"
+if [[ -z "${MELANIA_LAYER_LIB_DIR:-}" && -f "$STAGE/lib/libgtk4-layer-shell.so.0" ]]; then
+  export MELANIA_LAYER_LIB_DIR="$STAGE/lib"
+fi
+[[ $# -eq 1 ]] || { echo "Uso: $0 --check|--stage|--run|--nested-test" >&2; exit 2; }
+BIN=""
+for candidate in "${MELANIA_BIN_DIR:-}" "$ROOT/target/release" "$ROOT/target/debug"; do
+  [[ -n "$candidate" && -d "$candidate" ]] || continue
+  good=1
+  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd; do
+    [[ -x "$candidate/$name" ]] || good=0
+  done
+  if (( good )); then BIN="$candidate"; break; fi
+done
+fail() { echo "MELANIA_LABWC_BLOCKED: $*" >&2; exit 78; }
+preflight() {
+  [[ "$(uname -s)" == Linux ]] || fail "richiede Linux"
+  for name in labwc wlrctl python3 dbus-run-session; do
+    command -v "$name" >/dev/null || fail "manca $name (su Mint: sudo apt install labwc wlrctl)"
+  done
+  [[ -n "$BIN" ]] || fail "eseguibili mancanti: cargo build --release -p melania-panel -p melania-desktop-surface -p melania-files -p melania-settings -p melania-notifyd"
+  if [[ -n "${MELANIA_LAYER_LIB_DIR:-}" ]]; then
+    [[ "${MELANIA_LAYER_LIB_DIR:0:1}" == "/" &&
+       -f "$MELANIA_LAYER_LIB_DIR/libgtk4-layer-shell.so.0" ]] ||
+      fail "MELANIA_LAYER_LIB_DIR deve essere assoluto e contenere la libreria GTK4 privata"
+    export LD_LIBRARY_PATH="$MELANIA_LAYER_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+  if command -v ldd >/dev/null; then
+    for name in melania-panel melania-desktop-surface melania-files melania-settings; do
+      deps="$(ldd "$BIN/$name" 2>&1)" || fail "librerie non risolte per $name"
+      if grep -Eq 'not found|version .* not found' <<<"$deps"; then
+        echo "$deps" | grep -E 'not found|version .* not found' >&2
+        fail "dipendenze mancanti per $name; Mint 22 richiede GTK4 layer-shell compilato localmente (MELANIA_LAYER_LIB_DIR)"
+      fi
+    done
+  fi
+}
+runtime_check() {
+  [[ -n "${XDG_RUNTIME_DIR:-}" && "$XDG_RUNTIME_DIR" == /* && -d "$XDG_RUNTIME_DIR" ]] ||
+    fail "serve XDG_RUNTIME_DIR di una sessione logind"
+  [[ "$(stat -c %u "$XDG_RUNTIME_DIR")" == "$(id -u)" ]] ||
+    fail "XDG_RUNTIME_DIR appartiene a un altro utente"
+  perms="$(stat -c %a "$XDG_RUNTIME_DIR")"
+  (( (8#$perms & 8#77) == 0 )) || fail "XDG_RUNTIME_DIR non privato"
+  [[ "$(id -u)" -ne 0 ]] || fail "non avviare un desktop Wayland come root"
+}
+case "$MODE" in
+  --check)
+    preflight
+    echo "MELANIA_LABWC_DEPENDENCIES=PASS"
+    echo "MELANIA_LABWC_BIN_DIR=$BIN"
+    echo "MELANIA_LABWC_LOGIN_TESTED=false"
+    exit 0 ;;
+  --stage)
+    preflight
+    exec python3 "$ROOT/scripts/stage-melania-labwc-session.py" --bin "$BIN" ;;
+  --run|--nested-test|--run-in-bus|--nested-in-bus)
+    preflight
+    runtime_check
+    if [[ "$MODE" == --run || "$MODE" == --run-in-bus ]]; then
+      [[ -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]] ||
+        fail "una sessione grafica esiste già; usare --nested-test invece di sostituirla"
+    else
+      [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]] ||
+        fail "la prova annidata richiede una sessione grafica attiva"
+    fi
+    if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+      if [[ "$MODE" == --run || "$MODE" == --run-in-bus ]]; then
+        exec dbus-run-session -- bash "$ROOT/scripts/melania-labwc-session" --run-in-bus
+      else
+        exec dbus-run-session -- bash "$ROOT/scripts/melania-labwc-session" --nested-in-bus
+      fi
+    fi
+    [[ -f "$STAGE/share/applications/org.melaniadesktop.Files.desktop" ]] ||
+      fail "launcher applicazioni non preparati: eseguire prima --stage"
+    export MELANIA_ROOT="$ROOT"
+    export MELANIA_BIN_DIR="$BIN"
+    export MELANIA_CONTROL_SOCKET="$XDG_RUNTIME_DIR/melania-labwc-$$.sock"
+    export MELANIA_EXTERNAL_COMPOSITOR=labwc
+    if [[ "$MODE" == --nested-test || "$MODE" == --nested-in-bus ]]; then
+      export MELANIA_NESTED_SESSION=1
+      unset MELANIA_ALLOW_HOST_POWER_ACTIONS || true
+    else
+      unset MELANIA_NESTED_SESSION || true
+      export MELANIA_ALLOW_HOST_POWER_ACTIONS=1
+    fi
+    export XDG_CURRENT_DESKTOP="Melania:labwc"
+    export XDG_SESSION_DESKTOP="melania"
+    export DESKTOP_SESSION="melania-labwc"
+    export XDG_SESSION_TYPE=wayland
+    export GDK_BACKEND=wayland
+    export XDG_DATA_DIRS="$STAGE/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    export PATH="$ROOT/scripts:$BIN:$PATH"
+    echo "MELANIA_LABWC_START=real_lifecycle"
+    # -C isolates labwc settings; -s exists in Ubuntu 24.04 labwc 0.7.1.
+    # labwc owns KMS/VT, not the experimental melania-native binary.
+    exec labwc -C "$ROOT/integration/labwc" -s "melania-labwc-supervisor"
+    ;;
+  *) echo "Uso: $0 --check|--stage|--run|--nested-test" >&2; exit 2 ;;
+esac
