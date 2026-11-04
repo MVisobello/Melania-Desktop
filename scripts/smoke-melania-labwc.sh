@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
-for tool in labwc wlrctl xvfb-run dbus-run-session python3 scrot; do
+for tool in labwc wlrctl Xvfb dbus-run-session python3 scrot; do
   command -v "$tool" >/dev/null || { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$tool" >&2; exit 3; }
 done
 for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd; do
@@ -26,6 +26,7 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
 export GSK_RENDERER=cairo
 pid=''
+xvfb_pid=''
 socket_path=''
 cleanup() {
   if [[ -n "$socket_path" && -S "$socket_path" ]]; then
@@ -43,13 +44,37 @@ PY
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   fi
+  if [[ -n "$xvfb_pid" ]]; then
+    kill "$xvfb_pid" 2>/dev/null || true
+    wait "$xvfb_pid" 2>/dev/null || true
+  fi
   mkdir -p "$ROOT/reports"
   cp "$temp/session.log" "$ROOT/reports/melania-labwc-session.log" 2>/dev/null || true
   rm -rf "$temp"
 }
 trap cleanup EXIT
 
-xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- \
+# Share one disposable Xvfb display with the real nested labwc process
+# and scrot; xvfb-run otherwise hides DISPLAY in its own subprocess.
+Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp \
+  3>"$temp/display-number" >"$temp/xvfb.log" 2>&1 &
+xvfb_pid=$!
+display_ready=0
+for _ in {1..80}; do
+  if [[ -s "$temp/display-number" ]]; then
+    display_ready=1
+    break
+  fi
+  kill -0 "$xvfb_pid" 2>/dev/null || break
+  sleep .1
+done
+if (( ! display_ready )); then
+  cat "$temp/xvfb.log" >&2 || true
+  echo "MELANIA_LABWC_SMOKE_FAIL=isolated_Xvfb_not_ready" >&2
+  exit 1
+fi
+export DISPLAY=":$(cat "$temp/display-number")"
+dbus-run-session -- \
   bash "$ROOT/scripts/melania-labwc-session" --nested-test \
   >"$temp/session.log" 2>&1 &
 pid=$!
