@@ -332,6 +332,10 @@ report 'MELANIA_QEMU_REAL_GTK_PANEL_STARTUP_PASS=true'
 # melania-panel and sends the owned copy through Smithay -> Rust DRM/KMS.
 # The host independently verifies a live QMP screendump of the guest CRTC.
 # No mock Wayland client, synthetic panel pixels, or production login.
+# Resolve and validate the actual guest DRM receiver BEFORE launching
+# background clients. Previous KMS stages declare this name much later.
+continuous_kms=/mnt/melania-native/melania-continuous-kms
+[[ -x "$continuous_kms" ]] || fatal 'real_gtk_KMS_Rust_receiver_missing'
 gtk_kms_server_log="$(mktemp -t melania-gtk-kms-server-XXXXXX)"
 gtk_kms_client_log="$(mktemp -t melania-gtk-kms-client-XXXXXX)"
 gtk_kms_drm_log="$(mktemp -t melania-gtk-kms-drm-XXXXXX)"
