@@ -1044,6 +1044,77 @@ rm -f "$integrated_server_log" "$integrated_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Sustain 24 successive real Wayland/client buffer commits and kernel KMS
+# acknowledgements inside ONE compositor process. This is a longer stress
+# scenario, not an unbounded production session or a hardware VT-resume proof.
+# The old twelve-frame acceptance remains unchanged and is checked above.
+long_server_log="$(mktemp -t melania-integrated-long-server-XXXXXX)"
+long_client_log="$(mktemp -t melania-integrated-long-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_QEMU_FRAME_TARGET=24 \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=24 \
+  timeout --signal=TERM --kill-after=3s 110s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$long_server_log" 2>&1 &
+long_server_pid=$!
+long_socket=''
+for attempt in $(seq 1 100); do
+  long_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$long_server_log" | head -n 1)"
+  [[ -n "$long_socket" ]] && break
+  kill -0 "$long_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$long_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$long_server_log"; then
+  cat "$long_server_log"
+  kill "$long_server_pid" 2>/dev/null || true
+  fatal 'long_integrated_Smithay_KMS_process_never_started'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24 WAYLAND_DISPLAY="$long_socket" \
+  timeout --signal=TERM --kill-after=3s 100s \
+  "$continuous_client" > "$long_client_log" 2>&1; then
+  cat "$long_server_log" "$long_client_log"
+  kill "$long_server_pid" 2>/dev/null || true
+  fatal 'long_integrated_real_Wayland_client_failed'
+fi
+if ! wait "$long_server_pid"; then
+  cat "$long_server_log" "$long_client_log"
+  fatal 'long_integrated_real_Smithay_DRM_process_failed'
+fi
+for index in $(seq 1 24); do
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$long_server_log" ||
+    fatal "long_integrated_kernel_frame_${index}_not_acknowledged"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$long_server_log" ||
+    fatal "long_integrated_Wayland_frame_${index}_not_retired"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$long_client_log" ||
+    fatal "long_integrated_client_frame_${index}_not_released"
+done
+for marker in \
+  'MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=24' \
+  'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
+  'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' \
+  'MELANIA_RUST_CONTINUOUS_FRAMES_PASS=24' \
+  'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=24' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true'; do
+  grep -q "^${marker}$" "$long_server_log" || {
+    cat "$long_server_log"
+    fatal "long_integrated_missing_${marker}"
+  }
+done
+grep -q '^MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS=24$' "$long_client_log" ||
+  fatal 'long_integrated_client_extended_frames_not_completed'
+rm -f "$long_server_log" "$long_client_log"
+report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 
 # Stage48: two INDEPENDENT xdg_toplevel surfaces alternate twelve real
 # wl_shm commits. Every one requires real KMS FB_ID, frame.done and release.

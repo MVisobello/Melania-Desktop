@@ -30,11 +30,15 @@ class ContinuousKmsWireContract(unittest.TestCase):
             "planned.ticket.sequence", "planned.generation",
             "stream.read_exact(&mut ack)", "verified_ack(&ack, job.planned)",
             "mpsc::sync_channel::<ContinuousKmsJob>(1)",
-            "self.sender.try_send(job)", "self.receiver.try_recv()",
+            "sender.try_send(job)", "Err(TrySendError::Disconnected(job))",
+            "self.receiver.try_recv()",
             "stale, reordered, or mismatched continuous KMS ACK",
         ):
             self.assertIn(token, WIRE)
-        for forbidden in ("DrmDevice", "libseat", "NATIVE_SESSION_READY=true"):
+        # The transport can mention libseat in safety comments, but must
+        # never acquire a seat or a GPU itself.
+        for forbidden in ("DrmDevice", "LibSeatSession", "GbmDevice",
+                          "session.open(", "/dev/dri/", "NATIVE_SESSION_READY=true"):
             self.assertNotIn(forbidden, WIRE)
 
     def test_rust_socket_tests_cover_more_than_six_and_failures(self):
@@ -43,6 +47,7 @@ class ContinuousKmsWireContract(unittest.TestCase):
             "polling_does_not_block_while_peer_delays_ack",
             "stale_epoch_or_generation_cannot_acknowledge_frame",
             "failed_ack_and_invalid_payload_never_report_success",
+            "stop_interrupts_blocked_ack_and_cannot_accept_more_jobs",
         ):
             self.assertIn("fn " + name + "()", WIRE)
 

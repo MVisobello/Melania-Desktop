@@ -11,7 +11,9 @@ MAIN = (ROOT / "melania-native/src/main.rs").read_text()
 BRIDGE = (ROOT / "melania-native/src/wayland_bridge.rs").read_text()
 RECEIVER = (ROOT / "melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 CLIENT = (ROOT / "melania-native/src/bin/qemu-continuous-client.rs").read_text()
+TRANSPORT = (ROOT / "melania-native/src/continuous_kms_stream.rs").read_text()
 GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
+HOST = (ROOT / "scripts/run-qemu-melania-native.sh").read_text()
 
 class OneProcessWaylandKmsContract(unittest.TestCase):
     def test_same_native_executable_contains_wayland_and_kms(self):
@@ -58,6 +60,24 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS_ERROR_CLEANUP_ATTEMPTED=true', cleanup)
         self.assertTrue(cleanup.index('run_result') >= 0)
 
+    def test_transport_stops_and_joins_before_releasing_drm(self):
+        # A stranded transport thread must not keep a stale DRM frame
+        # alive after the libseat owner has closed its device descriptor.
+        self.assertIn('pub fn stop(&mut self)', TRANSPORT)
+        self.assertIn('self.shutdown.shutdown(Shutdown::Both)', TRANSPORT)
+        self.assertIn('worker.join()', TRANSPORT)
+        self.assertIn('impl Drop for ContinuousKmsWorker', TRANSPORT)
+        self.assertIn('ContinuousKmsWorker::spawn(sender)?', BRIDGE)
+        self.assertIn('ContinuousKmsWorker::spawn(stream)?', BRIDGE)
+        success=BRIDGE[BRIDGE.index('let outcome=join.join()'):]
+        self.assertLess(success.index('state.continuous_worker.take()'),
+                        success.index('owner.release()'))
+        cleanup=BRIDGE[BRIDGE.index('if integrated_kms && run_result.is_err()'):]
+        self.assertLess(cleanup.index('state.continuous_worker.take()'),
+                        cleanup.index('join.join()'))
+        self.assertLess(cleanup.index('join.join()'),
+                        cleanup.index('owner.release()'))
+
     def test_qemu_only_optin_and_original_login_block_remain(self):
         for required in (
             'MELANIA_NATIVE_IN_PROCESS_KMS',
@@ -81,6 +101,27 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertLess(CLIENT.index('std::fs::remove_file(&path)?;'),
                         CLIENT.index('let buffer=pool.create_buffer('))
 
+    def test_longer_one_process_kms_presents_24_actual_frames(self):
+        # The native receiver, Wayland server and client must agree on the
+        # frame target, while the host must require the actual guest proof.
+        start=GUEST.index('# Sustain 24 successive real Wayland/client buffer')
+        end=GUEST.index("report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true'",start)
+        scenario=GUEST[start:end]
+        self.assertIn('MELANIA_NATIVE_QEMU_FRAME_TARGET=24',scenario)
+        self.assertIn('MELANIA_QEMU_CONTINUOUS_FRAMES=24',scenario)
+        self.assertIn('MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24',scenario)
+        self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM',scenario)
+        self.assertIn('for index in $(seq 1 24); do',scenario)
+        self.assertIn('MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=24',scenario)
+        self.assertIn('MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true',scenario)
+        self.assertIn('MELANIA_RUST_KMS_RESTORE_VERIFIED=true',scenario)
+        self.assertIn('MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true',scenario)
+        self.assertIn('MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS=24',scenario)
+        self.assertNotIn('"$continuous_kms"',scenario)
+        self.assertIn('MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true',HOST)
+        self.assertIn('MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true',HOST)
+        self.assertEqual(GUEST.count('# Stage48:'),1)
+        self.assertEqual(GUEST.count('# ONE-PROCESS native integration proof:'),1)
     def test_vm_runs_real_client_without_second_kms_binary(self):
         start=GUEST.index('# ONE-PROCESS native integration proof:')
         end=GUEST.index("report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true'",start)

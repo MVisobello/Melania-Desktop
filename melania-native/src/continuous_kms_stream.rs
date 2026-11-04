@@ -14,6 +14,7 @@ use crate::continuous_redraw::PlannedSceneFrame;
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
+    net::Shutdown,
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     thread,
 };
@@ -38,8 +39,12 @@ pub struct ContinuousKmsResult {
 /// the Smithay dispatch thread. The caller's ContinuousRedraw ledger enforces
 /// at most one actual presentation in flight.
 pub struct ContinuousKmsWorker {
-    sender: SyncSender<ContinuousKmsJob>,
+    sender: Option<SyncSender<ContinuousKmsJob>>,
     receiver: Receiver<ContinuousKmsResult>,
+    // A second handle lets shutdown interrupt a blocked read_exact() on
+    // VT loss or compositor error without waiting for a socket timeout.
+    shutdown: UnixStream,
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 fn frame_header(planned: PlannedSceneFrame) -> [u8; HEADER_BYTES] {
@@ -83,14 +88,19 @@ fn transfer(stream: &mut UnixStream, job: &ContinuousKmsJob) -> Result<(), Strin
 }
 
 impl ContinuousKmsWorker {
-    pub fn spawn(mut stream: UnixStream) -> Self {
+    pub fn spawn(mut stream: UnixStream) -> std::io::Result<Self> {
+        // If duplicating the FD fails, do NOT start a worker that cannot be
+        // interrupted safely during libseat/VT cleanup.
+        let shutdown = stream.try_clone()?;
         let (sender, jobs) = mpsc::sync_channel::<ContinuousKmsJob>(1);
         let (results, receiver) = mpsc::sync_channel::<ContinuousKmsResult>(1);
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
             while let Ok(job) = jobs.recv() {
                 let status = transfer(&mut stream, &job);
                 let failed = status.is_err();
-                if results.send(ContinuousKmsResult { planned: job.planned, status }).is_err()
+                // Never block the worker while handing results to a stalled
+                // compositor: a full result channel is a fatal desync.
+                if results.try_send(ContinuousKmsResult { planned: job.planned, status }).is_err()
                     || failed {
                     // A partially transferred frame or bad ACK poisons this
                     // stream. Never reuse it or invent a successful callback.
@@ -98,12 +108,27 @@ impl ContinuousKmsWorker {
                 }
             }
         });
-        Self { sender, receiver }
+        Ok(Self { sender: Some(sender), receiver, shutdown, worker: Some(worker) })
     }
 
     pub fn submit(&self, job: ContinuousKmsJob)
         -> Result<(), TrySendError<ContinuousKmsJob>> {
-        self.sender.try_send(job)
+        match &self.sender {
+            Some(sender) => sender.try_send(job),
+            None => Err(TrySendError::Disconnected(job)),
+        }
+    }
+
+    /// Revoke queued jobs, abort any blocked socket I/O and join the writer
+    /// before the owner releases the libseat DRM descriptor. Idempotent.
+    pub fn stop(&mut self) {
+        self.sender.take();
+        let _ = self.shutdown.shutdown(Shutdown::Both);
+        if let Some(worker) = self.worker.take() {
+            if worker.join().is_err() {
+                eprintln!("MELANIA_CONTINUOUS_KMS_WORKER_PANICKED=true");
+            }
+        }
     }
 
     pub fn try_result(&self) -> Result<Option<ContinuousKmsResult>, TryRecvError> {
@@ -113,6 +138,10 @@ impl ContinuousKmsWorker {
             Err(error) => Err(error),
         }
     }
+}
+
+impl Drop for ContinuousKmsWorker {
+    fn drop(&mut self) { self.stop(); }
 }
 
 #[cfg(test)]
@@ -167,7 +196,7 @@ mod tests {
         let (client, mut peer) = UnixStream::pair().unwrap();
         client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
-        let worker = ContinuousKmsWorker::spawn(client);
+        let worker = ContinuousKmsWorker::spawn(client).unwrap();
         let responder = thread::spawn(move || {
             for number in 1..=10 {
                 let frame = consume(&mut peer);
@@ -192,7 +221,7 @@ mod tests {
         let (client, mut peer) = UnixStream::pair().unwrap();
         client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        let worker = ContinuousKmsWorker::spawn(client);
+        let worker = ContinuousKmsWorker::spawn(client).unwrap();
         let frame = plan(4, 1, 9);
         worker.submit(ContinuousKmsJob {
             planned: frame, pixels: vec![0; IMAGE_BYTES],
@@ -208,12 +237,37 @@ mod tests {
     }
 
     #[test]
+    fn stop_interrupts_blocked_ack_and_cannot_accept_more_jobs() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut worker = ContinuousKmsWorker::spawn(client).unwrap();
+        let frame = plan(9, 1, 13);
+        worker.submit(ContinuousKmsJob {
+            planned: frame, pixels: vec![0; IMAGE_BYTES],
+        }).unwrap();
+        // Read the whole frame but never send MLA1. The worker is blocked
+        // waiting for the ACK when a VT/error teardown stops it.
+        assert_eq!(consume(&mut peer), frame);
+        let start = Instant::now();
+        worker.stop();
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(matches!(worker.submit(ContinuousKmsJob {
+            planned: frame, pixels: vec![0; IMAGE_BYTES],
+        }), Err(TrySendError::Disconnected(_))));
+        let mut byte = [0u8; 1];
+        assert_eq!(peer.read(&mut byte).unwrap(), 0);
+        // Shutdown is idempotent; Drop must not wait on an already joined worker.
+        worker.stop();
+    }
+
+    #[test]
     fn stale_epoch_or_generation_cannot_acknowledge_frame() {
         for wrong in [plan(7, 9, 12), plan(8, 9, 11), plan(8, 10, 12)] {
             let (client, mut peer) = UnixStream::pair().unwrap();
             client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
             peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            let worker = ContinuousKmsWorker::spawn(client);
+            let worker = ContinuousKmsWorker::spawn(client).unwrap();
             let expected = plan(8, 9, 12);
             worker.submit(ContinuousKmsJob {
                 planned: expected, pixels: vec![0; IMAGE_BYTES],
@@ -230,7 +284,7 @@ mod tests {
         let (client, mut peer) = UnixStream::pair().unwrap();
         client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        let worker = ContinuousKmsWorker::spawn(client);
+        let worker = ContinuousKmsWorker::spawn(client).unwrap();
         let frame = plan(2, 1, 1);
         worker.submit(ContinuousKmsJob {
             planned: frame, pixels: vec![0; IMAGE_BYTES],
@@ -240,7 +294,7 @@ mod tests {
         assert!(result_for(&worker).status.is_err());
 
         let (client, _peer) = UnixStream::pair().unwrap();
-        let worker = ContinuousKmsWorker::spawn(client);
+        let worker = ContinuousKmsWorker::spawn(client).unwrap();
         worker.submit(ContinuousKmsJob {
             planned: frame, pixels: vec![0; 16],
         }).unwrap();
