@@ -9,14 +9,15 @@
 use std::{
     error::Error,
     io::{Read,Write},
-    os::unix::net::{UnixListener,UnixStream},
+    os::unix::net::{UnixDatagram,UnixListener,UnixStream},
+    path::Path,
     sync::Arc,
     time::{Duration,Instant},
 };
 use smithay::{
     backend::{
         input::{InputEvent, ButtonState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
-                AbsolutePositionEvent, Event},
+                AbsolutePositionEvent, Event, KeyState},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
@@ -54,6 +55,7 @@ use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderSchedu
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
+use melania_control::{start_toggle_socket_path,SOCKET_ENV};
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -150,6 +152,9 @@ struct BridgeState {
     pointer_position: Point<f64,Logical>,
     lifecycle: NativeLifecycle,
     delivered_keys: u32,
+    // Only the disposable QEMU Stage87 experiment tracks one Super key.
+    // Any intervening key press cancels the standalone-press shortcut.
+    qemu_start_super_down:Option<u32>,
     delivered_buttons: u32,
     delivered_motions: u32,
 }
@@ -1477,10 +1482,49 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceRemoved {device} =>
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device)),
         InputEvent::Keyboard {event} => {
-            if state.focused.is_none() ||
-               state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
+            if state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
+            // Stage87: ACTUAL USB-keyboard -> libinput -> private GTK Start IPC.
+            // The isolated QEMU shell has no initial keyboard-focused xdg
+            // client, so the legacy focused-only filter would drop Super.
+            // This path is opt-in, VM-gated and never enabled in a login or
+            // nested user session. Other keyboard shortcuts still use the
+            // existing focused-client Wayland event path.
+            let real_gtk_super=state.real_gtk_pixel_kms_mode &&
+                std::env::var("MELANIA_NATIVE_REAL_GTK_START_INPUT")
+                    .as_deref()==Ok("YES_QEMU_VM");
+            if real_gtk_super {
+                let code=event.key_code();
+                if code==125 || code==126 { // Linux evdev KEY_LEFTMETA/RIGHTMETA
+                    if event.state()==KeyState::Pressed {
+                        state.qemu_start_super_down=Some(code);
+                    } else if state.qemu_start_super_down.take()==Some(code) {
+                        // Only after a genuine release and an already owned
+                        // GTK taskbar may the UI be asked to reveal Start.
+                        if state.known_window_surfaces.get(1).is_some() {
+                            let control=std::env::var_os(SOCKET_ENV)
+                                .ok_or("Stage87 missing private panel control socket");
+                            if let Ok(control)=control {
+                                let destination=start_toggle_socket_path(Path::new(&control));
+                                match UnixDatagram::unbound().and_then(|socket|
+                                    socket.send_to(b"TOGGLE_START",&destination)) {
+                                    Ok(_)=>{
+                                        println!("MELANIA_NATIVE_GTK_SUPER_KEY_RELEASED=true");
+                                        let _=std::io::stdout().flush();
+                                    },
+                                    Err(error)=>eprintln!("MELANIA_NATIVE_GTK_SUPER_IPC_FAILED={error}"),
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+                if event.state()==KeyState::Pressed {
+                    state.qemu_start_super_down=None;
+                }
+            }
+            if state.focused.is_none() {return;}
             let keyboard=state.seat.get_keyboard().expect("keyboard");
             keyboard.input::<(),_>(state,event.key_code(),event.state(),
                 SERIAL_COUNTER.next_serial(),event.time_msec(),
@@ -1757,7 +1801,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         xdg_toplevel_count:0,layer_surface_count:0,
         seats,seat,focused:None,pointer_position:(0.0,0.0).into(),
         lifecycle:NativeLifecycle::default(),delivered_keys:0,
-        delivered_buttons:0,delivered_motions:0,
+        qemu_start_super_down:None,delivered_buttons:0,delivered_motions:0,
     };
     if session.is_active() {
         state.lifecycle.on_session(SessionEvent::ActivateSession);
