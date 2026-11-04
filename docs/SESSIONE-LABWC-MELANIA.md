@@ -40,6 +40,7 @@ sudo rm /usr/share/wayland-sessions/org.melaniadesktop.Labwc.desktop
 - Super+Spazio: Start; Super+E: Melania Files; Super+I: Impostazioni
 - Alt+Tab: cambia finestra; Alt+F4: chiude; Super+Invio: terminale
 - La barra riceve le finestre vere da wlrctl tramite un socket IPC privato.
+- Nel login completo, il servizio Rust melania-autostart applica le voci XDG di /etc/xdg/autostart e ~/.config/autostart: Hidden, OnlyShowIn e NotShowIn sono rispettati, e GIO interpreta Exec senza shell. La prova annidata non lancia servizi del computer ospitante.
 - Disconnetti termina soltanto il processo labwc di questa sessione.
 - La configurazione -C integration/labwc non modifica ~/.config/labwc.
 - Il frontend non avvia il compositore sperimentale DRM/KMS di Melania.
