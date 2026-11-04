@@ -402,6 +402,7 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         let monitor_count = gtk::gdk::Display::default()
             .map(|d| d.monitors().n_items()).unwrap_or(0);
         group(&display, "Monitor");
+        crate::system_integrations::append_tool(&display,crate::system_integrations::Tool::Displays);
         display.append(&info_row("video-display", "Schermi rilevati",
             &format!("{monitor_count} monitor rilevati da GTK nella sessione corrente.")));
         display.append(&info_row("dialog-information", "Risoluzione e scala",
@@ -443,6 +444,7 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         // clear unavailable state; no fake slider or host-wide mixer fallback.
         audio_device_controls(&audio, "Uscita audio", "@DEFAULT_AUDIO_SINK@");
         audio_device_controls(&audio, "Microfono", "@DEFAULT_AUDIO_SOURCE@");
+        crate::system_integrations::append_tool(&audio,crate::system_integrations::Tool::AudioMixer);
         Some(audio)
         },
         "power" => {
@@ -573,6 +575,7 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         "bluetooth" => {
         let bluetooth = page("Bluetooth", "bluetooth");
         crate::connectivity_controls::append_bluetooth(&bluetooth);
+        crate::system_integrations::append_tool(&bluetooth,crate::system_integrations::Tool::BluetoothDevices);
         group(&bluetooth, "Stato del controller");
         let controller=label("Rilevamento controller in corso…","settings-row-description");
         controller.add_css_class("settings-card");
@@ -623,6 +626,7 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         "devices" => {
         let devices = page("Dispositivi", "input-keyboard");
         group(&devices, "Hardware");
+        crate::system_integrations::append_tool(&devices,crate::system_integrations::Tool::Printers);
         devices.append(&info_row("input-keyboard", "Input e periferiche",
             "Tastiera, mouse e dispositivi USB vengono gestiti dal sottosistema Linux."));
         Some(devices)

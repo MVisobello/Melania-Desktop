@@ -79,7 +79,12 @@ pub fn availability(action: Action) -> Result<(), String> {
             .map_err(|e| format!("Il compositore Melania non risponde: {e}"));
     }
     if action == Action::Lock {
-        return Err("Blocco schermo non ancora implementato nel compositore Melania.".into());
+        // Never fake security with a GTK overlay. The dedicated Rust helper
+        // verifies standalone labwc ownership and swaylock PAM/ext-session-lock.
+        let status=Command::new("melania-sessionctl").arg("check-lock").status()
+            .map_err(|e|format!("Blocco sicuro non disponibile: {e}"))?;
+        return if status.success(){Ok(())}
+            else{Err("Blocco schermo non disponibile in questa sessione.".into())};
     }
     if !host_actions_enabled() {
         return Err("Disponibile soltanto in una futura sessione Melania nativa; l'anteprima annidata non modifica il computer ospitante.".into());
@@ -103,6 +108,13 @@ pub fn perform(action: Action) -> Result<(), String> {
             .map(PathBuf::from).ok_or("Socket della sessione mancante.")?;
         return request(&path, ControlCommand::Quit)
             .map(|_| ()).map_err(|e| format!("Disconnessione non riuscita: {e}"));
+    }
+    if action == Action::Lock {
+        // -f only reports success once the real Wayland session is locked.
+        let status=Command::new("melania-sessionctl").arg("lock").status()
+            .map_err(|e|format!("Impossibile bloccare il desktop: {e}"))?;
+        return if status.success(){Ok(())}
+            else{Err("Il blocco schermo sicuro ha rifiutato l'operazione.".into())};
     }
     let command = action.systemctl_command().ok_or("Azione non ancora supportata.")?;
     let result = Command::new("systemctl").arg(command).output()
