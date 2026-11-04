@@ -29,6 +29,33 @@ pub fn frame_budget(raw:Option<&str>,default:u64)->Result<u64,FrameBudgetError> 
     }
 }
 
+
+/// The external DRM/KMS receiver must reject invalid settings rather than
+/// silently falling back to 12 and deadlocking against a different sender.
+/// Historical (pre-Stage91) VM trials may request 8..=11 frames; GTK-only
+/// captures may request *exactly* 1, 2 or 3 when explicitly selected.
+pub fn receiver_frame_budget(
+    raw: Option<&str>, gtk_expected: Option<u64>,
+) -> Result<u64, FrameBudgetError> {
+    let count = match raw {
+        Some(value) => {
+            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(FrameBudgetError::InvalidValue);
+            }
+            value.parse::<u64>().map_err(|_| FrameBudgetError::InvalidValue)?
+        }
+        None if gtk_expected.is_some() => return Err(FrameBudgetError::InvalidValue),
+        None => DEFAULT_QEMU_FRAMES,
+    };
+    let valid = if let Some(gtk) = gtk_expected {
+        (1..=3).contains(&gtk) && count == gtk
+    } else {
+        (8..=MAX_QEMU_FRAMES).contains(&count)
+    };
+    if !valid { return Err(FrameBudgetError::InvalidValue); }
+    Ok(count)
+}
+
 impl std::fmt::Display for FrameBudgetError {
     fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
         write!(f,"invalid QEMU continuous frame budget")
@@ -53,6 +80,30 @@ mod tests {
         }
         assert_eq!(frame_budget(Some("65"),12),Err(FrameBudgetError::InvalidValue));
         assert_eq!(frame_budget(Some("1000000000"),12),Err(FrameBudgetError::InvalidValue));
+    }
+
+    #[test]
+    fn receiver_rejects_mismatch_and_invalid_opt_in() {
+        assert_eq!(receiver_frame_budget(None, None), Ok(12));
+        for count in [8u64, 11, 12, 24, 64] {
+            assert_eq!(receiver_frame_budget(Some(&count.to_string()), None), Ok(count));
+        }
+        for invalid in ["", "-1", "0", "7", "65", "NaN", "24x", " 24", "24 ",
+                        "18446744073709551616"] {
+            assert_eq!(receiver_frame_budget(Some(invalid), None),
+                       Err(FrameBudgetError::InvalidValue));
+        }
+        assert_eq!(receiver_frame_budget(None, Some(1)),
+                   Err(FrameBudgetError::InvalidValue));
+        assert_eq!(receiver_frame_budget(Some("1"), None),
+                   Err(FrameBudgetError::InvalidValue));
+        assert_eq!(receiver_frame_budget(Some("1"), Some(1)), Ok(1));
+        assert_eq!(receiver_frame_budget(Some("2"), Some(2)), Ok(2));
+        assert_eq!(receiver_frame_budget(Some("3"), Some(3)), Ok(3));
+        assert_eq!(receiver_frame_budget(Some("12"), Some(1)),
+                   Err(FrameBudgetError::InvalidValue));
+        assert_eq!(receiver_frame_budget(Some("2"), Some(3)),
+                   Err(FrameBudgetError::InvalidValue));
     }
 
     #[test]
