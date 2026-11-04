@@ -14,6 +14,7 @@ use smithay::{
     utils::DeviceFd,
 };
 use melania_native::NativeLifecycle;
+use drm::control::Device as ControlDevice;
 mod wayland_bridge;
 mod native_client_frame;
 // The validated DRM/KMS presenter is compiled into this same executable for
@@ -229,13 +230,41 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                 // Inspect only: never call set_crtc, reset_state or surface
                 // creation. No mode is applied by this probe.
                 let mut probe_mode=None;
+                // Prefer the mode that the kernel is ALREADY scanning out.
+                // VirtIO may advertise 5120x2160 EDID modes while the live
+                // CRTC runs at 1280x800. Never let an oversized advertised
+                // mode bypass the GBM allocator budget or trigger modeset.
+                let active_size=if output_sized {
+                    device.device_fd().resource_handles().ok().and_then(|resources|
+                        resources.crtcs().iter().find_map(|&crtc|
+                            device.device_fd().get_crtc(crtc).ok()
+                                .and_then(|info| info.mode().map(|mode| mode.size()))
+                        )
+                    )
+                } else {None};
                 match melania_native::outputs::inspect_connectors(device.device_fd()) {
                     Ok(connectors) => {
                         println!("Melania DRM connectors on {}: {}",path.display(),connectors.len());
                         for conn in connectors {
                             if output_sized && conn.connected {
+                                // Align the selection and the renderer's
+                                // dimension limits; budget alone would accept
+                                // an EDID width over the 4096 GPU safety cap.
+                                let supported=conn.advertised_modes.iter().filter(|mode|
+                                    melania_native::renderer::validate_gbm_output_dimensions(
+                                        mode.width,mode.height,2
+                                    ).is_ok()
+                                ).cloned().collect::<Vec<_>>();
+                                let active_candidates=supported.iter().filter(|mode|
+                                    active_size.is_some_and(|(width,height)|
+                                        mode.width==u32::from(width) &&
+                                        mode.height==u32::from(height))
+                                ).cloned().collect::<Vec<_>>();
+                                let candidates=if active_candidates.is_empty() {
+                                    &supported
+                                } else {&active_candidates};
                                 let candidate=melania_native::outputs::recommended_mode_for_budget(
-                                    &conn.advertised_modes,2,96*1024*1024
+                                    candidates,2,96*1024*1024
                                 );
                                 if let Some(mode)=candidate {
                                     let score=|m:&melania_native::outputs::DisplayMode|(
