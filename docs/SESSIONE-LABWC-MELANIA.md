@@ -44,6 +44,24 @@ sudo rm /usr/share/wayland-sessions/org.melaniadesktop.Labwc.desktop
 - La configurazione -C integration/labwc non modifica ~/.config/labwc.
 - Il frontend non avvia il compositore sperimentale DRM/KMS di Melania.
 
+## Portali desktop (Flatpak, condivisione schermo e file picker)
+
+La preparazione della sessione include ora il file privato
+`target/melania-labwc-session/share/xdg-desktop-portal/melania-portals.conf`,
+selezionato soltanto quando `XDG_CURRENT_DESKTOP=Melania:labwc`. Il backend
+GTK fornisce selezione file e altre interfacce standard, mentre il backend
+wlroots gestisce Screenshot e ScreenCast. L'ambiente Wayland della sessione
+è importato nel bus D-Bus per attivare i portali corretti, senza scrivere
+configurazioni di Cinnamon o imporre un servizio utente globale.
+
+Su Mint 22 installare facoltativamente:
+
+sudo apt install xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-wlr pipewire wireplumber
+
+La disponibilità reale di ScreenCast, permessi dei portali e selettore
+sorgente **deve essere provata su hardware reale**: la sola configurazione
+non conferma che un browser riesca già a condividere lo schermo.
+
 ## Limitazioni e verifica prima di sostituire Cinnamon
 
 Il launcher è una prima implementazione: la sessione completa deve ancora
