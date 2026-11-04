@@ -48,9 +48,15 @@ class NativeWaylandBridge(unittest.TestCase):
                        'InputEvent::PointerButton {event}',
                        'keyboard.input::<(),_>',
                        'pointer.button(state,',
-                       'SessionEvent::PauseSession=>context.suspend()',
+                       'state.native_presentation_guard.revoke();',
+                       'context.suspend();',
                        'MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true'):
             self.assertIn(needle,RUST)
+        # The native seat token must be invalidated *before* input is suspended:
+        # an old DRM worker reply may never release Wayland callbacks after VT loss.
+        pause=RUST.split('SessionEvent::PauseSession=>{',1)[1].split('SessionEvent::ActivateSession=>{',1)[0]
+        self.assertLess(pause.index('state.native_presentation_guard.revoke();'),
+                        pause.index('context.suspend();'))
 
     def test_real_wayland_client_requires_key_and_pointer_press(self):
         for needle in ('wl_display_connect(NULL)',
