@@ -12,6 +12,10 @@ for bin in melania-panel melania-desktop-surface melania-files melania-settings 
     { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$bin" >&2; exit 3; }
 done
 bash "$ROOT/scripts/melania-labwc-session" --stage >/dev/null
+portal="$ROOT/target/melania-labwc-session/share/xdg-desktop-portal/melania-portals.conf"
+[[ -f "$portal" ]] || { echo "MELANIA_LABWC_SMOKE_FAIL=portal_config_not_staged" >&2; exit 1; }
+grep -q "^org.freedesktop.impl.portal.ScreenCast=wlr$" "$portal"
+grep -q "^org.freedesktop.impl.portal.Screenshot=wlr$" "$portal"
 
 temp="$(mktemp -d -t melania-labwc-ci-XXXXXX)"
 mkdir -m 700 "$temp/runtime" "$temp/config" "$temp/data"
