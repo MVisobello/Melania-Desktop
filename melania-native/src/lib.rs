@@ -12,6 +12,7 @@ pub mod damage_regions;
 pub mod region_compositor;
 pub mod window_placement;
 pub mod output_layout;
+pub mod gtk_layer_geometry;
 pub mod window_slots;
 pub mod window_interaction;
 pub mod async_kms_stream;
