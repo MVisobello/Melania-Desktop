@@ -328,6 +328,96 @@ grep -q '^MELANIA_NATIVE_REAL_GTK_PANEL_LAYER_CONFIGURED=true' "$gtk_smoke_serve
 rm -f "$gtk_smoke_client_log" "$gtk_smoke_server_log"
 report 'MELANIA_QEMU_REAL_GTK_PANEL_STARTUP_PASS=true'
 
+# Stage84: a SEPARATE opt-in run takes wl_shm pixels from the ACTUAL GTK4
+# melania-panel and sends the owned copy through Smithay -> Rust DRM/KMS.
+# The host independently verifies a live QMP screendump of the guest CRTC.
+# No mock Wayland client, synthetic panel pixels, or production login.
+gtk_kms_server_log="$(mktemp -t melania-gtk-kms-server-XXXXXX)"
+gtk_kms_client_log="$(mktemp -t melania-gtk-kms-client-XXXXXX)"
+gtk_kms_drm_log="$(mktemp -t melania-gtk-kms-drm-XXXXXX)"
+rm -f /run/melania-native-qemu/continuous-frame-stream.sock
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_LAYER_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_GTK_MULTISURFACE=YES_QEMU_VM \
+MELANIA_NATIVE_REAL_GTK_PIXEL_KMS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 47s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 \
+  > "$gtk_kms_server_log" 2>&1 &
+gtk_kms_server_pid=$!
+gtk_kms_socket=''
+for attempt in $(seq 1 100); do
+  gtk_kms_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$gtk_kms_server_log" | head -n 1)"
+  [[ -n "$gtk_kms_socket" && -S /run/melania-native-qemu/continuous-frame-stream.sock ]] && break
+  kill -0 "$gtk_kms_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$gtk_kms_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+  cat "$gtk_kms_server_log"
+  kill "$gtk_kms_server_pid" 2>/dev/null || true
+  wait "$gtk_kms_server_pid" 2>/dev/null || true
+  fatal 'real_gtk_KMS_server_or_stream_unavailable'
+fi
+# The serial watcher must receive the unique marker while the GTK frame
+# is still on the virtual CRTC; after restore the pixels are no longer there.
+tail -n +1 -f -s 0.05 "$gtk_kms_drm_log" > /dev/ttyS0 &
+gtk_kms_tail_pid=$!
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=1 \
+MELANIA_QEMU_REAL_GTK_PANEL_KMS=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 40s \
+  "$continuous_kms" < /dev/tty1 > "$gtk_kms_drm_log" 2>&1 &
+gtk_kms_drm_pid=$!
+for attempt in $(seq 1 100); do
+  grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$gtk_kms_drm_log" && break
+  kill -0 "$gtk_kms_drm_pid" 2>/dev/null || break
+  sleep .1
+done
+if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$gtk_kms_drm_log"; then
+  cat "$gtk_kms_server_log" "$gtk_kms_drm_log"
+  kill "$gtk_kms_server_pid" "$gtk_kms_drm_pid" 2>/dev/null || true
+  fatal 'real_gtk_KMS_DRM_receiver_unavailable'
+fi
+LD_LIBRARY_PATH=/mnt/melania-native \
+GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
+GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
+WAYLAND_DISPLAY="$gtk_kms_socket" MELANIA_PROFILE_START=1 \
+  timeout --signal=TERM --kill-after=3s 35s "$gtk_panel" \
+  > "$gtk_kms_client_log" 2>&1 &
+gtk_kms_client_pid=$!
+if ! wait "$gtk_kms_drm_pid"; then
+  cat "$gtk_kms_client_log" "$gtk_kms_server_log" "$gtk_kms_drm_log"
+  kill "$gtk_kms_server_pid" "$gtk_kms_client_pid" 2>/dev/null || true
+  fatal 'real_gtk_KMS_CRTC_did_not_present_genuine_buffer'
+fi
+if ! wait "$gtk_kms_server_pid"; then
+  cat "$gtk_kms_client_log" "$gtk_kms_drm_log" "$gtk_kms_server_log"
+  kill "$gtk_kms_client_pid" 2>/dev/null || true
+  fatal 'real_gtk_KMS_Smithay_image_owner_or_ACK_failed'
+fi
+kill "$gtk_kms_client_pid" "$gtk_kms_tail_pid" 2>/dev/null || true
+wait "$gtk_kms_client_pid" 2>/dev/null || true
+wait "$gtk_kms_tail_pid" 2>/dev/null || true
+cat "$gtk_kms_client_log" "$gtk_kms_drm_log" "$gtk_kms_server_log"
+grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_kms_client_log" ||
+  fatal 'real_gtk_KMS_app_did_not_build_widgets'
+grep -q '^MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED=1280x52 layer=Top' "$gtk_kms_server_log" ||
+  fatal 'real_gtk_KMS_client_buffer_not_imported'
+grep -Fqx 'MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK=1' "$gtk_kms_server_log" ||
+  fatal 'real_gtk_KMS_native_scene_ACK_missing'
+grep -Fqx 'MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1' "$gtk_kms_drm_log" ||
+  fatal 'real_gtk_KMS_guest_CRTC_frame_not_visible'
+grep -Fqx 'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$gtk_kms_drm_log" ||
+  fatal 'real_gtk_KMS_original_guest_CRTC_not_restored'
+rm -f "$gtk_kms_client_log" "$gtk_kms_drm_log" "$gtk_kms_server_log"
+report 'MELANIA_QEMU_REAL_GTK_PANEL_KMS_SCANOUT_PASS=true'
+
 # Stage 26: The Rust native Smithay server accepts an actual Wayland xdg
 # client's wl_shm XRGB8888 buffer and composes the client's pixels into
 # an immutable QEMU-only framebuffer snapshot. A separate short-lived
