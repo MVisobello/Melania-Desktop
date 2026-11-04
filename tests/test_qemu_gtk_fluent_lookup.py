@@ -8,7 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 class QemuGtkFluentLookup(unittest.TestCase):
     def test_real_panel_uses_live_gtk_icon_resolver(self):
         source = (ROOT / "melania-panel/src/main.rs").read_text()
-        self.assertIn('icons.set_theme_name(Some(selected_theme))', source)
+        # GTK4 owns the display IconTheme singleton; selecting its theme
+        # via set_theme_name() raises a critical. Settings updates the managed
+        # resolver and the runtime has_icon() checks remain mandatory.
+        self.assertIn('settings.set_property("gtk-icon-theme-name",selected_theme)', source)
+        self.assertIn('let icons=gtk::IconTheme::for_display(&display)', source)
+        self.assertNotIn('icons.set_theme_name(Some(selected_theme))', source)
         self.assertIn('MELANIA_QEMU_VERIFY_FLUENT_LOOKUP', source)
         self.assertIn('MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true', source)
         self.assertIn('std::process::exit(53)', source)

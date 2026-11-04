@@ -61,6 +61,7 @@ on:
       - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
+      - melania-panel/src/main.rs
   push:
     branches: [main]
     paths:
@@ -122,6 +123,7 @@ on:
       - scripts/melania-vt-guest.py
       - .github/workflows/qemu-melania-native.yml
       - melania-native/**
+      - melania-panel/src/main.rs
   workflow_dispatch:
 
 permissions:

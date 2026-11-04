@@ -1950,12 +1950,12 @@ fn setup_melania_icon_theme() {
     if let Some(settings)=gtk::Settings::default() {
         settings.set_property("gtk-icon-theme-name",selected_theme);
     }
-    // GTK's per-display resolver must adopt the selected Melania theme now,
-    // before the real taskbar buttons/icons are constructed. This is local
-    // to this process/display and never modifies host desktop preferences.
+    // GtkIconTheme::for_display() returns GTK4's managed display singleton.
+    // Calling set_theme_name() on it emits a GTK-CRITICAL and is forbidden.
+    // GtkSettings::gtk-icon-theme-name above updates that resolver correctly;
+    // keep its runtime lookup below to verify that Fluent icons are present.
     if let Some(display)=gtk::gdk::Display::default() {
         let icons=gtk::IconTheme::for_display(&display);
-        icons.set_theme_name(Some(selected_theme));
         if std::env::var("MELANIA_QEMU_VERIFY_FLUENT_LOOKUP").as_deref()
             ==Ok("YES_DISPOSABLE_QEMU") {
             // This is a runtime GTK4 icon lookup, not a manifest/filename
