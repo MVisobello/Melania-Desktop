@@ -19,7 +19,7 @@ REQUIRED = (
     "apps/scalable/org.melaniadesktop.Settings.svg",
     "apps/24x24/system-file-manager.svg",
     "places/24x24/folder.svg",
-    "status/24x24/network-wireless-symbolic.svg",
+    "status/24x24/network-wireless-signal-excellent-symbolic.svg",
 )
 
 
