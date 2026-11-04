@@ -37,7 +37,7 @@ class SharedKernelScanoutStage96(unittest.TestCase):
         ):
             marker=f"MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED={count}$"
             self.assertIn(marker, GUEST)
-            self.assertIn(f'"${log}"', GUEST.replace('$', '\$'))
+            self.assertIn(f'"${log}"', GUEST)
 
     def test_no_host_gpu_or_login_enabled(self):
         self.assertIn("fn guest_only()", QEMU)
