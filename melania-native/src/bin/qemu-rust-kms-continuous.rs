@@ -137,11 +137,27 @@ fn wait_for_fb(card:&Card,handle:crtc::Handle,fb:framebuffer::Handle)
 
 fn run()->Result<(),Box<dyn Error>> {
     guest_only()?;
-    // Stream is connected while Smithay remains running. Unlike Stage28,
-    // the Wayland server must release buffers only after our per-frame ACK.
-    let mut stream=UnixStream::connect(
+    // Preserve the existing separate-process receiver for historical QEMU
+    // CI. The same receiver may now also run in the Smithay server process.
+    let stream=UnixStream::connect(
         "/run/melania-native-qemu/continuous-frame-stream.sock"
     )?;
+    run_stream(stream)
+}
+
+/// First real single-process integration checkpoint: the Smithay compositor
+/// can give this DRM presenter a pre-connected socket pair without launching
+/// an external KMS executable. All QEMU/tty1/opt-in safety checks still apply.
+/// This does NOT make direct card0 access a production libseat backend.
+pub(crate) fn run_embedded(stream:UnixStream)->Result<(),Box<dyn Error>> {
+    guest_only()?;
+    if std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()!=Ok("YES_QEMU_VM") {
+        return Err("embedded KMS needs explicit QEMU opt-in".into());
+    }
+    run_stream(stream)
+}
+
+fn run_stream(mut stream:UnixStream)->Result<(),Box<dyn Error>> {
     stream.set_read_timeout(Some(Duration::from_secs(12)))?;
     stream.set_write_timeout(Some(Duration::from_secs(7)))?;
     println!("MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true");
