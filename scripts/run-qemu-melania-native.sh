@@ -108,7 +108,9 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 # QEMU-only real Fluent artwork, built from the approved SVG generators.
-fluent_icons="$root/target/melania-qemu-fluent-icons"
+# In CI use the fresh, verified guest-only theme outside Cargo's restored
+# target cache. The default remains available for manual QEMU invocations.
+fluent_icons="${MELANIA_QEMU_FLUENT_ICONS_DIR:-$root/target/melania-qemu-fluent-icons}"
 [[ -f "$fluent_icons/Melania-Fluent-Light/index.theme" &&
    -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/melania.svg" &&
    -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/org.melaniadesktop.Files.svg" ]] ||
