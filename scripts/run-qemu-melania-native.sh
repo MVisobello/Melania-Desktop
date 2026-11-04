@@ -447,6 +447,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! grep -q '^MELANIA_QEMU_NATIVE_POST_KMS_VT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_GTK_PANEL_ELF_LINK_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_GTK_FIVE_REAL_LAYER_ROLE_ACK_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_REAL_GTK_PANEL_STARTUP_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial"; then
   printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
   tail -n 100 "$serial" || true
@@ -474,6 +475,7 @@ printf '%s\n' 'MELANIA_VM_NATIVE_VARIABLE_CLIENT_SIZES_GPU_QMP=true' >> "$report
 printf '%s\n' 'MELANIA_VM_NATIVE_MANAGED_XDG_FOUR_QMP_FRAMES=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_REAL_LAYER_SHELL_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_FIVE_WAYLAND_ROLE_ACK=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_STARTUP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_PANEL_REAL_ELF_GUEST_LINK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
