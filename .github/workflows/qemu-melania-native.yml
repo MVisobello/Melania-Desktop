@@ -160,11 +160,24 @@ jobs:
             libegl1-mesa-dev libgles2-mesa-dev libudev-dev libseat-dev \
             libdrm-dev libgbm-dev libinput-dev qemu-system-x86 \
             qemu-utils cloud-image-utils genisoimage curl \
-            libgtk-4-dev libgtk4-layer-shell-dev
+            libgtk-4-dev wayland-protocols meson ninja-build
           cargo test -p melania-native --all-targets
-          # Stage83B preflight: build the *actual* GTK4 panel on the same
-          # Ubuntu release as the QEMU guest, before attempting a guest run.
-          # This only proves build/link readiness, not native rendering.
+          # Ubuntu 24.04 has GTK4 headers but no gtk4-layer-shell C dev package.
+          # Build pinned upstream v1.1.1 from source, with nonessential
+          # introspection / docs / tests disabled; verify Git revision.
+          git clone --depth 1 --branch v1.1.1 \
+            https://github.com/wmww/gtk4-layer-shell.git /tmp/melania-gtk4-layer-shell
+          test "$(git -C /tmp/melania-gtk4-layer-shell rev-parse HEAD)" = \
+            "4867d7b85cdf1e829fc1fd6f1d5f04c42cc99389"
+          meson setup /tmp/melania-gtk4-layer-shell/build \
+            /tmp/melania-gtk4-layer-shell \
+            --prefix=/usr/local -Dintrospection=false -Dvapi=false \
+            -Dtests=false -Dsmoke-tests=false -Ddocs=false -Dexamples=false
+          ninja -C /tmp/melania-gtk4-layer-shell/build
+          sudo ninja -C /tmp/melania-gtk4-layer-shell/build install
+          sudo ldconfig
+          export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          # Stage83B preflight: compile the actual panel, not a mock client.
           pkg-config --modversion gtk4 gtk4-layer-shell-0
           cargo build -p melania-panel --bin melania-panel
           test -x target/debug/melania-panel
