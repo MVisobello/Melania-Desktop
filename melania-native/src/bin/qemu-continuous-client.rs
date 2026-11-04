@@ -140,12 +140,21 @@ fn main()->Result<(),Box<dyn Error>> {
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[blue,green,red,0]);
         }
-        let path=format!("/run/melania-native-qemu/continuous-client-{index}.bgra");
+        // Each Wayland client invocation must use its own wl_shm backing file.
+        // The guest runs sequential legacy and in-process KMS clients in the
+        // same /run directory; create_new with a fixed name fails on the
+        // second run even if the previous compositor exited cleanly.
+        let path=format!("/run/melania-native-qemu/continuous-client-{}-{index}.bgra",
+                         std::process::id());
         let mut file=OpenOptions::new().create_new(true).read(true).write(true)
-            .open(path)?;
+            .open(&path)?;
         file.write_all(&pixels)?;
         file.sync_all()?;
         let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
+        // The wl_shm pool retains the FD; the pathname is not needed by
+        // either process. Unlink immediately to avoid stale files between
+        // consecutive QEMU scenarios and on client disconnect.
+        std::fs::remove_file(&path)?;
         let buffer=pool.create_buffer(
             0,W as i32,H as i32,(W*4) as i32,wl_shm::Format::Xrgb8888,&qh,()
         );

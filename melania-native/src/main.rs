@@ -16,6 +16,10 @@ use smithay::{
 use melania_native::NativeLifecycle;
 mod wayland_bridge;
 mod native_client_frame;
+// The validated DRM/KMS presenter is compiled into this same executable for
+// the explicit one-process QEMU checkpoint, without exposing host login.
+#[path="bin/qemu-rust-kms-continuous.rs"]
+mod qemu_continuous_receiver;
 
 const BLOCKED: i32 = 78;
 fn blocked(why:&str)->! {

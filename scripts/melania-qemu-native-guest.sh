@@ -973,6 +973,78 @@ rm -f "$continuous_server_log" "$continuous_kms_log" "$continuous_client_log"
 report 'MELANIA_QEMU_NATIVE_CONTINUOUS_12_REAL_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
 
+# ONE-PROCESS native integration proof: REAL Smithay Wayland server and
+# Rust DRM/KMS presenter now share ONE melania-native process. No external
+# melania-continuous-kms executable may be launched in this scenario.
+integrated_server_log="$(mktemp -t melania-integrated-server-XXXXXX)"
+integrated_client_log="$(mktemp -t melania-integrated-client-XXXXXX)"
+tail -n +1 -f -s 0.05 "$integrated_server_log" > /dev/ttyS0 &
+integrated_tail_pid=$!
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+  timeout --signal=TERM --kill-after=3s 72s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$integrated_server_log" 2>&1 &
+integrated_server_pid=$!
+integrated_socket=''
+for attempt in $(seq 1 100); do
+  integrated_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$integrated_server_log" | head -n 1)"
+  [[ -n "$integrated_socket" ]] && break
+  kill -0 "$integrated_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$integrated_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$integrated_server_log"; then
+  cat "$integrated_server_log"
+  kill "$integrated_server_pid" 2>/dev/null || true
+  fatal 'integrated_Smithay_KMS_process_never_started'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$integrated_socket" \
+  timeout --signal=TERM --kill-after=3s 62s \
+  "$continuous_client" > "$integrated_client_log" 2>&1; then
+  cat "$integrated_server_log" "$integrated_client_log"
+  kill "$integrated_server_pid" 2>/dev/null || true
+  fatal 'integrated_real_Wayland_client_failed'
+fi
+if ! wait "$integrated_server_pid"; then
+  cat "$integrated_server_log" "$integrated_client_log"
+  fatal 'integrated_real_Smithay_DRM_process_failed'
+fi
+kill "$integrated_tail_pid" 2>/dev/null || true
+wait "$integrated_tail_pid" 2>/dev/null || true
+for index in $(seq 1 12); do
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$integrated_server_log" ||
+    fatal "integrated_kernel_frame_$index_not_acknowledged"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$integrated_server_log" ||
+    fatal "integrated_Wayland_frame_$index_not_retired"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$integrated_client_log" ||
+    fatal "integrated_client_frame_$index_not_released"
+done
+grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=12$' "$integrated_server_log" ||
+  fatal 'integrated_kernel_CRTC_connector_route_not_verified'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$integrated_server_log" ||
+  fatal 'integrated_original_connector_not_restored'
+grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$integrated_server_log" ||
+  fatal 'integrated_original_CRTC_not_restored'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$integrated_server_log" ||
+  fatal 'integrated_receiver_never_completed'
+grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=12' "$integrated_server_log" ||
+  fatal 'integrated_Wayland_DRM_join_incomplete'
+grep -q '^MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true' "$integrated_server_log" ||
+  fatal 'integrated_DRM_card_not_acquired_through_libseat'
+grep -q '^MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' "$integrated_server_log" ||
+  fatal 'integrated_libseat_DRM_card_not_closed_after_rollback'
+rm -f "$integrated_server_log" "$integrated_client_log"
+report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
+
 # Stage48: two INDEPENDENT xdg_toplevel surfaces alternate twelve real
 # wl_shm commits. Every one requires real KMS FB_ID, frame.done and release.
 # The final QMP screendump must show BOTH retained client images.

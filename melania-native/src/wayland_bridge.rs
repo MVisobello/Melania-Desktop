@@ -54,7 +54,9 @@ use melania_native::scene::Layer as SceneLayer;
 use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
-use crate::native_client_frame;
+use crate::{native_client_frame,qemu_continuous_receiver};
+use smithay::reexports::rustix::fs::OFlags;
+use std::os::fd::OwnedFd;
 use melania_control::{start_toggle_socket_path,SOCKET_ENV};
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
@@ -1833,9 +1835,31 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     }
 }
 
+/// Keep the original libseat-owned descriptor until the DRM worker exits.
+/// The seat's close() callback (not a bare close(2)) retires its device ID.
+struct OwnedSeatCard {
+    session:LibSeatSession,
+    fd:Option<OwnedFd>,
+}
+impl OwnedSeatCard {
+    fn release(&mut self)->Result<(),String> {
+        if let Some(fd)=self.fd.take() {
+            self.session.close(fd)
+                .map_err(|error|format!("libseat failed to release DRM card: {error}"))
+        } else {Ok(())}
+    }
+}
+impl Drop for OwnedSeatCard {
+    fn drop(&mut self) {
+        if let Err(error)=self.release() {
+            eprintln!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASE_ERROR={error}");
+        }
+    }
+}
+
 pub fn run() -> Result<(),Box<dyn Error>> {
     // Main has already required explicit consent, QEMU DMI and dedicated VT.
-    let (session,notifier)=LibSeatSession::new()?;
+    let (mut session,notifier)=LibSeatSession::new()?;
     let seat_name=session.seat();
     let mut context=Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
         session.clone().into()
@@ -2093,7 +2117,57 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        (!state.close_redraw_mode || !state.multi_window_mode) {
         return Err("reopen redraw requires an isolated QEMU close-redraw test".into());
     }
-    let frame_listener=if live_stream {
+    // SINGLE-PROCESS QEMU CHECKPOINT: use a private UnixStream pair to pass
+    // the live Smithay wl_shm frames to the real Rust DRM/KMS presenter.
+    // The presenter is compiled into this executable, not an external KMS
+    // process. This is still a disposable VM proof, NOT a libseat-owned
+    // production GPU, atomic rollback or login-manager session.
+    let integrated_kms=std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if integrated_kms && (
+        !state.continuous_kms_mode || !state.live_stream ||
+        !state.frame_callbacks_probe || state.async_kms_mode ||
+        std::env::var("MELANIA_QEMU_CONTINUOUS_KMS").as_deref()
+            !=Ok("YES_DISPOSABLE_QEMU") ||
+        std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
+            .ok().as_deref()!=Some(state.continuous_frame_target.to_string().as_str())
+    ) {
+        return Err("in-process KMS requires matching QEMU frame targets and explicit safeguards".into());
+    }
+    let mut integrated_thread=None;
+    let mut integrated_drm:Option<OwnedSeatCard>=None;
+    // Include every fallible initialization in the cleanup boundary. An error
+    // while binding the Wayland socket, creating the DRM worker, or flushing
+    // startup output must join the embedded presenter before libseat closes
+    // the original DRM descriptor; not just errors in the dispatch loop.
+    let run_result=(||->Result<(),Box<dyn Error>> {
+    if integrated_kms {
+        if !session.is_active() || !state.lifecycle.seat_active() {
+            return Err("cannot acquire QEMU DRM card from an inactive libseat session".into());
+        }
+        // In contrast with the historical separate-process receiver, this
+        // path obtains DRM from the SAME libseat seat as Smithay/libinput.
+        // Only a clone of the FD crosses into the DRM thread; the original
+        // FD remains registered until the verified rollback/join succeeds.
+        let fd=session.open(
+            Path::new("/dev/dri/card0"),
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        )?;
+        integrated_drm=Some(OwnedSeatCard{session:session.clone(),fd:Some(fd)});
+        let presenter_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
+        let (sender,receiver)=UnixStream::pair()?;
+        sender.set_read_timeout(Some(Duration::from_secs(8)))?;
+        sender.set_write_timeout(Some(Duration::from_secs(7)))?;
+        state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender));
+        integrated_thread=Some(std::thread::spawn(move || {
+            qemu_continuous_receiver::run_embedded(
+                receiver,std::fs::File::from(presenter_fd)
+            ).map_err(|error|error.to_string())
+        }));
+        println!("MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true");
+        println!("MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true");
+    }
+    let frame_listener=if live_stream && !integrated_kms {
         let path=if state.continuous_kms_mode {
             "/run/melania-native-qemu/continuous-frame-stream.sock"
         } else {"/run/melania-native-qemu/frame-stream.sock"};
@@ -2135,6 +2209,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let mut real_gtk_seen_since=None;
     let mut pixel_ready_since=None;
     let mut continuous_ready_since=None;
+    // Always unwind the integrated renderer before libseat drops its FD.
+    // A client error, libseat pause or Wayland dispatch failure must NOT
+    // bypass KMS rollback by returning directly from this function.
     while Instant::now()<deadline {
         // Accept the Rust DRM consumer before processing client commits;
         // the socket is private to this disposable VM, not the host.
@@ -2242,6 +2319,21 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 if state.dynamic_pointer_proof_mode {
                     println!("MELANIA_NATIVE_DYNAMIC_POINTER_FRAME13_PASS=true");
                 }
+                if let Some(join)=integrated_thread.take() {
+                    let outcome=join.join()
+                        .map_err(|_|"in-process KMS presenter panicked during rollback")?;
+                    outcome.map_err(|e|format!("in-process KMS presenter failed: {e}"))?;
+                    // The DRM worker has completed the final kernel
+                    // verification and restored the old CRTC/connector.
+                    // libseat must now explicitly close its original device.
+                    let Some(mut owner)=integrated_drm.take() else {
+                        return Err("libseat DRM ownership disappeared before cleanup".into());
+                    };
+                    owner.release().map_err(|error|format!("{error}"))?;
+                    println!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true");
+                    println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}",
+                             state.continuous_frame_target);
+                }
                 println!("MELANIA_NATIVE_SESSION_READY=false");
                 return Ok(());
             }
@@ -2331,6 +2423,27 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         "QEMU Wayland input bridge incomplete: focused={} keys={} buttons={}",
         state.focused.is_some(),state.delivered_keys,state.delivered_buttons
     ).into())
+    })();
+    if integrated_kms && run_result.is_err() {
+        // Close the pending-job producer first, allowing the KMS receiver
+        // to observe EOF. Its normal error/Drop path attempts CRTC rollback.
+        // Never release the libseat descriptor before this thread ends.
+        state.continuous_worker.take();
+        if let Some(join)=integrated_thread.take() {
+            match join.join() {
+                Ok(Ok(()))=>println!("MELANIA_NATIVE_IN_PROCESS_KMS_EARLY_STOP=true"),
+                Ok(Err(error))=>eprintln!("MELANIA_NATIVE_IN_PROCESS_KMS_ERROR={error}"),
+                Err(_)=>eprintln!("MELANIA_NATIVE_IN_PROCESS_KMS_THREAD_PANICKED=true"),
+            }
+        }
+        if let Some(mut owner)=integrated_drm.take() {
+            if let Err(error)=owner.release() {
+                eprintln!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASE_ERROR={error}");
+            }
+        }
+        println!("MELANIA_NATIVE_IN_PROCESS_KMS_ERROR_CLEANUP_ATTEMPTED=true");
+    }
+    run_result
 }
 
 #[cfg(test)]
