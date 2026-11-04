@@ -4,6 +4,7 @@
 //! Never exec() a desktop file through a shell. Only enable in an independent
 //! Melania login after the Wayland compositor has become available.
 use gtk::gio::{self,prelude::*};
+use gio_unix::DesktopAppInfo;
 use std::{collections::BTreeMap,env,fs,path::{Path,PathBuf},process::ExitCode};
 
 fn eligible(get:impl Fn(&str)->Option<String>)->bool{
@@ -107,7 +108,7 @@ fn launch_all()->Result<(),String>{
         if meta.len()>262_144 {continue;}
         let Ok(content)=fs::read_to_string(&path) else{continue};
         if !should_launch(&content,&desktops){continue;}
-        let Some(info)=gio::DesktopAppInfo::from_filename(&path) else{
+        let Some(info)=DesktopAppInfo::from_filename(&path) else{
             eprintln!("MELANIA_AUTOSTART_INVALID={id}");
             failed+=1;continue;
         };
