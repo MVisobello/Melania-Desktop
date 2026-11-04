@@ -55,6 +55,8 @@ use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderSchedu
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
+use smithay::reexports::rustix::fs::OFlags;
+use std::os::fd::OwnedFd;
 use melania_control::{start_toggle_socket_path,SOCKET_ENV};
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
@@ -1833,9 +1835,31 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     }
 }
 
+/// Keep the original libseat-owned descriptor until the DRM worker exits.
+/// The seat's close() callback (not a bare close(2)) retires its device ID.
+struct OwnedSeatCard {
+    session:LibSeatSession,
+    fd:Option<OwnedFd>,
+}
+impl OwnedSeatCard {
+    fn release(&mut self)->Result<(),String> {
+        if let Some(fd)=self.fd.take() {
+            self.session.close(fd)
+                .map_err(|error|format!("libseat failed to release DRM card: {error}"))
+        } else {Ok(())}
+    }
+}
+impl Drop for OwnedSeatCard {
+    fn drop(&mut self) {
+        if let Err(error)=self.release() {
+            eprintln!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASE_ERROR={error}");
+        }
+    }
+}
+
 pub fn run() -> Result<(),Box<dyn Error>> {
     // Main has already required explicit consent, QEMU DMI and dedicated VT.
-    let (session,notifier)=LibSeatSession::new()?;
+    let (mut session,notifier)=LibSeatSession::new()?;
     let seat_name=session.seat();
     let mut context=Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
         session.clone().into()
@@ -2111,15 +2135,31 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         return Err("in-process KMS requires matching QEMU frame targets and explicit safeguards".into());
     }
     let mut integrated_thread=None;
+    let mut integrated_drm:Option<OwnedSeatCard>=None;
     if integrated_kms {
+        if !session.is_active() || !state.lifecycle.seat_active() {
+            return Err("cannot acquire QEMU DRM card from an inactive libseat session".into());
+        }
+        // In contrast with the historical separate-process receiver, this
+        // path obtains DRM from the SAME libseat seat as Smithay/libinput.
+        // Only a clone of the FD crosses into the DRM thread; the original
+        // FD remains registered until the verified rollback/join succeeds.
+        let fd=session.open(
+            Path::new("/dev/dri/card0"),
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        )?;
+        integrated_drm=Some(OwnedSeatCard{session:session.clone(),fd:Some(fd)});
+        let presenter_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
         let (sender,receiver)=UnixStream::pair()?;
         sender.set_read_timeout(Some(Duration::from_secs(8)))?;
         sender.set_write_timeout(Some(Duration::from_secs(7)))?;
         state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender));
         integrated_thread=Some(std::thread::spawn(move || {
-            qemu_continuous_receiver::run_embedded(receiver)
-                .map_err(|error|error.to_string())
+            qemu_continuous_receiver::run_embedded(
+                receiver,std::fs::File::from(presenter_fd)
+            ).map_err(|error|error.to_string())
         }));
+        println!("MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true");
         println!("MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true");
     }
     let frame_listener=if live_stream && !integrated_kms {
@@ -2275,6 +2315,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     let outcome=join.join()
                         .map_err(|_|"in-process KMS presenter panicked during rollback")?;
                     outcome.map_err(|e|format!("in-process KMS presenter failed: {e}"))?;
+                    // The DRM worker has completed the final kernel
+                    // verification and restored the old CRTC/connector.
+                    // libseat must now explicitly close its original device.
+                    let Some(mut owner)=integrated_drm.take() else {
+                        return Err("libseat DRM ownership disappeared before cleanup".into());
+                    };
+                    owner.release().map_err(|error|format!("{error}"))?;
+                    println!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true");
                     println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}",
                              state.continuous_frame_target);
                 }
