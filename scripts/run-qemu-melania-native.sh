@@ -77,6 +77,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'QEMU real close/reopen frame13/14 screenshot verifier missing'
 [[ -f "$root/scripts/capture-qemu-real-layer-panel.py" ]] ||
   deny 'independent QMP layer pixel verifier missing'
+[[ -f "$root/scripts/capture-qemu-real-gtk-panel.py" ]] ||
+  deny 'independent QMP real GTK4 taskbar verifier missing'
 [[ -f "$root/scripts/capture-qemu-continuous-dynamic.py" ]] ||
   deny 'QEMU real variable-size two-window pixel verifier missing'
 [[ -f "$root/scripts/inject-qemu-dynamic-pointer.py" &&
@@ -238,6 +240,11 @@ python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
   --output "$report/real-layer-panel-frame12.ppm" --timeout 950 \
   > "$report/qmp-real-layer-panel.log" 2>&1 &
 layer_capture_pid=$!
+python3 "$root/scripts/capture-qemu-real-gtk-panel.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/real-gtk-panel-frame1.ppm" --timeout 950 \
+  > "$report/qmp-real-gtk-panel.log" 2>&1 &
+gtk_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -294,9 +301,13 @@ wait "$managed_role_capture_pid"
 managed_role_capture_code=$?
 wait "$layer_capture_pid"
 layer_capture_code=$?
+wait "$gtk_capture_pid"
+gtk_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$layer_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 ]] ||
+    ! grep -q '^MELANIA_QEMU_GTK4_PANEL_PIXELS_FROM_KMS=true' "$report/qmp-real-gtk-panel.log" ||
+    ! test -s "$report/real-gtk-panel-frame1.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true' "$report/qmp-real-layer-panel.log" ||
     ! grep -q '^MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true' "$serial" ||
     ! test -s "$report/real-layer-panel-frame12.ppm" ||
@@ -448,6 +459,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! grep -q '^MELANIA_QEMU_GTK_PANEL_ELF_LINK_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_GTK_FIVE_REAL_LAYER_ROLE_ACK_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_REAL_GTK_PANEL_STARTUP_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_REAL_GTK_PANEL_KMS_SCANOUT_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial"; then
   printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
   tail -n 100 "$serial" || true
@@ -464,6 +476,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-reopen-frame.log" || true
   tail -n 30 "$report/qmp-managed-xdg-roles.log" || true
   tail -n 30 "$report/qmp-real-layer-panel.log" || true
+  tail -n 30 "$report/qmp-real-gtk-panel.log" || true
   exit 1
 fi
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
@@ -476,6 +489,7 @@ printf '%s\n' 'MELANIA_VM_NATIVE_MANAGED_XDG_FOUR_QMP_FRAMES=true' >> "$report/r
 printf '%s\n' 'MELANIA_VM_NATIVE_REAL_LAYER_SHELL_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_FIVE_WAYLAND_ROLE_ACK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_STARTUP=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_KMS_QMP_PIXELS=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_PANEL_REAL_ELF_GUEST_LINK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
