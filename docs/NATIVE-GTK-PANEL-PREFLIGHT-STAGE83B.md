@@ -2,7 +2,9 @@
 
 Questa fase aggiunge un controllo **sul binario reale** `melania-panel`
 alla CI nativa QEMU. Il runner Ubuntu 24.04 installa le dipendenze di
-sviluppo GTK4 e gtk4-layer-shell, compila il binario Rust originale
+sviluppo GTK4 e compila **gtk4-layer-shell 1.1.1** dalla sorgente ufficiale
+(fissata al commit `4867d7b85cdf1e829fc1fd6f1d5f04c42cc99389`), perché
+`libgtk4-layer-shell-dev` non è disponibile via APT su Noble. Poi compila il binario Rust originale
 (`cargo build -p melania-panel --bin melania-panel`) e verifica con
 `ldd` che tutte le librerie dinamiche siano risolte.
 
