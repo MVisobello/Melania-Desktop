@@ -2007,11 +2007,26 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
+                // A revoked callback is not enough: a pending transport job
+                // could still ask the KMS presenter for a new page flip.
+                // Interrupt the socket and join its worker BEFORE returning
+                // from the libseat pause notification. The outer error path
+                // then joins the DRM presenter, attempts CRTC restoration,
+                // and releases the card through libseat.
+                state.continuous_worker.take();
+                state.continuous_inflight.take();
+                state.continuous_presentation_token.take();
+                state.continuous_pending=None;
                 context.suspend();
             },
             SessionEvent::ActivateSession=>{
                 if context.resume().is_err() {
                     state.native_presentation_guard.revoke();
+                    // If libinput cannot resume, never re-use a socket or
+                    // presentation ticket from the old DRM/VT generation.
+                    state.continuous_worker.take();
+                    state.continuous_inflight.take();
+                    state.continuous_presentation_token.take();
                     state.lifecycle.on_session(SessionEvent::PauseSession);
                     state.render_scheduler.set_seat_active(false);
                     state.continuous_redraw.set_seat_active(false);
