@@ -42,6 +42,7 @@ on:
       - tools/melania_fluent_settings_icons.py
       - tools/melania_shell_symbolic_icons.py
       - tests/test_qemu_fluent_icon_bundle.py
+      - tests/test_qemu_gtk_fluent_lookup.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
@@ -98,6 +99,7 @@ on:
       - tools/melania_fluent_settings_icons.py
       - tools/melania_shell_symbolic_icons.py
       - tests/test_qemu_fluent_icon_bundle.py
+      - tests/test_qemu_gtk_fluent_lookup.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
@@ -167,6 +169,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_gtk_png_evidence.py' -v
           python3 -m py_compile tools/build_qemu_fluent_subset.py
           python3 -m unittest discover -s tests -p 'test_qemu_fluent_icon_bundle.py' -v
+          python3 -m unittest discover -s tests -p 'test_qemu_gtk_fluent_lookup.py' -v
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
