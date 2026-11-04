@@ -17,7 +17,7 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertIn('mod qemu_continuous_receiver;', MAIN)
         self.assertIn('mod wayland_bridge;', MAIN)
         self.assertIn('pub(crate) fn run_embedded(stream:UnixStream,card:File)', RECEIVER)
-        self.assertIn('run_stream(stream)', RECEIVER)
+        self.assertIn('run_stream(stream,card)', RECEIVER)
         self.assertIn('qemu_continuous_receiver::run_embedded(receiver)', BRIDGE)
 
     def test_no_external_kms_process_required_for_embedded_mode(self):
