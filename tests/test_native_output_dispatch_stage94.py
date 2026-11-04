@@ -35,7 +35,7 @@ class NativeOutputDispatchStage94(unittest.TestCase):
         self.assertIn("self.fail_closed();", block)
 
     def test_callbacks_require_real_kernel_proof_and_all_acks(self):
-        start = SOURCE.index("pub fn presented(")
+        start = SOURCE.index("fn presented(")
         end = SOURCE.index("pub fn rejected(", start)
         block = SOURCE[start:end]
         for required in (
