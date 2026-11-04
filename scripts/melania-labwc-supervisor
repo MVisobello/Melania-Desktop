@@ -8,6 +8,15 @@ set -euo pipefail
 : "${LABWC_PID:?}"
 ROOT="$MELANIA_ROOT"
 BIN="$MELANIA_BIN_DIR"
+# D-Bus activated portal backends need the real compositor socket and the
+# Melania desktop selector. Update only the CURRENT private session bus;
+# in a full login, also publish it to the user systemd manager.
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+  dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || true
+  if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then
+    dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || true
+  fi
+fi
 child_pids=()
 cleanup() {
   trap - EXIT INT TERM HUP
@@ -41,6 +50,20 @@ child_pids+=("$panel")
 "$BIN/melania-notifyd" &
 notify=$!
 child_pids+=("$notify")
+# The real display-manager session must never become an unprotected shell.
+# swayidle -w serializes swaylock -f before logind releases suspend.
+# Do not attach a lock daemon to Cinnamon/VirtualBox nested previews.
+idle=''
+if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then
+  "$BIN/melania-sessionctl" check-lock || {
+    echo "MELANIA_LABWC_FATAL=secure_lock_unavailable" >&2
+    exit 1
+  }
+  "$BIN/melania-sessionctl" idle &
+  idle=$!
+  child_pids+=("$idle")
+  echo "MELANIA_LABWC_IDLE_GUARD_STARTED=true"
+fi
 # Only in the disposable Linux CI smoke: map one real xdg_toplevel
 # to prove that the panel socket adapter enumerates Wayland windows.
 if [[ "${MELANIA_LABWC_SMOKE_OPEN_FILES:-0}" == 1 ]]; then
@@ -50,6 +73,15 @@ if [[ "${MELANIA_LABWC_SMOKE_OPEN_FILES:-0}" == 1 ]]; then
 fi
 echo "MELANIA_LABWC_SHELL_STARTED=true"
 
+# Launch XDG autostart only for a real independent login. GIO parses Exec.
+# Never launch Cinnamon/XFCE inherited startup daemons in a nested preview.
+if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then
+  "$BIN/melania-autostart" &
+  child_pids+=("$!")
+  echo "MELANIA_LABWC_XDG_AUTOSTART_DISPATCHED=true"
+fi
+
+
 # Keep the session alive only while both essential graphical layers and
 # the compositor are alive. A crash requests logout, never a system reboot.
 while :; do
@@ -57,7 +89,8 @@ while :; do
   if ! kill -0 "$LABWC_PID" 2>/dev/null; then break; fi
   if ! kill -0 "$panel" 2>/dev/null ||
      ! kill -0 "$desktop" 2>/dev/null ||
-     ! kill -0 "$adapter" 2>/dev/null; then
+     ! kill -0 "$adapter" 2>/dev/null ||
+     { [[ -n "$idle" ]] && ! kill -0 "$idle" 2>/dev/null; }; then
     echo "MELANIA_LABWC_SHELL_FAILURE=critical_component_exited" >&2
     if [[ -r "/proc/$LABWC_PID/comm" &&
           "$(cat "/proc/$LABWC_PID/comm")" == labwc ]]; then
