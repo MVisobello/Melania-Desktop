@@ -9,6 +9,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RENDERER = (ROOT / "melania-native/src/renderer.rs").read_text()
 NATIVE = (ROOT / "melania-native/src/main.rs").read_text()
+GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
+HOST = (ROOT / "scripts/run-qemu-melania-native.sh").read_text()
 
 class NativeGbmOutputProbe(unittest.TestCase):
     def test_real_output_sized_gpu_path_reuses_libseat_device(self):
@@ -33,6 +35,13 @@ class NativeGbmOutputProbe(unittest.TestCase):
         self.assertIn('native_scanout_is_implemented() -> bool {false}', RENDERER)
         for forbidden in ('set_crtc(', 'page_flip(', 'atomic_commit(', 'create_surface('):
             self.assertNotIn(forbidden, RENDERER)
+
+    def test_qemu_guest_executes_gpu_probe_and_host_requires_proof(self):
+        self.assertIn('"$binary" --experimental-gbm-output < /dev/tty1',GUEST)
+        self.assertIn('MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED=',GUEST)
+        self.assertIn("report 'MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true'",GUEST)
+        self.assertIn("! grep -q '^MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true'",HOST)
+        self.assertNotIn('MELANIA_NATIVE_SESSION_READY=true',GUEST)
 
     def test_rust_limits_and_multi_frame_sync_are_verified(self):
         self.assertIn('fn output_sized_gpu_probe_limits_gpu_memory_and_oversized_edid()', RENDERER)
