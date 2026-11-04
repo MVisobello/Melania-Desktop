@@ -1357,7 +1357,7 @@ impl WlrLayerShellHandler for BridgeState {
             // A bounded 1280x800 output is the only opt-in scanout here.
             // The client's normal Wayland configure/ack precedes wl_shm.
             surface.with_pending_state(|pending|{
-                pending.size=Some((1280,40).into());
+                pending.size=Some((1280,52).into());
             });
             self.layer_surfaces.push(surface.clone());
         }
