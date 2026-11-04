@@ -490,6 +490,10 @@ fi
 # The live serial marker is needed while each actual CRTC framebuffer exists.
 tail -n +1 -f -s 0.05 "$gtk2_drm_log" > /dev/ttyS0 &
 gtk2_tail_pid=$!
+# Stage87: capture the REAL libinput and GTK shell path as it happens.
+# Delayed final log concatenation cannot diagnose lost USB keyboard events.
+tail -n +1 -f -s 0.05 "$gtk2_server_log" > /dev/ttyS0 &
+gtk2_server_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=3 \
 MELANIA_QEMU_REAL_GTK_PANEL_KMS=YES_QEMU_VM \
@@ -530,7 +534,7 @@ if ! wait "$gtk2_server_pid"; then
   kill "$gtk2_client_pid" 2>/dev/null || true
   fatal 'real_GTK_two_frame_Smithay_ACK_or_owner_failed'
 fi
-kill "$gtk2_client_pid" "$gtk2_tail_pid" 2>/dev/null || true
+kill "$gtk2_client_pid" "$gtk2_tail_pid" "$gtk2_server_tail_pid" 2>/dev/null || true
 wait "$gtk2_client_pid" 2>/dev/null || true
 wait "$gtk2_tail_pid" 2>/dev/null || true
 cat "$gtk2_client_log" "$gtk2_drm_log" "$gtk2_server_log"
