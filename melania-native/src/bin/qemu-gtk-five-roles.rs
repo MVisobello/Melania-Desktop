@@ -13,11 +13,21 @@ const NAMES:[&str;5]=[
 const SIZES:[(u32,u32);5]=[
     (1280,52),(510,565),(350,430),(380,440),(330,315),
 ];
+const GTK_REQUIRED_GLOBALS:[&str;6]=[
+    "wl_compositor","wl_subcompositor","wl_shm",
+    "wl_data_device_manager","xdg_wm_base","wl_seat",
+];
+fn missing_gtk_globals(present:&[bool;6])->Vec<&'static str> {
+    GTK_REQUIRED_GLOBALS.iter().enumerate()
+        .filter_map(|(i,name)|(!present[i]).then_some(*name)).collect()
+}
+
 
 #[derive(Default)]
 struct Probe {
     compositor:Option<wl_compositor::WlCompositor>,
     shell:Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    gtk_globals:[bool;6],
     acknowledged:[bool;5],
     error:Option<String>,
 }
@@ -26,7 +36,15 @@ impl Dispatch<wl_registry::WlRegistry,()> for Probe {
              _:&(),_:&Connection,q:&QueueHandle<Self>) {
         if let wl_registry::Event::Global{name,interface,version}=e {
             match interface.as_str() {
-                "wl_compositor"=>s.compositor=Some(r.bind(name,version.min(4),q,())),
+                "wl_compositor"=>{
+                    s.gtk_globals[0]=true;
+                    s.compositor=Some(r.bind(name,version.min(4),q,()));
+                },
+                "wl_subcompositor"=>s.gtk_globals[1]=true,
+                "wl_shm"=>s.gtk_globals[2]=true,
+                "wl_data_device_manager"=>s.gtk_globals[3]=true,
+                "xdg_wm_base"=>s.gtk_globals[4]=true,
+                "wl_seat"=>s.gtk_globals[5]=true,
                 "zwlr_layer_shell_v1"=>s.shell=Some(r.bind(name,version.min(1),q,())),
                 _=>{},
             }
@@ -82,6 +100,11 @@ fn main()->Result<(),Box<dyn Error>> {
     let _registry=conn.display().get_registry(&q,());
     let mut state=Probe::default();
     queue.roundtrip(&mut state)?;
+    let missing=missing_gtk_globals(&state.gtk_globals);
+    if !missing.is_empty(){
+        return Err(format!("GTK4 Wayland required globals missing: {}",missing.join(", ")).into());
+    }
+    println!("MELANIA_QEMU_GTK_REQUIRED_GLOBALS_PASS=true");
     let compositor=state.compositor.take().ok_or("wl_compositor missing")?;
     let shell=state.shell.take().ok_or("wlr-layer-shell missing")?;
     let mut owned=Vec::new();
@@ -139,4 +162,20 @@ fn main()->Result<(),Box<dyn Error>> {
     shell.destroy();
     conn.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn registry_preflight_rejects_missing_data_device_manager() {
+        let mut present=[true;6];
+        present[3]=false;
+        assert_eq!(missing_gtk_globals(&present),vec!["wl_data_device_manager"]);
+        assert!(missing_gtk_globals(&[true;6]).is_empty());
+    }
+    #[test]
+    fn registry_preflight_reports_all_missing_globals() {
+        assert_eq!(missing_gtk_globals(&[false;6]),GTK_REQUIRED_GLOBALS.to_vec());
+    }
 }
