@@ -364,6 +364,37 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
     Ok(())
 }
 
+/// Two real GPU-rendered framebuffer scanouts through the QEMU CRTC.
+/// The production login path remains blocked; original device ownership
+/// stays with libseat until the kernel mode and connector are restored.
+fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
+    assert_dedicated_console();
+    assert_qemu_test_guest();
+    if env::var("MELANIA_NATIVE_VM_GBM_KMS").as_deref()
+        !=Ok("YES_DISPOSABLE_QEMU") {
+        blocked("explicit MELANIA_NATIVE_VM_GBM_KMS=YES_DISPOSABLE_QEMU required");
+    }
+    let (mut session,notifier)=LibSeatSession::new()?;
+    if !session.is_active() {
+        return Err("QEMU GPU scanout requires an active libseat session".into());
+    }
+    let fd=session.open(
+        Path::new("/dev/dri/card0"),
+        OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+    )?;
+    // The native GPU/KMS probe must finish (and restore the CRTC)
+    // before the original libseat device is released.
+    let cloned=fd.try_clone()?;
+    let outcome=melania_native::native_gbm_scanout::qemu_two_gpu_frames(cloned);
+    let released=session.close(fd);
+    drop(notifier);
+    println!("MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED={}",released.is_ok());
+    released?;
+    outcome?;
+    println!("NATIVE_SESSION_READY=false");
+    Ok(())
+}
+
 /// One short-lived atomic TEST_ONLY and offscreen GLES frame on QEMU/vkms.
 /// No frame is submitted to a scanout plane, even if all checks pass.
 fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
@@ -488,6 +519,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        [flag] if flag=="--experimental-gbm-kms-scanout" =>{
+            if let Err(error)=experimental_gbm_kms_scanout() {
+                eprintln!("Melania VM GPU scanout: {error}");
+                std::process::exit(1);
+            }
+        }
         [flag] if flag=="--experimental-gbm-output" =>{
             if let Err(error)=experimental_drm(true,true){
                 eprintln!("Melania native output-sized GPU test: {error}");
@@ -512,7 +549,7 @@ fn main() {
             }
         }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-kms-test");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-gbm-kms-scanout | --experimental-kms-test");
             std::process::exit(2);
         }
     }
