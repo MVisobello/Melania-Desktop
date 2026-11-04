@@ -340,6 +340,7 @@ mod tests {
         let restart = state.begin_restore().unwrap();
         prove_all(&mut state, restart);
         assert!(!state.acknowledge_frame(old));
-        assert!(state.acknowledge_frame(state.next_frame().unwrap()));
+        let fresh = state.next_frame().unwrap();
+        assert!(state.acknowledge_frame(fresh));
     }
 }
