@@ -27,7 +27,8 @@ def frame(with_start: bool) -> bytes:
     if with_start:
         for y in range(229, 740):
             idx = (y * W + 8) * 3
-            image[idx:idx + 510 * 3] = bytes((82, 125, 185)) * 510
+            shade = (y - 229) // 52
+            image[idx:idx + 510 * 3] = bytes((60 + shade * 9, 92 + shade * 8, 145 + shade * 7)) * 510
             if y % 5 == 0:
                 # Distinct tones for text/widgets, unlike a flat fake tile.
                 image[idx:idx + 220 * 3] = bytes((230, 238, 245)) * 220
