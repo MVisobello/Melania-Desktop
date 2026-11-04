@@ -11,6 +11,7 @@ MAIN = (ROOT / "melania-native/src/main.rs").read_text()
 BRIDGE = (ROOT / "melania-native/src/wayland_bridge.rs").read_text()
 RECEIVER = (ROOT / "melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 CLIENT = (ROOT / "melania-native/src/bin/qemu-continuous-client.rs").read_text()
+TRANSPORT = (ROOT / "melania-native/src/continuous_kms_stream.rs").read_text()
 GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
 
 class OneProcessWaylandKmsContract(unittest.TestCase):
@@ -57,6 +58,24 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
                         cleanup.index('owner.release()'))
         self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS_ERROR_CLEANUP_ATTEMPTED=true', cleanup)
         self.assertTrue(cleanup.index('run_result') >= 0)
+
+    def test_transport_stops_and_joins_before_releasing_drm(self):
+        # A stranded transport thread must not keep a stale DRM frame
+        # alive after the libseat owner has closed its device descriptor.
+        self.assertIn('pub fn stop(&mut self)', TRANSPORT)
+        self.assertIn('self.shutdown.shutdown(Shutdown::Both)', TRANSPORT)
+        self.assertIn('worker.join()', TRANSPORT)
+        self.assertIn('impl Drop for ContinuousKmsWorker', TRANSPORT)
+        self.assertIn('ContinuousKmsWorker::spawn(sender)?', BRIDGE)
+        self.assertIn('ContinuousKmsWorker::spawn(stream)?', BRIDGE)
+        success=BRIDGE[BRIDGE.index('let outcome=join.join()'):]
+        self.assertLess(success.index('state.continuous_worker.take()'),
+                        success.index('owner.release()'))
+        cleanup=BRIDGE[BRIDGE.index('if integrated_kms && run_result.is_err()'):]
+        self.assertLess(cleanup.index('state.continuous_worker.take()'),
+                        cleanup.index('join.join()'))
+        self.assertLess(cleanup.index('join.join()'),
+                        cleanup.index('owner.release()'))
 
     def test_qemu_only_optin_and_original_login_block_remain(self):
         for required in (
