@@ -1089,7 +1089,7 @@ for index in $(seq 1 12); do
 done
 grep -q '^MELANIA_RUST_CONTINUOUS_LAYER_FRAME_VISIBLE=12' "$layer_kms_log" ||
   fatal 'real_layer_QMP_frame12_marker_absent'
-grep -q '^MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED=1280x40 layer=Top' "$layer_server_log" ||
+grep -q '^MELANIA_NATIVE_LAYER_OWNED_SHM_QUEUED=1280x52 layer=Top' "$layer_server_log" ||
   fatal 'real_layer_owned_client_pixels_not_imported'
 grep -q '^MELANIA_NATIVE_REAL_LAYER_12_KMS_FRAMES_PASS=true' "$layer_client_log" ||
   fatal 'real_layer_client_frames_incomplete'

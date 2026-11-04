@@ -63,7 +63,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,()> for Client {
              e:zwlr_layer_surface_v1::Event,_:&(),_:&Connection,_:&QueueHandle<Self>){
         match e {
             zwlr_layer_surface_v1::Event::Configure{serial,width,height}=>{
-                if (width,height)!=(1280,40) {
+                if (width,height)!=(1280,52) {
                     panic!("native layer QEMU configured wrong panel dimensions");
                 }
                 r.ack_configure(serial);
@@ -130,8 +130,10 @@ fn main()->Result<(),Box<dyn Error>> {
     panel.set_anchor(zwlr_layer_surface_v1::Anchor::Bottom |
                      zwlr_layer_surface_v1::Anchor::Left |
                      zwlr_layer_surface_v1::Anchor::Right);
-    panel.set_size(1280,40);
-    panel.set_exclusive_zone(40);
+    // The real GTK taskbar requests width=0 between left/right anchors.
+    // The compositor must configure the full output width and 52px height.
+    panel.set_size(0,52);
+    panel.set_exclusive_zone(52);
     b.commit();
     for _ in 0..8 {
         queue.roundtrip(&mut s)?;
@@ -146,7 +148,7 @@ fn main()->Result<(),Box<dyn Error>> {
     for index in 1..=12u32 {
         let is_panel=index%2==0;
         let surface=if is_panel {&b} else {&a};
-        let (w,h)=if is_panel {(1280usize,40usize)} else {(360,224)};
+        let (w,h)=if is_panel {(1280usize,52usize)} else {(360,224)};
         let red=(30+(index*17)%200) as u8;
         let green=(40+(index*31)%190) as u8;
         let blue=(25+(index*43)%210) as u8;
