@@ -444,6 +444,8 @@ grep -Fqx 'MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1' "$gtk_kms_drm_log" ||
   fatal 'real_gtk_KMS_guest_CRTC_frame_not_visible'
 grep -Fqx 'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$gtk_kms_drm_log" ||
   fatal 'real_gtk_KMS_original_guest_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$gtk_kms_drm_log" ||
+  fatal 'real_gtk_panel_connector_route_not_restored'
 rm -f "$gtk_kms_client_log" "$gtk_kms_drm_log" "$gtk_kms_server_log"
 report 'MELANIA_QEMU_REAL_GTK_PANEL_KMS_SCANOUT_PASS=true'
 
@@ -567,6 +569,8 @@ grep -Fqx 'MELANIA_RUST_REAL_GTK_START_OVERLAY_KMS_PASS=true' "$gtk2_drm_log" ||
   fatal 'real_GTK_Start_third_CRTC_FB_ID_not_verified'
 grep -Fqx 'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$gtk2_drm_log" ||
   fatal 'real_GTK_two_frame_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$gtk2_drm_log" ||
+  fatal 'real_gtk_two_frame_connector_route_not_restored'
 rm -f "$gtk2_client_log" "$gtk2_drm_log" "$gtk2_server_log"
 report 'MELANIA_QEMU_REAL_GTK_TWO_FRAME_KMS_SCANOUT_PASS=true'
 report 'MELANIA_QEMU_REAL_GTK_START_OVERLAY_KMS_SCANOUT_PASS=true'
@@ -957,6 +961,8 @@ grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$continuous_kms_log" ||
   fatal 'continuous_Rust_CRTC_verification_incomplete'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$continuous_kms_log" ||
   fatal 'continuous_original_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$continuous_kms_log" ||
+  fatal 'continuous_connector_route_not_restored'
 rm -f "$continuous_server_log" "$continuous_kms_log" "$continuous_client_log"
 report 'MELANIA_QEMU_NATIVE_CONTINUOUS_12_REAL_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false'
@@ -1051,6 +1057,8 @@ grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$two_kms_log" ||
   fatal 'two_window_KMS_12_FBs_not_presented'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$two_kms_log" ||
   fatal 'two_window_original_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$two_kms_log" ||
+  fatal 'two_window_connector_route_not_restored'
 rm -f "$two_server_log" "$two_kms_log" "$two_client_log"
 report 'MELANIA_QEMU_NATIVE_CONTINUOUS_TWO_WINDOWS_PASS=true'
 
@@ -1144,6 +1152,8 @@ grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=14' "$reopen_kms_log" ||
   fatal 'continuous_KMS_14_frame_sequence_failed'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$reopen_kms_log" ||
   fatal 'continuous_close_reopen_original_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$reopen_kms_log" ||
+  fatal 'reopen_connector_route_not_restored'
 rm -f "$reopen_server_log" "$reopen_kms_log" "$reopen_client_log"
 report 'MELANIA_QEMU_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true'
 
@@ -1259,6 +1269,8 @@ grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=13' "$dynamic_kms_log" ||
   fatal 'dynamic_KMS_thirteen_frames_not_presented'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$dynamic_kms_log" ||
   fatal 'dynamic_real_KMS_original_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$dynamic_kms_log" ||
+  fatal 'dynamic_connector_route_not_restored'
 rm -f "$dynamic_server_log" "$dynamic_kms_log" "$dynamic_client_log"
 report 'MELANIA_QEMU_NATIVE_DYNAMIC_TWO_SIZES_PASS=true'
 report 'MELANIA_QEMU_NATIVE_DYNAMIC_POINTER_KMS13_PASS=true'
@@ -1371,6 +1383,8 @@ grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$managed_kms_log" ||
   fatal 'managed_role_KMS_did_not_complete_twelve_frames'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$managed_kms_log" ||
   fatal 'managed_role_did_not_restore_original_CRTC'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$managed_kms_log" ||
+  fatal 'managed_connector_route_not_restored'
 rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
 report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
 
@@ -1465,6 +1479,8 @@ grep -q '^MELANIA_NATIVE_REAL_LAYER_12_KMS_FRAMES_PASS=true' "$layer_client_log"
   fatal 'real_layer_client_frames_incomplete'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$layer_kms_log" ||
   fatal 'real_layer_original_CRTC_not_restored'
+grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$layer_kms_log" ||
+  fatal 'real_layer_connector_route_not_restored'
 rm -f "$layer_client_log" "$layer_kms_log" "$layer_server_log"
 report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'
 
