@@ -61,6 +61,38 @@ def send_usb_super(qmp: Path) -> None:
             time.sleep(0.15)
 
 
+def send_usb_search_key(qmp: Path) -> None:
+    # Independent physical USB A press/release after the real GTK Start
+    # framebuffer is on the VM CRTC. Do not write directly to GTK or Wayland.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(6)
+        conn.connect(str(qmp))
+        stream = conn.makefile("rwb", buffering=0)
+        if "QMP" not in json.loads(stream.readline()):
+            raise RuntimeError("invalid QMP keyboard greeting")
+        for request in [
+            {"execute": "qmp_capabilities"},
+            *(
+                {"execute": "input-send-event", "arguments": {
+                    "events": [{"type": "key", "data": {
+                        "key": {"type": "qcode", "data": "a"}, "down": down,
+                    }}],
+                }}
+                for down in (True, False)
+            ),
+        ]:
+            stream.write((json.dumps(request) + "\n").encode("utf-8"))
+            for _ in range(50):
+                answer = json.loads(stream.readline())
+                if "error" in answer:
+                    raise RuntimeError("QMP USB text key rejected: " + str(answer["error"]))
+                if "return" in answer:
+                    break
+            else:
+                raise RuntimeError("QMP USB text reply unavailable")
+            time.sleep(0.12)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--serial", type=Path, required=True)
@@ -76,6 +108,11 @@ def main() -> None:
     print("MELANIA_QEMU_GTK_USB_SUPER_DOWN_UP=true", flush=True)
     await_serial(args.serial, THIRD, deadline)
     print("MELANIA_QEMU_GTK_REAL_SUPER_INPUT_PASS=true", flush=True)
+    # The CRTC is deliberately held long enough for the independent QMP
+    # screenshot watcher to capture Start before this key changes the entry.
+    time.sleep(1.0)
+    send_usb_search_key(args.qmp)
+    print("MELANIA_QEMU_GTK_USB_SEARCH_TEXT_SENT=true", flush=True)
 
 
 if __name__ == "__main__":

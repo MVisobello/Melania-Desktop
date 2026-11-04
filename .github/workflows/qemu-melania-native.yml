@@ -48,6 +48,7 @@ on:
       - scripts/capture-qemu-real-gtk-start-overlay.py
       - scripts/inject-qemu-real-gtk-super-start.py
       - tests/test_qemu_real_gtk_super_stage87.py
+      - tests/test_qemu_gtk_start_search_stage88.py
       - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
@@ -112,6 +113,7 @@ on:
       - scripts/capture-qemu-real-gtk-start-overlay.py
       - scripts/inject-qemu-real-gtk-super-start.py
       - tests/test_qemu_real_gtk_super_stage87.py
+      - tests/test_qemu_gtk_start_search_stage88.py
       - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
@@ -190,6 +192,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_start_overlay_stage86.py' -v
           python3 -m py_compile scripts/inject-qemu-real-gtk-super-start.py
           python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_super_stage87.py' -v
+          python3 -m unittest discover -s tests -p 'test_qemu_gtk_start_search_stage88.py' -v
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
@@ -230,8 +233,14 @@ jobs:
           cargo build -p melania-panel --bin melania-panel
           # Only the small, already approved original Fluent SVG set enters
           # the sacrificial guest ISO. Full distributions use a separate pack.
-          python3 tools/build_qemu_fluent_subset.py
-          python3 tools/build_qemu_fluent_subset.py --verify-only
+          # Rust cache can restore a stale target/melania-qemu-fluent-icons
+          # directory. Generate this VM-only fixture at a fresh, uncached
+          # runner-local location and preserve the builder's no-overwrite guard.
+          fluent_staging="$(mktemp -d "${RUNNER_TEMP}/melania-qemu-fluent.XXXXXXXX")"
+          fluent_icons="$fluent_staging/icons"
+          python3 tools/build_qemu_fluent_subset.py --output "$fluent_icons"
+          python3 tools/build_qemu_fluent_subset.py --verify-only --output "$fluent_icons"
+          printf 'MELANIA_QEMU_FLUENT_ICONS_DIR=%s\n' "$fluent_icons" >> "$GITHUB_ENV"
           test -x target/debug/melania-panel
           ldd target/debug/melania-panel | tee gtk-panel-runtime-libs.txt
           if grep -q 'not found' gtk-panel-runtime-libs.txt; then

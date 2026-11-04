@@ -208,6 +208,30 @@ impl BridgeState {
         }
     }
 
+    // Stage88: a real keyboard focus may only follow a committed GTK4 Start
+    // wl_shm buffer, not a mere layer-shell configure or a QMP host marker.
+    // This remains opt-in for the disposable native QEMU compositor.
+    fn refresh_qemu_gtk_start_focus(&mut self,surface:&WlSurface,on_screen:bool) {
+        if !self.real_gtk_pixel_kms_mode ||
+           std::env::var("MELANIA_NATIVE_GTK_START_FOCUS")
+               .as_deref()!=Ok("YES_QEMU_VM") {
+            return;
+        }
+        if on_screen {
+            if self.focused.as_ref()==Some(surface) {return;}
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+            self.focused=Some(surface.clone());
+            println!("MELANIA_NATIVE_GTK_START_REAL_KEYBOARD_FOCUS=true");
+        } else if self.focused.as_ref()==Some(surface) {
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,None,SERIAL_COUNTER.next_serial());
+            self.focused=None;
+            println!("MELANIA_NATIVE_GTK_START_KEYBOARD_FOCUS_RELEASED=true");
+        }
+        let _=std::io::stdout().flush();
+    }
+
     // Stage46: in this isolated mode ContinuousRedraw is authoritative.
     // All DRM socket writes and ACK reads happen off the Smithay thread.
     fn submit_continuous_frame(&mut self)->Result<(),Box<dyn Error>> {
@@ -854,6 +878,20 @@ impl CompositorHandler for BridgeState {
         if self.layer_pixels_mode {
             if let Some(role)=self.layer_surfaces.iter().find(|(_,r)|r.wl_surface()==surface)
                 .map(|(_,r)|r.clone()) {
+                // GTK may move a still-mapped Start layer off-screen by
+                // committing only its margin/role state (no new wl_shm
+                // buffer). Revoke focus on that real state transition too.
+                let is_start_layer=self.layer_surfaces.iter().any(|(name,r)|
+                    name=="melania-start" && r.wl_surface()==surface);
+                if is_start_layer {
+                    let left=with_states(surface,|states|{
+                        states.cached_state.get::<LayerSurfaceCachedState>()
+                            .current().margin.left
+                    });
+                    if left<=-510 {
+                        self.refresh_qemu_gtk_start_focus(surface,false);
+                    }
+                }
                 // A protocol configure is NOT pixel evidence. Only a client
                 // wl_shm buffer copied out of Smithay's live mapping enters
                 // the native retained scene and the Rust KMS worker.
@@ -925,6 +963,16 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     };
+                    // Start is on-screen only inside the actual bounded
+                    // QEMU output. The hidden GTK role stays mapped offscreen.
+                    let start_role=self.layer_surfaces.iter().any(|(name,role)|{
+                        name=="melania-start" && role.wl_surface()==surface
+                    });
+                    let start_visible=placement.rect.x>=0 && placement.rect.y>=0 &&
+                        placement.rect.x<1280 && placement.rect.y<800;
+                    if start_role && !start_visible {
+                        self.refresh_qemu_gtk_start_focus(surface,false);
+                    }
                     let role_layer:SceneLayer=placement.layer.scene_layer();
                     if self.dynamic_scene.upsert_in_layer(
                         key,placement.rect.x,placement.rect.y,role_layer,pixels
@@ -932,6 +980,11 @@ impl CompositorHandler for BridgeState {
                         eprintln!("MELANIA_NATIVE_LAYER_SCENE_REJECTED=true");
                         buffer.release();
                         return;
+                    }
+                    if start_role && start_visible {
+                        // This wl_shm buffer passed both geometry and actual
+                        // scene import: it is now eligible for keyboard focus.
+                        self.refresh_qemu_gtk_start_focus(surface,true);
                     }
                     match self.continuous_client_ledger.stage(surface.clone(),buffer) {
                         Ok(Some(previous))=>previous.release(),
@@ -1434,6 +1487,10 @@ impl WlrLayerShellHandler for BridgeState {
     fn layer_destroyed(&mut self,role:WlrLayerSurface){
         if !self.layer_pixels_mode && !self.gtk_layer_mode {return;}
         let surface=role.wl_surface().clone();
+        if self.layer_surfaces.iter().any(|(name,existing)|
+            name=="melania-start" && existing.wl_surface()==&surface) {
+            self.refresh_qemu_gtk_start_focus(&surface,false);
+        }
         self.layer_surfaces.retain(|(_,existing)|existing.wl_surface()!=&surface);
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             if self.dynamic_scene.remove(key) {

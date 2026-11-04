@@ -108,7 +108,9 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
 # QEMU-only real Fluent artwork, built from the approved SVG generators.
-fluent_icons="$root/target/melania-qemu-fluent-icons"
+# In CI use the fresh, verified guest-only theme outside Cargo's restored
+# target cache. The default remains available for manual QEMU invocations.
+fluent_icons="${MELANIA_QEMU_FLUENT_ICONS_DIR:-$root/target/melania-qemu-fluent-icons}"
 [[ -f "$fluent_icons/Melania-Fluent-Light/index.theme" &&
    -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/melania.svg" &&
    -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/org.melaniadesktop.Files.svg" ]] ||
@@ -340,6 +342,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! grep -q '^MELANIA_QEMU_GTK4_TWO_DISTINCT_REAL_FRAMES=true' "$report/qmp-real-gtk-two-frames.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_START_REAL_CRTC_PIXELS=true' "$report/qmp-real-gtk-start-overlay.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_REAL_SUPER_INPUT_PASS=true' "$report/qmp-real-gtk-super-input.log" ||
+    ! grep -q '^MELANIA_QEMU_GTK_USB_SEARCH_TEXT_SENT=true' "$report/qmp-real-gtk-super-input.log" ||
     ! test -s "$report/real-gtk-start-overlay-frame3.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_GTK_START_OVERLAY_KMS_SCANOUT_PASS=true' "$serial" ||
     ! test -s "$report/real-gtk-continuous-frame1.ppm" ||

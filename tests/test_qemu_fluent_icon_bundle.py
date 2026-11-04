@@ -29,6 +29,17 @@ class FluentThemeGuestProof(unittest.TestCase):
                     ET.parse(icon)  # actual SVG, not fake success marker
                     self.assertTrue(icon.resolve().is_relative_to(output.resolve()))
 
+    def test_ci_uses_fresh_icons_outside_rust_cache(self):
+        workflow = (ROOT / ".github/workflows/qemu-melania-native.yml").read_text()
+        harness = (ROOT / "scripts/run-qemu-melania-native.sh").read_text()
+        self.assertIn('mktemp -d "${RUNNER_TEMP}/melania-qemu-fluent.XXXXXXXX"', workflow)
+        self.assertIn('tools/build_qemu_fluent_subset.py --output "$fluent_icons"', workflow)
+        self.assertIn('tools/build_qemu_fluent_subset.py --verify-only --output "$fluent_icons"', workflow)
+        self.assertIn('MELANIA_QEMU_FLUENT_ICONS_DIR=%s', workflow)
+        self.assertIn('MELANIA_QEMU_FLUENT_ICONS_DIR:-$root/target/melania-qemu-fluent-icons', harness)
+        # The generator itself must continue rejecting accidental overwrites.
+        self.assertIn('raise FileExistsError(', (ROOT / "tools/build_qemu_fluent_subset.py").read_text())
+
     def test_real_guest_loads_theme_and_fails_closed_if_missing(self):
         runner = (ROOT / "scripts" / "run-qemu-melania-native.sh").read_text()
         guest = (ROOT / "scripts" / "melania-qemu-native-guest.sh").read_text()

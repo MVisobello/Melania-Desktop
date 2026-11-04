@@ -469,6 +469,7 @@ MELANIA_NATIVE_REAL_GTK_PIXEL_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_REAL_GTK_TWO_FRAME=YES_QEMU_VM \
 MELANIA_NATIVE_REAL_GTK_START_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_REAL_GTK_START_INPUT=YES_QEMU_VM \
+MELANIA_NATIVE_GTK_START_FOCUS=YES_QEMU_VM \
 MELANIA_CONTROL_SOCKET=/run/melania-native-qemu/gtk-panel-control.sock \
   timeout --signal=TERM --kill-after=3s 55s \
   "$binary" --experimental-wayland-seat < /dev/tty1 \
@@ -499,6 +500,7 @@ MELANIA_QEMU_CONTINUOUS_FRAMES=3 \
 MELANIA_QEMU_REAL_GTK_PANEL_KMS=YES_QEMU_VM \
 MELANIA_QEMU_GTK_TWO_FRAME_KMS=YES_QEMU_VM \
 MELANIA_QEMU_GTK_START_KMS=YES_QEMU_VM \
+MELANIA_QEMU_GTK_SEARCH_INPUT=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 48s \
   "$continuous_kms" < /dev/tty1 > "$gtk2_drm_log" 2>&1 &
 gtk2_drm_pid=$!
@@ -517,6 +519,7 @@ MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native \
 MELANIA_QEMU_VERIFY_FLUENT_LOOKUP=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_GTK_SECOND_FRAME=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_GTK_START_FROM_SUPER=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_GTK_SEARCH_INPUT=YES_DISPOSABLE_QEMU \
 MELANIA_CONTROL_SOCKET=/run/melania-native-qemu/gtk-panel-control.sock \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
@@ -548,6 +551,10 @@ grep -Fqx 'MELANIA_NATIVE_REAL_GTK_TWO_FRAME_KMS_PASS=true' "$gtk2_server_log" |
   fatal 'real_GTK_two_frame_Smithay_validation_failed'
 grep -Fqx 'MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true' "$gtk2_drm_log" ||
   fatal 'real_GTK_second_frame_CRTC_verification_failed'
+grep -Fqx 'MELANIA_NATIVE_GTK_START_REAL_KEYBOARD_FOCUS=true' "$gtk2_server_log" ||
+  fatal 'real_GTK_Start_wl_shm_not_keyboard_focused'
+grep -Fqx 'MELANIA_QEMU_GTK_START_REAL_SEARCH_TYPED=true' "$gtk2_client_log" ||
+  fatal 'real_GTK_Start_search_entry_not_typed_via_USB'
 grep -Fqx 'MELANIA_NATIVE_GTK_SUPER_KEY_RELEASED=true' "$gtk2_server_log" ||
   fatal 'real_USB_Super_key_not_delivered_by_libinput'
 grep -Fqx 'MELANIA_QEMU_GTK_START_SUPER_IPC_OPEN=true' "$gtk2_client_log" ||
