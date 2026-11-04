@@ -16,7 +16,7 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
     def test_same_native_executable_contains_wayland_and_kms(self):
         self.assertIn('mod qemu_continuous_receiver;', MAIN)
         self.assertIn('mod wayland_bridge;', MAIN)
-        self.assertIn('pub(crate) fn run_embedded(stream:UnixStream)', RECEIVER)
+        self.assertIn('pub(crate) fn run_embedded(stream:UnixStream,card:File)', RECEIVER)
         self.assertIn('run_stream(stream)', RECEIVER)
         self.assertIn('qemu_continuous_receiver::run_embedded(receiver)', BRIDGE)
 
@@ -26,6 +26,12 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertIn('if live_stream && !integrated_kms', BRIDGE)
         self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true', BRIDGE)
         self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}', BRIDGE)
+        self.assertIn('session.open(', BRIDGE)
+        self.assertIn('Path::new("/dev/dri/card0")', BRIDGE)
+        self.assertIn('struct OwnedSeatCard', BRIDGE)
+        self.assertIn('self.session.close(fd)', BRIDGE)
+        self.assertIn('MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true', BRIDGE)
+        self.assertIn('std::fs::File::from(presenter_fd)', BRIDGE)
 
     def test_worker_completion_is_awaited_and_failure_is_fatal(self):
         self.assertIn('let outcome=join.join()', BRIDGE)
