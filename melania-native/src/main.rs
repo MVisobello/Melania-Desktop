@@ -199,7 +199,7 @@ fn experiment() -> Result<(),Box<dyn Error>> {
 
 /// Stage2: a deliberate, short-lived DRM capability inspection. libseat owns
 /// the device open; KMS connectors are NOT reset, mode-set or rendered into.
-fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
+fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box<dyn Error>> {
     assert_dedicated_console();
     let (mut session,notifier)=LibSeatSession::new()?;
     let udev=UdevBackend::new(session.seat())?;
@@ -228,10 +228,24 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
                     path.display(),device.is_atomic(),device.crtcs().len());
                 // Inspect only: never call set_crtc, reset_state or surface
                 // creation. No mode is applied by this probe.
+                let mut probe_mode=None;
                 match melania_native::outputs::inspect_connectors(device.device_fd()) {
                     Ok(connectors) => {
                         println!("Melania DRM connectors on {}: {}",path.display(),connectors.len());
                         for conn in connectors {
+                            if output_sized && conn.connected {
+                                let candidate=melania_native::outputs::recommended_mode_for_budget(
+                                    &conn.advertised_modes,2,96*1024*1024
+                                );
+                                if let Some(mode)=candidate {
+                                    let score=|m:&melania_native::outputs::DisplayMode|(
+                                        u64::from(m.width)*u64::from(m.height),m.refresh_hz
+                                    );
+                                    if probe_mode.as_ref().is_none_or(|old|score(&mode)>score(old)) {
+                                        probe_mode=Some(mode);
+                                    }
+                                }
+                            }
                             let suggested=conn.recommendation.as_ref()
                                 .map(|m|format!("{}x{}@{}Hz",m.width,m.height,m.refresh_hz))
                                 .unwrap_or_else(||"none".into());
@@ -273,14 +287,34 @@ fn experimental_drm(render_offscreen: bool) -> Result<(),Box<dyn Error>> {
                     Err(error)=>eprintln!("Melania GPU renderer unavailable {}: {error}",path.display()),
                 }
                 if render_offscreen {
-                    // Explicitly isolated 64x64 GPU render test: no output
-                    // modeset, page flip, KMS surface or monitor interaction.
-                    match melania_native::renderer::smoke_render_gbm_offscreen(device.device_fd().clone()) {
+                    // Only real EGL/GBM DMA-BUF rendering. Both probes are
+                    // bounded and cannot submit a KMS page flip or modeset.
+                    // In output-sized mode, use a connected EDID candidate;
+                    // no hard-coded fallback resolution may mask a GPU error.
+                    let rendered=if output_sized {
+                        match probe_mode {
+                            Some(mode)=>{
+                                let result=melania_native::renderer::smoke_render_gbm_output_buffers(
+                                    device.device_fd().clone(),mode.width,mode.height,2
+                                );
+                                if result.is_ok() {
+                                    println!("MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED={}x{}x2",mode.width,mode.height);
+                                }
+                                result
+                            },
+                            None=>Err("No connected monitor mode fits the GPU memory budget".into()),
+                        }
+                    } else {
+                        melania_native::renderer::smoke_render_gbm_offscreen(
+                            device.device_fd().clone()
+                        )
+                    };
+                    match rendered {
                         Ok(())=>{
                             rendered_offscreen+=1;
-                            println!("Melania native offscreen GLES frame: OK (NOT displayed)");
+                            println!("Melania native offscreen GLES frames: OK (NOT displayed)");
                         },
-                        Err(error)=>eprintln!("Melania native offscreen GLES frame: {error}"),
+                        Err(error)=>eprintln!("Melania native offscreen GLES frames: {error}"),
                     }
                 }
                 // Device ownership and DRM master return to libseat on drop.
@@ -414,14 +448,20 @@ fn main() {
             }
         }
         [flag] if flag=="--experimental-drm" =>{
-            if let Err(error)=experimental_drm(false){
+            if let Err(error)=experimental_drm(false,false){
                 eprintln!("Melania native stage2: {error}");
                 std::process::exit(1);
             }
         }
         [flag] if flag=="--experimental-offscreen" =>{
-            if let Err(error)=experimental_drm(true){
+            if let Err(error)=experimental_drm(true,false){
                 eprintln!("Melania native stage6 offscreen: {error}");
+                std::process::exit(1);
+            }
+        }
+        [flag] if flag=="--experimental-gbm-output" =>{
+            if let Err(error)=experimental_drm(true,true){
+                eprintln!("Melania native output-sized GPU test: {error}");
                 std::process::exit(1);
             }
         }
@@ -443,7 +483,7 @@ fn main() {
             }
         }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-kms-test");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-kms-test");
             std::process::exit(2);
         }
     }
