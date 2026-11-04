@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
-for tool in labwc wlrctl xvfb-run dbus-run-session python3; do
+for tool in labwc wlrctl xvfb-run dbus-run-session python3 scrot; do
   command -v "$tool" >/dev/null || { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$tool" >&2; exit 3; }
 done
 for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd; do
@@ -156,6 +156,27 @@ if ! grep -q 'MELANIA_START_IPC toggled open=true' "$temp/session.log"; then
   exit 1
 fi
 echo "MELANIA_LABWC_REAL_START_TOGGLE=true"
+
+# Real pixels captured from Xvfb hosting the actual nested labwc/Wayland
+# session, after the GTK Start overlay and Melania Files have been mapped.
+mkdir -p "$ROOT/reports"
+screenshot="$ROOT/reports/melania-labwc-live-session.png"
+rm -f "$screenshot"
+sleep .35
+scrot "$screenshot"
+python3 - "$screenshot" <<'PYSHOT'
+from PIL import Image
+from pathlib import Path
+import sys
+path=Path(sys.argv[1])
+assert path.is_file() and path.stat().st_size>3000
+image=Image.open(path).convert("RGB")
+assert image.width>=1024 and image.height>=720, image.size
+sample=image.resize((256,160))
+assert len(sample.getcolors(256*160) or [])>80, "display is blank or nearly monochrome"
+print("MELANIA_LABWC_REAL_SESSION_SCREENSHOT=" + str(path))
+print("MELANIA_LABWC_REAL_PIXELS_VERIFIED=true")
+PYSHOT
 
 python3 - "$socket_path" <<'PY'
 import socket,sys
