@@ -42,6 +42,15 @@ class GtkKmsScreenshotValidation(unittest.TestCase):
         self.assertGreater(changed, 500)
         self.assertGreaterEqual(tones, 4)
 
+    def test_guest_resolves_drm_receiver_before_first_stage84_execution(self):
+        guest = (ROOT / "scripts" / "melania-qemu-native-guest.sh").read_text()
+        stage84 = guest.split("# Stage84: a SEPARATE opt-in run", 1)[1]
+        receiver_definition = stage84.index("continuous_kms=/mnt/melania-native/melania-continuous-kms")
+        executable_check = stage84.index("[[ -x \"$continuous_kms\" ]]")
+        first_use = stage84.index('  "$continuous_kms" < /dev/tty1')
+        self.assertLess(receiver_definition, executable_check)
+        self.assertLess(executable_check, first_use)
+
     def test_missing_qmp_marker_cannot_claim_success(self):
         self.assertEqual(verifier.FRAME_MARKER, "MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1")
         host_script = (ROOT / "scripts" / "run-qemu-melania-native.sh").read_text()
