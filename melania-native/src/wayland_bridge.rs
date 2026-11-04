@@ -1679,7 +1679,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             } else {ClientCommitLedger::new()}, 
         continuous_frame_count:0,
         continuous_frame_target:if std::env::var("MELANIA_NATIVE_REAL_GTK_PIXEL_KMS")
-            .as_deref()==Ok("YES_QEMU_VM") {1} else if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
+            .as_deref()==Ok("YES_QEMU_VM") {
+                if std::env::var("MELANIA_NATIVE_REAL_GTK_TWO_FRAME")
+                    .as_deref()==Ok("YES_QEMU_VM") {2} else {1}
+            } else if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
             .as_deref()==Ok("YES_QEMU_VM") {13} else {12},
         continuous_reopen_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
@@ -1963,7 +1966,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                        }) {
                         return Err("GTK panel was not the actual KMS image owner".into());
                     }
-                    println!("MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK=1");
+                    println!("MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK={}",
+                             state.continuous_frame_target);
+                    if state.continuous_frame_target==2 {
+                        println!("MELANIA_NATIVE_REAL_GTK_TWO_FRAME_KMS_PASS=true");
+                    }
                 }
                 if state.continuous_reopen_mode {
                     println!("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true");
