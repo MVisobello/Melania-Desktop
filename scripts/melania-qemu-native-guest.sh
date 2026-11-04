@@ -315,6 +315,7 @@ fi
 mkdir -p /run/melania-native-qemu/config
 LD_LIBRARY_PATH=/mnt/melania-native \
 MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native \
+MELANIA_QEMU_VERIFY_FLUENT_LOOKUP=YES_DISPOSABLE_QEMU \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
 WAYLAND_DISPLAY="$gtk_smoke_socket" MELANIA_PROFILE_START=1 \
@@ -334,6 +335,8 @@ grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_smoke_client_log" ||
   fatal 'real_gtk_panel_widget_build_not_confirmed'
 grep -Fqx 'MELANIA_PANEL_ICON_THEME_SELECTED=Melania-Fluent-Light' "$gtk_smoke_client_log" ||
   fatal 'real_gtk_smoke_used_Adwaita_instead_of_Melania_Fluent'
+grep -Fqx 'MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true' "$gtk_smoke_client_log" ||
+  fatal 'real_gtk_smoke_Fluent_icons_not_resolved_by_GTK4'
 grep -q '^MELANIA_NATIVE_GTK_LAYER_CONFIGURED=melania-panel size=1280x52' "$gtk_smoke_server_log" ||
   fatal 'real_gtk_panel_top_layer_not_configured'
 grep -q '^MELANIA_NATIVE_REAL_GTK_PANEL_LAYER_CONFIGURED=true' "$gtk_smoke_server_log" ||
@@ -403,6 +406,7 @@ if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$gtk_kms_drm_log"; t
 fi
 LD_LIBRARY_PATH=/mnt/melania-native \
 MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native \
+MELANIA_QEMU_VERIFY_FLUENT_LOOKUP=YES_DISPOSABLE_QEMU \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
 WAYLAND_DISPLAY="$gtk_kms_socket" MELANIA_PROFILE_START=1 \
@@ -427,6 +431,8 @@ grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_kms_client_log" ||
   fatal 'real_gtk_KMS_app_did_not_build_widgets'
 grep -Fqx 'MELANIA_PANEL_ICON_THEME_SELECTED=Melania-Fluent-Light' "$gtk_kms_client_log" ||
   fatal 'real_gtk_KMS_used_Adwaita_instead_of_Melania_Fluent'
+grep -Fqx 'MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true' "$gtk_kms_client_log" ||
+  fatal 'real_gtk_KMS_Fluent_icons_not_resolved_by_GTK4'
 # The real GTK4 client negotiates a 52px layer configure but its existing
 # theme's natural widget minimum is 60px. Verify the ACTUAL owned buffer
 # rather than silently treating configured geometry as a screenshot.
