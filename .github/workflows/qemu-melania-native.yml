@@ -159,8 +159,21 @@ jobs:
             build-essential pkg-config libwayland-dev libxkbcommon-dev \
             libegl1-mesa-dev libgles2-mesa-dev libudev-dev libseat-dev \
             libdrm-dev libgbm-dev libinput-dev qemu-system-x86 \
-            qemu-utils cloud-image-utils genisoimage curl
+            qemu-utils cloud-image-utils genisoimage curl \
+            libgtk-4-dev libgtk4-layer-shell-dev
           cargo test -p melania-native --all-targets
+          # Stage83B preflight: build the *actual* GTK4 panel on the same
+          # Ubuntu release as the QEMU guest, before attempting a guest run.
+          # This only proves build/link readiness, not native rendering.
+          pkg-config --modversion gtk4 gtk4-layer-shell-0
+          cargo build -p melania-panel --bin melania-panel
+          test -x target/debug/melania-panel
+          ldd target/debug/melania-panel | tee gtk-panel-runtime-libs.txt
+          if grep -q 'not found' gtk-panel-runtime-libs.txt; then
+            echo 'MELANIA_NATIVE_GTK_PANEL_LINK_READY=false'
+            exit 1
+          fi
+          echo 'MELANIA_NATIVE_GTK_PANEL_LINK_READY=true'
           cargo build -p melania-native --bins
           test -x target/debug/qemu-layer-panel-client
           test -x target/debug/qemu-shell-client
@@ -199,4 +212,5 @@ jobs:
           path: |
             reports/qemu-native/
             native-runtime-libs.txt
+            gtk-panel-runtime-libs.txt
           if-no-files-found: warn
