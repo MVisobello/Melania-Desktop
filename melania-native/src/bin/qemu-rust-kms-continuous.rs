@@ -299,7 +299,9 @@ fn run()->Result<(),Box<dyn Error>> {
                 if (reopen && (index==12 || index==13)) ||
                    (pointer_proof && index==12) ||
                    (managed_role_qmp && matches!(index+1,3|5|7|9)) ||
-                   real_gtk_panel || index==6 || index==11 {2500} else {350}
+                   real_gtk_panel || index==6 || index==11 {
+                    if real_gtk_start && index==2 {5500} else {2500}
+                   } else {350}
             ));
             if index+1==total {rollback.restore()?;}
             let mut ack=[0u8;29];
