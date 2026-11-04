@@ -1509,7 +1509,12 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     .as_deref()==Ok("YES_QEMU_VM");
             if real_gtk_super {
                 let code:u32=event.key_code().into();
-                if code==125 || code==126 { // Linux evdev KEY_LEFTMETA/RIGHTMETA
+                // Smithay's Keycode is an XKB keycode: the Linux evdev
+                // value plus 8. Real QEMU USB LEFTMETA=125 arrived as
+                // 133 in the Stage87 guest log, so normalize before
+                // testing the physical Super keys.
+                let evdev_code=code.checked_sub(8);
+                if matches!(evdev_code,Some(125 | 126)) { // KEY_LEFTMETA / KEY_RIGHTMETA
                     if event.state()==KeyState::Pressed {
                         state.qemu_start_super_down=Some(code);
                     } else if state.qemu_start_super_down.take()==Some(code) {
