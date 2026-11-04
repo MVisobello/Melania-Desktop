@@ -140,6 +140,15 @@ fn prepare(p:InputPrefs,base:&Path)->Result<(),String>{
     println!("MELANIA_LABWC_INPUT_CONFIG={}",out.display());
     Ok(())
 }
+fn commit_and_reload(prefs:InputPrefs,base:&Path,prefs_path:&Path)->Result<(),String>{
+    write_atomic(prefs_path,&prefs.encoded())?;
+    prepare(prefs,base)?;
+    let status=Command::new("labwc").arg("--reconfigure").status()
+        .map_err(|e|format!("cannot reload labwc: {e}"))?;
+    if !status.success(){return Err("labwc did not reload input settings".into());}
+    println!("MELANIA_LABWC_INPUT_RECONFIGURED=true");
+    Ok(())
+}
 fn run()->Result<(),String>{
     let args=env::args().skip(1).collect::<Vec<_>>();
     let base=config_home()?;
@@ -156,15 +165,18 @@ fn run()->Result<(),String>{
             session_guard()?;
             if env::var("WAYLAND_DISPLAY").is_err(){return Err("no Wayland session".into());}
             prefs.update(key,value)?;
-            write_atomic(&prefs_path,&prefs.encoded())?;
-            prepare(prefs,&base)?;
-            let status=Command::new("labwc").arg("--reconfigure").status()
-                .map_err(|e|format!("cannot reload labwc: {e}"))?;
-            if !status.success(){return Err("labwc did not reload new input settings".into());}
-            println!("MELANIA_LABWC_INPUT_RECONFIGURED=true");
-            Ok(())
+            commit_and_reload(prefs,&base,&prefs_path)
         },
-        _=>Err("usage: melania-inputctl show|prepare|set <tap|natural_scroll|left_handed|speed> <value>".into()),
+        [command,tap,natural,left,speed] if command=="apply"=>{
+            session_guard()?;
+            if env::var("WAYLAND_DISPLAY").is_err(){return Err("no Wayland session".into());}
+            prefs.update("tap",tap)?;
+            prefs.update("natural_scroll",natural)?;
+            prefs.update("left_handed",left)?;
+            prefs.update("speed",speed)?;
+            commit_and_reload(prefs,&base,&prefs_path)
+        },
+        _=>Err("usage: melania-inputctl show|prepare|set <key> <value>|apply <tap> <scroll> <left> <speed>".into()),
     }
 }
 fn main()->ExitCode{
