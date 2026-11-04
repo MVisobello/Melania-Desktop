@@ -207,6 +207,7 @@ jobs:
             target/debug/melania-compositor
             target/debug/melania-control
             target/debug/melania-sessionctl
+            target/debug/melania-inputctl
             target/debug/melania-files
             target/debug/melania-desktop-surface
             target/debug/melania-panel
