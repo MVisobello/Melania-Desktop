@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / "melania-native/src/main.rs").read_text()
 BRIDGE = (ROOT / "melania-native/src/wayland_bridge.rs").read_text()
 RECEIVER = (ROOT / "melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
+CLIENT = (ROOT / "melania-native/src/bin/qemu-continuous-client.rs").read_text()
 GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
 
 class OneProcessWaylandKmsContract(unittest.TestCase):
@@ -67,6 +68,17 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
             self.assertIn(required, BRIDGE + RECEIVER)
         self.assertIn('guest_only()?;', RECEIVER)
         self.assertIn('NATIVE_SESSION_READY=false', BRIDGE)
+
+    def test_multiple_qemu_clients_do_not_reuse_stale_wl_shm_paths(self):
+        # The legacy scenario and the embedded one run the same client in
+        # one guest. Fixed create_new() paths would fail on frame 1 of the
+        # second run even if the first DRM session restored correctly.
+        self.assertIn('std::process::id()', CLIENT)
+        self.assertIn('std::fs::remove_file(&path)?;', CLIENT)
+        self.assertLess(CLIENT.index('let pool=shm.create_pool('),
+                        CLIENT.index('std::fs::remove_file(&path)?;'))
+        self.assertLess(CLIENT.index('std::fs::remove_file(&path)?;'),
+                        CLIENT.index('let buffer=pool.create_buffer('))
 
     def test_vm_runs_real_client_without_second_kms_binary(self):
         start=GUEST.index('# ONE-PROCESS native integration proof:')
