@@ -1267,3 +1267,29 @@ window.melania-theme-light .melania-bar.melania-bar-top { border-bottom-color: #
   min-height: 35px;
   padding: 0 2px;
 }
+
+/* Stable centered color icons for Start's two built-in apps and the taskbar.
+ * gtk::Image paintables are sized by GTK; never tint them as symbolic icons.
+ * Pin and running window use the same 44px visual slot and symmetric padding.
+ * This must apply in light, dark and Aero without changing button geometry. */
+.melania-start-panel .melania-start-program-column image.melania-color-app-icon {
+  min-width: 27px;
+  min-height: 27px;
+  -gtk-icon-style: regular;
+}
+.melania-bar button.melania-pin.melania-icon-only,
+.melania-bar button.melania-window.melania-icon-only,
+.melania-bar menubutton.melania-window-group > button {
+  min-width: 44px;
+  min-height: 39px;
+  padding: 3px 5px;
+}
+.melania-bar .melania-taskbar-app-icon {
+  min-width: 28px;
+  min-height: 28px;
+  margin: 0;
+  -gtk-icon-style: regular;
+}
+.melania-bar .melania-color-app-icon {
+  opacity: 1;
+}
