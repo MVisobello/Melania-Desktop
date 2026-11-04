@@ -13,7 +13,7 @@ BIN=""
 for candidate in "${MELANIA_BIN_DIR:-}" "$ROOT/target/release" "$ROOT/target/debug"; do
   [[ -n "$candidate" && -d "$candidate" ]] || continue
   good=1
-  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd; do
+  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart; do
     [[ -x "$candidate/$name" ]] || good=0
   done
   if (( good )); then BIN="$candidate"; break; fi
@@ -69,6 +69,11 @@ case "$MODE" in
     else
       [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]] ||
         fail "la prova annidata richiede una sessione grafica attiva"
+    fi
+    # Refuse an unprotected real login, but leave nested test displays alone.
+    if [[ "$MODE" == --run || "$MODE" == --run-in-bus ]]; then
+      "$BIN/melania-sessionctl" check-tools ||
+        fail "swaylock e swayidle necessari per proteggere il login Melania"
     fi
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
       if [[ "$MODE" == --run || "$MODE" == --run-in-bus ]]; then
