@@ -32,6 +32,8 @@ on:
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
+      - scripts/capture-qemu-real-layer-panel.py
+      - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
       - tests/test_native_xdg_qmp_role_pixels.py
       - scripts/capture-qemu-two-windows.py
@@ -76,6 +78,8 @@ on:
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
+      - scripts/capture-qemu-real-layer-panel.py
+      - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
       - tests/test_native_xdg_qmp_role_pixels.py
       - scripts/capture-qemu-two-windows.py
@@ -137,6 +141,8 @@ jobs:
           python3 -m py_compile scripts/capture-qemu-dynamic-pointer.py
           python3 -m unittest discover -s tests -p 'test_qemu_dynamic_pointer_frame13.py' -v
           python3 -m py_compile scripts/capture-qemu-managed-xdg-roles.py
+          python3 -m py_compile scripts/capture-qemu-real-layer-panel.py
+          python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
@@ -156,6 +162,7 @@ jobs:
             qemu-utils cloud-image-utils genisoimage curl
           cargo test -p melania-native --all-targets
           cargo build -p melania-native --bins
+          test -x target/debug/qemu-layer-panel-client
           test -x target/debug/qemu-shell-client
           test -x target/debug/qemu-client-window
           test -x target/debug/qemu-rust-kms-frames
