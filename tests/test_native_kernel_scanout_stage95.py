@@ -1,9 +1,10 @@
-"""Stage95: only a live drm-rs CRTC and encoder read can release callbacks."""
+"""Stage95: only live drm-rs CRTC and encoder reads may release callbacks."""
 from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "melania-native/src/native_output_dispatch.rs").read_text()
+PROBE = (ROOT / "melania-native/src/native_kms_scanout.rs").read_text()
 
 
 class NativeKernelScanoutVerifierStage95(unittest.TestCase):
@@ -20,24 +21,25 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
             "card.get_connector(connector, false)",
             "attached.current_encoder()",
             "card.get_encoder(encoder)",
-            "observed.framebuffer() == Some(expected_fb)",
+            "current.framebuffer() != Some(expected_fb)",
             "routed.crtc() == Some(crtc)",
-            "Ok(self.presented(",
         ):
-            self.assertIn(marker, block)
-        self.assertLess(block.index("card.get_crtc("), block.index("self.presented("))
-        self.assertLess(block.index("routed.crtc()"), block.index("self.presented("))
+            self.assertIn(marker, PROBE)
+        self.assertIn("crate::native_kms_scanout::verify_kernel_scanout(", block)
+        self.assertLess(block.index("verify_kernel_scanout("), block.index("self.presented("))
+        self.assertIn("Ok(self.presented(", block)
 
     def test_stale_ack_never_probes_or_cancels_new_frame(self):
         block = SOURCE[SOURCE.index("pub fn verify_and_present("):SOURCE.index("fn presented(")]
         self.assertIn("self.inflight != Some(submission)", block)
-        self.assertLess(block.index("self.inflight != Some(submission)"), block.index("card.get_crtc(crtc)"))
+        self.assertLess(block.index("self.inflight != Some(submission)"),
+                        block.index("verify_kernel_scanout("))
         self.assertIn("return Ok(false);", block)
 
     def test_drm_read_errors_and_missing_route_fail_closed(self):
         block = SOURCE[SOURCE.index("pub fn verify_and_present("):SOURCE.index("fn presented(")]
-        self.assertIn("let Some(encoder) = attached.current_encoder() else", block)
-        self.assertIn("return Ok(false);", block)
+        self.assertIn("let Some(encoder) = attached.current_encoder() else", PROBE)
+        self.assertIn("return Ok(false);", PROBE)
         self.assertIn("self.fail_closed();", block)
         self.assertIn("Err(error)", block)
 
