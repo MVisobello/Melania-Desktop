@@ -33,6 +33,7 @@ on:
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
       - scripts/capture-qemu-real-layer-panel.py
+      - scripts/capture-qemu-real-gtk-panel.py
       - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
       - tests/test_native_xdg_qmp_role_pixels.py
@@ -79,6 +80,7 @@ on:
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
       - scripts/capture-qemu-real-layer-panel.py
+      - scripts/capture-qemu-real-gtk-panel.py
       - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
       - tests/test_native_xdg_qmp_role_pixels.py
@@ -142,6 +144,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_dynamic_pointer_frame13.py' -v
           python3 -m py_compile scripts/capture-qemu-managed-xdg-roles.py
           python3 -m py_compile scripts/capture-qemu-real-layer-panel.py
+          python3 -m py_compile scripts/capture-qemu-real-gtk-panel.py
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
