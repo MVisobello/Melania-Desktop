@@ -1935,9 +1935,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             }
             // The real GTK program is a single panel, despite sharing the
             // existing multi-client-capable KMS machinery with old scenarios.
-            if state.multi_window_mode && !state.real_gtk_pixel_kms_mode &&
-               !state.continuous_two_window_presented {
-                return Err("continuous KMS did not present both retained windows".into());
+            if state.multi_window_mode && !state.continuous_two_window_presented {
+                // The original multi-window invariant remains mandatory
+                // outside this one-image, real GTK panel QEMU experiment.
+                if !state.real_gtk_pixel_kms_mode {
+                    return Err("continuous KMS did not present both retained windows".into());
+                }
             }
             if state.continuous_reopen_mode &&
                (!state.continuous_close_frame_presented ||
