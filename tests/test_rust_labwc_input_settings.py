@@ -29,7 +29,7 @@ class MelaniaInputConfig(unittest.TestCase):
         self.assertIn('MELANIA_NESTED_SESSION',RUST)
         self.assertIn('MELANIA_EXTERNAL_COMPOSITOR',RUST)
         self.assertIn('MELANIA_ALLOW_HOST_POWER_ACTIONS',RUST)
-        self.assertIn('PathBuf::from(h).join(".config")',RUST)
+        self.assertIn('PathBuf::from(home).join(".config")',RUST)
         self.assertIn('base.join("labwc").join("rc.xml")',RUST)
         self.assertIn('CONFIG_HEADER',RUST)
         self.assertIn('create_new(true).write(true).mode(0o600)',RUST)
