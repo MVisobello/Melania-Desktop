@@ -1840,10 +1840,19 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // The parent process enforces the opt-in, DMI and Linux VT gates.
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
+    // A separate, strictly protocol-only smoke launches the real GTK4
+    // process in QEMU. It must not be mistaken for a pixel/KMS proof.
+    let real_gtk_smoke=std::env::var("MELANIA_NATIVE_REAL_GTK_SMOKE")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if real_gtk_smoke && (!shell_probe || !state.gtk_layer_mode ||
+                          state.layer_pixels_mode || state.continuous_kms_mode) {
+        return Err("real GTK startup smoke requires QEMU five-layer role-only mode".into());
+    }
     let deadline=Instant::now()+Duration::from_secs(
         if state.continuous_kms_mode {70} else if state.reopen_redraw_mode {68} else if state.close_redraw_mode {55} else if state.drag_redraw_mode {45} else {27}
     );
     let mut both_shell_roles_seen_at=None;
+    let mut real_gtk_seen_since=None;
     let mut pixel_ready_since=None;
     let mut continuous_ready_since=None;
     while Instant::now()<deadline {
@@ -1964,7 +1973,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Ok(());
             }
         }
-        if shell_probe && (if state.gtk_layer_mode {
+        if real_gtk_smoke && state.layer_surfaces.iter()
+            .any(|(name,_)|name=="melania-panel") {
+            let since=real_gtk_seen_since.get_or_insert_with(Instant::now);
+            // Give the actual GtkApplication time to finish constructing
+            // widgets and process the Wayland configure; do NOT claim KMS.
+            if since.elapsed()>=Duration::from_secs(5) {
+                println!("MELANIA_NATIVE_REAL_GTK_PANEL_LAYER_CONFIGURED=true");
+                println!("MELANIA_NATIVE_SESSION_READY=false");
+                return Ok(());
+            }
+        }
+        if shell_probe && !real_gtk_smoke && (if state.gtk_layer_mode {
             state.layer_surface_count>=gtk_layer_geometry::MAX_GTK_LAYER_SURFACES as u32
         } else {state.xdg_toplevel_count>0 && state.layer_surface_count>0}) {
             let since=both_shell_roles_seen_at.get_or_insert_with(Instant::now);
