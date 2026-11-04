@@ -467,6 +467,7 @@ MELANIA_NATIVE_LAYER_PIXELS=YES_QEMU_VM \
 MELANIA_NATIVE_GTK_MULTISURFACE=YES_QEMU_VM \
 MELANIA_NATIVE_REAL_GTK_PIXEL_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_REAL_GTK_TWO_FRAME=YES_QEMU_VM \
+MELANIA_NATIVE_REAL_GTK_START_KMS=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 55s \
   "$binary" --experimental-wayland-seat < /dev/tty1 \
   > "$gtk2_server_log" 2>&1 &
@@ -488,9 +489,10 @@ fi
 tail -n +1 -f -s 0.05 "$gtk2_drm_log" > /dev/ttyS0 &
 gtk2_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
-MELANIA_QEMU_CONTINUOUS_FRAMES=2 \
+MELANIA_QEMU_CONTINUOUS_FRAMES=3 \
 MELANIA_QEMU_REAL_GTK_PANEL_KMS=YES_QEMU_VM \
 MELANIA_QEMU_GTK_TWO_FRAME_KMS=YES_QEMU_VM \
+MELANIA_QEMU_GTK_START_KMS=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 48s \
   "$continuous_kms" < /dev/tty1 > "$gtk2_drm_log" 2>&1 &
 gtk2_drm_pid=$!
@@ -508,6 +510,7 @@ LD_LIBRARY_PATH=/mnt/melania-native \
 MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native \
 MELANIA_QEMU_VERIFY_FLUENT_LOOKUP=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_GTK_SECOND_FRAME=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_GTK_SHOW_START_AFTER_PAINT=YES_DISPOSABLE_QEMU \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
 WAYLAND_DISPLAY="$gtk2_socket" MELANIA_PROFILE_START=1 \
@@ -532,16 +535,23 @@ grep -Fqx 'MELANIA_QEMU_GTK_SECOND_REAL_FRAME_REQUESTED=true' "$gtk2_client_log"
   fatal 'real_GTK_second_frame_not_repainted_by_client'
 grep -Fqx 'MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true' "$gtk2_client_log" ||
   fatal 'real_GTK_two_frame_Fluent_lookup_missing'
-grep -Fqx 'MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK=2' "$gtk2_server_log" ||
+grep -Fqx 'MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK=3' "$gtk2_server_log" ||
   fatal 'real_GTK_two_frame_Smithay_owned_buffer_ACK_missing'
 grep -Fqx 'MELANIA_NATIVE_REAL_GTK_TWO_FRAME_KMS_PASS=true' "$gtk2_server_log" ||
   fatal 'real_GTK_two_frame_Smithay_validation_failed'
 grep -Fqx 'MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true' "$gtk2_drm_log" ||
   fatal 'real_GTK_second_frame_CRTC_verification_failed'
+grep -Fqx 'MELANIA_QEMU_GTK_START_OVERLAY_PRESENTED=true' "$gtk2_client_log" ||
+  fatal 'real_GTK_Start_surface_not_presented_by_client'
+grep -Fqx 'MELANIA_NATIVE_REAL_GTK_START_OVERLAY_KMS_PASS=true' "$gtk2_server_log" ||
+  fatal 'real_GTK_Start_surface_not_owned_by_Smithay'
+grep -Fqx 'MELANIA_RUST_REAL_GTK_START_OVERLAY_KMS_PASS=true' "$gtk2_drm_log" ||
+  fatal 'real_GTK_Start_third_CRTC_FB_ID_not_verified'
 grep -Fqx 'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$gtk2_drm_log" ||
   fatal 'real_GTK_two_frame_CRTC_not_restored'
 rm -f "$gtk2_client_log" "$gtk2_drm_log" "$gtk2_server_log"
 report 'MELANIA_QEMU_REAL_GTK_TWO_FRAME_KMS_SCANOUT_PASS=true'
+report 'MELANIA_QEMU_REAL_GTK_START_OVERLAY_KMS_SCANOUT_PASS=true'
 
 # Stage 26: The Rust native Smithay server accepts an actual Wayland xdg
 # client's wl_shm XRGB8888 buffer and composes the client's pixels into
