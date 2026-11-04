@@ -30,7 +30,11 @@ class ContinuousQmpPixels(unittest.TestCase):
         # Additional VM-only capture holds may be inserted for later frames.
         # Verify that the original seven/twelve framebuffer holds survive.
         self.assertIn('index==6 || index==11',RECEIVER)
-        self.assertIn('{2500} else {350}',RECEIVER)
+        # Stage86 holds only its third Start framebuffer longer for QMP.
+        # Keep the original Stage47 holds and the normal 350 ms path.
+        self.assertIn('real_gtk_panel || index==6 || index==11',RECEIVER)
+        self.assertIn('if real_gtk_start && index==2 {5500} else {2500}',RECEIVER)
+        self.assertIn('} else {350}',RECEIVER)
         self.assertIn('wait_for_fb(&card,crtc_handle,framebuffer)?',RECEIVER)
 
 if __name__=="__main__":
