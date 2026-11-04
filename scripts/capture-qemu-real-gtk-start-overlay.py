@@ -46,12 +46,20 @@ def validate_start_open(previous: bytes, opened: bytes) -> int:
         raise ValueError("QMP Start framebuffer lengths differ")
     # A real Start overlay changes ONLY the allowed left-bottom area. The
     # wallpaper/empty desktop and opposite side of screen must stay fixed.
-    for y in (0, 125, 210, 310, 555, 700):
-        for x in (600, 800, 1050, 1279):
-            pos = (y * width + x) * 3
-            if max(abs(a-b) for a,b in zip(previous[pos:pos+3],
-                                           opened[pos:pos+3])) > 8:
-                raise ValueError("QEMU background changed outside GTK Start bounds")
+    # Compare every byte outside Start above the taskbar. A sparse probe
+    # misses isolated unrelated changes and could certify a bad screenshot.
+    top_end = START_Y0 * width * 3
+    if previous[:top_end] != opened[:top_end]:
+        raise ValueError("QEMU background changed outside GTK Start bounds")
+    for y in range(START_Y0, START_Y1):
+        base = y * width * 3
+        left_end = base + START_X0 * 3
+        right_start = base + START_X1 * 3
+        right_end = base + width * 3
+        if previous[base:left_end] != opened[base:left_end] or (
+            previous[right_start:right_end] != opened[right_start:right_end]
+        ):
+            raise ValueError("QEMU background changed outside GTK Start bounds")
     # The second frame's taskbar is already validated by Stage85. Only count
     # changes ABOVE the taskbar, where Stage85 cannot draw by design.
     changed = 0
