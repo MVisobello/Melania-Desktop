@@ -231,7 +231,22 @@ fn run()->Result<(),Box<dyn Error>> {
                     original.position(),&connected,Some(mode))?;
                 rollback.submitted=true;
             } else {
-                card.page_flip(crtc_handle,framebuffer,PageFlipFlags::empty(),None)?;
+                // VirtIO DRM may still have the previous asynchronous flip
+                // pending even after its FB_ID becomes visible. EAGAIN is
+                // transient; retry only this error, with a strict deadline.
+                // Other DRM errors fail immediately and no frame is ACKed
+                // until wait_for_fb verifies the actual CRTC framebuffer.
+                let flip_deadline=Instant::now()+Duration::from_secs(2);
+                loop {
+                    match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::empty(),None) {
+                        Ok(())=>break,
+                        Err(error) if error.raw_os_error()==Some(11) &&
+                            Instant::now()<flip_deadline => {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(error)=>return Err(error.into()),
+                    }
+                }
             }
             // Only verified CRTC scanout may produce a success ACK.
             wait_for_fb(&card,crtc_handle,framebuffer)?;
