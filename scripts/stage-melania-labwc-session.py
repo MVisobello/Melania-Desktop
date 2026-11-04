@@ -45,10 +45,10 @@ def entries(bin_dir: Path) -> dict[Path, str]:
              f"Exec={exe['melania-settings']}\nTryExec={exe['melania-settings']}\n"
              "Icon=preferences-system\nCategories=Settings;\nStartupNotify=true\n"),
         STAGE / "share/xdg-desktop-portal/melania-portals.conf":
-            ("[preferred]\\n"
-             "default=gtk\\n"
-             "org.freedesktop.impl.portal.Screenshot=wlr\\n"
-             "org.freedesktop.impl.portal.ScreenCast=wlr\\n"),
+            ("[preferred]\n"
+             "default=gtk\n"
+             "org.freedesktop.impl.portal.Screenshot=wlr\n"
+             "org.freedesktop.impl.portal.ScreenCast=wlr\n"),
     }
     return result
 
