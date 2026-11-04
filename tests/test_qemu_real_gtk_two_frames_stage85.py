@@ -56,7 +56,9 @@ class QemuTwoRealGtkFrames(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_GTK_TWO_FRAME_KMS", receiver)
         self.assertIn("MELANIA_RUST_REAL_GTK_TWO_FRAME_VISIBLE=", receiver)
         self.assertIn("MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true", receiver)
-        self.assertIn("MELANIA_QEMU_CONTINUOUS_FRAMES=2", guest)
+        # Stage86 extends Stage85's same VM to a third real Start frame.
+        # The first TWO independent QMP screenshots still have to pass.
+        self.assertIn("MELANIA_QEMU_CONTINUOUS_FRAMES=3", guest)
         self.assertIn("MELANIA_QEMU_GTK_SECOND_FRAME=YES_DISPOSABLE_QEMU", guest)
         self.assertIn("MELANIA_QEMU_REAL_GTK_TWO_FRAME_KMS_SCANOUT_PASS=true", guest)
         self.assertIn("capture-qemu-real-gtk-two-frames.py", host)
