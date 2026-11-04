@@ -79,6 +79,8 @@ client_probe="$root/target/debug/melania-qemu-wayland-client"
   deny 'independent QMP layer pixel verifier missing'
 [[ -f "$root/scripts/capture-qemu-real-gtk-panel.py" ]] ||
   deny 'independent QMP real GTK4 taskbar verifier missing'
+[[ -f "$root/scripts/export-qemu-real-gtk-png.py" ]] ||
+  deny 'lossless QMP GTK screenshot PNG encoder missing'
 [[ -f "$root/scripts/capture-qemu-continuous-dynamic.py" ]] ||
   deny 'QEMU real variable-size two-window pixel verifier missing'
 [[ -f "$root/scripts/inject-qemu-dynamic-pointer.py" &&
@@ -479,6 +481,14 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-real-gtk-panel.log" || true
   exit 1
 fi
+# Export only the previously verified LIVE QMP GTK framebuffer, preserving
+# the original PPM as forensic evidence. Never synthesize a screenshot.
+python3 "$root/scripts/export-qemu-real-gtk-png.py" \
+  --ppm "$report/real-gtk-panel-frame1.ppm" \
+  --png "$report/real-gtk-panel-frame1.png" \
+  | tee "$report/qmp-real-gtk-png.log"
+test -s "$report/real-gtk-panel-frame1.png" ||
+  deny 'verified real GTK4 screenshot PNG was not written'
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_12_KMS_ACKS=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_FRAME7_12_PIXELS=true' >> "$report/result.txt"
@@ -490,6 +500,7 @@ printf '%s\n' 'MELANIA_VM_NATIVE_REAL_LAYER_SHELL_QMP=true' >> "$report/result.t
 printf '%s\n' 'MELANIA_VM_GTK_FIVE_WAYLAND_ROLE_ACK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_STARTUP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_KMS_QMP_PIXELS=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_SCREENSHOT_PNG=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_PANEL_REAL_ELF_GUEST_LINK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
