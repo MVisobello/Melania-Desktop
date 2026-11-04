@@ -7,7 +7,7 @@ cd "$ROOT"
 for tool in labwc wlrctl Xvfb dbus-run-session python3 scrot; do
   command -v "$tool" >/dev/null || { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$tool" >&2; exit 3; }
 done
-for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart; do
+for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart melania-inputctl; do
   [[ -x "$ROOT/target/debug/$bin" ]] ||
     { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$bin" >&2; exit 3; }
 done
