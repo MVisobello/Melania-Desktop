@@ -454,6 +454,13 @@ fn start_window(app:&Application)->ApplicationWindow {
     query.connect_changed(move |q| {
         let term=q.text().trim().to_lowercase();
         if !term.is_empty() &&
+            std::env::var("MELANIA_QEMU_GTK_SEARCH_INPUT")
+                .as_deref()==Ok("YES_DISPOSABLE_QEMU") {
+            // Only the actual GtkEntry::changed signal can claim this proof.
+            // Never print the user's search text, even in disposable CI.
+            eprintln!("MELANIA_QEMU_GTK_START_REAL_SEARCH_TYPED=true");
+        }
+        if !term.is_empty() &&
             std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
             // Record only the fact that typing reached search in isolated CI,
             // not the user's actual input content.
