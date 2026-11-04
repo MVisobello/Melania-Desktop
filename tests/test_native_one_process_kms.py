@@ -68,6 +68,14 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertIn('"$continuous_server" --experimental-wayland-seat', scenario)
         self.assertIn('"$continuous_client"', scenario)
         self.assertNotIn('"$continuous_kms"', scenario)
+        # A JS replacement accidentally expanded "$'" and duplicated all
+        # following QEMU scenarios once. Keep the guest script intact.
+        self.assertEqual(GUEST.count("# Stage48:"), 1)
+        self.assertEqual(GUEST.count("two_continuous_client=/mnt/melania-native/melania-two-continuous-client"), 1)
+        self.assertIn(
+            "grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=12$' \"$integrated_server_log\" ||",
+            scenario,
+        )
         self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM', scenario)
         for receipt in (
             'MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=12',
