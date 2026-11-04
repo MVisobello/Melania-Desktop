@@ -139,6 +139,8 @@ struct BridgeState {
     layer_pixels_mode:bool,
     // Five named GTK surfaces are accepted only in the explicit QEMU opt-in.
     gtk_layer_mode:bool,
+    // Stage84 is a separate, strictly QEMU-only real GTK -> wl_shm -> DRM proof.
+    real_gtk_pixel_kms_mode:bool,
     layer_surfaces:Vec<(String,WlrLayerSurface)>,
     xdg_toplevel_count: u32,
     layer_surface_count: u32,
@@ -1676,7 +1678,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 ClientCommitLedger::with_capacity(16).expect("bounded QEMU receipts")
             } else {ClientCommitLedger::new()}, 
         continuous_frame_count:0,
-        continuous_frame_target:if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
+        continuous_frame_target:if std::env::var("MELANIA_NATIVE_REAL_GTK_PIXEL_KMS")
+            .as_deref()==Ok("YES_QEMU_VM") {1} else if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
             .as_deref()==Ok("YES_QEMU_VM") {13} else {12},
         continuous_reopen_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
@@ -1724,6 +1727,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         layer_pixels_mode:std::env::var("MELANIA_NATIVE_LAYER_PIXELS")
             .as_deref()==Ok("YES_QEMU_VM"),
         gtk_layer_mode:std::env::var("MELANIA_NATIVE_GTK_MULTISURFACE")
+            .as_deref()==Ok("YES_QEMU_VM"),
+        real_gtk_pixel_kms_mode:std::env::var("MELANIA_NATIVE_REAL_GTK_PIXEL_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
         layer_surfaces:Vec::new(),
         xdg_toplevel_count:0,layer_surface_count:0,
@@ -1805,6 +1810,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         !state.multi_window_mode || !state.frame_callbacks_probe ||
         state.continuous_reopen_mode) {
         return Err("native layer pixels require isolated QEMU dynamic multi-client KMS".into());
+    }
+    if state.real_gtk_pixel_kms_mode &&
+       (!state.gtk_layer_mode || !state.layer_pixels_mode ||
+        !state.dynamic_window_mode || !state.continuous_kms_mode ||
+        !state.live_stream || !state.frame_callbacks_probe ||
+        !state.multi_window_mode || !state.pixel_probe || gtk_role_protocol_only ||
+        state.continuous_reopen_mode || state.dynamic_pointer_proof_mode) {
+        return Err("real GTK pixel KMS requires isolated QEMU single-frame pipeline".into());
     }
     if state.managed_xdg_mode && !state.dynamic_window_mode &&
        std::env::var("MELANIA_NATIVE_SHELL_PROBE").as_deref()!=Ok("YES_QEMU_VM") {
@@ -1916,11 +1929,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // damage: NO new client commit and therefore NO callback.
             let expected_callbacks=if state.dynamic_pointer_proof_mode {12}
                 else {state.continuous_frame_target};
-            if u64::from(state.frame_callback_count)!=expected_callbacks {
+            if !state.real_gtk_pixel_kms_mode &&
+               u64::from(state.frame_callback_count)!=expected_callbacks {
                 return Err("Wayland callbacks not completed after continuous KMS".into());
             }
+            // The real GTK program is a single panel, despite sharing the
+            // existing multi-client-capable KMS machinery with old scenarios.
             if state.multi_window_mode && !state.continuous_two_window_presented {
-                return Err("continuous KMS did not present both retained windows".into());
+                // The original multi-window invariant remains mandatory
+                // outside this one-image, real GTK panel QEMU experiment.
+                if !state.real_gtk_pixel_kms_mode {
+                    return Err("continuous KMS did not present both retained windows".into());
+                }
             }
             if state.continuous_reopen_mode &&
                (!state.continuous_close_frame_presented ||
@@ -1933,6 +1953,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             if since.elapsed()>=Duration::from_secs(2) {
                 println!("MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS={}",
                          state.continuous_frame_target);
+                if state.real_gtk_pixel_kms_mode {
+                    // This branch is reachable only after a genuine DRM FB_ID
+                    // receipt, not after wl_surface.configure alone.
+                    if state.dynamic_scene.window_count()!=1 ||
+                       !state.layer_surfaces.iter().any(|(name,role)|{
+                           name=="melania-panel" &&
+                           state.known_window_surfaces.get(1)==Some(role.wl_surface())
+                       }) {
+                        return Err("GTK panel was not the actual KMS image owner".into());
+                    }
+                    println!("MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK=1");
+                }
                 if state.continuous_reopen_mode {
                     println!("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true");
                 }

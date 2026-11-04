@@ -167,12 +167,18 @@ fn run()->Result<(),Box<dyn Error>> {
     };
     let mut previous:Option<Vec<u8>>=None;
 
-    // Only the disposable VM harness sets a bounded target. This is not a
-    // compositor frame ordinal; sequence/generation are full-width counters.
-    let total: u64 = std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
+    // Stage84 allows one real GTK image only with the explicit VM opt-in.
+    // All historical tests retain the stricter 8..=64-frame count.
+    let real_gtk_panel=std::env::var("MELANIA_QEMU_REAL_GTK_PANEL_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    let total: u64=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
         .ok().and_then(|value|value.parse().ok())
-        .filter(|count:&u64|(8..=64).contains(count))
+        .filter(|count:&u64|(8..=64).contains(count) ||
+                (real_gtk_panel && *count==1))
         .unwrap_or(12);
+    if real_gtk_panel && total!=1 {
+        return Err("real GTK KMS experiment requires exactly one frame".into());
+    }
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut previous_identity:Option<(u64,u64,u64)>=None;
         for index in 0..total {
@@ -223,6 +229,11 @@ fn run()->Result<(),Box<dyn Error>> {
             // Only verified CRTC scanout may produce a success ACK.
             wait_for_fb(&card,crtc_handle,framebuffer)?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_VISIBLE={}",index+1);
+            if real_gtk_panel && index==0 {
+                // The host QMP verifier must capture the LIVE guest CRTC,
+                // not a hand-crafted bitmap or a previously saved screenshot.
+                println!("MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1");
+            }
             // Only the disposable managed-role run emits these markers.
             // The host reads the *actual* QMP GPU framebuffer during the
             // following hold, before any later client frame is presented.
@@ -271,7 +282,7 @@ fn run()->Result<(),Box<dyn Error>> {
                 if (reopen && (index==12 || index==13)) ||
                    (pointer_proof && index==12) ||
                    (managed_role_qmp && matches!(index+1,3|5|7|9)) ||
-                   index==6 || index==11 {2500} else {350}
+                   real_gtk_panel || index==6 || index==11 {2500} else {350}
             ));
             if index+1==total {rollback.restore()?;}
             let mut ack=[0u8;29];
