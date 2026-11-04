@@ -25,6 +25,16 @@ file "$binary" || true
 # gtk4-layer-shell SONAME. Never mistake this for a native screenshot.
 gtk_panel=/mnt/melania-native/melania-panel
 gtk_layer_lib=/mnt/melania-native/libgtk4-layer-shell.so.0
+# A genuine freedesktop Melania-Fluent-Light theme MUST exist in this VM.
+# Avoid silently accepting Adwaita when the real icon pack is missing.
+gtk_icons=/mnt/melania-native/icons/Melania-Fluent-Light
+[[ -f "$gtk_icons/index.theme" &&
+   -f "$gtk_icons/apps/scalable/melania.svg" &&
+   -f "$gtk_icons/apps/scalable/org.melaniadesktop.Files.svg" &&
+   -f "$gtk_icons/apps/scalable/org.melaniadesktop.Settings.svg" &&
+   -f "$gtk_icons/status/24x24/network-wireless-signal-excellent-symbolic.svg" ]] ||
+  fatal 'isolated_real_Melania_Fluent_icon_theme_missing'
+report 'MELANIA_QEMU_REAL_FLUENT_THEME_BUNDLED=true'
 [[ -x "$gtk_panel" && -s "$gtk_layer_lib" ]] ||
   fatal 'real_GTK_panel_or_layer_shell_payload_missing'
 gtk_link_log="$(mktemp -t melania-gtk-guest-link-XXXXXX)"
@@ -304,6 +314,7 @@ if [[ -z "$gtk_smoke_socket" ]]; then
 fi
 mkdir -p /run/melania-native-qemu/config
 LD_LIBRARY_PATH=/mnt/melania-native \
+MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
 WAYLAND_DISPLAY="$gtk_smoke_socket" MELANIA_PROFILE_START=1 \
@@ -321,6 +332,8 @@ wait "$gtk_smoke_client_pid" 2>/dev/null || true
 cat "$gtk_smoke_client_log" "$gtk_smoke_server_log"
 grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_smoke_client_log" ||
   fatal 'real_gtk_panel_widget_build_not_confirmed'
+grep -Fqx 'MELANIA_PANEL_ICON_THEME_SELECTED=Melania-Fluent-Light' "$gtk_smoke_client_log" ||
+  fatal 'real_gtk_smoke_used_Adwaita_instead_of_Melania_Fluent'
 grep -q '^MELANIA_NATIVE_GTK_LAYER_CONFIGURED=melania-panel size=1280x52' "$gtk_smoke_server_log" ||
   fatal 'real_gtk_panel_top_layer_not_configured'
 grep -q '^MELANIA_NATIVE_REAL_GTK_PANEL_LAYER_CONFIGURED=true' "$gtk_smoke_server_log" ||
@@ -389,6 +402,7 @@ if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$gtk_kms_drm_log"; t
   fatal 'real_gtk_KMS_DRM_receiver_unavailable'
 fi
 LD_LIBRARY_PATH=/mnt/melania-native \
+MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
 WAYLAND_DISPLAY="$gtk_kms_socket" MELANIA_PROFILE_START=1 \
@@ -411,6 +425,8 @@ wait "$gtk_kms_tail_pid" 2>/dev/null || true
 cat "$gtk_kms_client_log" "$gtk_kms_drm_log" "$gtk_kms_server_log"
 grep -q '^MELANIA_PANEL_BOOT_MS ' "$gtk_kms_client_log" ||
   fatal 'real_gtk_KMS_app_did_not_build_widgets'
+grep -Fqx 'MELANIA_PANEL_ICON_THEME_SELECTED=Melania-Fluent-Light' "$gtk_kms_client_log" ||
+  fatal 'real_gtk_KMS_used_Adwaita_instead_of_Melania_Fluent'
 # The real GTK4 client negotiates a 52px layer configure but its existing
 # theme's natural widget minimum is 60px. Verify the ACTUAL owned buffer
 # rather than silently treating configured geometry as a screenshot.
