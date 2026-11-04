@@ -13,6 +13,7 @@ RECEIVER = (ROOT / "melania-native/src/bin/qemu-rust-kms-continuous.rs").read_te
 CLIENT = (ROOT / "melania-native/src/bin/qemu-continuous-client.rs").read_text()
 TRANSPORT = (ROOT / "melania-native/src/continuous_kms_stream.rs").read_text()
 GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
+HOST = (ROOT / "scripts/run-qemu-melania-native.sh").read_text()
 
 class OneProcessWaylandKmsContract(unittest.TestCase):
     def test_same_native_executable_contains_wayland_and_kms(self):
@@ -100,6 +101,27 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         self.assertLess(CLIENT.index('std::fs::remove_file(&path)?;'),
                         CLIENT.index('let buffer=pool.create_buffer('))
 
+    def test_longer_one_process_kms_presents_24_actual_frames(self):
+        # The native receiver, Wayland server and client must agree on the
+        # frame target, while the host must require the actual guest proof.
+        start=GUEST.index('# Sustain 24 successive real Wayland/client buffer')
+        end=GUEST.index("report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true'",start)
+        scenario=GUEST[start:end]
+        self.assertIn('MELANIA_NATIVE_QEMU_FRAME_TARGET=24',scenario)
+        self.assertIn('MELANIA_QEMU_CONTINUOUS_FRAMES=24',scenario)
+        self.assertIn('MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24',scenario)
+        self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM',scenario)
+        self.assertIn('for index in $(seq 1 24); do',scenario)
+        self.assertIn('MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=24',scenario)
+        self.assertIn('MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true',scenario)
+        self.assertIn('MELANIA_RUST_KMS_RESTORE_VERIFIED=true',scenario)
+        self.assertIn('MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true',scenario)
+        self.assertIn('MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS=24',scenario)
+        self.assertNotIn('"$continuous_kms"',scenario)
+        self.assertIn('MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true',HOST)
+        self.assertIn('MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true',HOST)
+        self.assertEqual(GUEST.count('# Stage48:'),1)
+        self.assertEqual(GUEST.count('# ONE-PROCESS native integration proof:'),1)
     def test_vm_runs_real_client_without_second_kms_binary(self):
         start=GUEST.index('# ONE-PROCESS native integration proof:')
         end=GUEST.index("report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true'",start)
