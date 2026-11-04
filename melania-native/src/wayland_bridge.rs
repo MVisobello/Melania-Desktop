@@ -1680,7 +1680,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_frame_count:0,
         continuous_frame_target:if std::env::var("MELANIA_NATIVE_REAL_GTK_PIXEL_KMS")
             .as_deref()==Ok("YES_QEMU_VM") {
-                if std::env::var("MELANIA_NATIVE_REAL_GTK_TWO_FRAME")
+                if std::env::var("MELANIA_NATIVE_REAL_GTK_START_KMS")
+                    .as_deref()==Ok("YES_QEMU_VM") {3}
+                else if std::env::var("MELANIA_NATIVE_REAL_GTK_TWO_FRAME")
                     .as_deref()==Ok("YES_QEMU_VM") {2} else {1}
             } else if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
@@ -1959,17 +1961,28 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 if state.real_gtk_pixel_kms_mode {
                     // This branch is reachable only after a genuine DRM FB_ID
                     // receipt, not after wl_surface.configure alone.
-                    if state.dynamic_scene.window_count()!=1 ||
+                    let start_overlay=std::env::var("MELANIA_NATIVE_REAL_GTK_START_KMS")
+                        .as_deref()==Ok("YES_QEMU_VM");
+                    let expected_count=if start_overlay {2} else {1};
+                    if state.dynamic_scene.window_count()!=expected_count ||
                        !state.layer_surfaces.iter().any(|(name,role)|{
                            name=="melania-panel" &&
                            state.known_window_surfaces.get(1)==Some(role.wl_surface())
-                       }) {
-                        return Err("GTK panel was not the actual KMS image owner".into());
+                       }) ||
+                       (start_overlay &&
+                        !state.layer_surfaces.iter().any(|(name,role)|{
+                            name=="melania-start" &&
+                            state.known_window_surfaces.get(2)==Some(role.wl_surface())
+                        })) {
+                        return Err("real GTK panel/Start did not own KMS image".into());
                     }
                     println!("MELANIA_NATIVE_REAL_GTK_PANEL_KMS_ACK={}",
                              state.continuous_frame_target);
-                    if state.continuous_frame_target==2 {
+                    if state.continuous_frame_target>=2 {
                         println!("MELANIA_NATIVE_REAL_GTK_TWO_FRAME_KMS_PASS=true");
+                    }
+                    if start_overlay && state.continuous_frame_target==3 {
+                        println!("MELANIA_NATIVE_REAL_GTK_START_OVERLAY_KMS_PASS=true");
                     }
                 }
                 if state.continuous_reopen_mode {
