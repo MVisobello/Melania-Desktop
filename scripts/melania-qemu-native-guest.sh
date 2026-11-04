@@ -260,6 +260,8 @@ if ! wait "$gtk_server_pid"; then
   fatal 'gtk_five_role_protocol_server_failed'
 fi
 cat "$gtk_client_log" "$gtk_server_log"
+grep -Fqx 'MELANIA_QEMU_GTK_REQUIRED_GLOBALS_PASS=true' "$gtk_client_log" ||
+  fatal 'gtk4_required_wayland_globals_missing'
 grep -q '^MELANIA_QEMU_GTK_FIVE_ROLE_CONFIGURES_PASS=true' "$gtk_client_log" ||
   fatal 'gtk_five_role_client_ACKs_missing'
 grep -q '^MELANIA_NATIVE_LAYER_SURFACE_COUNT=5$' "$gtk_server_log" ||
