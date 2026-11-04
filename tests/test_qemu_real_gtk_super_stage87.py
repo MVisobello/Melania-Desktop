@@ -17,7 +17,11 @@ class RealSuperQemuStart(unittest.TestCase):
         self.assertIn('melania-control = { path = "../melania-control" }', native_cargo)
         self.assertIn('MELANIA_NATIVE_REAL_GTK_START_INPUT', bridge)
         self.assertIn('state.real_gtk_pixel_kms_mode', bridge)
-        self.assertIn('code==125 || code==126', bridge)
+        # Smithay provides an XKB keycode (evdev + 8); QEMU LEFTMETA
+        # arrived as 133. Reject regressions to comparing 125 directly.
+        self.assertIn("let evdev_code=code.checked_sub(8);", bridge)
+        self.assertIn("matches!(evdev_code,Some(125 | 126))", bridge)
+        self.assertNotIn("if code==125 || code==126", bridge)
         self.assertIn('event.state()==KeyState::Pressed', bridge)
         self.assertIn('state.qemu_start_super_down.take()==Some(code)', bridge)
         self.assertIn('state.known_window_surfaces.get(1).is_some()', bridge)
