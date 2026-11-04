@@ -171,13 +171,16 @@ fn run()->Result<(),Box<dyn Error>> {
     // All historical tests retain the stricter 8..=64-frame count.
     let real_gtk_panel=std::env::var("MELANIA_QEMU_REAL_GTK_PANEL_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
+    let real_gtk_two_frame=real_gtk_panel && std::env::var("MELANIA_QEMU_GTK_TWO_FRAME_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
     let total: u64=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
         .ok().and_then(|value|value.parse().ok())
         .filter(|count:&u64|(8..=64).contains(count) ||
-                (real_gtk_panel && *count==1))
+                (real_gtk_panel && *count==1) ||
+                (real_gtk_two_frame && *count==2))
         .unwrap_or(12);
-    if real_gtk_panel && total!=1 {
-        return Err("real GTK KMS experiment requires exactly one frame".into());
+    if real_gtk_panel && total!=if real_gtk_two_frame {2} else {1} {
+        return Err("real GTK KMS experiment has invalid VM-only frame count".into());
     }
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut previous_identity:Option<(u64,u64,u64)>=None;
@@ -232,7 +235,12 @@ fn run()->Result<(),Box<dyn Error>> {
             if real_gtk_panel && index==0 {
                 // The host QMP verifier must capture the LIVE guest CRTC,
                 // not a hand-crafted bitmap or a previously saved screenshot.
-                println!("MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1");
+                if !real_gtk_two_frame {
+                    println!("MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1");
+                }
+            }
+            if real_gtk_two_frame {
+                println!("MELANIA_RUST_REAL_GTK_TWO_FRAME_VISIBLE={}",index+1);
             }
             // Only the disposable managed-role run emits these markers.
             // The host reads the *actual* QMP GPU framebuffer during the
@@ -313,6 +321,9 @@ fn run()->Result<(),Box<dyn Error>> {
         card.destroy_dumb_buffer(db2)?;
         card.destroy_dumb_buffer(db1)?;
         println!("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}");
+        if real_gtk_two_frame {
+            println!("MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true");
+        }
         println!("MELANIA_NATIVE_CONTINUOUS_COMPOSITOR_READY=false");
         println!("MELANIA_NATIVE_SESSION_READY=false");
         return Ok(());

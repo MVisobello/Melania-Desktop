@@ -1879,6 +1879,29 @@ fn build(app:&Application){
             &bar,&content,&start,&quick,&notifications,&calendar);
     }
     bar.present();
+    // Disposable QEMU-only second real GTK frame: modify the already-real
+    // bar's GTK CSS after the first surface was committed. This deliberately
+    // uses GTK rendering/Wayland wl_shm again, never synthesizes a pixel buffer.
+    if std::env::var("MELANIA_QEMU_GTK_SECOND_FRAME").as_deref()
+        ==Ok("YES_DISPOSABLE_QEMU") {
+        let bar_for_second_frame=bar.clone();
+        glib::timeout_add_local_once(Duration::from_millis(4500),move || {
+            let css=gtk::CssProvider::new();
+            css.load_from_data(
+                ".melania-bar.melania-qemu-second-frame { background: #346ba2; }"
+            );
+            if let Some(display)=gtk::gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(
+                    &display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION+1
+                );
+            }
+            if let Some(content)=bar_for_second_frame.child() {
+                content.add_css_class("melania-qemu-second-frame");
+                content.queue_draw();
+                eprintln!("MELANIA_QEMU_GTK_SECOND_REAL_FRAME_REQUESTED=true");
+            }
+        });
+    }
     if std::env::var_os("MELANIA_PROFILE_START").is_some() {
         eprintln!(
             "MELANIA_PANEL_BOOT_MS theme={} start={} notifications={} quick={} calendar={} taskbar={} present={} total={}",

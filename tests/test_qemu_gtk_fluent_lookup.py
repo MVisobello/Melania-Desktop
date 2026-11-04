@@ -19,13 +19,14 @@ class QemuGtkFluentLookup(unittest.TestCase):
                      "network-wireless-signal-excellent-symbolic"):
             self.assertIn(f'"{icon}"', source)
 
-    def test_both_guest_gtk_launches_are_actually_checked(self):
+    def test_three_guest_gtk_launches_are_actually_checked(self):
         guest = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
-        self.assertEqual(guest.count("MELANIA_QEMU_VERIFY_FLUENT_LOOKUP=YES_DISPOSABLE_QEMU"), 2)
-        self.assertEqual(guest.count("MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true"), 2)
+        self.assertEqual(guest.count("MELANIA_QEMU_VERIFY_FLUENT_LOOKUP=YES_DISPOSABLE_QEMU"), 3)
+        self.assertEqual(guest.count("MELANIA_QEMU_GTK_FLUENT_ICON_LOOKUPS_PASS=true"), 3)
         self.assertIn("real_gtk_smoke_Fluent_icons_not_resolved_by_GTK4", guest)
         self.assertIn("real_gtk_KMS_Fluent_icons_not_resolved_by_GTK4", guest)
         self.assertIn("MELANIA_QEMU_REAL_GTK_PANEL_KMS_SCANOUT_PASS=true", guest)
+        self.assertIn("MELANIA_QEMU_REAL_GTK_TWO_FRAME_KMS_SCANOUT_PASS=true", guest)
 
 
 if __name__ == "__main__":
