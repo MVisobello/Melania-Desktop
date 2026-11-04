@@ -2204,6 +2204,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let mut real_gtk_seen_since=None;
     let mut pixel_ready_since=None;
     let mut continuous_ready_since=None;
+    // Always unwind the integrated renderer before libseat drops its FD.
+    // A client error, libseat pause or Wayland dispatch failure must NOT
+    // bypass KMS rollback by returning directly from this function.
+    let run_result=(||->Result<(),Box<dyn Error>> {
     while Instant::now()<deadline {
         // Accept the Rust DRM consumer before processing client commits;
         // the socket is private to this disposable VM, not the host.
@@ -2415,6 +2419,27 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         "QEMU Wayland input bridge incomplete: focused={} keys={} buttons={}",
         state.focused.is_some(),state.delivered_keys,state.delivered_buttons
     ).into())
+    })();
+    if integrated_kms && run_result.is_err() {
+        // Close the pending-job producer first, allowing the KMS receiver
+        // to observe EOF. Its normal error/Drop path attempts CRTC rollback.
+        // Never release the libseat descriptor before this thread ends.
+        state.continuous_worker.take();
+        if let Some(join)=integrated_thread.take() {
+            match join.join() {
+                Ok(Ok(()))=>println!("MELANIA_NATIVE_IN_PROCESS_KMS_EARLY_STOP=true"),
+                Ok(Err(error))=>eprintln!("MELANIA_NATIVE_IN_PROCESS_KMS_ERROR={error}"),
+                Err(_)=>eprintln!("MELANIA_NATIVE_IN_PROCESS_KMS_THREAD_PANICKED=true"),
+            }
+        }
+        if let Some(mut owner)=integrated_drm.take() {
+            if let Err(error)=owner.release() {
+                eprintln!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASE_ERROR={error}");
+            }
+        }
+        println!("MELANIA_NATIVE_IN_PROCESS_KMS_ERROR_CLEANUP_ATTEMPTED=true");
+    }
+    run_result
 }
 
 #[cfg(test)]
