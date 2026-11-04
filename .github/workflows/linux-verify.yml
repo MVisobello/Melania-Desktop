@@ -139,7 +139,7 @@ jobs:
       - name: Build real Linux desktop binaries
         run: |
           set -o pipefail
-          cargo build -p melania-compositor -p melania-control -p melania-services -p melania-files -p melania-desktop-surface -p melania-panel -p melania-settings 2>&1 | tee compositor-build.log
+          cargo build -p melania-compositor -p melania-control -p melania-files -p melania-desktop-surface -p melania-panel -p melania-settings -p melania-services 2>&1 | tee compositor-build.log
       - name: Compile and test native libseat/udev/DRM stage1
         run: |
           set -o pipefail
