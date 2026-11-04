@@ -222,6 +222,57 @@ rm -f "$shell_log" "$shell_client_log"
 report 'MELANIA_QEMU_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true'
 report 'MELANIA_QEMU_NATIVE_SHELL_PROBE_PASS=true'
 
+# Stage83F: REAL libwayland client requests all five GTK-compatible layer
+# namespaces. This is a configure/ACK protocol probe, not a GTK screenshot.
+gtk_role_client=/mnt/melania-native/melania-gtk-five-roles
+[[ -x "$gtk_role_client" ]] || fatal 'gtk_five_role_protocol_client_missing'
+gtk_server_log="$(mktemp -t melania-gtk-roles-server-XXXXXX)"
+gtk_client_log="$(mktemp -t melania-gtk-roles-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_GTK_MULTISURFACE=YES_QEMU_VM \
+MELANIA_NATIVE_SHELL_PROBE=YES_QEMU_VM \
+  timeout --signal=TERM --kill-after=3s 22s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 > "$gtk_server_log" 2>&1 &
+gtk_server_pid=$!
+gtk_socket=''
+for attempt in $(seq 1 100); do
+  gtk_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$gtk_server_log" | head -n 1)"
+  [[ -n "$gtk_socket" ]] && break
+  kill -0 "$gtk_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$gtk_socket" ]]; then
+  cat "$gtk_server_log"
+  kill "$gtk_server_pid" 2>/dev/null || true
+  wait "$gtk_server_pid" 2>/dev/null || true
+  fatal 'gtk_five_role_protocol_socket_missing'
+fi
+if ! MELANIA_QEMU_GTK_FIVE_ROLES=YES_QEMU_VM WAYLAND_DISPLAY="$gtk_socket" \
+  timeout --signal=TERM --kill-after=3s 12s "$gtk_role_client" \
+  > "$gtk_client_log" 2>&1; then
+  cat "$gtk_client_log" "$gtk_server_log"
+  kill "$gtk_server_pid" 2>/dev/null || true
+  wait "$gtk_server_pid" 2>/dev/null || true
+  fatal 'gtk_five_role_protocol_client_failed'
+fi
+if ! wait "$gtk_server_pid"; then
+  cat "$gtk_server_log"
+  fatal 'gtk_five_role_protocol_server_failed'
+fi
+cat "$gtk_client_log" "$gtk_server_log"
+grep -q '^MELANIA_QEMU_GTK_FIVE_ROLE_CONFIGURES_PASS=true' "$gtk_client_log" ||
+  fatal 'gtk_five_role_client_ACKs_missing'
+grep -q '^MELANIA_NATIVE_LAYER_SURFACE_COUNT=5$' "$gtk_server_log" ||
+  fatal 'gtk_five_role_server_count_missing'
+for spec in 'melania-panel size=1280x52' 'melania-start size=510x565' 'melania-quick size=350x430' 'melania-notifications size=380x440' 'melania-calendar size=330x315'; do
+  grep -Fqx "MELANIA_QEMU_GTK_ROLE_CONFIGURE_ACK=$spec" "$gtk_client_log" ||
+    fatal "gtk_client_missing:$spec"
+  grep -Fqx "MELANIA_NATIVE_GTK_LAYER_CONFIGURED=$spec" "$gtk_server_log" ||
+    fatal "gtk_server_missing:$spec"
+done
+rm -f "$gtk_client_log" "$gtk_server_log"
+report 'MELANIA_QEMU_GTK_FIVE_REAL_LAYER_ROLE_ACK_PASS=true'
+
 # Stage 26: The Rust native Smithay server accepts an actual Wayland xdg
 # client's wl_shm XRGB8888 buffer and composes the client's pixels into
 # an immutable QEMU-only framebuffer snapshot. A separate short-lived

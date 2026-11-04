@@ -195,6 +195,7 @@ jobs:
           test -s target/debug/melania-gtk4-layer-shell.so.0
           cargo build -p melania-native --bins
           test -x target/debug/qemu-layer-panel-client
+          test -x target/debug/qemu-gtk-five-roles
           test -x target/debug/qemu-shell-client
           test -x target/debug/qemu-client-window
           test -x target/debug/qemu-rust-kms-frames
