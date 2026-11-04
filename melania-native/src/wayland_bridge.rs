@@ -21,6 +21,7 @@ use smithay::{
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
+    delegate_data_device,
     input::{keyboard::FilterResult, pointer::{ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
@@ -37,6 +38,8 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
+        selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
+            ClientDndGrabHandler,ServerDndGrabHandler}},
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
@@ -64,6 +67,10 @@ impl ClientData for BridgeClientState {
 struct BridgeState {
     compositor: CompositorState,
     shm:ShmState,
+    // GTK4's GDK Wayland backend requires wl_data_device_manager even
+    // before it creates its first layer-shell window. This is a protocol
+    // global, NOT proof of native clipboard/DnD integration or login.
+    data_device:DataDeviceState,
     output:Output,
     output_manager:OutputManagerState,
     pixel_probe:bool,
@@ -1415,6 +1422,15 @@ impl WlrLayerShellHandler for BridgeState {
         }
     }
 }
+// Advertise the actual wl_data_device_manager protocol to GTK4 clients.
+// The QEMU bridge does not yet claim complete clipboard/DnD UX.
+impl SelectionHandler for BridgeState {type SelectionUserData=();}
+impl ClientDndGrabHandler for BridgeState {}
+impl ServerDndGrabHandler for BridgeState {}
+impl DataDeviceHandler for BridgeState {
+    fn data_device_state(&self)->&DataDeviceState {&self.data_device}
+}
+delegate_data_device!(BridgeState);
 delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
 delegate_xdg_shell!(BridgeState);
@@ -1633,6 +1649,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let mut state=BridgeState{
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
+        data_device:DataDeviceState::new::<BridgeState>(&handle),
         output_manager:OutputManagerState::new_with_xdg_output::<BridgeState>(&handle),
         output,
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
@@ -1840,10 +1857,19 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // The parent process enforces the opt-in, DMI and Linux VT gates.
     let shell_probe=std::env::var("MELANIA_NATIVE_SHELL_PROBE")
         .as_deref()==Ok("YES_QEMU_VM");
+    // A separate, strictly protocol-only smoke launches the real GTK4
+    // process in QEMU. It must not be mistaken for a pixel/KMS proof.
+    let real_gtk_smoke=std::env::var("MELANIA_NATIVE_REAL_GTK_SMOKE")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if real_gtk_smoke && (!shell_probe || !state.gtk_layer_mode ||
+                          state.layer_pixels_mode || state.continuous_kms_mode) {
+        return Err("real GTK startup smoke requires QEMU five-layer role-only mode".into());
+    }
     let deadline=Instant::now()+Duration::from_secs(
         if state.continuous_kms_mode {70} else if state.reopen_redraw_mode {68} else if state.close_redraw_mode {55} else if state.drag_redraw_mode {45} else {27}
     );
     let mut both_shell_roles_seen_at=None;
+    let mut real_gtk_seen_since=None;
     let mut pixel_ready_since=None;
     let mut continuous_ready_since=None;
     while Instant::now()<deadline {
@@ -1964,7 +1990,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Ok(());
             }
         }
-        if shell_probe && (if state.gtk_layer_mode {
+        if real_gtk_smoke && state.layer_surfaces.iter()
+            .any(|(name,_)|name=="melania-panel") {
+            let since=real_gtk_seen_since.get_or_insert_with(Instant::now);
+            // Give the actual GtkApplication time to finish constructing
+            // widgets and process the Wayland configure; do NOT claim KMS.
+            if since.elapsed()>=Duration::from_secs(5) {
+                println!("MELANIA_NATIVE_REAL_GTK_PANEL_LAYER_CONFIGURED=true");
+                println!("MELANIA_NATIVE_SESSION_READY=false");
+                return Ok(());
+            }
+        }
+        if shell_probe && !real_gtk_smoke && (if state.gtk_layer_mode {
             state.layer_surface_count>=gtk_layer_geometry::MAX_GTK_LAYER_SURFACES as u32
         } else {state.xdg_toplevel_count>0 && state.layer_surface_count>0}) {
             let since=both_shell_roles_seen_at.get_or_insert_with(Instant::now);
