@@ -56,6 +56,7 @@ on:
       - tests/test_native_kms_restore_stage93.py
       - tests/test_native_output_dispatch_stage94.py
       - tests/test_native_kernel_scanout_stage95.py
+      - tests/test_native_shared_kernel_scanout_stage96.py
       - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
@@ -128,6 +129,7 @@ on:
       - tests/test_native_kms_restore_stage93.py
       - tests/test_native_output_dispatch_stage94.py
       - tests/test_native_kernel_scanout_stage95.py
+      - tests/test_native_shared_kernel_scanout_stage96.py
       - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
@@ -214,6 +216,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_kms_restore_stage93.py' -v
           python3 -m unittest discover -s tests -p 'test_native_output_dispatch_stage94.py' -v
           python3 -m unittest discover -s tests -p 'test_native_kernel_scanout_stage95.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_shared_kernel_scanout_stage96.py' -v
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py

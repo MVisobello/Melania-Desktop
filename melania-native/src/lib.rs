@@ -35,6 +35,7 @@ pub mod native_presentation_guard;
 pub mod native_frame_budget;
 pub mod native_resource_recovery;
 pub mod native_output_dispatch;
+pub mod native_kms_scanout;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
