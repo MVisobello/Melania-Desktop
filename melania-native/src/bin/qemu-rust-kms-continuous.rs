@@ -171,7 +171,7 @@ fn run()->Result<(),Box<dyn Error>> {
     // All historical tests retain the stricter 8..=64-frame count.
     let real_gtk_panel=std::env::var("MELANIA_QEMU_REAL_GTK_PANEL_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
-    let total:u64=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
+    let total: u64=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
         .ok().and_then(|value|value.parse().ok())
         .filter(|count:&u64|(8..=64).contains(count) ||
                 (real_gtk_panel && *count==1))
