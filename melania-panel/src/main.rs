@@ -137,12 +137,51 @@ fn xdg_shortcut_directory(kind: &str) -> PathBuf {
     home
 }
 
-// Prefer Melania artwork, but never leave a blank GTK image when a theme
-// variant or a portable preview does not ship the requested icon name.
+// The build includes two COLOR app icons so Start and the taskbar do not
+// depend on a separately generated/installed Fluent theme. Adwaita's generic
+// symbolic file/gear glyphs become nearly invisible against the pale Win7
+// Start column and the dark Aero taskbar in the Mint 22 labwc session.
+// A selected, installed Melania Fluent theme still takes precedence.
+fn packaged_core_app_icon(name: &str) -> Option<Image> {
+    let bytes: &'static [u8] = match name {
+        "org.melaniadesktop.Files" => include_bytes!(
+            "../../branding/Melania/64x64/apps/org.melaniadesktop.Files.png"
+        ),
+        "org.melaniadesktop.Settings" => include_bytes!(
+            "../../branding/Melania/64x64/apps/org.melaniadesktop.Settings.png"
+        ),
+        _ => return None,
+    };
+    match gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
+        Ok(texture) => {
+            let image = Image::from_paintable(Some(&texture));
+            image.add_css_class("melania-color-app-icon");
+            Some(image)
+        }
+        Err(error) => {
+            eprintln!("Melania embedded app icon {name}: {error}");
+            None
+        }
+    }
+}
+
+fn active_fluent_theme() -> bool {
+    gtk::Settings::default()
+        .map(|settings| settings.property::<String>("gtk-icon-theme-name"))
+        .is_some_and(|name| name.starts_with("Melania-Fluent-"))
+}
+
+// Prefer original Fluent artwork, but never allow a blank/pale generic
+// symbolic icon for Melania's first two Start items or its running windows.
 fn icon_with_fallback(primary: &str, fallback: &str) -> Image {
     let available = gdk::Display::default()
         .map(|display| gtk::IconTheme::for_display(&display).has_icon(primary))
         .unwrap_or(false);
+    if matches!(primary,"org.melaniadesktop.Files"|"org.melaniadesktop.Settings")
+        && (!active_fluent_theme() || !available)
+    {
+        if let Some(image) = packaged_core_app_icon(primary) {return image;}
+    }
     Image::from_icon_name(if available { primary } else { fallback })
 }
 
@@ -961,10 +1000,9 @@ fn app_button(id:&str)->Option<Button> {
         else {Some(installed_pin_app(id)?)};
     let b=Button::new();
     b.add_css_class("melania-pin");
-    let row=GtkBox::new(Orientation::Horizontal,6);
     let (name,icon)=match id {
-        "melania-files"=>("File".to_owned(),icon_with_fallback("system-file-manager","folder")),
-        "melania-settings"=>("Impostazioni".to_owned(),icon_with_fallback("preferences-system","applications-system")),
+        "melania-files"=>("File".to_owned(),icon_with_fallback("org.melaniadesktop.Files","system-file-manager")),
+        "melania-settings"=>("Impostazioni".to_owned(),icon_with_fallback("org.melaniadesktop.Settings","preferences-system")),
         _=>{
             let app=info.as_ref()?;
             (app.name().to_string(),app.icon().map(|icon|Image::from_gicon(&icon))
@@ -972,8 +1010,12 @@ fn app_button(id:&str)->Option<Button> {
         }
     };
     icon.set_pixel_size(28);
-    row.append(&icon);
-    b.set_child(Some(&row));
+    icon.set_halign(gtk::Align::Center);
+    icon.set_valign(gtk::Align::Center);
+    icon.add_css_class("melania-taskbar-app-icon");
+    // The old one-child GtkBox used start alignment. Use the image itself
+    // as the centered button child to avoid left-shifted pinned icons.
+    b.set_child(Some(&icon));
     b.add_css_class("melania-icon-only");
     b.set_tooltip_text(Some(&name));
     let launch_id=id.to_string();
@@ -1096,6 +1138,11 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                     let entry = gtk::Overlay::new();
                     let icon = taskbar_app_icon(&first.app_id);
                     icon.set_pixel_size(28);
+                    icon.set_halign(gtk::Align::Center);
+                    icon.set_valign(gtk::Align::Center);
+                    icon.add_css_class("melania-taskbar-app-icon");
+                    entry.set_halign(gtk::Align::Center);
+                    entry.set_valign(gtk::Align::Center);
                     entry.set_child(Some(&icon));
                     let count_badge = Label::new(Some(&count.to_string()));
                     count_badge.add_css_class("melania-icon-count");
@@ -1116,7 +1163,7 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                         } else { grouped_window.title.clone() };
                         let row = GtkBox::new(Orientation::Horizontal, 6);
                         row.add_css_class("melania-window-preview");
-                        let preview_icon = Image::from_icon_name(&grouped_window.app_id);
+                        let preview_icon = taskbar_app_icon(&grouped_window.app_id);
                         preview_icon.set_pixel_size(38);
                         preview_icon.add_css_class("melania-preview-icon");
                         row.append(&preview_icon);
@@ -1249,6 +1296,9 @@ fn running_window_strip(pinned_buttons: Rc<RefCell<Vec<(String, Button)>>>) -> G
                 focus.add_css_class("melania-icon-only");
                 let window_icon = taskbar_app_icon(&window.app_id);
                 window_icon.set_pixel_size(28);
+                window_icon.set_halign(gtk::Align::Center);
+                window_icon.set_valign(gtk::Align::Center);
+                window_icon.add_css_class("melania-taskbar-app-icon");
                 focus.set_child(Some(&window_icon));
                 focus.set_tooltip_text(Some(&format!("{} — {}",window.title,window.app_id)));
                 if window.active {focus.add_css_class("melania-window-active");}
