@@ -39,13 +39,19 @@ impl ResourceMilestone {
     fn bit(self) -> u16 { 1u16 << (self as u8) }
 
     fn prerequisites(self) -> u16 {
-        use self::ResourceMilestone::*;
         match self {
-            ActiveSeat => 0,
-            OwnedDrmMaster | EnumeratedInput | RestorableVt => ActiveSeat.bit(),
-            GbmRenderer | OwnedOriginalScanout => OwnedDrmMaster.bit(),
-            ConfiguredOutput => GbmRenderer.bit() | OwnedOriginalScanout.bit(),
-            VerifiedRollback => ConfiguredOutput.bit() | RestorableVt.bit(),
+            ResourceMilestone::ActiveSeat => 0,
+            ResourceMilestone::OwnedDrmMaster |
+            ResourceMilestone::EnumeratedInput |
+            ResourceMilestone::RestorableVt => ResourceMilestone::ActiveSeat.bit(),
+            ResourceMilestone::GbmRenderer |
+            ResourceMilestone::OwnedOriginalScanout => ResourceMilestone::OwnedDrmMaster.bit(),
+            ResourceMilestone::ConfiguredOutput =>
+                ResourceMilestone::GbmRenderer.bit() |
+                ResourceMilestone::OwnedOriginalScanout.bit(),
+            ResourceMilestone::VerifiedRollback =>
+                ResourceMilestone::ConfiguredOutput.bit() |
+                ResourceMilestone::RestorableVt.bit(),
         }
     }
 }
