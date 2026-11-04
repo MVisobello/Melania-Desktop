@@ -1809,6 +1809,17 @@ fn install_start_hotkey_listener(
                 Ok(n) if &packet[..n]==b"TOGGLE_START"=>{
                     hide_popup_surface(&notifications);
                     toggle_surface(&open,&quick);
+                    if std::env::var("MELANIA_QEMU_GTK_START_FROM_SUPER").as_deref()
+                        ==Ok("YES_DISPOSABLE_QEMU") {
+                        // The QEMU-only keyboard injector must open the real
+                        // GTK window through exactly this existing IPC path.
+                        let visible=open.is_visible() &&
+                            !open.has_css_class("melania-start-concealed");
+                        eprintln!("MELANIA_QEMU_GTK_START_SUPER_IPC_OPEN={visible}");
+                        if visible {
+                            eprintln!("MELANIA_QEMU_GTK_START_OVERLAY_PRESENTED=true");
+                        }
+                    }
                     if std::env::var_os("MELANIA_SMOKE_OPEN_START").is_some() {
                         // Write the entire diagnostic marker in one syscall.
                         // This panel and the compositor share an Xvfb CI log;

@@ -46,6 +46,8 @@ on:
       - scripts/capture-qemu-real-gtk-two-frames.py
       - tests/test_qemu_real_gtk_two_frames_stage85.py
       - scripts/capture-qemu-real-gtk-start-overlay.py
+      - scripts/inject-qemu-real-gtk-super-start.py
+      - tests/test_qemu_real_gtk_super_stage87.py
       - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
@@ -108,6 +110,8 @@ on:
       - scripts/capture-qemu-real-gtk-two-frames.py
       - tests/test_qemu_real_gtk_two_frames_stage85.py
       - scripts/capture-qemu-real-gtk-start-overlay.py
+      - scripts/inject-qemu-real-gtk-super-start.py
+      - tests/test_qemu_real_gtk_super_stage87.py
       - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
@@ -184,6 +188,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_two_frames_stage85.py' -v
           python3 -m py_compile scripts/capture-qemu-real-gtk-start-overlay.py
           python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_start_overlay_stage86.py' -v
+          python3 -m py_compile scripts/inject-qemu-real-gtk-super-start.py
+          python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_super_stage87.py' -v
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py

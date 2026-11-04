@@ -22,3 +22,4 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # Read-only KMS connector/mode inventory; same drm-rs version as Smithay 0.7.
 drm = "0.14"
+melania-control = { path = "../melania-control" }
