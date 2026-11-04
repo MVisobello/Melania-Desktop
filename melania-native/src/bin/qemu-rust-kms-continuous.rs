@@ -176,16 +176,16 @@ fn run()->Result<(),Box<dyn Error>> {
     let real_gtk_start=real_gtk_two_frame &&
         std::env::var("MELANIA_QEMU_GTK_START_KMS")
             .as_deref()==Ok("YES_QEMU_VM");
-    let total: u64=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
-        .ok().and_then(|value|value.parse().ok())
-        .filter(|count:&u64|(8..=64).contains(count) ||
-                (real_gtk_panel && *count==1) ||
-                (real_gtk_two_frame && *count==2) ||
-                (real_gtk_start && *count==3))
-        .unwrap_or(12);
-    if real_gtk_panel && total!=if real_gtk_start {3} else if real_gtk_two_frame {2} else {1} {
-        return Err("real GTK KMS experiment has invalid VM-only frame count".into());
-    }
+    // Do not silently turn invalid or mismatched frame targets into 12.
+    // The Wayland sender and DRM receiver must agree before touching KMS.
+    let gtk_expected=if real_gtk_start {Some(3)}
+        else if real_gtk_two_frame {Some(2)}
+        else if real_gtk_panel {Some(1)}
+        else {None};
+    let configured=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok();
+    let total=melania_native::native_frame_budget::receiver_frame_budget(
+        configured.as_deref(),gtk_expected,
+    )?;
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut previous_identity:Option<(u64,u64,u64)>=None;
         for index in 0..total {

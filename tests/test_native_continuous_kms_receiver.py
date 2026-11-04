@@ -33,8 +33,12 @@ class NativeContinuousReceiverSafety(unittest.TestCase):
                         NEW.index('stream.write_all(&ack)?'))
         self.assertLess(NEW.index('let restored=rollback.restore();'),
                         NEW.index('MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}'))
-        self.assertIn('let total: u64', NEW)
-        self.assertIn('(8..=64).contains(count)', NEW)
+        # Stage92 checks the shared parser instead of the removed inline fallback.
+        self.assertIn('native_frame_budget::receiver_frame_budget(', NEW)
+        self.assertNotIn('.unwrap_or(12);', NEW)
+        parser=(ROOT / 'melania-native/src/native_frame_budget.rs').read_text()
+        self.assertIn('pub fn receiver_frame_budget(', parser)
+        self.assertIn('(8..=MAX_QEMU_FRAMES).contains(&count)', parser)
         self.assertIn('IMAGE_BYTES', WIRE)
 
 if __name__ == "__main__":
