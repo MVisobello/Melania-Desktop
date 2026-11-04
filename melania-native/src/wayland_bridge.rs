@@ -57,6 +57,7 @@ use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
 use melania_control::{start_toggle_socket_path,SOCKET_ENV};
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
+use melania_native::native_frame_budget;
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -1898,7 +1899,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     .as_deref()==Ok("YES_QEMU_VM") {2} else {1}
             } else if std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DYNAMIC_POINTER_PROOF")
-            .as_deref()==Ok("YES_QEMU_VM") {13} else {12},
+            .as_deref()==Ok("YES_QEMU_VM") {13} else {
+                // The historical scenario remains twelve frames by default.
+                // Extended QEMU-only trials can exercise up to 64 actual
+                // wl_shm -> Smithay -> KMS ACK cycles with the same receiver.
+                native_frame_budget::frame_budget(
+                    std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").ok().as_deref(),12
+                )?
+            },
         continuous_reopen_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_REOPEN")
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_close_frame_presented:false,
@@ -2015,6 +2023,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if state.continuous_kms_mode &&
        (state.multi_window_mode != continuous_two_windows) {
         return Err("continuous QEMU window layout flags must agree".into());
+    }
+    // Extended frame counts are for the existing plain QEMU continuous
+    // renderer only: GTK three-frame captures, interactive pointer and
+    // close/reopen proofs have fixed frame numbers and separate invariants.
+    if std::env::var_os("MELANIA_NATIVE_QEMU_FRAME_TARGET").is_some() &&
+       (!state.continuous_kms_mode || state.real_gtk_pixel_kms_mode ||
+        state.continuous_reopen_mode || state.dynamic_pointer_proof_mode ||
+        state.layer_pixels_mode || state.gtk_layer_mode) {
+        return Err("extended native frames require plain QEMU continuous KMS".into());
     }
     if state.continuous_reopen_mode &&
        (!state.continuous_kms_mode || !state.multi_window_mode) {
