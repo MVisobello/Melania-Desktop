@@ -14,7 +14,9 @@ class ReopenAfterTwelveKmsFrames(unittest.TestCase):
         for word in ("MELANIA_NATIVE_CONTINUOUS_REOPEN",
                      "continuous_reopen_mode:bool", "continuous_frame_target:u64",
                      '"YES_QEMU_VM") {14} else if',
-                     '"YES_QEMU_VM") {13} else {12}',
+                     '"YES_QEMU_VM") {13} else {',
+                     'native_frame_budget::frame_budget(',
+                     'MELANIA_NATIVE_QEMU_FRAME_TARGET',
                      "continuous_close_frame_presented",
                      "continuous_reopen_frame_presented"):
             self.assertIn(word,BRIDGE)
