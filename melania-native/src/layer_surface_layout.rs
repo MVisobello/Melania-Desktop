@@ -175,17 +175,17 @@ mod tests {
             ("start",ShellLayer::Overlay,Anchors{left:true,bottom:true,top:false,right:false},
              510,565,8,6,0,Rect{x:8,y:229,width:510,height:565}),
             ("quick",ShellLayer::Overlay,Anchors{right:true,bottom:true,top:false,left:false},
-             350,430,0,65,12,Rect{x:930,y:305,width:350,height:430}),
+             350,430,12,65,0,Rect{x:918,y:305,width:350,height:430}),
             ("notifications",ShellLayer::Overlay,Anchors{right:true,bottom:true,top:false,left:false},
-             380,440,0,65,12,Rect{x:900,y:295,width:380,height:440}),
+             380,440,12,65,0,Rect{x:888,y:295,width:380,height:440}),
             ("calendar",ShellLayer::Overlay,Anchors{right:true,bottom:true,top:false,left:false},
-             330,315,0,58,12,Rect{x:950,y:427,width:330,height:315}),
+             330,315,12,58,0,Rect{x:938,y:427,width:330,height:315}),
         ];
         let mut work=WorkAreaReservations::default();
         for (name,layer,anchors,width,height,left,bottom,zone,expected) in cases {
             let request=LayerRequest {
                 layer,anchors,width,height,
-                margins:Insets{left,bottom,..Insets::default()},
+                margins:Insets{left,bottom,right:if anchors.right {left} else {0},..Insets::default()},
                 exclusive_zone:zone,
             };
             let placed=place(request,1280,800).unwrap();
