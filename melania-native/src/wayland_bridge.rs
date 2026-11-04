@@ -17,13 +17,13 @@ use std::{
 use smithay::{
     backend::{
         input::{InputEvent, ButtonState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
-                AbsolutePositionEvent, Event, KeyState},
+                AbsolutePositionEvent, PointerAxisEvent, Axis, AxisSource, Event, KeyState},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
     delegate_data_device,
-    input::{keyboard::FilterResult, pointer::{ButtonEvent, CursorImageStatus,
+    input::{keyboard::FilterResult, pointer::{AxisFrame, ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
         input::{self as libinput, DeviceCapability, Libinput},
@@ -162,6 +162,7 @@ struct BridgeState {
     qemu_start_super_down:Option<u32>,
     delivered_buttons: u32,
     delivered_motions: u32,
+    delivered_scroll_frames: u32,
 }
 
 struct PendingAsyncFrame {
@@ -1555,6 +1556,13 @@ fn register(state:&mut BridgeState,device:libinput::Device) {
 
 /// Relays only actual libinput events belonging to currently registered
 /// devices on the ACTIVE libseat generation. No host-wide synthetic key feed.
+// libinput wheel deltas are expressed as fractional v120 units. Constrain
+// untrusted device values before converting them to Wayland wl_pointer events.
+fn bounded_v120(value:Option<f64>)->Option<i32> {
+    value.filter(|v|v.is_finite() && v.abs()<=14400.0)
+        .map(|v|v.round() as i32)
+}
+
 fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     // No physical input reaches a Wayland client after a VT/seat pause.
     if state.native_presentation_guard
@@ -1681,6 +1689,46 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                              time:event.time_msec()});
             pointer.frame(state);
             state.delivered_motions+=1;
+        }
+        InputEvent::PointerAxis {event} => {
+            // Forward actual libinput wheel/touchpad scroll to the Wayland
+            // wl_pointer, never to the host X11/Wayland session. The Stage89
+            // seat epoch check at the top of this handler remains mandatory.
+            if state.lifecycle.input_registry_mut()
+                .event(&InputDevice::id(&event.device())).is_err() {
+                return;
+            }
+            let point=state.pointer_position;
+            let Some(target)=state.pointer_target(point) else {return;};
+            let source=event.source();
+            let mut frame=AxisFrame::new(event.time_msec()).source(source);
+            let mut present=false;
+            for axis in [Axis::Horizontal,Axis::Vertical] {
+                let amount=event.amount(axis).filter(|v|v.is_finite() && v.abs()<=20000.0);
+                let v120=bounded_v120(event.amount_v120(axis));
+                // Older USB wheels may provide only discrete units; touchpad
+                // gestures normally provide a continuous pixel delta.
+                let value=amount.or_else(||v120.map(|steps|f64::from(steps)*15.0/120.0));
+                if let Some(value)=value {
+                    frame=frame.value(axis,value)
+                        .relative_direction(axis,event.relative_direction(axis));
+                    if source==AxisSource::Finger && value==0.0 {
+                        frame=frame.stop(axis);
+                    }
+                    present=true;
+                }
+                if let Some(steps)=v120 {
+                    frame=frame.v120(axis,steps);
+                }
+            }
+            if !present {return;}
+            let pointer=state.seat.get_pointer().expect("pointer");
+            pointer.motion(state,Some(target),
+                &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
+                             time:event.time_msec()});
+            pointer.axis(state,frame);
+            pointer.frame(state);
+            state.delivered_scroll_frames=state.delivered_scroll_frames.saturating_add(1);
         }
         InputEvent::PointerButton {event} => {
             if (state.focused.is_none() && !state.multi_window_mode) ||
@@ -1904,6 +1952,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         seats,seat,focused:None,pointer_position:(0.0,0.0).into(),
         lifecycle:NativeLifecycle::default(),delivered_keys:0,
         qemu_start_super_down:None,delivered_buttons:0,delivered_motions:0,
+        delivered_scroll_frames:0,
     };
     // Never pretend an inactive libseat owns the first KMS presentation.
     state.native_presentation_guard.arm_initial(session.is_active())
@@ -2272,5 +2321,25 @@ mod managed_role_commit_tests {
         assert!(accepts_managed_role_buffer(Some((1280,800)),(1280,800)));
         assert!(!accepts_managed_role_buffer(Some((360,224)),(1280,800)));
         assert!(accepts_managed_role_buffer(Some((360,224)),(360,224)));
+    }
+}
+
+#[cfg(test)]
+mod native_scroll_stage90_tests {
+    use super::bounded_v120;
+
+    #[test]
+    fn fractional_wheel_units_round_with_finite_bounds() {
+        assert_eq!(bounded_v120(Some(120.0)),Some(120));
+        assert_eq!(bounded_v120(Some(-120.0)),Some(-120));
+        assert_eq!(bounded_v120(Some(59.8)),Some(60));
+        assert_eq!(bounded_v120(None),None);
+    }
+
+    #[test]
+    fn corrupt_scroll_payload_cannot_reach_wayland() {
+        assert_eq!(bounded_v120(Some(f64::NAN)),None);
+        assert_eq!(bounded_v120(Some(f64::INFINITY)),None);
+        assert_eq!(bounded_v120(Some(1e30)),None);
     }
 }
