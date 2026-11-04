@@ -2158,7 +2158,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         let (sender,receiver)=UnixStream::pair()?;
         sender.set_read_timeout(Some(Duration::from_secs(8)))?;
         sender.set_write_timeout(Some(Duration::from_secs(7)))?;
-        state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender));
+        state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender)?);
         integrated_thread=Some(std::thread::spawn(move || {
             qemu_continuous_receiver::run_embedded(
                 receiver,std::fs::File::from(presenter_fd)
@@ -2222,7 +2222,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                         stream.set_write_timeout(Some(Duration::from_secs(7)))?;
                         stream.set_read_timeout(Some(Duration::from_secs(8)))?;
                         if state.continuous_kms_mode {
-                            state.continuous_worker=Some(ContinuousKmsWorker::spawn(stream));
+                            state.continuous_worker=Some(ContinuousKmsWorker::spawn(stream)?);
                             println!("MELANIA_NATIVE_CONTINUOUS_KMS_WORKER_STARTED=true");
                         } else if state.async_kms_mode {
                             state.async_stream=Some(AsyncKmsWorker::spawn(stream));
