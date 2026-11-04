@@ -1567,6 +1567,10 @@ grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$integrated_server_log" ||
   fatal 'integrated_receiver_never_completed'
 grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=12' "$integrated_server_log" ||
   fatal 'integrated_Wayland_DRM_join_incomplete'
+grep -q '^MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true' "$integrated_server_log" ||
+  fatal 'integrated_DRM_card_not_acquired_through_libseat'
+grep -q '^MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' "$integrated_server_log" ||
+  fatal 'integrated_libseat_DRM_card_not_closed_after_rollback'
 rm -f "$integrated_server_log" "$integrated_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
