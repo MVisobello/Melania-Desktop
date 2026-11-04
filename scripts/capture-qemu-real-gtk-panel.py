@@ -44,6 +44,18 @@ def validate_ppm(payload: bytes) -> tuple[int, int]:
             if max(abs(a - b) for a, b in zip(actual, BACKGROUND)) > 10:
                 raise ValueError(f"unexpected scene pixel outside GTK taskbar at {x},{y}: {actual}")
 
+    # Reject a stale 52px-only screenshot after GTK negotiated 60px. The
+    # top edge must contain actual client pixels, not just the QEMU backdrop.
+    edge_pixels = [rgb(x, y)
+                   for y in (PANEL_TOP, PANEL_TOP + 1, PANEL_TOP + 3)
+                   for x in (0, 200, 500, 800, WIDTH - 1)]
+    edge_changed = sum(
+        max(abs(a - b) for a, b in zip(pixel, BACKGROUND)) >= 8
+        for pixel in edge_pixels
+    )
+    if edge_changed < 8:
+        raise ValueError("genuine GTK4 buffer does not start at y=740 (60px height)")
+
     changed = 0
     tones: set[tuple[int, int, int]] = set()
     for y in range(PANEL_TOP, HEIGHT):
