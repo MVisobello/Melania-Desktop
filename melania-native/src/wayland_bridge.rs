@@ -56,6 +56,7 @@ use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::native_client_frame;
 use melania_control::{start_toggle_socket_path,SOCKET_ENV};
+use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -88,6 +89,10 @@ struct BridgeState {
     continuous_worker:Option<ContinuousKmsWorker>,
     // Keep one pending wl_shm buffer per real client surface, not globally.
     continuous_inflight:Option<(PlannedSceneFrame,Vec<(WlSurface,wl_buffer::WlBuffer)>)>,
+    // Stage89: the token is minted at worker enqueue time. A frame ACK
+    // after libseat/VT revocation must never release clients or callbacks.
+    continuous_presentation_token:Option<PresentationToken>,
+    native_presentation_guard:NativePresentationGuard,
     continuous_client_ledger:ClientCommitLedger<WlSurface,wl_buffer::WlBuffer>,
     continuous_frame_count:u64,
     continuous_frame_target:u64,
@@ -238,6 +243,11 @@ impl BridgeState {
         if !self.continuous_kms_mode || self.continuous_inflight.is_some() {
             return Ok(());
         }
+        // A fresh frame must originate from the currently active libseat
+        // generation. An automatic seat resume never re-arms old GPU state.
+        let presentation_token=self.native_presentation_guard
+            .ticket(self.lifecycle.seat_active())
+            .ok_or("native KMS frame blocked: libseat presentation revoked")?;
         // Stage86 is a bounded *three-frame* VM proof. GTK may repaint the
         // taskbar more than once after frame two, before its Start layer is
         // mapped. Do not consume the third KMS slot with another taskbar-only
@@ -296,6 +306,7 @@ impl BridgeState {
             return Err("continuous QEMU KMS worker rejected frame".into());
         }
         self.dynamic_submitted_frame=candidate;
+        self.continuous_presentation_token=Some(presentation_token);
         self.continuous_inflight=Some((
             planned,self.continuous_client_ledger.take_for_presentation()
         ));
@@ -307,6 +318,10 @@ impl BridgeState {
 
     fn poll_continuous_kms(&mut self)->Result<(),Box<dyn Error>> {
         if !self.continuous_kms_mode {return Ok(());}
+        if self.native_presentation_guard
+            .ticket(self.lifecycle.seat_active()).is_none() {
+            return Err("native KMS ACK blocked after libseat/VT revocation".into());
+        }
         let Some(worker)=self.continuous_worker.as_ref() else {return Ok(());};
         let reply=match worker.try_result() {
             Ok(Some(reply))=>reply,
@@ -315,6 +330,13 @@ impl BridgeState {
         };
         let (planned,clients)=self.continuous_inflight.take()
             .ok_or("continuous KMS reply with no pending frame")?;
+        let ticket=self.continuous_presentation_token.take()
+            .ok_or("continuous KMS reply without a seat presentation token")?;
+        if !self.native_presentation_guard.accepts(ticket,self.lifecycle.seat_active()) {
+            self.dynamic_submitted_frame=None;
+            self.continuous_redraw.failed(planned);
+            return Err("stale native KMS ACK from revoked libseat generation".into());
+        }
         if reply.planned!=planned {
             self.dynamic_submitted_frame=None;
             self.continuous_redraw.failed(planned);
@@ -1534,6 +1556,9 @@ fn register(state:&mut BridgeState,device:libinput::Device) {
 /// Relays only actual libinput events belonging to currently registered
 /// devices on the ACTIVE libseat generation. No host-wide synthetic key feed.
 fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
+    // No physical input reaches a Wayland client after a VT/seat pause.
+    if state.native_presentation_guard
+        .ticket(state.lifecycle.seat_active()).is_none() {return;}
     match event {
         InputEvent::DeviceAdded {device} =>register(state,device),
         InputEvent::DeviceRemoved {device} =>
@@ -1810,6 +1835,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_kms_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
         continuous_worker:None,continuous_inflight:None,
+        continuous_presentation_token:None,
+        native_presentation_guard:NativePresentationGuard::default(),
         continuous_client_ledger:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
                 ClientCommitLedger::with_capacity(16).expect("bounded QEMU receipts")
@@ -1878,11 +1905,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         lifecycle:NativeLifecycle::default(),delivered_keys:0,
         qemu_start_super_down:None,delivered_buttons:0,delivered_motions:0,
     };
-    if session.is_active() {
-        state.lifecycle.on_session(SessionEvent::ActivateSession);
-        state.render_scheduler.set_seat_active(true);
-        state.continuous_redraw.set_seat_active(true);
-    }
+    // Never pretend an inactive libseat owns the first KMS presentation.
+    state.native_presentation_guard.arm_initial(session.is_active())
+        .map_err(|_|"isolated native bridge requires initially active libseat")?;
+    state.lifecycle.on_session(SessionEvent::ActivateSession);
+    state.render_scheduler.set_seat_active(true);
+    state.continuous_redraw.set_seat_active(true);
     context.dispatch()?;
     for event in &mut context {
         if let libinput::Event::Device(libinput::event::DeviceEvent::Added(added))=event {
@@ -1894,9 +1922,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(backend,|event,_,state|handle_input(state,event))?;
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
-            SessionEvent::PauseSession=>context.suspend(),
+            SessionEvent::PauseSession=>{
+                // Revoke *before* suspending input. Outstanding DRM worker
+                // completions are no longer eligible for Wayland callbacks.
+                state.native_presentation_guard.revoke();
+                context.suspend();
+            },
             SessionEvent::ActivateSession=>{
                 if context.resume().is_err() {
+                    state.native_presentation_guard.revoke();
                     state.lifecycle.on_session(SessionEvent::PauseSession);
                     state.render_scheduler.set_seat_active(false);
                     state.continuous_redraw.set_seat_active(false);
@@ -2054,6 +2088,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             }
         }
         events.dispatch(Some(Duration::from_millis(12)),&mut state)?;
+        // A real pause requires complete KMS/VT re-acquisition and rollback
+        // before resuming. The Stage89 VM bridge deliberately has no such
+        // operation: exit instead of accepting stale DRM ACKs or input.
+        if state.native_presentation_guard.permanently_revoked() {
+            return Err("native QEMU bridge stopped: libseat paused; safe revalidation unavailable".into());
+        }
         while let Some(stream)=listener.accept()? {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
