@@ -11,7 +11,9 @@ CI=(ROOT/".github/workflows/linux-verify.yml").read_text()
 class XdgAutostartContracts(unittest.TestCase):
     def test_real_gio_launch_not_shell_or_exec_splitting(self):
         self.assertIn('name = "melania-autostart"',CARGO)
-        self.assertIn('gio::DesktopAppInfo::from_filename(&path)',SRC)
+        self.assertIn('DesktopAppInfo::from_filename(&path)',SRC)
+        self.assertIn('use gio_unix::DesktopAppInfo;',SRC)
+        self.assertIn('gio-unix = "0.22"',CARGO)
         self.assertIn('info.launch(&[],None::<&gio::AppLaunchContext>)',SRC)
         self.assertIn('fn should_launch(source:&str,desktops:&[&str])->bool',SRC)
         for item in ('Hidden','OnlyShowIn','NotShowIn','X-GNOME-Autostart-enabled','Type','Exec'):
