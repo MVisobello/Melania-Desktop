@@ -253,6 +253,12 @@ python3 "$root/scripts/capture-qemu-real-gtk-panel.py" \
   --output "$report/real-gtk-panel-frame1.ppm" --timeout 950 \
   > "$report/qmp-real-gtk-panel.log" 2>&1 &
 gtk_capture_pid=$!
+python3 "$root/scripts/capture-qemu-real-gtk-two-frames.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --first "$report/real-gtk-continuous-frame1.ppm" \
+  --second "$report/real-gtk-continuous-frame2.ppm" --timeout 950 \
+  > "$report/qmp-real-gtk-two-frames.log" 2>&1 &
+gtk_two_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=10s 1020s \
   qemu-system-x86_64 \
@@ -311,10 +317,16 @@ wait "$layer_capture_pid"
 layer_capture_code=$?
 wait "$gtk_capture_pid"
 gtk_capture_code=$?
+wait "$gtk_two_capture_pid"
+gtk_two_capture_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 ]] ||
     ! grep -q '^MELANIA_QEMU_GTK4_PANEL_PIXELS_FROM_KMS=true' "$report/qmp-real-gtk-panel.log" ||
+    ! grep -q '^MELANIA_QEMU_GTK4_TWO_DISTINCT_REAL_FRAMES=true' "$report/qmp-real-gtk-two-frames.log" ||
+    ! test -s "$report/real-gtk-continuous-frame1.ppm" ||
+    ! test -s "$report/real-gtk-continuous-frame2.ppm" ||
+    ! grep -q '^MELANIA_QEMU_REAL_GTK_TWO_FRAME_KMS_SCANOUT_PASS=true' "$serial" ||
     ! test -s "$report/real-gtk-panel-frame1.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true' "$report/qmp-real-layer-panel.log" ||
     ! grep -q '^MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true' "$serial" ||
@@ -485,6 +497,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-managed-xdg-roles.log" || true
   tail -n 30 "$report/qmp-real-layer-panel.log" || true
   tail -n 30 "$report/qmp-real-gtk-panel.log" || true
+  tail -n 30 "$report/qmp-real-gtk-two-frames.log" || true
   exit 1
 fi
 # Export only the previously verified LIVE QMP GTK framebuffer, preserving
@@ -495,6 +508,18 @@ python3 "$root/scripts/export-qemu-real-gtk-png.py" \
   | tee "$report/qmp-real-gtk-png.log"
 test -s "$report/real-gtk-panel-frame1.png" ||
   deny 'verified real GTK4 screenshot PNG was not written'
+# Export only two live-QMP-validated PPMs; retain originals as evidence.
+python3 "$root/scripts/export-qemu-real-gtk-png.py" \
+  --ppm "$report/real-gtk-continuous-frame1.ppm" \
+  --png "$report/real-gtk-continuous-frame1.png" \
+  | tee "$report/qmp-real-gtk-continuous-png.log"
+python3 "$root/scripts/export-qemu-real-gtk-png.py" \
+  --ppm "$report/real-gtk-continuous-frame2.ppm" \
+  --png "$report/real-gtk-continuous-frame2.png" \
+  | tee -a "$report/qmp-real-gtk-continuous-png.log"
+test -s "$report/real-gtk-continuous-frame1.png" &&
+  test -s "$report/real-gtk-continuous-frame2.png" ||
+  deny 'real GTK4 two-frame PNG evidence missing'
 printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=PASS' | tee -a "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_12_KMS_ACKS=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_FRAME7_12_PIXELS=true' >> "$report/result.txt"
@@ -507,6 +532,7 @@ printf '%s\n' 'MELANIA_VM_GTK_FIVE_WAYLAND_ROLE_ACK=true' >> "$report/result.txt
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_STARTUP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_KMS_QMP_PIXELS=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_SCREENSHOT_PNG=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_REAL_GTK_TWO_DIFFERENT_KMS_FRAMES_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_PANEL_REAL_ELF_GUEST_LINK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_ONLY_VISIBLE_FRAME_AND_CRTC_RESTORE=true' >> "$report/result.txt"
