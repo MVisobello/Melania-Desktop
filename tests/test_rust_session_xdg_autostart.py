@@ -32,7 +32,7 @@ class XdgAutostartContracts(unittest.TestCase):
         self.assertIn('if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then',SUP)
         self.assertIn('"$BIN/melania-autostart" &',SUP)
         self.assertIn('MELANIA_LABWC_XDG_AUTOSTART_DISPATCHED=true',SUP)
-        self.assertIn('melania-autostart; do',LAUNCH)
+        self.assertIn('melania-autostart melania-inputctl; do',LAUNCH)
         self.assertIn('cargo test -p melania-settings --bin melania-autostart',CI)
         self.assertNotIn('sudo ',SUP)
         for path in ("scripts/melania-labwc-session","scripts/melania-labwc-supervisor"):
