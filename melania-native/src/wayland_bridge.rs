@@ -878,6 +878,20 @@ impl CompositorHandler for BridgeState {
         if self.layer_pixels_mode {
             if let Some(role)=self.layer_surfaces.iter().find(|(_,r)|r.wl_surface()==surface)
                 .map(|(_,r)|r.clone()) {
+                // GTK may move a still-mapped Start layer off-screen by
+                // committing only its margin/role state (no new wl_shm
+                // buffer). Revoke focus on that real state transition too.
+                let is_start_layer=self.layer_surfaces.iter().any(|(name,r)|
+                    name=="melania-start" && r.wl_surface()==surface);
+                if is_start_layer {
+                    let left=with_states(surface,|states|{
+                        states.cached_state.get::<LayerSurfaceCachedState>()
+                            .current().margin.left
+                    });
+                    if left<=-510 {
+                        self.refresh_qemu_gtk_start_focus(surface,false);
+                    }
+                }
                 // A protocol configure is NOT pixel evidence. Only a client
                 // wl_shm buffer copied out of Smithay's live mapping enters
                 // the native retained scene and the Rust KMS worker.
