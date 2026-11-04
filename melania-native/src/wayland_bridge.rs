@@ -2120,8 +2120,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                           state.layer_pixels_mode || state.continuous_kms_mode) {
         return Err("real GTK startup smoke requires QEMU five-layer role-only mode".into());
     }
+    // A longer, explicitly bounded VM frame sequence needs more than the
+    // historical twelve-frame watchdog. Keep the old 70-second default;
+    // scale only this QEMU experiment (never a production login session).
+    let continuous_deadline_secs=state.continuous_frame_target
+        .saturating_mul(3).clamp(70,240);
     let deadline=Instant::now()+Duration::from_secs(
-        if state.continuous_kms_mode {70} else if state.reopen_redraw_mode {68} else if state.close_redraw_mode {55} else if state.drag_redraw_mode {45} else {27}
+        if state.continuous_kms_mode {continuous_deadline_secs}
+        else if state.reopen_redraw_mode {68}
+        else if state.close_redraw_mode {55}
+        else if state.drag_redraw_mode {45} else {27}
     );
     let mut both_shell_roles_seen_at=None;
     let mut real_gtk_seen_since=None;
