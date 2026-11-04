@@ -116,6 +116,32 @@ fi
 rm -f "$gpu_output_log"
 report 'MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true'
 
+# Real GPU-to-DRM bridge, ONLY inside this disposable QEMU VM. Unlike the
+# preceding renderer-only probe this imports two GLES-rendered DMA-BUFs
+# as DRM framebuffer IDs, verifies both KMS scanouts and restores the
+# original Linux console CRTC/connector before libseat releases the card.
+gpu_kms_log="$(mktemp -t melania-gbm-kms-XXXXXX)"
+if ! MELANIA_NATIVE_VM_GBM_KMS=YES_DISPOSABLE_QEMU \
+  timeout --signal=TERM --kill-after=3s 55s \
+  "$binary" --experimental-gbm-kms-scanout < /dev/tty1 \
+  > "$gpu_kms_log" 2>&1; then
+  cat "$gpu_kms_log"
+  fatal 'native_GLES_DMA_BUF_to_KMS_scanout_failed'
+fi
+cat "$gpu_kms_log"
+for marker in \
+  'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=1' \
+  'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=2' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_TWO_GPU_FRAMES_PASS=true' \
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true'; do
+  grep -q "^${marker}$" "$gpu_kms_log" ||
+    fatal "native_GLES_KMS_missing_${marker}"
+done
+rm -f "$gpu_kms_log"
+report 'MELANIA_QEMU_NATIVE_GBM_KMS_TWO_REAL_FRAMES_PASS=true'
+
 # Verify live old framebuffer metadata and acquired GEM handle lifecycle.
 # This audit opens DRM only INSIDE the disposable QEMU guest and calls
 # drmModeGetFB2 then GEM_CLOSE for each distinct returned GEM handle.

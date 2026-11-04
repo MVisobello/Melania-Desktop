@@ -389,6 +389,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
    ! test -s "$report/continuous-frame7.ppm" ||
    ! test -s "$report/continuous-frame12.ppm" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true' "$serial" ||
+   ! grep -q '^MELANIA_QEMU_NATIVE_GBM_KMS_TWO_REAL_FRAMES_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_NATIVE_CONTINUOUS_12_REAL_FRAMES_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_12_FRAMES_PASS=true' "$serial" ||
    ! grep -q '^MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true' "$serial" ||
