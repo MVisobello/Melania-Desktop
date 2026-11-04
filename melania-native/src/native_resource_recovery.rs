@@ -39,7 +39,7 @@ impl ResourceMilestone {
     fn bit(self) -> u16 { 1u16 << (self as u8) }
 
     fn prerequisites(self) -> u16 {
-        use ResourceMilestone::*;
+        use self::ResourceMilestone::*;
         match self {
             ActiveSeat => 0,
             OwnedDrmMaster | EnumeratedInput | RestorableVt => ActiveSeat.bit(),
