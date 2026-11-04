@@ -101,6 +101,21 @@ report "MELANIA_QEMU_NATIVE_KMS_EXIT=$code"
 [[ "$code" -eq 0 ]] || fatal 'native_KMS_TEST_ONLY_failed'
 report 'MELANIA_QEMU_NATIVE_KMS_PASS=true'
 
+# Probe two REAL monitor-sized GBM DMA-BUF/GLES frames, rendered against the
+# libseat-owned guest VirtIO GPU. This does NOT change the KMS scanout.
+gpu_output_log="$(mktemp -t melania-gbm-output-XXXXXX)"
+if ! timeout --signal=TERM --kill-after=3s 45s \
+  "$binary" --experimental-gbm-output < /dev/tty1 | tee "$gpu_output_log"; then
+  cat "$gpu_output_log"
+  fatal 'native_output_sized_GBM_GLES_rendering_failed'
+fi
+if ! grep -Eq '^MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED=[0-9]+x[0-9]+x2$' "$gpu_output_log"; then
+  cat "$gpu_output_log"
+  fatal 'native_output_sized_GBM_two_frames_not_verified'
+fi
+rm -f "$gpu_output_log"
+report 'MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true'
+
 # Verify live old framebuffer metadata and acquired GEM handle lifecycle.
 # This audit opens DRM only INSIDE the disposable QEMU guest and calls
 # drmModeGetFB2 then GEM_CLOSE for each distinct returned GEM handle.

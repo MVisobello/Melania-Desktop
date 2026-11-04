@@ -11,13 +11,15 @@ class Stage6OffscreenContracts(unittest.TestCase):
     def test_actual_gbm_dma_buf_and_frame(self):
         for source in [
             'fn smoke_render_gbm_offscreen(fd: DrmDeviceFd)',
-            'const SIZE: u32=64',
+            'smoke_render_gbm_output_buffers(fd,64,64,1)',
             'GbmDevice::new(fd)',
             'GbmAllocator::new(gbm.clone(),GbmBufferFlags::RENDERING)',
             'DmabufAllocator(',
-            'allocator.create_buffer(SIZE,SIZE,Fourcc::Abgr8888,&[Modifier::Linear])',
+            'allocator.create_buffer(',
+            'width,height,Fourcc::Abgr8888,&[Modifier::Linear]',
             'renderer.bind(&mut buffer)',
-            'renderer.render(&mut framebuffer,',
+            'renderer.render(',
+            '&mut framebuffer,(width as i32,height as i32).into(),Transform::Normal',
             'frame.clear(',
             'frame.finish()',
             '.wait()',
@@ -27,7 +29,8 @@ class Stage6OffscreenContracts(unittest.TestCase):
             self.assertNotIn(forbidden,RENDER)
         self.assertIn('native_scanout_is_implemented() -> bool {false}',RENDER)
         self.assertIn('assert_dedicated_console();',MAIN)
-        self.assertIn('experimental_drm(true)',MAIN)
+        self.assertIn('experimental_drm(true,false)',MAIN)
+        self.assertIn('experimental_drm(true,true)',MAIN)
         self.assertIn('rendered_offscreen+=1;',MAIN)
         self.assertIn('if render_offscreen && rendered_offscreen==0',MAIN)
         self.assertIn('No GPU produced an offscreen frame',MAIN)
