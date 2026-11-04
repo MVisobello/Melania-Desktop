@@ -45,6 +45,8 @@ on:
       - tests/test_qemu_gtk_fluent_lookup.py
       - scripts/capture-qemu-real-gtk-two-frames.py
       - tests/test_qemu_real_gtk_two_frames_stage85.py
+      - scripts/capture-qemu-real-gtk-start-overlay.py
+      - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
@@ -104,6 +106,8 @@ on:
       - tests/test_qemu_gtk_fluent_lookup.py
       - scripts/capture-qemu-real-gtk-two-frames.py
       - tests/test_qemu_real_gtk_two_frames_stage85.py
+      - scripts/capture-qemu-real-gtk-start-overlay.py
+      - tests/test_qemu_real_gtk_start_overlay_stage86.py
       - tests/test_qemu_gtk_png_evidence.py
       - tests/test_native_layer_panel_qmp.py
       - tests/test_qemu_dynamic_pointer_frame13.py
@@ -176,6 +180,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_qemu_gtk_fluent_lookup.py' -v
           python3 -m py_compile scripts/capture-qemu-real-gtk-two-frames.py
           python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_two_frames_stage85.py' -v
+          python3 -m py_compile scripts/capture-qemu-real-gtk-start-overlay.py
+          python3 -m unittest discover -s tests -p 'test_qemu_real_gtk_start_overlay_stage86.py' -v
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
