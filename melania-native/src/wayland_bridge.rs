@@ -2323,6 +2323,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     let outcome=join.join()
                         .map_err(|_|"in-process KMS presenter panicked during rollback")?;
                     outcome.map_err(|e|format!("in-process KMS presenter failed: {e}"))?;
+                    // The kernel presenter has completed verified rollback.
+                    // Stop and join the IPC transport before closing the
+                    // original DRM device through libseat, even on success.
+                    state.continuous_worker.take();
                     // The DRM worker has completed the final kernel
                     // verification and restored the old CRTC/connector.
                     // libseat must now explicitly close its original device.
