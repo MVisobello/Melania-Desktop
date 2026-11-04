@@ -1495,7 +1495,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 std::env::var("MELANIA_NATIVE_REAL_GTK_START_INPUT")
                     .as_deref()==Ok("YES_QEMU_VM");
             if real_gtk_super {
-                let code=event.key_code();
+                let code:u32=event.key_code().into();
                 if code==125 || code==126 { // Linux evdev KEY_LEFTMETA/RIGHTMETA
                     if event.state()==KeyState::Pressed {
                         state.qemu_start_super_down=Some(code);
