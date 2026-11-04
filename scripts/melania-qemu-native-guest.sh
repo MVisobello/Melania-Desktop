@@ -20,6 +20,27 @@ mount -t iso9660 -o ro /dev/disk/by-label/MELANIA_BIN /mnt/melania-native ||
 binary=/mnt/melania-native/melania-native
 [[ -f "$binary" ]] || fatal 'real_native_ELF_binary_missing'
 file "$binary" || true
+# Stage83C: no GTK app is launched yet; validate only that the exact
+# host-compiled GTK panel ELF links to guest GTK4 and the ISO's pinned
+# gtk4-layer-shell SONAME. Never mistake this for a native screenshot.
+gtk_panel=/mnt/melania-native/melania-panel
+gtk_layer_lib=/mnt/melania-native/libgtk4-layer-shell.so.0
+[[ -x "$gtk_panel" && -s "$gtk_layer_lib" ]] ||
+  fatal 'real_GTK_panel_or_layer_shell_payload_missing'
+gtk_link_log="$(mktemp -t melania-gtk-guest-link-XXXXXX)"
+if ! LD_LIBRARY_PATH=/mnt/melania-native ldd "$gtk_panel" > "$gtk_link_log" 2>&1; then
+  cat "$gtk_link_log"
+  fatal 'real_GTK_panel_ELF_loader_failed_in_guest'
+fi
+cat "$gtk_link_log"
+if grep -q 'not found' "$gtk_link_log" ||
+   ! grep -q 'libgtk-4.so.1 => ' "$gtk_link_log" ||
+   ! grep -q 'libgtk4-layer-shell.so.0 => /mnt/melania-native/' "$gtk_link_log"; then
+  rm -f "$gtk_link_log"
+  fatal 'real_GTK_panel_dependency_missing_in_guest'
+fi
+rm -f "$gtk_link_log"
+report 'MELANIA_QEMU_GTK_PANEL_ELF_LINK_PASS=true'
 mkdir -p /run/melania-native-qemu
 chmod 0700 /run/melania-native-qemu
 

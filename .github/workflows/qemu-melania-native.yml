@@ -187,6 +187,12 @@ jobs:
             exit 1
           fi
           echo 'MELANIA_NATIVE_GTK_PANEL_LINK_READY=true'
+          # Copy the resolved SONAME file, not a symlink broken by ISO9660.
+          layer_libdir="$(pkg-config --variable=libdir gtk4-layer-shell-0)"
+          layer_soname="$(readlink -e "$layer_libdir/libgtk4-layer-shell.so.0")"
+          test -s "$layer_soname"
+          install -m 0644 "$layer_soname" target/debug/melania-gtk4-layer-shell.so.0
+          test -s target/debug/melania-gtk4-layer-shell.so.0
           cargo build -p melania-native --bins
           test -x target/debug/qemu-layer-panel-client
           test -x target/debug/qemu-shell-client
