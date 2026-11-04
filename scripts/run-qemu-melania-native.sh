@@ -340,6 +340,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! grep -q '^MELANIA_QEMU_GTK4_TWO_DISTINCT_REAL_FRAMES=true' "$report/qmp-real-gtk-two-frames.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_START_REAL_CRTC_PIXELS=true' "$report/qmp-real-gtk-start-overlay.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_REAL_SUPER_INPUT_PASS=true' "$report/qmp-real-gtk-super-input.log" ||
+    ! grep -q '^MELANIA_QEMU_GTK_USB_SEARCH_TEXT_SENT=true' "$report/qmp-real-gtk-super-input.log" ||
     ! test -s "$report/real-gtk-start-overlay-frame3.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_GTK_START_OVERLAY_KMS_SCANOUT_PASS=true' "$serial" ||
     ! test -s "$report/real-gtk-continuous-frame1.ppm" ||
