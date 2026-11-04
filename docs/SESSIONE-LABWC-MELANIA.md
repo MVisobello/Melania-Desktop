@@ -59,3 +59,24 @@ hotplug, schermata di blocco, portali e condivisione schermo, notifiche,
 audio, stampa e ritorno a Cinnamon senza perdita di dati.
 Non impostare Melania come sessione predefinita finché queste verifiche
 non hanno avuto esito positivo.
+
+## Configurazione completa tramite servizi Linux già collaudati
+
+Le Impostazioni Melania integrano in Rust/GTK4 cinque collegamenti a
+gestori di sistema reali, visibili soltanto nella sessione labwc autonoma:
+**Schermo** → wdisplays; **Audio** → pavucontrol; **Rete** →
+nm-connection-editor; **Bluetooth** → blueman-manager; **Dispositivi** →
+system-config-printer. Non vengono mai lanciati tramite shell, e i
+pulsanti sono disattivati se il programma manca o la sessione è annidata.
+
+Installazione facoltativa su Mint 22:
+
+sudo apt install wdisplays pavucontrol network-manager-gnome blueman system-config-printer
+
+Questi programmi mantengono le proprie interfacce native: Melania fornisce
+il punto di accesso integrato e verifica la sessione, ma non pretende ancora
+di implementare in Rust tutti i pannelli di configurazione.
+**wdisplays** permette risoluzione, rotazione, scala e disposizione
+multi-monitor con il protocollo Wayland di labwc. La persistenza dei
+profili monitor su hotplug tramite kanshi e il rollback automatico dopo
+una modifica di output rischiosa restano da verificare e integrare.
