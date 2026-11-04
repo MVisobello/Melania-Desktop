@@ -32,6 +32,7 @@ pub mod rollback_audit;
 pub mod framebuffer_lease;
 pub mod input_registry;
 pub mod native_presentation_guard;
+pub mod native_frame_budget;
 use std::{collections::BTreeMap, path::PathBuf};
 use smithay::backend::{
     session::Event as SessionEvent,
