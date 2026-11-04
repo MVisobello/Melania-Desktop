@@ -11,7 +11,7 @@ class NativeScrollWayland(unittest.TestCase):
         self.assertIn("InputEvent::PointerAxis {event} => {",source)
         self.assertIn("PointerAxisEvent, Axis, AxisSource",source)
         self.assertIn("AxisFrame::new(event.time_msec()).source(source)",source)
-        self.assertIn("event.amount(Axis",source.replace("event.amount(axis)","event.amount(Axis"))
+        self.assertIn("event.amount(axis)",source)
         self.assertIn("event.amount_v120(axis)",source)
         self.assertIn("frame=frame.value(axis,value)",source)
         self.assertIn("frame=frame.v120(axis,steps);",source)
