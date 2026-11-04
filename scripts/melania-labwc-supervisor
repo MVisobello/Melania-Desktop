@@ -50,6 +50,14 @@ if [[ "${MELANIA_LABWC_SMOKE_OPEN_FILES:-0}" == 1 ]]; then
 fi
 echo "MELANIA_LABWC_SHELL_STARTED=true"
 
+# Launch XDG autostart only for a real independent login. GIO parses Exec.
+# Never launch Cinnamon/XFCE inherited startup daemons in a nested preview.
+if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then
+  "$BIN/melania-autostart" &
+  child_pids+=("$!")
+  echo "MELANIA_LABWC_XDG_AUTOSTART_DISPATCHED=true"
+fi
+
 # Keep the session alive only while both essential graphical layers and
 # the compositor are alive. A crash requests logout, never a system reboot.
 while :; do
