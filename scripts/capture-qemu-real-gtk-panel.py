@@ -15,6 +15,10 @@ import time
 from pathlib import Path
 
 WIDTH, HEIGHT = 1280, 800
+# The real GTK4 content has a 60px CSS natural minimum, although its initial
+# layer-shell configure requests 52px. Preserve the running app's appearance.
+PANEL_HEIGHT = 60
+PANEL_TOP = HEIGHT - PANEL_HEIGHT
 BACKGROUND = (27, 33, 58)
 FRAME_MARKER = "MELANIA_RUST_REAL_GTK_PANEL_FRAME_VISIBLE=1"
 EXIT_MARKER = "MELANIA_QEMU_NATIVE_GUEST_EXIT="
@@ -32,17 +36,29 @@ def validate_ppm(payload: bytes) -> tuple[int, int]:
         start = offset + (y * WIDTH + x) * 3
         return tuple(payload[start:start + 3])
 
-    # All the pixels above the 52-pixel bottom panel must remain the genuine
-    # scene background. No synthetic full-screen success frame is accepted.
-    for y in (100, 550, 727, 747):
+    # Above the genuine 60px GTK buffer the scene must still have the exact
+    # QEMU background. Reject invented full-screen images and leaked pixels.
+    for y in (100, 550, 700, PANEL_TOP - 1):
         for x in (0, 101, 440, 800, 1177, 1279):
             actual = rgb(x, y)
             if max(abs(a - b) for a, b in zip(actual, BACKGROUND)) > 10:
                 raise ValueError(f"unexpected scene pixel outside GTK taskbar at {x},{y}: {actual}")
 
+    # Reject a stale 52px-only screenshot after GTK negotiated 60px. The
+    # top edge must contain actual client pixels, not just the QEMU backdrop.
+    edge_pixels = [rgb(x, y)
+                   for y in (PANEL_TOP, PANEL_TOP + 1, PANEL_TOP + 3)
+                   for x in (0, 200, 500, 800, WIDTH - 1)]
+    edge_changed = sum(
+        max(abs(a - b) for a, b in zip(pixel, BACKGROUND)) >= 8
+        for pixel in edge_pixels
+    )
+    if edge_changed < 8:
+        raise ValueError("genuine GTK4 buffer does not start at y=740 (60px height)")
+
     changed = 0
     tones: set[tuple[int, int, int]] = set()
-    for y in range(748, 800):
+    for y in range(PANEL_TOP, HEIGHT):
         for x in range(WIDTH):
             actual = rgb(x, y)
             if max(abs(a - b) for a, b in zip(actual, BACKGROUND)) >= 8:
