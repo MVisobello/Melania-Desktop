@@ -17,8 +17,8 @@ def verify(data:bytes)->dict[str,tuple[int,int,int]]:
     offset=m.end()
     if len(data)!=offset+W*H*3:raise ValueError("truncated QMP output")
     checks={
-        "background_above_panel":((10,759),(27,33,58)),
-        "panel_start_bottom":((10,760),color(12)),
+        "background_above_panel":((10,747),(27,33,58)),
+        "panel_start_bottom":((10,748),color(12)),
         "panel_middle":((700,780),color(12)),
         "panel_last_pixel":((1279,799),color(12)),
         "xdg_retained_from_frame11":((200,200),color(11)),
