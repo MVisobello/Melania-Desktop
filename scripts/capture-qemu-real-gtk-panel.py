@@ -21,7 +21,7 @@ EXIT_MARKER = "MELANIA_QEMU_NATIVE_GUEST_EXIT="
 
 
 def validate_ppm(payload: bytes) -> tuple[int, int]:
-    header = re.match(rb"P6\\s+(\\d+)\\s+(\\d+)\\s+255\\s", payload)
+    header = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", payload)
     if not header or tuple(map(int, header.groups())) != (WIDTH, HEIGHT):
         raise ValueError("QMP framebuffer must be the real 1280x800 VirtIO scanout")
     offset = header.end()
@@ -67,7 +67,7 @@ def capture(qmp: Path, destination: Path) -> None:
             {"execute": "qmp_capabilities"},
             {"execute": "screendump", "arguments": {"filename": str(destination), "format": "ppm"}},
         ):
-            wire.write((json.dumps(request) + "\\n").encode())
+            wire.write((json.dumps(request) + "\n").encode())
             for _ in range(50):
                 result = json.loads(wire.readline())
                 if "error" in result:
