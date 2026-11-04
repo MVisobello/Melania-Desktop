@@ -72,6 +72,8 @@ jobs:
         run: |
           set -o pipefail
           cargo test -p melania-files --bin melania-files 2>&1 | tee gtk-files-tests.log
+      - name: Test safe Rust XDG autostart reader and GIO launcher
+        run: cargo test -p melania-settings --bin melania-autostart
       - name: Capture native GTK Settings with classic window controls
         run: |
           set -euo pipefail
