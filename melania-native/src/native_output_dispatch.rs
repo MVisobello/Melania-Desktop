@@ -133,21 +133,11 @@ impl NativeOutputDispatch {
             self.inflight != Some(submission) {
             return Ok(false);
         }
-        // The interface calls the drm-rs control ioctls directly. Only a
-        // real CRTC FB_ID AND a live encoder route may grant a frame callback.
-        let verified = (|| -> Result<bool, String> {
-            let observed = card.get_crtc(crtc)
-                .map_err(|error| format!("DRM get_crtc failed: {error}"))?;
-            let attached = card.get_connector(connector, false)
-                .map_err(|error| format!("DRM get_connector failed: {error}"))?;
-            let Some(encoder) = attached.current_encoder() else {
-                return Ok(false);
-            };
-            let routed = card.get_encoder(encoder)
-                .map_err(|error| format!("DRM get_encoder failed: {error}"))?;
-            Ok(observed.framebuffer() == Some(expected_fb) &&
-                routed.crtc() == Some(crtc))
-        })();
+        // Use the exact kernel probe also exercised by the real QEMU KMS
+        // receiver, not a mockable or caller-provided success flag.
+        let verified = crate::native_kms_scanout::verify_kernel_scanout(
+            card, crtc, connector, expected_fb,
+        );
         match verified {
             Ok(kernel_presented) => Ok(self.presented(
                 submission, now_ms, kernel_presented,
