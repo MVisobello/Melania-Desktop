@@ -13,7 +13,7 @@ BIN=""
 for candidate in "${MELANIA_BIN_DIR:-}" "$ROOT/target/release" "$ROOT/target/debug"; do
   [[ -n "$candidate" && -d "$candidate" ]] || continue
   good=1
-  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart; do
+  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart melania-inputctl; do
     [[ -x "$candidate/$name" ]] || good=0
   done
   if (( good )); then BIN="$candidate"; break; fi
