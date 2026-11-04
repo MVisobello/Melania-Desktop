@@ -74,6 +74,7 @@ class OneProcessWaylandKmsContract(unittest.TestCase):
         # one guest. Fixed create_new() paths would fail on frame 1 of the
         # second run even if the first DRM session restored correctly.
         self.assertIn('std::process::id()', CLIENT)
+        self.assertIn('.open(&path)?;', CLIENT)  # keep path for subsequent unlink
         self.assertIn('std::fs::remove_file(&path)?;', CLIENT)
         self.assertLess(CLIENT.index('let pool=shm.create_pool('),
                         CLIENT.index('std::fs::remove_file(&path)?;'))
