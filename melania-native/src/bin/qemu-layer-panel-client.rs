@@ -133,7 +133,7 @@ fn main()->Result<(),Box<dyn Error>> {
     // The real GTK taskbar requests width=0 between left/right anchors.
     // The compositor must configure the full output width and 52px height.
     panel.set_size(0,52);
-    panel.set_exclusive_zone(40);
+    panel.set_exclusive_zone(52);
     b.commit();
     for _ in 0..8 {
         queue.roundtrip(&mut s)?;
