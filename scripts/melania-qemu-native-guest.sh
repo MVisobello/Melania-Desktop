@@ -1500,7 +1500,9 @@ MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
 MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
-  timeout --signal=TERM --kill-after=3s 83s \
+MELANIA_NATIVE_MANAGED_MINIMIZE_QMP=YES_QEMU_VM \
+MELANIA_NATIVE_QEMU_FRAME_TARGET=14 \
+  timeout --signal=TERM --kill-after=3s 103s \
   "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
   > "$managed_server_log" 2>&1 &
 managed_server_pid=$!
@@ -1511,7 +1513,9 @@ for attempt in $(seq 1 100); do
   kill -0 "$managed_server_pid" 2>/dev/null || break
   sleep .1
 done
-if [[ -z "$managed_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ]]; then
+managed_control_socket="$(sed -n 's/^MELANIA_NATIVE_CONTROL_SOCKET_READY=//p' "$managed_server_log" | head -n 1)"
+if [[ -z "$managed_socket" || ! -S /run/melania-native-qemu/continuous-frame-stream.sock ||
+      -z "$managed_control_socket" || ! -S "$managed_control_socket" ]]; then
   cat "$managed_server_log"
   fatal 'managed_role_live_Wayland_stream_unavailable'
 fi
@@ -1520,10 +1524,10 @@ fi
 tail -n +1 -f -s 0.05 "$managed_kms_log" > /dev/ttyS0 &
 managed_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
-MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+MELANIA_QEMU_CONTINUOUS_FRAMES=14 \
 MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_MANAGED_ROLE_QMP=YES_QEMU_VM \
-  timeout --signal=TERM --kill-after=3s 76s \
+  timeout --signal=TERM --kill-after=3s 96s \
   "$continuous_kms" < /dev/tty1 > "$managed_kms_log" 2>&1 &
 managed_kms_pid=$!
 for attempt in $(seq 1 100); do
@@ -1538,8 +1542,10 @@ if ! grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$managed_kms_log"; t
 fi
 if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
        MELANIA_QEMU_MANAGED_ROLE_CLIENT=YES_QEMU_VM \
+       MELANIA_QEMU_MANAGED_MINIMIZE_CLIENT=YES_QEMU_VM \
+       MELANIA_CONTROL_SOCKET="$managed_control_socket" \
        WAYLAND_DISPLAY="$managed_socket" \
-  timeout --signal=TERM --kill-after=3s 70s \
+  timeout --signal=TERM --kill-after=3s 86s \
   "$two_continuous_client" > "$managed_client_log" 2>&1; then
   cat "$managed_client_log" "$managed_kms_log" "$managed_server_log"
   kill "$managed_server_pid" "$managed_kms_pid" 2>/dev/null || true
@@ -1557,7 +1563,7 @@ fi
 kill "$managed_tail_pid" 2>/dev/null || true
 wait "$managed_tail_pid" 2>/dev/null || true
 cat "$managed_client_log" "$managed_kms_log" "$managed_server_log"
-for index in 3 5 7 9; do
+for index in 3 5 7 9 13 14; do
   grep -q "^MELANIA_RUST_CONTINUOUS_MANAGED_ROLE_FRAME_VISIBLE=$index$" "$managed_kms_log" ||
     fatal "managed_role_real_CRTC_QMP_capture_marker_$index_missing"
 done
@@ -1584,16 +1590,31 @@ for event in \
 done
 grep -q '^MELANIA_NATIVE_MANAGED_ROLE_12_KMS_FRAMES_PASS=true' "$managed_client_log" ||
   fatal 'managed_role_client_did_not_complete_all_real_CRTC_ACKs'
-grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=12' "$managed_server_log" ||
-  fatal 'managed_role_compositor_did_not_complete_twelve_frames'
-grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=12' "$managed_kms_log" ||
-  fatal 'managed_role_KMS_did_not_complete_twelve_frames'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_WAYLAND_KMS_FRAMES_PASS=14' "$managed_server_log" ||
+  fatal 'managed_role_compositor_did_not_complete_fourteen_frames'
+grep -q '^MELANIA_RUST_CONTINUOUS_FRAMES_PASS=14' "$managed_kms_log" ||
+  fatal 'managed_role_KMS_did_not_complete_fourteen_frames'
+for index in 13 14; do
+  grep -q "^MELANIA_NATIVE_MANAGED_MINIMIZE_KMS_ACK=$index " "$managed_server_log" ||
+    fatal "managed_role_compositor_minimize_restore_ACK_$index_missing"
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$managed_kms_log" ||
+    fatal "managed_role_CRTC_minimize_restore_ACK_$index_missing"
+done
+grep -q '^MELANIA_NATIVE_MANAGED_MINIMIZE_CLIENT_KMS13_PASS=true' "$managed_client_log" ||
+  fatal 'client_did_not_observe_KMS_hidden_frame'
+grep -q '^MELANIA_NATIVE_MANAGED_MINIMIZE_CLIENT_KMS14_PASS=true' "$managed_client_log" ||
+  fatal 'client_did_not_observe_KMS_restored_frame'
 grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$managed_kms_log" ||
   fatal 'managed_role_did_not_restore_original_CRTC'
 grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$managed_kms_log" ||
   fatal 'managed_connector_route_not_restored'
-grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=12$' "$managed_kms_log" ||
-  fatal 'kernel_scanout_route_not_verified_managed_kms_log_12'
+grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=14
+rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
+report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
+report 'MELANIA_QEMU_MANAGED_MINIMIZE_RESTORE_14_KMS_ACKS_PASS=true'
+
+ "$managed_kms_log" ||
+  fatal 'kernel_scanout_route_not_verified_managed_kms_log_14'
 rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
 report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
 
