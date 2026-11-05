@@ -14,7 +14,7 @@ class NativeKernelFlipLedger(unittest.TestCase):
     def test_actual_kernel_receipt_is_available_not_just_crtc_read(self):
         self.assertIn("pub mod native_flip_ledger;",LIB)
         self.assertIn("-> Result<u32, String>",KERNEL)
-        self.assertIn("return Ok(done.frame)",KERNEL)
+        self.assertIn("router.enqueue(done.crtc, done.frame)?",KERNEL)
         self.assertIn("done.crtc==expected_crtc",KERNEL)
         self.assertIn("pub fn begin_flip(",LEDGER)
         self.assertIn("pub fn complete_flip(",LEDGER)
