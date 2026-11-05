@@ -1575,13 +1575,13 @@ impl XdgShellHandler for BridgeState {
     fn new_popup(&mut self,popup:PopupSurface,_:PositionerState) {
         let _=popup.send_configure();
     }
-    fn move_request(&mut self,top:ToplevelSurface,_:wl_seat::WlSeat,serial:Serial){
+    fn move_request(&mut self,top:ToplevelSurface,seat:wl_seat::WlSeat,serial:Serial){
         // Stage113: accept only a real left-button serial issued to this
         // exact focused xdg_toplevel while the libseat KMS epoch is active.
         // This shares the actual pointer-motion -> scene -> KMS ACK path;
         // it does not create a synthetic move or change window decorations.
         if !self.managed_xdg_mode || !self.dynamic_window_mode ||
-           !self.lifecycle.seat_active() ||
+           !self.seat.owns(&seat) || !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() {
             return;
         }
@@ -1600,11 +1600,12 @@ impl XdgShellHandler for BridgeState {
             println!("MELANIA_NATIVE_XDG_CLIENT_MOVE_GRANTED={key}");
         }
     }
-    fn resize_request(&mut self,top:ToplevelSurface,_:wl_seat::WlSeat,
+    fn resize_request(&mut self,top:ToplevelSurface,seat:wl_seat::WlSeat,
                       serial:Serial,edge:xdg_toplevel::ResizeEdge){
         let Some(direction)=xdg_resize_direction(edge) else{return;};
         if !self.managed_xdg_mode || !self.dynamic_window_mode ||
-           !self.multi_window_mode || !self.lifecycle.seat_active() ||
+           !self.multi_window_mode || !self.seat.owns(&seat) ||
+           !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() {
             return;
         }
