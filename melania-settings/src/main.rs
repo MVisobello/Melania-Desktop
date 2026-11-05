@@ -13,6 +13,7 @@ mod xfce_desktop;
 mod symbols;
 mod sensors;
 mod input_controls;
+mod keyboard_shortcuts;
 mod system_integrations;
 #[path = "../../branding/window_controls.rs"]
 mod window_controls;
@@ -404,10 +405,10 @@ fn build_ui(
     ));
     stack.add_titled(&accessibility, Some("accessibility"), "Accessibilità");
     let keyboard = page("Scorciatoie");
-    keyboard.append(&text("Alt + Tab  ·  Finestra successiva", "settings-hero"));
-    keyboard.append(&text("Alt + Maiusc + Tab  ·  Finestra precedente", "settings-subtitle"));
-    keyboard.append(&text("Ctrl + Alt + Freccia sinistra/destra  ·  Cambia spazio di lavoro", "settings-hero"));
-    keyboard.append(&text("Super + E  ·  Apri Melania Files", "settings-hero"));
+    keyboard_shortcuts::append(&keyboard);
+    keyboard.append(&text(
+        "Alt + Tab cambia finestra; Alt + F4 chiude la finestra attiva. Queste combinazioni del gestore finestre non sono ancora modificabili.",
+        "settings-row-description"));
     stack.add_titled(&keyboard, Some("shortcuts"), "Scorciatoie");
     // Summary and category pages reflect actual status, without fake hardware switches.
     gnome_pages::add_pages(&stack);
