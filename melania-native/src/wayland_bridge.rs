@@ -66,6 +66,7 @@ use melania_native::native_presentation_guard::{NativePresentationGuard,Presenta
 use melania_native::native_frame_budget;
 use melania_native::native_popup_layout::PopupPlacement;
 use smithay::utils::Rectangle;
+use melania_native::keyboard_window_cycle::{KeyboardWindowCycle,ShortcutResult};
 use signal_hook::consts::signal::{SIGINT,SIGTERM};
 
 struct NativeControlSocket(PathBuf);
@@ -160,6 +161,7 @@ struct BridgeState {
     // Parent identity is retained to follow real parent drags/destroy.
     native_popup_roles:Vec<(PopupSurface,WlSurface)>,
     window_interaction:WindowInteraction,
+    keyboard_window_cycle:KeyboardWindowCycle,
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
     last_xdg_press:Option<(WlSurface,Serial)>,
@@ -2050,6 +2052,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceRemoved {device} => {
             state.last_xdg_press=None;
             state.window_interaction.cancel();
+            state.keyboard_window_cycle.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
         InputEvent::Keyboard {event} => {
@@ -2111,6 +2114,52 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 }
                 if event.state()==KeyState::Pressed {
                     state.qemu_start_super_down=None;
+                }
+            }
+            // The actual physical XKB keycode (evdev +8) is the sole
+            // source of Alt/Tab. Never switch on an IPC command or a client
+            // forged wl_keyboard event. Keep the existing GTK Super behavior.
+            if state.managed_xdg_mode && state.dynamic_window_mode &&
+               state.multi_window_mode && state.window_interaction.active_key().is_none() {
+                let code:u32=event.key_code().into();
+                let stack=state.dynamic_scene.focusable_normal_keys_top_first();
+                let focused=state.focused.as_ref()
+                    .and_then(|role|state.known_window_surfaces.id_of(role));
+                match state.keyboard_window_cycle.event(
+                    code.checked_sub(8),event.state()==KeyState::Pressed,&stack,focused
+                ) {
+                    ShortcutResult::Forward=>{},
+                    ShortcutResult::Consume=>return,
+                    ShortcutResult::Focus(key)=>{
+                        let Some(surface)=state.known_window_surfaces.get(key).cloned() else {
+                            state.keyboard_window_cycle.cancel_cycle();
+                            return;
+                        };
+                        // Raising alone is scene damage, never fabricated
+                        // GPU success. The KMS worker/receipt remains the
+                        // only path to wl_surface.frame completion.
+                        match state.dynamic_scene.raise(key) {
+                            Ok(changed)=>{
+                                let keyboard=state.seat.get_keyboard().expect("keyboard");
+                                keyboard.set_focus(state,Some(surface.clone()),
+                                    SERIAL_COUNTER.next_serial());
+                                state.focused=Some(surface);
+                                if changed {
+                                    state.note_scene_change();
+                                    if state.persistent_kms_mode ||
+                                       state.continuous_frame_count<state.continuous_frame_target {
+                                        if let Err(error)=state.submit_continuous_frame() {
+                                            eprintln!("native Alt-Tab KMS submission failed: {error}");
+                                        }
+                                    }
+                                }
+                                println!("MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS={key}");
+                                let _=std::io::stdout().flush();
+                            },
+                            Err(_)=>state.keyboard_window_cycle.cancel_cycle(),
+                        }
+                        return;
+                    },
                 }
             }
             if state.focused.is_none() {return;}
@@ -2289,6 +2338,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                                     }
                                 }
                             }
+                            state.keyboard_window_cycle.cancel_cycle();
                             let keyboard=state.seat.get_keyboard().expect("keyboard");
                             keyboard.set_focus(state,Some(surface.clone()),
                                 SERIAL_COUNTER.next_serial());
@@ -2493,6 +2543,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_pending_resize:Vec::new(),
         native_popup_roles:Vec::new(),
         window_interaction:WindowInteraction::default(),
+        keyboard_window_cycle:KeyboardWindowCycle::default(),
         last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
@@ -2534,6 +2585,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             SessionEvent::PauseSession=>{
                 state.last_xdg_press=None;
                 state.window_interaction.cancel();
+                state.keyboard_window_cycle.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
@@ -2572,6 +2624,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         if !active {
             state.continuous_pending=None;
             state.window_interaction.cancel();
+            state.keyboard_window_cycle.reset();
         }
     })?;
     events.handle().insert_source(udev,|event,_,state|{
