@@ -7,7 +7,7 @@ cd "$ROOT"
 for tool in labwc wlrctl Xvfb dbus-run-session python3 scrot; do
   command -v "$tool" >/dev/null || { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$tool" >&2; exit 3; }
 done
-for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart melania-inputctl; do
+for bin in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart melania-inputctl melania-session-supervisor; do
   [[ -x "$ROOT/target/debug/$bin" ]] ||
     { echo "MELANIA_LABWC_SMOKE_BLOCKED=missing_$bin" >&2; exit 3; }
 done
@@ -228,6 +228,30 @@ print(f"MELANIA_LABWC_START_SETTINGS_ICON_COLOR_PIXELS={settings_pixels}")
 print(f"MELANIA_LABWC_RUNNING_ICON_COLOR_PIXELS={running_pixels}")
 print("MELANIA_LABWC_ICON_VISIBILITY_PASS=true")
 PYSHOT
+
+# Simulate a transient crash of ONLY the panel started by this isolated
+# Melania supervisor. The compositor, desktop and user applications must
+# survive; the Rust supervisor must recover the panel without reboot/logout.
+panel_pid="$(sed -n 's/^MELANIA_LABWC_SERVICE_STARTED=panel pid=//p' "$temp/session.log" | head -n 1)"
+[[ "$panel_pid" =~ ^[0-9]+$ && "$panel_pid" -gt 1 &&
+   -r "/proc/$panel_pid/comm" &&
+   "$(cat "/proc/$panel_pid/comm")" == "melania-panel" ]] ||
+  { echo "MELANIA_LABWC_SMOKE_FAIL=panel_crash_target_invalid" >&2; exit 1; }
+kill -TERM "$panel_pid"
+recovery=0
+for _ in {1..95}; do
+  if grep -q '^MELANIA_LABWC_COMPONENT_RECOVERED=panel$' "$temp/session.log"; then
+    recovery=1
+    break
+  fi
+  kill -0 "$pid" 2>/dev/null || break
+  sleep .1
+done
+(( recovery )) || { cat "$temp/session.log" >&2;
+  echo "MELANIA_LABWC_SMOKE_FAIL=panel_not_recovered" >&2; exit 1; }
+[[ -S "$socket_path" ]] || { echo "MELANIA_LABWC_SMOKE_FAIL=control_lost_after_panel_crash" >&2; exit 1; }
+kill -0 "$pid" || { echo "MELANIA_LABWC_SMOKE_FAIL=session_exited_on_panel_crash" >&2; exit 1; }
+echo "MELANIA_LABWC_REAL_PANEL_CRASH_RECOVERY_PASS=true"
 
 python3 - "$socket_path" <<'PY'
 import socket,sys

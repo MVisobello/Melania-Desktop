@@ -4,6 +4,7 @@ No compositor, seat device, display manager or /usr/share file is touched.
 """
 import importlib.util
 import os
+import subprocess
 from pathlib import Path
 import socket
 import tempfile
@@ -16,6 +17,7 @@ import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 SESSION=(ROOT/"scripts/melania-labwc-session").read_text()
 SUPERVISOR=(ROOT/"scripts/melania-labwc-supervisor").read_text()
+RUST_SUPERVISOR=(ROOT/"melania-services/src/supervisor.rs").read_text()
 HOTKEY=(ROOT/"scripts/melania-labwc-hotkey").read_text()
 
 def load(path, name):
@@ -141,9 +143,22 @@ class LabwcStandaloneSession(unittest.TestCase):
         self.assertIn('exec labwc -C "$ROOT/integration/labwc"',SESSION)
         self.assertNotIn("sudo install",SESSION)
         self.assertNotIn("apt install",SUPERVISOR)
-        self.assertIn('trap cleanup EXIT',SUPERVISOR)
-        self.assertIn('kill "$pid"',SUPERVISOR)
+        self.assertIn('exec "$BIN/melania-session-supervisor"',SUPERVISOR)
+        self.assertIn('MELANIA_LABWC_RESTART_SCHEDULED=',RUST_SUPERVISOR)
+        self.assertIn('MELANIA_LABWC_SHELL_FAILURE=',RUST_SUPERVISOR)
+        self.assertIn('process_group(0)',RUST_SUPERVISOR)
+        self.assertIn('Policy::FailClosed',RUST_SUPERVISOR)
+        self.assertNotIn('pkill',SUPERVISOR+RUST_SUPERVISOR)
         self.assertIn("TOGGLE_START",HOTKEY+Path(ROOT/"scripts/melania-labwc-control.py").read_text())
+
+    def test_real_wayland_crash_and_logout_smoke_script_is_syntactically_valid(self):
+        smoke=ROOT/"scripts/smoke-melania-labwc.sh"
+        check=subprocess.run(["bash","-n",str(smoke)],
+                             capture_output=True,text=True,timeout=10)
+        self.assertEqual(check.returncode,0,check.stderr)
+        source=smoke.read_text()
+        self.assertIn("MELANIA_LABWC_REAL_PANEL_CRASH_RECOVERY_PASS=true",source)
+        self.assertIn("MELANIA_LABWC_REAL_LOGOUT_PASS=true",source)
 
     def test_labwc_shortcuts_and_isolated_config_are_well_formed(self):
         xml=ET.parse(ROOT/"integration/labwc/rc.xml").getroot()
