@@ -934,6 +934,27 @@ impl BridgeState {
             }
             self.window_interaction.cancel_for_key(key);
         }
+        // An XDG popup can be the keyboard and pointer focus at dismissal.
+        // Its old Wayland surface must never remain the input recipient after
+        // its retained image and scene slot have been removed. This also runs
+        // for nested descendants when an ancestor is destroyed.
+        if matches!(self.last_xdg_press.as_ref(),Some((pressed,_)) if pressed==surface) {
+            self.last_xdg_press=None;
+        }
+        if self.focused.as_ref()==Some(surface) {
+            self.focused=None;
+            let target=self.pointer_target(self.pointer_position);
+            let replacement=target.as_ref().map(|(next,_)|next.clone());
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,replacement.clone(),SERIAL_COUNTER.next_serial());
+            self.focused=replacement;
+            let pointer=self.seat.get_pointer().expect("pointer");
+            pointer.motion(self,target,&MotionEvent{
+                location:self.pointer_position,
+                serial:SERIAL_COUNTER.next_serial(),time:0,
+            });
+            pointer.frame(self);
+        }
     }
     fn reposition_native_popups_for_parent(&mut self,parent_key:u64) {
         // Traverse the bounded parent/popup tree in depth-first order.
@@ -1351,21 +1372,6 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     }
-                    // An invalid/rejected popup must never reserve a stable
-                    // client slot and block unrelated mapped windows.
-                    let key=match self.known_window_surfaces.register(surface.clone()) {
-                        Ok(key)=>key,
-                        Err(_)=>{
-                            eprintln!("dynamic QEMU client has no scene slot");
-                            buffer.release();
-                            return;
-                        }
-                    };
-                    let Some(default_pos)=melania_native::window_placement::default_position(key,1280,800) else {
-                        eprintln!("dynamic QEMU client outside bounded placement policy");
-                        buffer.release();
-                        return;
-                    };
                     // Refuse stale-size buffers during a managed role switch.
                     // A successful client ACK alone did not provide pixels.
                     if self.managed_xdg_mode && popup_parent.is_none() {
@@ -1401,14 +1407,30 @@ impl CompositorHandler for BridgeState {
                             buffer.release();
                             return;
                         };
-                        if !layout.matches_buffer(pixels.width(),pixels.height()) ||
-                           layout.absolute(px,py,1280,800).is_none() {
+                        let Some(position)=layout.accepted_buffer(
+                            pixels.width(),pixels.height(),px,py,1280,800
+                        ) else {
                             eprintln!("MELANIA_NATIVE_XDG_POPUP_SIZE_MISMATCH=true");
                             buffer.release();
                             return;
-                        }
-                        layout.absolute(px,py,1280,800)
+                        };
+                        Some(position)
                     } else {None};
+                    // An invalid/rejected popup must never reserve a stable
+                    // client slot and block unrelated mapped windows.
+                    let key=match self.known_window_surfaces.register(surface.clone()) {
+                        Ok(key)=>key,
+                        Err(_)=>{
+                            eprintln!("dynamic QEMU client has no scene slot");
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    let Some(default_pos)=melania_native::window_placement::default_position(key,1280,800) else {
+                        eprintln!("dynamic QEMU client outside bounded placement policy");
+                        buffer.release();
+                        return;
+                    };
                     // Keep the current position across later wl_shm commits.
                     let (x,y)=if let Some(position)=placement {
                         position
