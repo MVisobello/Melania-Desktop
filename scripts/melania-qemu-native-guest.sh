@@ -1214,13 +1214,15 @@ if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   kill -TERM "$persistent_server_pid" 2>/dev/null || true
   fatal 'persistent_Wayland_client_failed'
 fi
-# A fixed-length receiver would have exited here after the client reached 24.
-# This process must still own the Wayland socket and its libseat KMS session.
-sleep 1
+# A fixed-length receiver would have exited after frame 24. A receiver
+# retaining its historical 12-second read timeout would also terminate
+# during this deliberate idle gap. The real Wayland/KMS server must survive.
+sleep 15
 if ! kill -0 "$persistent_server_pid" 2>/dev/null; then
   cat "$persistent_server_log" "$persistent_client_log"
   fatal 'persistent_Smithay_exited_at_twenty_four_frames'
 fi
+report 'MELANIA_QEMU_PERSISTENT_IDLE_OVER_12_SECONDS_PASS=true'
 kill -TERM "$persistent_server_pid"
 if ! wait "$persistent_server_pid"; then
   cat "$persistent_server_log" "$persistent_client_log"
