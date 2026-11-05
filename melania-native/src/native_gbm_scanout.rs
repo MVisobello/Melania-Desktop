@@ -176,8 +176,11 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                 let kernel_frame=crate::native_drm_flip::wait_for_kms_page_flip_routed(
                     &card,crtc,Duration::from_secs(3),&mut event_router,
                 )?;
-                flip_ledger.complete_flip(kernel_frame)
+                flip_ledger.complete_vm_flip(kernel_frame)
                     .map_err(|error|format!("GBM kernel flip event rejected: {error:?}"))?;
+                if flip_ledger.unreliable_vm_counter() {
+                    println!("MELANIA_NATIVE_GBM_KMS_VBLANK_COUNTER_UNRELIABLE_QEMU=true");
+                }
                 println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             wait_for_scanout(&card,crtc,connector,handles[index])?;
