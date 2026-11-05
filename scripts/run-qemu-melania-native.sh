@@ -353,6 +353,12 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! grep -q '^MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true' "$serial" ||
     ! test -s "$report/real-layer-panel-frame12.ppm" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FOUR_FRAMES_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_SIX_FRAMES_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME13_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME14_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
+    ! test -s "$report/managed-role-frame13.ppm" ||
+    ! test -s "$report/managed-role-frame14.ppm" ||
+    ! grep -q '^MELANIA_QEMU_MANAGED_MINIMIZE_RESTORE_14_KMS_ACKS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME3_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME5_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
     ! grep -q '^MELANIA_QEMU_MANAGED_XDG_FRAME7_PIXELS_VERIFIED=true' "$report/qmp-managed-xdg-roles.log" ||
@@ -560,6 +566,7 @@ printf '%s\n' 'MELANIA_VM_NATIVE_TWO_CONTINUOUS_WINDOWS_QMP=true' >> "$report/re
 printf '%s\n' 'MELANIA_VM_NATIVE_CONTINUOUS_CLOSE_REOPEN_14_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_VARIABLE_CLIENT_SIZES_GPU_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_MANAGED_XDG_FOUR_QMP_FRAMES=true' >> "$report/result.txt"
+printf '%s\n' 'MELANIA_VM_NATIVE_MANAGED_MINIMIZE_RESTORE_SIX_QMP_FRAMES=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_NATIVE_REAL_LAYER_SHELL_QMP=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_GTK_FIVE_WAYLAND_ROLE_ACK=true' >> "$report/result.txt"
 printf '%s\n' 'MELANIA_VM_REAL_GTK_PANEL_STARTUP=true' >> "$report/result.txt"
