@@ -40,6 +40,15 @@ impl PopupPlacement {
         Some((x as i32,y as i32))
     }
 
+    /// Supply a drawable position only after the caller has established the
+    /// ACKed XDG popup role and its mapped parent. This is the validation
+    /// gate BEFORE allocating the client's finite retained scene slot.
+    pub fn accepted_buffer(self, w:usize, h:usize, parent_x:i32, parent_y:i32,
+                           output_w:i32, output_h:i32)->Option<(i32,i32)> {
+        if !self.matches_buffer(w,h) {return None;}
+        self.absolute(parent_x,parent_y,output_w,output_h)
+    }
+
     /// Reject wrong-sized popup commits after an XDG configure or reposition.
     pub fn matches_buffer(self,w:usize,h:usize)->bool {
         w==self.width as usize && h==self.height as usize
@@ -73,6 +82,16 @@ mod tests {
         assert!(PopupPlacement::new(1,0,0,8193,40).is_none());
         let extreme=PopupPlacement::new(1,i32::MAX,i32::MIN,80,50).unwrap();
         assert!(extreme.absolute(500,500,1280,800).is_none());
+    }
+    #[test]
+    fn no_scene_slot_for_wrong_size_or_offscreen_popup_buffer() {
+        let popup=PopupPlacement::new(9,20,-10,128,72).unwrap();
+        assert_eq!(popup.accepted_buffer(128,72,40,35,1280,800),Some((60,25)));
+        assert_eq!(popup.accepted_buffer(127,72,40,35,1280,800),None);
+        assert_eq!(popup.accepted_buffer(128,71,40,35,1280,800),None);
+        assert_eq!(popup.accepted_buffer(128,72,-1000,35,1280,800),None);
+        assert_eq!(popup.accepted_buffer(128,72,40,35,0,800),None);
+        assert_eq!(popup.accepted_buffer(128,72,i32::MAX,35,1280,800),None);
     }
     #[test]
     fn nested_or_repositioned_popups_have_separate_parent_epochs() {
