@@ -1275,9 +1275,15 @@ impl CompositorHandler for BridgeState {
                     }
                     // Keep the current position across later wl_shm commits.
                     let (x,y)=if self.managed_xdg_mode {
-                        self.managed_windows.iter().find(|(role,_)|role==surface)
-                            .and_then(|(_,window)|window.geometry())
-                            .map(|rect|(rect.x,rect.y))
+                        // The top/left edge moves with the exact matching
+                        // resized wl_shm commit, not when XDG configure is sent.
+                        self.managed_pending_resize.iter()
+                            .find(|(role,_)|role==surface)
+                            .map(|(_,rect)|(rect.x,rect.y))
+                            .or_else(||self.managed_windows.iter()
+                                .find(|(role,_)|role==surface)
+                                .and_then(|(_,window)|window.geometry())
+                                .map(|rect|(rect.x,rect.y)))
                             .unwrap_or(default_pos)
                     } else {
                         self.dynamic_scene.position(key).unwrap_or(default_pos)
@@ -1297,6 +1303,7 @@ impl CompositorHandler for BridgeState {
                             window.update_normal_geometry(WindowRect{x,y,width,height});
                         }
                         self.managed_pending_sizes.retain(|(role,_)|role!=surface);
+                        self.managed_pending_resize.retain(|(role,_)|role!=surface);
                         println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
                     }
                 } else {
@@ -1672,6 +1679,7 @@ impl XdgShellHandler for BridgeState {
         }
         self.managed_windows.retain(|(role,_)|role!=&surface);
         self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+        self.managed_pending_resize.retain(|(role,_)|role!=&surface);
         if self.dynamic_xdg_resize_mode {
             self.dynamic_toplevels.retain(|existing|existing.wl_surface()!=&surface);
         }
@@ -2061,7 +2069,8 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                                     let right=f64::from(x)+f64::from(width);
                                     let bottom=f64::from(y)+f64::from(height);
                                     let kind=if point.x>=right-16.0 &&
-                                                point.y>=bottom-16.0 {
+                                                point.y>=bottom-16.0 &&
+                                                !(state.managed_xdg_mode && state.dynamic_window_mode) {
                                         Some(InteractionKind::ResizeBottomRight)
                                     } else if point.y>=f64::from(y) &&
                                               point.y<f64::from(y+26) &&
