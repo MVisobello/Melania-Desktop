@@ -229,6 +229,51 @@ print(f"MELANIA_LABWC_RUNNING_ICON_COLOR_PIXELS={running_pixels}")
 print("MELANIA_LABWC_ICON_VISIBILITY_PASS=true")
 PYSHOT
 
+# Simulate a transient crash of ONLY the panel started by this isolated
+# Melania supervisor. The compositor, desktop and user applications must
+# survive; the Rust supervisor must recover the panel without reboot/logout.
+panel_pid="$(sed -n 's/^MELANIA_LABWC_SERVICE_STARTED=panel pid=//p' "$temp/session.log" | head -n 1)"
+[[ "$panel_pid" =~ ^[0-9]+$ && "$panel_pid" -gt 1 &&
+   -r "/proc/$panel_pid/comm" &&
+   "$(cat "/proc/$panel_pid/comm")" == "melania-panel" ]] ||
+  { echo "MELANIA_LABWC_SMOKE_FAIL=panel_crash_target_invalid" >&2; exit 1; }
+kill -TERM "$panel_pid"
+recovery=0
+for _ in {1..95}; do
+  if grep -q '^MELANIA_LABWC_COMPONENT_RECOVERED=panel
+    s.shutdown(socket.SHUT_WR)
+    assert s.recv(100)==b"OK\nEND\n"
+PY
+for _ in {1..80}; do
+  if ! kill -0 "$pid" 2>/dev/null; then break; fi
+  sleep .1
+done
+if kill -0 "$pid" 2>/dev/null; then
+  echo "MELANIA_LABWC_SMOKE_FAIL=logout_did_not_terminate_session" >&2
+  exit 1
+fi
+wait "$pid" || {
+  cat "$temp/session.log" >&2
+  echo "MELANIA_LABWC_SMOKE_FAIL=labwc_exit_failed" >&2
+  exit 1
+}
+pid=''
+socket_path=''
+echo "MELANIA_LABWC_REAL_LOGOUT_PASS=true"
+echo "MELANIA_LABWC_REAL_NESTED_SESSION_PASS=true"
+ "$temp/session.log"; then
+    recovery=1
+    break
+  fi
+  kill -0 "$pid" 2>/dev/null || break
+  sleep .1
+done
+(( recovery )) || { cat "$temp/session.log" >&2;
+  echo "MELANIA_LABWC_SMOKE_FAIL=panel_not_recovered" >&2; exit 1; }
+[[ -S "$socket_path" ]] || { echo "MELANIA_LABWC_SMOKE_FAIL=control_lost_after_panel_crash" >&2; exit 1; }
+kill -0 "$pid" || { echo "MELANIA_LABWC_SMOKE_FAIL=session_exited_on_panel_crash" >&2; exit 1; }
+echo "MELANIA_LABWC_REAL_PANEL_CRASH_RECOVERY_PASS=true"
+
 python3 - "$socket_path" <<'PY'
 import socket,sys
 with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
