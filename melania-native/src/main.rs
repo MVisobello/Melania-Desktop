@@ -233,7 +233,7 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                 // changes during the snapshot. It never modesets or claims
                 // a display. Mirrors/shared CRTCs fail closed until explicit
                 // per-output KMS ownership is implemented.
-                let stable_output_routes=match
+                let active_output_plan=match
                     melania_native::native_output_topology::inspect_stable_active_outputs(
                         device.device_fd()
                     ) {
@@ -245,18 +245,24 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                                      route.connector,route.crtc,route.original_fb,
                                      route.width,route.height);
                         }
-                        true
+                        match melania_native::native_output_probe_plan::plan_active_output_probes(&topology) {
+                            Ok(probes)=>Some(probes),
+                            Err(error)=>{
+                                eprintln!("MELANIA_NATIVE_ACTIVE_DRM_PROBE_PLAN_REFUSED: {error}");
+                                None
+                            },
+                        }
                     },
                     Err(error)=>{
                         eprintln!("MELANIA_NATIVE_ACTIVE_DRM_ROUTE_UNVERIFIED: {error}");
-                        false
+                        None
                     },
                 };
-                // An offscreen buffer advertised as "output sized" must
-                // correspond to a verifiable active route. A disconnected
-                // or changing physical monitor is not a valid target.
-                if output_sized && !stable_output_routes {
-                    eprintln!("Melania native output-sized probe refused unstable physical DRM topology");
+                // Output-sized allocation must cover EVERY active CRTC
+                // independently, using the actual kernel scanout dimensions,
+                // or none of them count as a successful multi-output probe.
+                if output_sized && active_output_plan.is_none() {
+                    eprintln!("Melania native output-sized probe refused unstable or unrenderable physical DRM topology");
                     continue;
                 }
                 // Inspect only: never call set_crtc, reset_state or surface
@@ -353,18 +359,27 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                     // In output-sized mode, use a connected EDID candidate;
                     // no hard-coded fallback resolution may mask a GPU error.
                     let rendered=if output_sized {
-                        match probe_mode {
-                            Some(mode)=>{
-                                let result=melania_native::renderer::smoke_render_gbm_output_buffers(
-                                    device.device_fd().clone(),mode.width,mode.height,2
-                                );
-                                if result.is_ok() {
-                                    println!("MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED={}x{}x2",mode.width,mode.height);
-                                }
-                                result
-                            },
-                            None=>Err("No connected monitor mode fits the GPU memory budget".into()),
+                        // The EDID recommendation above is diagnostic only.
+                        // Render and synchronize two real GBM/GLES frames for
+                        // every connector's active kernel mode. A partial
+                        // success cannot claim full physical GPU coverage.
+                        let plan=active_output_plan.as_ref()
+                            .expect("output-sized DRM route plan validated above");
+                        let all:Result<(),String>=plan.iter().try_for_each(|probe|{
+                            melania_native::renderer::smoke_render_gbm_output_buffers(
+                                device.device_fd().clone(),probe.width,probe.height,2
+                            )?;
+                            println!("MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED={}x{}x2",
+                                     probe.width,probe.height);
+                            println!("MELANIA_NATIVE_GBM_ACTIVE_CRTC_PROBED={:?}",
+                                     probe.crtc);
+                            Ok(())
+                        });
+                        if all.is_ok() {
+                            println!("MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED={}",
+                                     plan.len());
                         }
+                        all
                     } else {
                         melania_native::renderer::smoke_render_gbm_offscreen(
                             device.device_fd().clone()
