@@ -190,7 +190,7 @@ fn main()->Result<()> {
     std::io::stdout().flush()?;
     draw(&popup_surface,&shm,&mut queue,&mut state,POP_W,POP_H,(245,180,50),2)?;
     // Keep popup mapped while the host captures the genuine GPU scanout.
-    thread::sleep(Duration::from_secs(6));
+    thread::sleep(Duration::from_secs(10));
     popup.destroy();
     popup_xdg.destroy();
     popup_surface.destroy();
@@ -199,7 +199,7 @@ fn main()->Result<()> {
     std::io::stdout().flush()?;
     // The compositor sends a separate compositor-only KMS frame to clear
     // popup pixels. Keep the root mapped through that real framebuffer ACK.
-    thread::sleep(Duration::from_secs(7));
+    thread::sleep(Duration::from_secs(10));
     root_top.destroy();
     root_xdg.destroy();
     root.destroy();
