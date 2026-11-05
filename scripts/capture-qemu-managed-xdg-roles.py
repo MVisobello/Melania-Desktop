@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify actual QEMU framebuffer pixels at four *real* xdg role transitions.
+"""Verify actual QEMU framebuffer pixels at six *real* xdg role transitions.
 
 This is a host-side QMP reader, not a mock visual preview. Each frame must
 be captured during the corresponding Rust KMS FB_ID-acknowledged hold.
@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 W, H = 1280, 800
-FRAMES = (3, 5, 7, 9)
+FRAMES = (3, 5, 7, 9, 13, 14)
 EXIT_MARKER = "MELANIA_QEMU_NATIVE_GUEST_EXIT="
 MARKER = "MELANIA_RUST_CONTINUOUS_MANAGED_ROLE_FRAME_VISIBLE={}"
 
@@ -39,8 +39,21 @@ def expected_samples(frame: int) -> dict[str, tuple[tuple[int, int], tuple[int, 
     # A starts at (160,120) with 360x224; fullscreen and maximized
     # A fill 1280x800, while B remains in front at (650,190), 360x224.
     # B is intentionally not redrawn during the role transition of A.
-    samples = {"B_retained_on_top": ((700, 250), second)}
-    if frame in (3, 7):
+    # Frames 13 and 14 have NO new Wayland image: they must reuse A11/B12
+    # while the IPC shell hides and restores A's retained buffer.
+    samples = {"B_retained_on_top": ((700, 250), client_color(12) if frame>=13 else second)}
+    if frame in (13, 14):
+        a_color = client_color(11) if frame==14 else background
+        samples.update({
+            "A_retained_or_hidden": ((200, 200), a_color),
+            "A_rightmost_or_hidden": ((479, 200), a_color),
+            "A_bottommost_or_hidden": ((200, 343), a_color),
+            "A_outside_right": ((520, 200), background),
+            "A_outside_bottom": ((200, 344), background),
+            "B_retained_last_buffer": ((1000, 250), client_color(12)),
+            "outside_both": ((40, 40), background),
+        })
+    elif frame in (3, 7):
         samples.update({
             "A_maximized_top_left": ((40, 40), foreground),
             "A_maximized_far_right": ((1250, 50), foreground),
@@ -145,6 +158,7 @@ def main() -> int:
             raise RuntimeError(f"managed xdg frame {frame} pixels failed: {error}")
 
     print("MELANIA_QEMU_MANAGED_XDG_FOUR_FRAMES_VERIFIED=true", flush=True)
+    print("MELANIA_QEMU_MANAGED_XDG_SIX_FRAMES_VERIFIED=true", flush=True)
     return 0
 
 
