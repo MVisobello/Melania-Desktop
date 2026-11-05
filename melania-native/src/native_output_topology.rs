@@ -10,7 +10,7 @@
 //! before KMS presents the first framebuffer.
 
 use drm::control::{
-    self, connector, crtc, framebuffer, Device as ControlDevice,
+    connector, crtc, framebuffer, Device as ControlDevice,
 };
 
 pub const MAX_ACTIVE_DRM_OUTPUTS:usize=8;
@@ -136,6 +136,7 @@ pub fn inspect_stable_active_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use drm::control;
     fn route(conn:u32,scanout:u32,fb:u32,w:u16,hgt:u16)->ActiveOutputRoute {
         ActiveOutputRoute {
             connector:control::from_u32(conn).unwrap(),
