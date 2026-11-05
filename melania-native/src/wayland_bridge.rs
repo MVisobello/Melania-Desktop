@@ -8,9 +8,10 @@
 //! roundtrips without claiming these clients are displayed.
 use std::{
     error::Error,
+    fs,
     io::{Read,Write},
-    os::unix::net::{UnixDatagram,UnixListener,UnixStream},
-    path::Path,
+    os::unix::{fs::PermissionsExt,net::{UnixDatagram,UnixListener,UnixStream}},
+    path::{Path,PathBuf},
     sync::Arc,
     time::{Duration,Instant},
 };
@@ -42,7 +43,7 @@ use smithay::{
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
             ClientDndGrabHandler,ServerDndGrabHandler}},
         output::{OutputHandler,OutputManagerState},
-        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState},
+        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer,
                            Anchor as WlrAnchor,LayerSurfaceCachedState}},
@@ -57,9 +58,15 @@ use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
 use smithay::reexports::rustix::fs::OFlags;
 use std::os::fd::OwnedFd;
-use melania_control::{start_toggle_socket_path,SOCKET_ENV};
+use melania_control::{start_toggle_socket_path,SOCKET_ENV,
+    Command as ControlCommand,WindowInfo,ACK,read_command,respond_list,respond_workspace,respond_error};
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+
+struct NativeControlSocket(PathBuf);
+impl Drop for NativeControlSocket {
+    fn drop(&mut self){let _=fs::remove_file(&self.0);}
+}
 
 #[derive(Default)]
 struct BridgeClientState {
@@ -892,6 +899,99 @@ impl BridgeState {
     }
 }
 
+impl BridgeState {
+    /// The current compositor uses the *same* bounded IPC protocol as
+    /// Melania Panel, without adding a QEMU-specific command syntax.
+    fn control_command(&mut self,command:ControlCommand)->String {
+        match command {
+            ControlCommand::List=>{
+                let windows=self.managed_windows.iter().filter_map(|(surface,model)|{
+                    let id=self.known_window_surfaces.id_of(surface)?;
+                    let (title,app_id)=with_states(surface,|states|{
+                        states.data_map.get::<XdgToplevelSurfaceData>()
+                            .map(|data|{
+                                let data=data.lock().unwrap();
+                                (data.title.clone(),data.app_id.clone())
+                            }).unwrap_or((None,None))
+                    });
+                    Some(WindowInfo{
+                        id,
+                        title:title.filter(|text|!text.is_empty())
+                            .unwrap_or_else(||format!("Finestra {id}"))
+                            .chars().take(96).collect(),
+                        app_id:app_id.filter(|text|!text.is_empty())
+                            .unwrap_or_else(||"applicazione-wayland".into())
+                            .chars().take(96).collect(),
+                        active:self.focused.as_ref()==Some(surface),
+                        minimized:model.state()==WindowDisplayState::Minimized,
+                    })
+                }).collect::<Vec<_>>();
+                respond_list(&windows)
+            },
+            ControlCommand::Status=>respond_workspace(1),
+            ControlCommand::Activate(id)=>{
+                let Some(surface)=self.known_window_surfaces.get(id).cloned() else {
+                    return respond_error("Finestra non trovata");
+                };
+                let Some((_,model))=self.managed_windows.iter_mut()
+                    .find(|(role,_)|role==&surface) else {
+                    return respond_error("Ruolo finestra non trovato");
+                };
+                let minimized=model.state()==WindowDisplayState::Minimized;
+                if minimized {model.restore();}
+                let rect=model.geometry();
+                let mut changed=false;
+                if self.dynamic_scene.geometry(id).is_some(){
+                    if minimized {
+                        changed|=self.dynamic_scene.set_visible(id,true).unwrap_or(false);
+                    }
+                    if let Some(rect)=rect {
+                        if self.dynamic_scene.position(id)!=Some((rect.x,rect.y)){
+                            changed|=self.dynamic_scene.move_to(id,rect.x,rect.y).is_ok();
+                        }
+                    }
+                    changed|=self.dynamic_scene.raise(id).unwrap_or(false);
+                }
+                if changed {
+                    self.note_scene_change();
+                    if self.continuous_kms_mode &&
+                       self.continuous_frame_count<self.continuous_frame_target {
+                        if let Err(error)=self.submit_continuous_frame(){
+                            eprintln!("native IPC restore KMS rejected: {error}");
+                        }
+                    }
+                }
+                if let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface){
+                    top.with_pending_state(|pending|{
+                        pending.states.set(xdg_toplevel::State::Activated);
+                        if let Some(rect)=rect{
+                            pending.size=Some((rect.width,rect.height).into());
+                        }
+                    });
+                    top.send_pending_configure();
+                }
+                let keyboard=self.seat.get_keyboard().expect("keyboard");
+                keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+                self.focused=Some(surface);
+                println!("MELANIA_NATIVE_CONTROL_ACTIVATED={id}");
+                ACK.into()
+            },
+            ControlCommand::Minimize(id) | ControlCommand::Close(id)=>{
+                let top=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|self.known_window_surfaces.id_of(top.wl_surface())==Some(id))
+                    .cloned();
+                let Some(top)=top else {return respond_error("Finestra non trovata");};
+                if matches!(command,ControlCommand::Minimize(_)){
+                    <BridgeState as XdgShellHandler>::minimize_request(self,top);
+                } else {top.send_close();}
+                ACK.into()
+            },
+            _=>respond_error("Comando non supportato nel compositore nativo QEMU"),
+        }
+    }
+}
+
 impl BufferHandler for BridgeState {
     fn buffer_destroyed(&mut self,_:&wl_buffer::WlBuffer) {}
 }
@@ -1398,7 +1498,41 @@ impl XdgShellHandler for BridgeState {
     fn unfullscreen_request(&mut self,top:ToplevelSurface) {
         self.request_managed_fullscreen(top,false);
     }
-    fn minimize_request(&mut self,_:ToplevelSurface){}
+    fn minimize_request(&mut self,top:ToplevelSurface){
+        if !self.managed_xdg_mode {return;}
+        let surface=top.wl_surface().clone();
+        let Some((_,model))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface) else {return;};
+        if !model.minimize(){return;}
+        if let Some(key)=self.known_window_surfaces.id_of(&surface){
+            if self.dynamic_scene.geometry(key).is_some() &&
+               self.dynamic_scene.set_visible(key,false)==Ok(true) {
+                self.note_scene_change();
+                if self.continuous_kms_mode &&
+                   self.continuous_frame_count<self.continuous_frame_target {
+                    if let Err(error)=self.submit_continuous_frame(){
+                        eprintln!("managed xdg minimize repaint refused: {error}");
+                    }
+                }
+            }
+        }
+        // A hidden surface must lose keyboard and pointer focus.
+        if self.focused.as_ref()==Some(&surface){
+            self.focused=None;
+            let target=self.pointer_target(self.pointer_position);
+            let replacement=target.as_ref().map(|(next,_)|next.clone());
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,replacement.clone(),SERIAL_COUNTER.next_serial());
+            self.focused=replacement;
+            let pointer=self.seat.get_pointer().expect("pointer");
+            pointer.motion(self,target,&MotionEvent {
+                location:self.pointer_position,
+                serial:SERIAL_COUNTER.next_serial(),time:0,
+            });
+            pointer.frame(self);
+        }
+        println!("MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true");
+    }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
         self.managed_windows.retain(|(role,_)|role!=&surface);
@@ -2191,6 +2325,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_FRAME_STREAM_SOCKET_READY=true");
         Some(listener)
     } else {None};
+    // VM-only user-private control socket. Never advertise a production
+    // display-manager session from this experimental seat bridge.
+    let control_listener=if state.managed_xdg_mode {
+        let runtime=PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")
+            .ok_or("QEMU native control requires XDG_RUNTIME_DIR")?);
+        let meta=fs::symlink_metadata(&runtime)?;
+        if !meta.file_type().is_dir() || meta.permissions().mode()&0o077!=0 {
+            return Err("QEMU native control runtime must be private (0700)".into());
+        }
+        let path=runtime.join(format!("melania-{}-control.sock",std::process::id()));
+        let listener=UnixListener::bind(&path)?;
+        let cleanup=NativeControlSocket(path.clone());
+        fs::set_permissions(&path,fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        println!("MELANIA_NATIVE_CONTROL_SOCKET_READY={}",path.display());
+        Some((listener,cleanup))
+    } else {None};
     let listener=ListeningSocket::bind_auto("melania-native-seat",1..=8)?;
     let socket=listener.socket_name().ok_or("Missing native Wayland socket name")?;
     println!("MELANIA_NATIVE_WAYLAND_SOCKET_READY={}",socket.to_string_lossy());
@@ -2264,6 +2415,26 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
+        // Execute only complete, bounded messages on the isolated socket.
+        // Invalid/incomplete commands are rejected, never partially applied.
+        if let Some((listener,_cleanup))=&control_listener {
+            for _ in 0..8 {
+                match listener.accept(){
+                    Ok((mut client,_))=>{
+                        let _=client.set_read_timeout(Some(Duration::from_millis(40)));
+                        let _=client.set_write_timeout(Some(Duration::from_millis(120)));
+                        let response=match read_command(&mut client){
+                            Ok(Some(command))=>state.control_command(command),
+                            Ok(None)=>respond_error("Comando incompleto o non valido"),
+                            Err(error)=>respond_error(&format!("Lettura IPC: {error}")),
+                        };
+                        let _=client.write_all(response.as_bytes());
+                    },
+                    Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
+                    Err(error)=>{eprintln!("native control accept failed: {error}");break;}
+                }
+            }
+        }
         if state.async_kms_mode && state.async_stream.is_some() {
             state.poll_async_kms()?;
         }
