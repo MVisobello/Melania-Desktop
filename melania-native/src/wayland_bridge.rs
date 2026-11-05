@@ -2366,6 +2366,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     ) {
         return Err("in-process KMS requires matching QEMU frame targets and explicit safeguards".into());
     }
+    // The DRM descriptor must correspond to the actual primary device
+    // discovered by Smithay udev on THIS libseat seat. Never guess card0
+    // or silently choose a GPU when the current compositor has no output
+    // routing for multiple cards.
+    let selected_kms_card=if integrated_kms {
+        Some(state.gpu_watch.single_primary_card()
+            .map_err(|error|format!("QEMU seat DRM selection rejected: {error:?}"))?
+            .to_path_buf())
+    } else {None};
     let mut integrated_thread=None;
     let mut integrated_drm:Option<OwnedSeatCard>=None;
     // Include every fallible initialization in the cleanup boundary. An error
@@ -2381,10 +2390,13 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         // path obtains DRM from the SAME libseat seat as Smithay/libinput.
         // Only a clone of the FD crosses into the DRM thread; the original
         // FD remains registered until the verified rollback/join succeeds.
+        let card_path=selected_kms_card.as_deref()
+            .ok_or("integrated KMS requires a seat-discovered DRM primary device")?;
         let fd=session.open(
-            Path::new("/dev/dri/card0"),
+            card_path,
             OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
         )?;
+        println!("MELANIA_NATIVE_SEAT_DRM_CARD={}",card_path.display());
         integrated_drm=Some(OwnedSeatCard{session:session.clone(),fd:Some(fd)});
         let presenter_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
         let (sender,receiver)=UnixStream::pair()?;
