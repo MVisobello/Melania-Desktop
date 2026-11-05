@@ -145,6 +145,44 @@ done
 rm -f "$gpu_kms_log"
 report 'MELANIA_QEMU_NATIVE_GBM_KMS_TWO_REAL_FRAMES_PASS=true'
 
+# Stage108: twelve REAL GPU-rendered GBM frames on only TWO retained
+# DMA-BUFs / kernel FB_IDs, while the same libseat-owned VirtIO CRTC
+# completes each asynchronous page-flip and restores its original route.
+# This opt-in is forbidden on a host or ordinary login session.
+gbm_reuse_log="$(mktemp -t melania-gbm-reuse-XXXXXX)"
+if ! MELANIA_NATIVE_VM_GBM_KMS=YES_DISPOSABLE_QEMU \
+  MELANIA_NATIVE_VM_GBM_REUSE=YES_DISPOSABLE_QEMU \
+  timeout --signal=TERM --kill-after=3s 65s \
+  "$binary" --experimental-gbm-kms-scanout < /dev/tty1 \
+  > "$gbm_reuse_log" 2>&1; then
+  cat "$gbm_reuse_log"
+  fatal 'native_real_GBM_reused_12_frame_KMS_failed'
+fi
+cat "$gbm_reuse_log"
+for marker in \
+  'MELANIA_NATIVE_GBM_KMS_TOPOLOGY_STABLE_OUTPUTS=1' \
+  'MELANIA_NATIVE_GBM_KMS_REUSED_FRAMEBUFFERS=2' \
+  'MELANIA_NATIVE_GBM_KMS_REUSE_COUNT=10' \
+  'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=12' \
+  'MELANIA_NATIVE_GBM_KMS_FRAME_SLOT=0 frame=11' \
+  'MELANIA_NATIVE_GBM_KMS_FRAME_SLOT=1 frame=12' \
+  'MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK=12' \
+  'MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED=11' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_REUSED_FRAMES_PASS=12' \
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -q "^${marker}$" "$gbm_reuse_log" ||
+    fatal "native_GBM_reuse_missing_${marker}"
+done
+[[ "$(grep -c '^MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=' "$gbm_reuse_log")" -eq 12 ]] ||
+  fatal 'native_GBM_reuse_visible_frame_count_mismatch'
+[[ "$(grep -c '^MELANIA_NATIVE_GBM_KMS_FRAME_SLOT=' "$gbm_reuse_log")" -eq 12 ]] ||
+  fatal 'native_GBM_reuse_kernel_confirmed_slot_count_mismatch'
+rm -f "$gbm_reuse_log"
+report 'MELANIA_QEMU_NATIVE_GBM_KMS_REUSED_12_REAL_FRAMES_PASS=true'
+
 # Verify live old framebuffer metadata and acquired GEM handle lifecycle.
 # This audit opens DRM only INSIDE the disposable QEMU guest and calls
 # drmModeGetFB2 then GEM_CLOSE for each distinct returned GEM handle.
