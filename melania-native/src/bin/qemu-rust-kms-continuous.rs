@@ -320,8 +320,11 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 let kernel_frame=melania_native::native_drm_flip::wait_for_kms_page_flip_routed(
                     &card,crtc_handle,Duration::from_secs(2),&mut event_router,
                 )?;
-                flip_ledger.complete_flip(kernel_frame)
+                flip_ledger.complete_vm_flip(kernel_frame)
                     .map_err(|error|format!("DRM kernel flip event rejected: {error:?}"))?;
+                if flip_ledger.unreliable_vm_counter() {
+                    println!("MELANIA_RUST_KMS_VBLANK_COUNTER_UNRELIABLE_QEMU=true");
+                }
                 println!("MELANIA_RUST_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             // A vblank alone is insufficient: verify the real scanout state.
