@@ -1408,6 +1408,86 @@ rm -f "$persist_gpu_server_log" "$persist_gpu_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_PERSISTENT_GPU_WAYLAND_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage114: genuine Wayland pointer serial -> client-requested TopLeft resize
+# -> new owned wl_shm pixels -> verified GPU/GBM/DRM scanout.
+auth_client=/mnt/melania-native/melania-auth-resize-client
+[[ -x "$auth_client" ]] || fatal 'authenticated_resize_real_client_missing'
+auth_server_log="$(mktemp -t melania-auth-resize-server-XXXXXX)"
+auth_client_log="$(mktemp -t melania-auth-resize-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$auth_server_log" 2>&1 &
+auth_server_pid=$!
+auth_socket=''
+for attempt in $(seq 1 100); do
+  auth_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$auth_server_log" | head -n 1)"
+  [[ -n "$auth_socket" ]] && break
+  kill -0 "$auth_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$auth_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$auth_server_log"; then
+  cat "$auth_server_log"
+  kill -TERM "$auth_server_pid" 2>/dev/null || true
+  fatal 'authenticated_resize_GPU_Wayland_server_not_ready'
+fi
+tail -n +1 -f -s 0.05 "$auth_server_log" > /dev/ttyS0 &
+auth_server_tail_pid=$!
+tail -n +1 -f -s 0.05 "$auth_client_log" > /dev/ttyS0 &
+auth_client_tail_pid=$!
+if ! MELANIA_QEMU_AUTH_RESIZE_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$auth_socket" \
+   timeout --signal=TERM --kill-after=3s 145s \
+   "$auth_client" > "$auth_client_log" 2>&1; then
+  cat "$auth_client_log" "$auth_server_log"
+  kill -TERM "$auth_server_pid" 2>/dev/null || true
+  fatal 'authenticated_resize_real_client_failed'
+fi
+kill -TERM "$auth_server_pid"
+if ! wait "$auth_server_pid"; then
+  cat "$auth_server_log" "$auth_client_log"
+  fatal 'authenticated_resize_GPU_KMS_restore_failed'
+fi
+kill "$auth_server_tail_pid" "$auth_client_tail_pid" 2>/dev/null || true
+wait "$auth_server_tail_pid" "$auth_client_tail_pid" 2>/dev/null || true
+cat "$auth_client_log" "$auth_server_log"
+for index in 1 2; do
+  grep -q "^MELANIA_NATIVE_AUTH_RESIZE_FRAME$index""_ACK=true$" "$auth_client_log" ||
+    fatal "authenticated_resize_client_frame$index""_KMS_callback_missing"
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE=$index$" "$auth_server_log" ||
+    fatal "authenticated_resize_GPU_CRTC_frame$index""_missing"
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index$" "$auth_server_log" ||
+    fatal "authenticated_resize_kernel_frame$index""_missing"
+done
+for marker in \
+  'MELANIA_NATIVE_XDG_CLIENT_RESIZE_GRANTED=1 edge=TopLeft' \
+  'MELANIA_NATIVE_AUTH_RESIZE_REQUEST_SENT=true' \
+  'MELANIA_NATIVE_AUTH_RESIZE_FINAL_CONFIGURE_ACK=true' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$marker" "$auth_server_log" "$auth_client_log" ||
+    fatal "authenticated_resize_missing_$marker"
+done
+grep -Eq '^MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED=[1-9][0-9]*x[1-9][0-9]*$' "$auth_server_log" ||
+  fatal 'authenticated_resize_client_pixels_not_ingested'
+rm -f "$auth_server_log" "$auth_client_log"
+report 'MELANIA_QEMU_AUTHENTICATED_XDG_RESIZE_REAL_KMS_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage105: an actual ONE-PROCESS QEMU DRM/Wayland compositor must remain
 # alive after its 24th real client frame. SIGTERM triggers orderly stream
 # EOF, verified original CRTC/connector rollback and libseat device release.

@@ -27,7 +27,18 @@ impl WindowRect {
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum InteractionKind { Move, ResizeBottomRight }
+pub enum ResizeDirection {
+    Top, Bottom, Left, Right, TopLeft, TopRight, BottomLeft, BottomRight,
+}
+impl ResizeDirection {
+    pub fn left(self)->bool {matches!(self,Self::Left|Self::TopLeft|Self::BottomLeft)}
+    pub fn right(self)->bool {matches!(self,Self::Right|Self::TopRight|Self::BottomRight)}
+    pub fn top(self)->bool {matches!(self,Self::Top|Self::TopLeft|Self::TopRight)}
+    pub fn bottom(self)->bool {matches!(self,Self::Bottom|Self::BottomLeft|Self::BottomRight)}
+}
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum InteractionKind {Move, ResizeBottomRight, Resize(ResizeDirection)}
 
 #[derive(Clone,Copy,Debug,PartialEq)]
 struct Active {
@@ -98,11 +109,30 @@ impl WindowInteraction {
                 rect.x=(rect.x.saturating_add(dx)).clamp(0,self.output_width-rect.width);
                 rect.y=(rect.y.saturating_add(dy)).clamp(0,self.output_height-rect.height);
             },
-            InteractionKind::ResizeBottomRight=>{
-                rect.width=(rect.width.saturating_add(dx))
-                    .clamp(MIN_W,self.output_width-rect.x);
-                rect.height=(rect.height.saturating_add(dy))
-                    .clamp(MIN_H,self.output_height-rect.y);
+            InteractionKind::ResizeBottomRight | InteractionKind::Resize(_) => {
+                let direction=match active.kind {
+                    InteractionKind::Resize(direction)=>direction,
+                    InteractionKind::ResizeBottomRight=>ResizeDirection::BottomRight,
+                    InteractionKind::Move=>unreachable!(),
+                };
+                // Move each selected edge independently, keeping the
+                // opposite edge anchored. Saturate at the output bounds and
+                // never invert the window or shrink below the client minimum.
+                let mut left=active.origin.x;
+                let mut top=active.origin.y;
+                let mut right=active.origin.x+active.origin.width;
+                let mut bottom=active.origin.y+active.origin.height;
+                if direction.left() {
+                    left=left.saturating_add(dx).clamp(0,right-MIN_W);
+                } else if direction.right() {
+                    right=right.saturating_add(dx).clamp(left+MIN_W,self.output_width);
+                }
+                if direction.top() {
+                    top=top.saturating_add(dy).clamp(0,bottom-MIN_H);
+                } else if direction.bottom() {
+                    bottom=bottom.saturating_add(dy).clamp(top+MIN_H,self.output_height);
+                }
+                rect=WindowRect{x:left,y:top,width:right-left,height:bottom-top};
             },
         }
         Some((active.key,rect))
@@ -112,6 +142,13 @@ impl WindowInteraction {
     /// revokes the current grab. A late motion is then ignored.
     pub fn end(&mut self)->Option<u64> { self.active.take().map(|a|a.key) }
     pub fn cancel(&mut self) { self.active=None; }
+    /// Reject stale role changes from other clients without dropping
+    /// the pointer grab currently owned by this window.
+    pub fn cancel_for_key(&mut self,key:u64)->bool {
+        if self.active_key()!=Some(key) {return false;}
+        self.cancel();
+        true
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +182,54 @@ mod tests {
             Some((2,WindowRect{x:650,y:190,width:96,height:72})));
         model.cancel();
         assert_eq!(model.active_key(),None);
+    }
+
+    #[test]
+    fn eight_xdg_edges_keep_opposite_edges_fixed_and_clip_to_output() {
+        let start=rect();
+        for direction in [
+            ResizeDirection::Top,ResizeDirection::Bottom,
+            ResizeDirection::Left,ResizeDirection::Right,
+            ResizeDirection::TopLeft,ResizeDirection::TopRight,
+            ResizeDirection::BottomLeft,ResizeDirection::BottomRight,
+        ] {
+            let mut active=WindowInteraction::default();
+            assert!(active.begin(1,start,200.0,130.0,InteractionKind::Resize(direction)));
+            let (id,next)=active.motion(240.0,170.0).unwrap();
+            assert_eq!(id,1);
+            assert!(next.valid());
+            assert_eq!(next.x,if direction.left(){200}else{160});
+            assert_eq!(next.y,if direction.top(){160}else{120});
+            assert_eq!(next.width,360+if direction.right(){40}else if direction.left(){-40}else{0});
+            assert_eq!(next.height,224+if direction.bottom(){40}else if direction.top(){-40}else{0});
+            assert_eq!(active.end(),Some(1));
+            assert!(active.motion(240.0,170.0).is_none());
+        }
+    }
+
+    #[test]
+    fn left_top_resize_cannot_escape_output_or_invert_window() {
+        let r=WindowRect{x:160,y:120,width:360,height:224};
+        let mut active=WindowInteraction::default();
+        assert!(active.begin(5,r,200.0,160.0,
+                             InteractionKind::Resize(ResizeDirection::TopLeft)));
+        assert_eq!(active.motion(0.0,0.0),
+                   Some((5,WindowRect{x:0,y:0,width:520,height:344})));
+        assert_eq!(active.motion(1279.0,799.0),
+                   Some((5,WindowRect{x:424,y:272,width:96,height:72})));
+    }
+
+    #[test]
+    fn role_transition_cancels_only_matching_grab() {
+        let mut model=WindowInteraction::default();
+        assert!(model.begin(7,rect(),200.0,140.0,
+                            InteractionKind::Resize(ResizeDirection::TopLeft)));
+        assert!(!model.cancel_for_key(8));
+        assert_eq!(model.active_key(),Some(7));
+        assert!(model.cancel_for_key(7));
+        assert_eq!(model.active_key(),None);
+        assert!(model.motion(320.0,260.0).is_none());
+        assert!(!model.cancel_for_key(7));
     }
 
     #[test]

@@ -53,7 +53,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -152,6 +152,8 @@ struct BridgeState {
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
+    // A top/left edge moves only with the matching new client buffer.
+    managed_pending_resize:Vec<(WlSurface,WindowRect)>,
     window_interaction:WindowInteraction,
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
@@ -186,6 +188,21 @@ struct BridgeState {
     delivered_buttons: u32,
     delivered_motions: u32,
     delivered_scroll_frames: u32,
+}
+
+fn xdg_resize_direction(edge:xdg_toplevel::ResizeEdge)->Option<ResizeDirection>{
+    use xdg_toplevel::ResizeEdge as Edge;
+    Some(match edge {
+        Edge::Top=>ResizeDirection::Top,
+        Edge::Bottom=>ResizeDirection::Bottom,
+        Edge::Left=>ResizeDirection::Left,
+        Edge::Right=>ResizeDirection::Right,
+        Edge::TopLeft=>ResizeDirection::TopLeft,
+        Edge::TopRight=>ResizeDirection::TopRight,
+        Edge::BottomLeft=>ResizeDirection::BottomLeft,
+        Edge::BottomRight=>ResizeDirection::BottomRight,
+        _=>return None,
+    })
 }
 
 // A client-provided serial alone is never permission to move another window.
@@ -613,11 +630,30 @@ impl BridgeState {
                     }
                 }
             },
-            Some(InteractionKind::ResizeBottomRight)=>{
-                // A real xdg.configure + client ACK must precede actual
-                // resize/scanout. For now this is a non-destructive preview.
-                println!("MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW={} w={} h={}",
-                         key,rect.width,rect.height);
+            Some(InteractionKind::ResizeBottomRight | InteractionKind::Resize(_))=>{
+                if !self.managed_xdg_mode || !self.dynamic_window_mode {
+                    println!("MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW={} w={} h={}",
+                             key,rect.width,rect.height);
+                    return;
+                }
+                let Some(surface)=self.known_window_surfaces.get(key).cloned() else{return;};
+                let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned() else{return;};
+                if self.managed_pending_resize.iter().any(|(role,pending)|
+                    role==&surface && *pending==rect) {return;}
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+                self.managed_pending_resize.push((surface.clone(),rect));
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_sizes.push((
+                    surface.clone(),(rect.width as usize,rect.height as usize)
+                ));
+                top.with_pending_state(|pending|{
+                    pending.states.set(xdg_toplevel::State::Resizing);
+                    pending.size=Some((rect.width,rect.height).into());
+                });
+                top.send_pending_configure();
+                println!("MELANIA_NATIVE_XDG_RESIZE_CONFIGURE={} x={} y={} w={} h={}",
+                         key,rect.x,rect.y,rect.width,rect.height);
             },
             None=>{},
         }
@@ -853,6 +889,14 @@ impl BridgeState {
 }
 
 impl BridgeState {
+    /// A state change must revoke the grab of its own surface, not one
+    /// belonging to a different Wayland client.
+    fn cancel_surface_grab(&mut self,surface:&WlSurface) {
+        if let Some(key)=self.known_window_surfaces.id_of(surface) {
+            self.window_interaction.cancel_for_key(key);
+        }
+    }
+
     /// Apply actual xdg_toplevel requests to the QEMU compositor state and
     /// configure the client. A new client commit is still required for the
     /// maximized-sized wl_shm content to become visible at its full size.
@@ -875,7 +919,9 @@ impl BridgeState {
             } else {false}
         };
         let rectangle=window.geometry();
+        if changed { self.cancel_surface_grab(&surface); }
         top.with_pending_state(|pending| {
+            pending.states.unset(xdg_toplevel::State::Resizing);
             if enabled {
                 pending.states.set(xdg_toplevel::State::Maximized);
                 pending.states.unset(xdg_toplevel::State::Fullscreen);
@@ -890,6 +936,7 @@ impl BridgeState {
                 // The configure is only a request. A previous wl_shm image
                 // must NOT be moved or submitted to KMS before the matching
                 // client buffer has been committed and validated.
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.push((
                     surface.clone(),(rect.width as usize,rect.height as usize)
@@ -919,7 +966,9 @@ impl BridgeState {
             } else {false}
         };
         let rectangle=window.geometry();
+        if changed { self.cancel_surface_grab(&surface); }
         top.with_pending_state(|pending| {
+            pending.states.unset(xdg_toplevel::State::Resizing);
             if enabled {
                 pending.states.set(xdg_toplevel::State::Fullscreen);
                 pending.states.unset(xdg_toplevel::State::Maximized);
@@ -936,6 +985,7 @@ impl BridgeState {
                 // The configure is only a request. A previous wl_shm image
                 // must NOT be moved or submitted to KMS before the matching
                 // client buffer has been committed and validated.
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.push((
                     surface.clone(),(rect.width as usize,rect.height as usize)
@@ -1239,9 +1289,15 @@ impl CompositorHandler for BridgeState {
                     }
                     // Keep the current position across later wl_shm commits.
                     let (x,y)=if self.managed_xdg_mode {
-                        self.managed_windows.iter().find(|(role,_)|role==surface)
-                            .and_then(|(_,window)|window.geometry())
-                            .map(|rect|(rect.x,rect.y))
+                        // The top/left edge moves with the exact matching
+                        // resized wl_shm commit, not when XDG configure is sent.
+                        self.managed_pending_resize.iter()
+                            .find(|(role,_)|role==surface)
+                            .map(|(_,rect)|(rect.x,rect.y))
+                            .or_else(||self.managed_windows.iter()
+                                .find(|(role,_)|role==surface)
+                                .and_then(|(_,window)|window.geometry())
+                                .map(|rect|(rect.x,rect.y)))
                             .unwrap_or(default_pos)
                     } else {
                         self.dynamic_scene.position(key).unwrap_or(default_pos)
@@ -1261,6 +1317,7 @@ impl CompositorHandler for BridgeState {
                             window.update_normal_geometry(WindowRect{x,y,width,height});
                         }
                         self.managed_pending_sizes.retain(|(role,_)|role!=surface);
+                        self.managed_pending_resize.retain(|(role,_)|role!=surface);
                         println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
                     }
                 } else {
@@ -1530,13 +1587,13 @@ impl XdgShellHandler for BridgeState {
     fn new_popup(&mut self,popup:PopupSurface,_:PositionerState) {
         let _=popup.send_configure();
     }
-    fn move_request(&mut self,top:ToplevelSurface,_:wl_seat::WlSeat,serial:Serial){
+    fn move_request(&mut self,top:ToplevelSurface,seat:wl_seat::WlSeat,serial:Serial){
         // Stage113: accept only a real left-button serial issued to this
         // exact focused xdg_toplevel while the libseat KMS epoch is active.
         // This shares the actual pointer-motion -> scene -> KMS ACK path;
         // it does not create a synthetic move or change window decorations.
         if !self.managed_xdg_mode || !self.dynamic_window_mode ||
-           !self.lifecycle.seat_active() ||
+           !self.seat.owns(&seat) || !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() {
             return;
         }
@@ -1555,8 +1612,34 @@ impl XdgShellHandler for BridgeState {
             println!("MELANIA_NATIVE_XDG_CLIENT_MOVE_GRANTED={key}");
         }
     }
-    fn resize_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,
-                      _:Serial,_:xdg_toplevel::ResizeEdge){}
+    fn resize_request(&mut self,top:ToplevelSurface,seat:wl_seat::WlSeat,
+                      serial:Serial,edge:xdg_toplevel::ResizeEdge){
+        let Some(direction)=xdg_resize_direction(edge) else{return;};
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.multi_window_mode || !self.seat.owns(&seat) ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {
+            return;
+        }
+        let surface=top.wl_surface();
+        if self.focused.as_ref()!=Some(surface) ||
+           !take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial) {
+            return;
+        }
+        if !self.managed_windows.iter().any(|(role,window)|
+            role==surface && window.state()==WindowDisplayState::Normal) {
+            return;
+        }
+        let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
+        let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
+        let rect=WindowRect{x,y,width:width as i32,height:height as i32};
+        if self.window_interaction.begin(
+            key,rect,self.pointer_position.x,self.pointer_position.y,
+            InteractionKind::Resize(direction),
+        ) {
+            println!("MELANIA_NATIVE_XDG_CLIENT_RESIZE_GRANTED={key} edge={direction:?}");
+        }
+    }
     fn maximize_request(&mut self,top:ToplevelSurface) {
         self.request_managed_maximize(top,true);
     }
@@ -1575,6 +1658,9 @@ impl XdgShellHandler for BridgeState {
         let Some((_,model))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {return;};
         if !model.minimize(){return;}
+        self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+        self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+        self.window_interaction.cancel();
         if let Some(key)=self.known_window_surfaces.id_of(&surface){
             if self.dynamic_scene.geometry(key).is_some() &&
                self.dynamic_scene.set_visible(key,false)==Ok(true) {
@@ -1611,6 +1697,7 @@ impl XdgShellHandler for BridgeState {
         }
         self.managed_windows.retain(|(role,_)|role!=&surface);
         self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+        self.managed_pending_resize.retain(|(role,_)|role!=&surface);
         if self.dynamic_xdg_resize_mode {
             self.dynamic_toplevels.retain(|existing|existing.wl_surface()!=&surface);
         }
@@ -2000,7 +2087,8 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                                     let right=f64::from(x)+f64::from(width);
                                     let bottom=f64::from(y)+f64::from(height);
                                     let kind=if point.x>=right-16.0 &&
-                                                point.y>=bottom-16.0 {
+                                                point.y>=bottom-16.0 &&
+                                                !(state.managed_xdg_mode && state.dynamic_window_mode) {
                                         Some(InteractionKind::ResizeBottomRight)
                                     } else if point.y>=f64::from(y) &&
                                               point.y<f64::from(y+26) &&
@@ -2054,7 +2142,22 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             pointer.frame(state);
             if state.multi_window_mode && event.button_code()==0x110 &&
                event.state()==ButtonState::Released {
+                let was_resize=matches!(state.window_interaction.active_kind(),
+                    Some(InteractionKind::ResizeBottomRight | InteractionKind::Resize(_)));
                 if let Some(id)=state.window_interaction.end() {
+                    if was_resize && state.managed_xdg_mode {
+                        if let Some(surface)=state.known_window_surfaces.get(id) {
+                            if let Some(top)=state.xdg_shell.toplevel_surfaces().iter()
+                                .find(|top|top.wl_surface()==surface) {
+                                // XDG requires a final configure with the
+                                // Resizing state cleared after button release.
+                                top.with_pending_state(|pending|{
+                                    pending.states.unset(xdg_toplevel::State::Resizing);
+                                });
+                                top.send_pending_configure();
+                            }
+                        }
+                    }
                     println!("MELANIA_NATIVE_WINDOW_INTERACTION_END={id}");
                 }
             }
@@ -2207,6 +2310,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
         managed_pending_sizes:Vec::new(),
+        managed_pending_resize:Vec::new(),
         window_interaction:WindowInteraction::default(),
         last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
