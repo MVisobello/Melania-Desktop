@@ -20,6 +20,11 @@ class NativeXdgMoveGrant113(unittest.TestCase):
             "serial:button_serial,time:event.time_msec()",
         ):
             self.assertIn(piece,button)
+        self.assertLess(button.index("pointer.motion(state,target.clone()"),
+                        button.index("let button_serial=SERIAL_COUNTER.next_serial()"))
+        self.assertLess(button.index("let button_serial=SERIAL_COUNTER.next_serial()"),
+                        button.index("pointer.button(state,&ButtonEvent{"))
+        self.assertIn("!(state.managed_xdg_mode && state.dynamic_window_mode)",button)
         # wl_pointer.motion has its own serial; only the actual button
         # event must reuse the move-authorization serial.
         button_event=button[button.index("pointer.button(state,&ButtonEvent{"):]
