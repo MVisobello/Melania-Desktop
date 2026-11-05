@@ -1,7 +1,8 @@
 //! A REAL Wayland protocol client used only inside the disposable QEMU guest.
 //! It creates an xdg_toplevel and wlr-layer-shell panel, receives configure
 //! events, and acknowledges both. No window buffers or frame are displayed.
-use std::{error::Error,io::Write};
+use std::{error::Error,io::{Read,Write},net::Shutdown,
+    os::unix::net::UnixStream,time::Duration};
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface},
@@ -98,6 +99,18 @@ impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1,()> for Probe {
     fn event(state:&mut Self,_:&zwlr_layer_shell_v1::ZwlrLayerShellV1,
              _:zwlr_layer_shell_v1::Event,_:&(),_:&Connection,_:&QueueHandle<Self>){}
 }
+// Same user-only bounded socket protocol used by Melania Panel.
+fn control_request(path:&str,command:&str)->Result<String,Box<dyn Error>>{
+    let mut stream=UnixStream::connect(path)?;
+    stream.set_read_timeout(Some(Duration::from_millis(400)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(400)))?;
+    stream.write_all(command.as_bytes())?;
+    stream.shutdown(Shutdown::Write)?;
+    let mut reply=String::new();
+    stream.take(4096).read_to_string(&mut reply)?;
+    Ok(reply)
+}
+
 fn expect_managed_role(
     events:&mut wayland_client::EventQueue<Probe>,
     state:&mut Probe,
@@ -179,6 +192,24 @@ fn main()->Result<(),Box<dyn Error>> {
         expect_managed_role(&mut events,&mut state,(360,224),
             None,Some(xdg_toplevel::State::Fullscreen))?;
         window_surface.commit();
+        top.set_minimized();
+        events.roundtrip(&mut state)?;
+        println!("MELANIA_NATIVE_XDG_MINIMIZE_REQUEST_SENT=true");
+        let path=std::env::var("MELANIA_CONTROL_SOCKET")
+            .map_err(|_|"managed QEMU role probe missing control socket")?;
+        let before=control_request(&path,"LIST\n")?;
+        if !before.lines().any(|line|line.starts_with("WINDOW\t1\t0\t1\t")) {
+            return Err("native IPC failed to list a minimized real xdg role".into());
+        }
+        if control_request(&path,"ACTIVATE 1\n")?!="OK\nEND\n" {
+            return Err("native IPC rejected taskbar restore command".into());
+        }
+        events.roundtrip(&mut state)?;
+        let after=control_request(&path,"LIST\n")?;
+        if !after.lines().any(|line|line.starts_with("WINDOW\t1\t1\t0\t")) {
+            return Err("native IPC did not restore an active real Wayland role".into());
+        }
+        println!("MELANIA_NATIVE_CONTROL_RESTORE_PASS=true");
         println!("MELANIA_NATIVE_XDG_ROLE_ROUNDTRIP_PASS=true");
     }
     println!("MELANIA_NATIVE_XDG_CONFIGURE_ACK=true");

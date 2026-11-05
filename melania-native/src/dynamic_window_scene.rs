@@ -77,6 +77,8 @@ struct Window {
     y:i32,
     layer:Layer,
     image:WindowPixels,
+    /// A minimized client retains its owned buffer but does not paint or receive input.
+    visible:bool,
 }
 
 #[derive(Debug)]
@@ -174,7 +176,7 @@ impl DynamicWindowScene {
         }
         let old_rect=previous.map(|n|{
             let previous=&self.windows[n];
-            (previous.x,previous.y,previous.image.width,previous.image.height)
+            (previous.x,previous.y,previous.image.width,previous.image.height,previous.visible)
         });
         let new_rect=(x,y,image.width,image.height);
         self.used_bytes=next;
@@ -185,14 +187,36 @@ impl DynamicWindowScene {
             existing.layer=layer;
             existing.image=image;
         } else {
-            self.windows.push(Window {key,x,y,layer,image});
+            self.windows.push(Window {key,x,y,layer,image,visible:true});
         }
-        if let Some((ox,oy,ow,oh))=old_rect {
+        if let Some((ox,oy,ow,oh,true))=old_rect {
             self.damage.invalidate(ox,oy,ow,oh);
         }
-        self.damage.invalidate(new_rect.0,new_rect.1,new_rect.2,new_rect.3);
+        // A hidden client's new wl_shm buffer must remain invisible until
+        // the shell explicitly restores it. Keep ownership/accounting.
+        if self.is_visible(key)==Some(true) {
+            self.damage.invalidate(new_rect.0,new_rect.1,new_rect.2,new_rect.3);
+        }
         self.dirty();
         Ok(())
+    }
+
+    /// Change visibility without dropping the compositor-owned wl_shm copy.
+    /// Damage the full rectangle on both minimize and restore so that the
+    /// next confirmed KMS frame removes or repaints all affected pixels.
+    pub fn set_visible(&mut self,key:u64,visible:bool)
+        ->Result<bool,DynamicSceneError>
+    {
+        let window=self.windows.iter_mut().find(|w|w.key==key)
+            .ok_or(DynamicSceneError::UnknownWindow)?;
+        if window.visible==visible {return Ok(false);}
+        window.visible=visible;
+        self.damage.invalidate(window.x,window.y,window.image.width,window.image.height);
+        self.dirty();
+        Ok(true)
+    }
+    pub fn is_visible(&self,key:u64)->Option<bool>{
+        self.windows.iter().find(|w|w.key==key).map(|w|w.visible)
     }
 
     pub fn move_to(&mut self,key:u64,x:i32,y:i32)
@@ -204,7 +228,7 @@ impl DynamicWindowScene {
             let old=(window.x,window.y,window.image.width,window.image.height);
             let new=(x,y,window.image.width,window.image.height);
             window.x=x;window.y=y;
-            self.damage.window_moved(old,new);
+            if window.visible {self.damage.window_moved(old,new);}
             self.dirty();
         }
         Ok(())
@@ -215,7 +239,9 @@ impl DynamicWindowScene {
             .ok_or(DynamicSceneError::UnknownWindow)?;
         if n+1==self.windows.len() {return Ok(false);}
         let entry=self.windows.remove(n);
-        self.damage.invalidate(entry.x,entry.y,entry.image.width,entry.image.height);
+        if entry.visible {
+            self.damage.invalidate(entry.x,entry.y,entry.image.width,entry.image.height);
+        }
         self.windows.push(entry);
         self.dirty();
         Ok(true)
@@ -227,7 +253,9 @@ impl DynamicWindowScene {
         };
         let removed=self.windows.remove(n);
         self.used_bytes-=removed.image.bytes();
-        self.damage.invalidate(removed.x,removed.y,removed.image.width,removed.image.height);
+        if removed.visible {
+            self.damage.invalidate(removed.x,removed.y,removed.image.width,removed.image.height);
+        }
         self.dirty();
         true
     }
@@ -250,7 +278,7 @@ impl DynamicWindowScene {
         // order within the same layer. Do not allow a normal toplevel to
         // steal a panel's pointer hit merely because it committed later.
         let mut target:Option<&Window>=None;
-        for window in &self.windows {
+        for window in self.windows.iter().filter(|w|w.visible) {
             let left=f64::from(window.x);
             let top=f64::from(window.y);
             if x>=left && y>=top &&
@@ -277,7 +305,7 @@ impl DynamicWindowScene {
             frame.copy_from_slice(&self.composite()?);
             return Ok(());
         }
-        let surfaces=self.windows.iter().map(|w|Surface {
+        let surfaces=self.windows.iter().filter(|w|w.visible).map(|w|Surface {
             x:w.x,y:w.y,width:w.image.width,height:w.image.height,
             layer:w.layer,
             pixels:match w.image.alpha {
@@ -299,7 +327,7 @@ impl DynamicWindowScene {
     /// per-window alpha uses the Wayland premultiplied semantics, without
     /// altering the live fixed-size QEMU compositor or grabbing DRM master.
     pub fn composite(&self)->Result<Vec<u8>,DynamicSceneError> {
-        let surfaces=self.windows.iter().map(|w| {
+        let surfaces=self.windows.iter().filter(|w|w.visible).map(|w| {
             Surface {
                 x:w.x,y:w.y,
                 width:w.image.width,height:w.image.height,
@@ -332,6 +360,39 @@ mod tests {
     fn px(frame:&[u8],width:usize,x:usize,y:usize)->[u8;3] {
         let n=(y*width+x)*4;
         [frame[n],frame[n+1],frame[n+2]]
+    }
+
+
+    #[test]
+    fn minimized_layered_window_retains_pixels_but_never_captures_pointer() {
+        let mut scene=DynamicWindowScene::new(120,80,[1,2,3,0]).unwrap();
+        scene.upsert_in_layer(1,10,10,Layer::Normal,
+            solid(28,28,[70,80,90,0],DynamicAlpha::Opaque)).unwrap();
+        scene.upsert_in_layer(2,18,18,Layer::Top,
+            solid(22,22,[20,30,40,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(scene.hit_test(20.0,20.0),Some(2));
+        assert_eq!(px(&scene.composite().unwrap(),120,21,21),[20,30,40]);
+        let bytes=scene.used_bytes();
+        let before=scene.generation();
+        assert_eq!(scene.set_visible(2,false),Ok(true));
+        assert_eq!(scene.is_visible(2),Some(false));
+        assert!(scene.generation()>before);
+        assert_eq!(scene.hit_test(20.0,20.0),Some(1));
+        assert_eq!(px(&scene.composite().unwrap(),120,21,21),[70,80,90]);
+        assert_eq!(scene.used_bytes(),bytes);
+        assert_eq!(scene.set_visible(2,false),Ok(false));
+        assert!(scene.confirm_presented_damage(scene.generation()));
+        scene.upsert_in_layer(2,18,18,Layer::Top,
+            solid(22,22,[80,90,100,0],DynamicAlpha::Opaque)).unwrap();
+        assert_eq!(scene.is_visible(2),Some(false));
+        assert_eq!(scene.hit_test(20.0,20.0),Some(1));
+        let mut composed=scene.composite().unwrap();
+        scene.composite_damaged_into(&mut composed).unwrap();
+        assert_eq!(px(&composed,120,21,21),[70,80,90]);
+        assert_eq!(scene.set_visible(2,true),Ok(true));
+        assert_eq!(scene.hit_test(20.0,20.0),Some(2));
+        assert_eq!(px(&scene.composite().unwrap(),120,21,21),[80,90,100]);
+        assert_eq!(scene.set_visible(999,false),Err(DynamicSceneError::UnknownWindow));
     }
 
     #[test]
