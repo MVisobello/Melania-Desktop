@@ -303,6 +303,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             )? {
                 return Err("QEMU continuous KMS scanout lost connector/CRTC route".into());
             }
+            if index>0 {
+                println!("MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED={}",
+                         flip_ledger.completed_count());
+            }
             println!("MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED={}",index+1);
             println!("MELANIA_RUST_CONTINUOUS_FRAME_VISIBLE={}",index+1);
             if real_gtk_panel && index==0 {
