@@ -194,6 +194,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         card:&card,original,connector:connected[0],submitted:false,restored:false
     };
     let mut previous:Option<Vec<u8>>=None;
+    let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
 
     // Stage84 allows one real GTK image only with the explicit VM opt-in.
     // All historical tests retain the stricter 8..=64-frame count.
@@ -266,6 +267,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 // transient; retry only this error, with a strict deadline.
                 // Other DRM errors fail immediately and no frame is ACKed
                 // until wait_for_fb verifies the actual CRTC framebuffer.
+                flip_ledger.begin_flip()
+                    .map_err(|error|format!("DRM flip already pending or revoked: {error:?}"))?;
                 let flip_deadline=Instant::now()+Duration::from_secs(2);
                 loop {
                     match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::EVENT,None) {
@@ -283,9 +286,11 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // before any framebuffer or Wayland callback is acknowledged.
             // This fails closed (no polling-only success) on kernel timeout.
             if index>0 {
-                melania_native::native_drm_flip::wait_for_kms_page_flip(
+                let kernel_frame=melania_native::native_drm_flip::wait_for_kms_page_flip(
                     &card,crtc_handle,Duration::from_secs(2),
                 )?;
+                flip_ledger.complete_flip(kernel_frame)
+                    .map_err(|error|format!("DRM kernel flip event rejected: {error:?}"))?;
                 println!("MELANIA_RUST_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             // A vblank alone is insufficient: verify the real scanout state.
