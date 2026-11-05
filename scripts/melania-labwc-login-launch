@@ -6,7 +6,7 @@
 set -euo pipefail
 fail() { echo "MELANIA_LOGIN_BLOCKED: $*" >&2; exit 78; }
 [[ "$(id -u)" -ne 0 ]] || fail "cannot launch a graphical login as root"
-config_base="\${XDG_CONFIG_HOME:-$HOME/.config}"
+config_base="${XDG_CONFIG_HOME:-$HOME/.config}"
 [[ "$config_base" == /* && "$HOME" == /* ]] ||
   fail "XDG_CONFIG_HOME and HOME must be absolute"
 [[ ! -L "$config_base" && ! -L "$config_base/melania" ]] ||
@@ -19,10 +19,10 @@ root_file="$config_base/melania/labwc-login-root"
 mode="$(stat -c %a "$root_file")"
 (( (8#$mode & 8#77) == 0 )) || fail "registration file is not private"
 mapfile -t lines < "$root_file"
-[[ "\${#lines[@]}" -eq 2 &&
-   "\${lines[0]}" == "MELANIA_LABWC_USER_ROOT_V1" &&
-   "\${lines[1]}" == /* ]] || fail "invalid registration data"
-root="\${lines[1]}"
+[[ "${#lines[@]}" -eq 2 &&
+   "${lines[0]}" == "MELANIA_LABWC_USER_ROOT_V1" &&
+   "${lines[1]}" == /* ]] || fail "invalid registration data"
+root="${lines[1]}"
 [[ -d "$root" && ! -L "$root" &&
    -f "$root/scripts/melania-labwc-session" &&
    ! -L "$root/scripts/melania-labwc-session" ]] ||
