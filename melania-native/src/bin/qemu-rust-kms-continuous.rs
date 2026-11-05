@@ -159,7 +159,19 @@ pub(crate) fn run_embedded(stream:UnixStream,card:File)->Result<(),Box<dyn Error
 }
 
 fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
-    stream.set_read_timeout(Some(Duration::from_secs(12)))?;
+    // The persistent Smithay owner is damage-driven. A compositor that is
+    // idle for 12 seconds is still healthy: only a clean transport EOF from
+    // signal shutdown may terminate this receiver. The finite QEMU legacy
+    // probes continue to fail closed on a stalled frame source.
+    let idle_persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+        .as_deref()==Ok("YES_DISPOSABLE_QEMU") &&
+        std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    stream.set_read_timeout(if idle_persistent {
+        None
+    } else {
+        Some(Duration::from_secs(12))
+    })?;
     stream.set_write_timeout(Some(Duration::from_secs(7)))?;
     println!("MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true");
 

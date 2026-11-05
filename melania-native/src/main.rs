@@ -385,7 +385,15 @@ fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
     // The native GPU/KMS probe must finish (and restore the CRTC)
     // before the original libseat device is released.
     let cloned=fd.try_clone()?;
-    let outcome=melania_native::native_gbm_scanout::qemu_two_gpu_frames(cloned);
+    // This separate opt-in exercises twenty-four real GPU/KMS presentations
+    // without enabling native host login or altering the two-frame smoke.
+    let stress=env::var("MELANIA_NATIVE_VM_GBM_STRESS").ok();
+    let outcome=match stress.as_deref() {
+        None=>melania_native::native_gbm_scanout::qemu_two_gpu_frames(cloned),
+        Some("YES_DISPOSABLE_QEMU")=>
+            melania_native::native_gbm_scanout::qemu_stress_gpu_frames(cloned,24),
+        Some(_)=>Err("invalid QEMU GBM stress opt-in".into()),
+    };
     let released=session.close(fd);
     drop(notifier);
     println!("MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED={}",released.is_ok());

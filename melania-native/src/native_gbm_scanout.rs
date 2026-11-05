@@ -80,12 +80,30 @@ fn wait_for_scanout(
     Err("QEMU GPU-produced DMA-BUF was never observed on actual CRTC".into())
 }
 
-/// Performs two synchronized GLES clears in full-size GBM DMA-BUFs and
-/// displays them through REAL DRM set_crtc/page_flip kernel ioctls.
-///
-/// The incoming descriptor MUST be a clone of a live libseat card opened by
-/// the QEMU-only entrypoint. No host display or display-manager invocation.
+/// Preserve the original two-frame smoke exactly as a compatibility gate.
+/// The same actual KMS path also supports a longer, explicitly QEMU-only
+/// GPU-backed render loop, reusing both real DMA-BUF allocations.
 pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
+    qemu_gpu_frames(card_fd,2)
+}
+
+/// Drive multiple real GLES render + CRTC pageflips on two retained DMA-BUFs.
+/// This remains a disposable VM GPU stress probe, not a Wayland renderer.
+pub fn qemu_stress_gpu_frames(card_fd:OwnedFd,frames:u32)
+    ->Result<(),Box<dyn Error>>
+{
+    if frames!=24 {
+        return Err("GBM stress run requires the isolated 24-frame QEMU contract".into());
+    }
+    qemu_gpu_frames(card_fd,frames)
+}
+
+fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
+    ->Result<(),Box<dyn Error>>
+{
+    if !(2..=24).contains(&total_frames) {
+        return Err("GBM KMS frame count exceeds isolated QEMU limits".into());
+    }
     let card=DrmDeviceFd::new(DeviceFd::from(card_fd));
     let resources=card.resource_handles()?;
     if resources.crtcs().len()!=1 || resources.connectors().is_empty() {
@@ -135,14 +153,17 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
         card:&card, original, connector, submitted:false, restored:false,
     };
     let work=(||->Result<(),Box<dyn Error>> {
-        for index in 0..2 {
-            let buffer=if index==0 {&mut a} else {&mut b};
+        for index in 0..total_frames {
+            // Never render into the currently visible buffer: the preceding
+            // flip's DRM event AND actual scanout verification have completed.
+            // Two GPU DMA-BUFs are reused without per-frame allocations.
+            let buffer=if index%2==0 {&mut a} else {&mut b};
             let mut framebuffer=renderer.bind(buffer)?;
             let mut frame=renderer.render(
                 &mut framebuffer,(i32::from(w),i32::from(h)).into(),
                 Transform::Normal,
             )?;
-            let color=if index==0 {
+            let color=if index%2==0 {
                 Color32F::new(0.07,0.28,0.67,1.0)
             } else {
                 Color32F::new(0.20,0.65,0.23,1.0)
@@ -156,7 +177,7 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
             if index==0 {
                 // Even a failed initial modeset requires restoration.
                 rollback.submitted=true;
-                card.set_crtc(crtc,Some(handles[index]),original.position(),
+                card.set_crtc(crtc,Some(handles[index as usize%2]),original.position(),
                     &connected,Some(mode))?;
             } else {
                 // EAGAIN means the prior asynchronous flip has not retired.
@@ -165,7 +186,7 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                     .map_err(|error|format!("GBM flip already pending or revoked: {error:?}"))?;
                 let until=Instant::now()+Duration::from_secs(3);
                 loop {
-                    match card.page_flip(crtc,handles[index],PageFlipFlags::EVENT,None) {
+                    match card.page_flip(crtc,handles[index as usize%2],PageFlipFlags::EVENT,None) {
                         Ok(())=>break,
                         Err(error) if error.raw_os_error()==Some(11) && Instant::now()<until =>
                             thread::sleep(Duration::from_millis(20)),
@@ -184,14 +205,14 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                 }
                 println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
-            wait_for_scanout(&card,crtc,connector,handles[index])?;
+            wait_for_scanout(&card,crtc,connector,handles[index as usize%2])?;
             if index>0 {
                 println!("MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED={}",
                          flip_ledger.completed_count());
             }
             println!("MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE={}",index+1);
             // Keep a visible interval for an isolated future QMP pixel check.
-            thread::sleep(Duration::from_millis(450));
+            thread::sleep(Duration::from_millis(if total_frames==2 {450}else{75}));
         }
         Ok(())
     })();
@@ -200,6 +221,11 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
     let restore=rollback.restore();
     work?;
     restore?;
-    println!("MELANIA_NATIVE_GBM_KMS_TWO_GPU_FRAMES_PASS=true");
+    if total_frames==2 {
+        println!("MELANIA_NATIVE_GBM_KMS_TWO_GPU_FRAMES_PASS=true");
+    } else {
+        println!("MELANIA_NATIVE_GBM_KMS_REUSED_DMA_BUFS=2");
+        println!("MELANIA_NATIVE_GBM_KMS_24_GPU_FRAMES_PASS=true");
+    }
     Ok(())
 }
