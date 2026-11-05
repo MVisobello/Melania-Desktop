@@ -39,9 +39,10 @@ class PersistentGpuWayland110(unittest.TestCase):
 
     def test_guest_client_environment_is_one_shell_command(self):
         """Do not detach WAYLAND_DISPLAY/48 frames from 'timeout' with comments."""
-        start=GUEST.index("if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM")
-        end=GUEST.index('"$continuous_client" > "$persist_gpu_client_log" 2>&1; then',start)
-        invocation=GUEST[start:end]
+        stage=GUEST[GUEST.index("# Stage110: same REAL wl_shm"):GUEST.index("# Stage105:",GUEST.index("# Stage110: same REAL wl_shm"))]
+        start=stage.index("if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM")
+        end=stage.index('"$continuous_client" > "$persist_gpu_client_log" 2>&1; then',start)
+        invocation=stage[start:end]
         lines=invocation.splitlines()
         # A comment after a line ending in a backslash terminates the Bash
         # logical command. This caused QEMU to run the default client instead
