@@ -62,17 +62,10 @@ probe seat_enum 35 '^MELANIA_NATIVE_INPUT_ENUMERATED ' --experimental-seat
 probe drm_routes 60 '^MELANIA_NATIVE_ACTIVE_DRM_ROUTES=[1-9][0-9]* \(READ_ONLY\)' --experimental-drm
 [[ "$failure" -eq 0 ]] || deny 'no validated stable physical CRTC route; refusing GPU probes'
 probe gbm_offscreen 120 'Melania native offscreen GLES frames: OK \(NOT displayed\)' --experimental-offscreen
-probe gbm_output 120 '^MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED=[1-8]
+probe gbm_output 120 '^MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED=[1-8]$' --experimental-gbm-output
 printf 'NATIVE_SESSION_READY=false\n' | tee -a "$report/manifest.txt"
 printf 'MELANIA_PHYSICAL_PREFLIGHT_REPORT=%s\n' "$report"
 [[ "$failure" -eq 0 ]] || exit 1
 printf 'MELANIA_PHYSICAL_PREFLIGHT_COMPLETE=PASS_LIMITED\n'
-# Success proves only the four tests above on this local GPU and seat.
-# It cannot authorize the native compositor or disable the labwc fallback.
- --experimental-gbm-output
-printf 'NATIVE_SESSION_READY=false\n' | tee -a "$report/manifest.txt"
-printf 'MELANIA_PHYSICAL_PREFLIGHT_REPORT=%s\n' "$report"
-[[ "$failure" -eq 0 ]] || exit 1
-printf 'MELANIA_PHYSICAL_PREFLIGHT_COMPLETE=PASS_LIMITED\n'
-# Success proves only the four tests above on this local GPU and seat.
-# It cannot authorize the native compositor or disable the labwc fallback.
+# Passing does not establish physical modeset, multi-CRTC KMS output,
+# real input delivery, Xwayland, VT recovery, or safe native login.
