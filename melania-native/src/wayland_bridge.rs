@@ -376,6 +376,32 @@ impl BridgeState {
         }
         self.continuous_frame_count=self.continuous_frame_count.saturating_add(1);
         self.presented_layout_generation=planned.generation;
+        // Stage99: after a VERIFIED CRTC/connector ACK only, expose a
+        // guest-local synchronization marker for the real Wayland client.
+        // Unlike a protocol-only role ACK, frame 13/14 must have reached
+        // the VM's physical display before the next IPC action is allowed.
+        if std::env::var("MELANIA_NATIVE_MANAGED_MINIMIZE_QMP")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+           matches!(self.continuous_frame_count,13|14) {
+            let visible=self.continuous_frame_count==14;
+            let first=self.known_window_surfaces.get(1)
+                .ok_or("managed minimize lost the first real Wayland surface")?;
+            let model=self.managed_windows.iter()
+                .find(|(surface,_)|surface==first)
+                .ok_or("managed minimize lost the first xdg role")?;
+            if self.dynamic_scene.window_count()!=2 ||
+               self.dynamic_scene.is_visible(1)!=Some(visible) ||
+               self.dynamic_scene.is_visible(2)!=Some(true) ||
+               (model.1.state()==WindowDisplayState::Minimized)==visible {
+                return Err("managed minimize CRTC ACK has inconsistent retained window state".into());
+            }
+            let marker=format!("/run/melania-native-qemu/managed-minimize-frame{}-acked",
+                self.continuous_frame_count);
+            std::fs::write(marker,b"verified CRTC route and framebuffer ACK\n")?;
+            println!("MELANIA_NATIVE_MANAGED_MINIMIZE_KMS_ACK={} visible={}",
+                     self.continuous_frame_count,visible);
+            let _=std::io::stdout().flush();
+        }
         if self.dynamic_pointer_proof_mode && self.continuous_frame_count==12 {
             // Unique *post-ACK* signal: prior scenarios in this same QEMU
             // guest also present frame 12, so the host must not use a
@@ -2239,6 +2265,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
        std::env::var("MELANIA_NATIVE_SHELL_PROBE").as_deref()!=Ok("YES_QEMU_VM") {
         return Err("managed xdg requires QEMU dynamic KMS or role-only shell probe".into());
     }
+    if std::env::var("MELANIA_NATIVE_MANAGED_MINIMIZE_QMP")
+        .as_deref()==Ok("YES_QEMU_VM") &&
+       (!state.managed_xdg_mode || !state.dynamic_window_mode ||
+        !state.continuous_kms_mode || !state.multi_window_mode ||
+        !state.frame_callbacks_probe || state.continuous_frame_target!=14 ||
+        state.continuous_reopen_mode || state.dynamic_pointer_proof_mode ||
+        state.real_gtk_pixel_kms_mode || state.layer_pixels_mode) {
+        return Err("managed minimize pixel proof requires 14-frame isolated QEMU xdg KMS".into());
+    }
     if state.dynamic_xdg_resize_mode && !state.dynamic_window_mode {
         return Err("xdg resize configure is only permitted in disposable QEMU dynamic mode".into());
     }
@@ -2433,8 +2468,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
            state.continuous_frame_count==state.continuous_frame_target {
             // Frame 13 in the optional tablet proof is compositor-owned
             // damage: NO new client commit and therefore NO callback.
-            let expected_callbacks=if state.dynamic_pointer_proof_mode {12}
-                else {state.continuous_frame_target};
+            let compositor_only_minimize=std::env::var("MELANIA_NATIVE_MANAGED_MINIMIZE_QMP")
+                .as_deref()==Ok("YES_QEMU_VM");
+            let expected_callbacks=if state.dynamic_pointer_proof_mode ||
+                compositor_only_minimize {12} else {state.continuous_frame_target};
             if !state.real_gtk_pixel_kms_mode &&
                u64::from(state.frame_callback_count)!=expected_callbacks {
                 return Err("Wayland callbacks not completed after continuous KMS".into());
