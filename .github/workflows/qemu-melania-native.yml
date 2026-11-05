@@ -31,6 +31,7 @@ on:
       - scripts/capture-qemu-drag-frame.py
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/inject-qemu-authenticated-resize.py
+      - scripts/inject-qemu-alt-tab.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
       - scripts/capture-qemu-real-layer-panel.py
@@ -65,6 +66,7 @@ on:
       - tests/test_qemu_dynamic_pointer_frame13.py
       - tests/test_native_xdg_qmp_role_pixels.py
       - tests/test_native_authenticated_resize_qemu_stage114.py
+      - tests/test_native_alt_tab_qemu_stage116.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -107,6 +109,7 @@ on:
       - scripts/capture-qemu-drag-frame.py
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/inject-qemu-authenticated-resize.py
+      - scripts/inject-qemu-alt-tab.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
       - scripts/capture-qemu-real-layer-panel.py
@@ -141,6 +144,7 @@ on:
       - tests/test_qemu_dynamic_pointer_frame13.py
       - tests/test_native_xdg_qmp_role_pixels.py
       - tests/test_native_authenticated_resize_qemu_stage114.py
+      - tests/test_native_alt_tab_qemu_stage116.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -200,6 +204,7 @@ jobs:
           python3 -m py_compile scripts/capture-qemu-drag-frame.py
           python3 -m py_compile scripts/inject-qemu-dynamic-pointer.py
           python3 -m py_compile scripts/inject-qemu-authenticated-resize.py
+          python3 -m py_compile scripts/inject-qemu-alt-tab.py
           python3 -m py_compile scripts/capture-qemu-dynamic-pointer.py
           python3 -m unittest discover -s tests -p 'test_qemu_dynamic_pointer_frame13.py' -v
           python3 -m py_compile scripts/capture-qemu-managed-xdg-roles.py
@@ -229,6 +234,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_layer_panel_qmp.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m unittest discover -s tests -p 'test_native_authenticated_resize_qemu_stage114.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_alt_tab_qemu_stage116.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
           python3 -m py_compile scripts/capture-qemu-rust-kms-frames.py
