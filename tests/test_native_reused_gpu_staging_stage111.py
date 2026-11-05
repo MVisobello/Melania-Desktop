@@ -4,6 +4,8 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 GPU=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+CLIENT=(ROOT/"melania-native/src/bin/qemu-continuous-client.rs").read_text()
+GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
 
 class NativeReusedGpuStaging111(unittest.TestCase):
     def test_exactly_two_staging_allocations_before_unbounded_gpu_loop(self):
@@ -30,6 +32,22 @@ class NativeReusedGpuStaging111(unittest.TestCase):
         self.assertIn("have_prior_pixels=true;",code[swap:swap+130])
         self.assertIn("if have_prior_pixels && prior_pixels==pixels",code)
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER",code)
+
+    def test_identical_client_commit_is_real_gpu_presented_not_fake_ack(self):
+        body=GPU[GPU.index("pub fn qemu_wayland_gpu_scene_stream("):]
+        self.assertIn("if have_prior_pixels && prior_pixels==pixels && !persistent",body)
+        self.assertLess(body.index("if have_prior_pixels && prior_pixels==pixels && !persistent"),
+                        body.index("frame.render_texture_from_to("))
+        self.assertLess(body.index("wait_for_scanout(&card,crtc,connector,framebuffer)?;"),
+                        body.index("stream.write_all(&ack)?;"))
+        self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_IDENTICAL_AFTER",CLIENT)
+        self.assertIn("Some(\"24\") if pause_for_gpu=>true",CLIENT)
+        self.assertIn("let color_index=if replay_same && index==25 {24} else {index};",CLIENT)
+        self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_IDENTICAL_CLIENT_FRAME25_ACKED=true",CLIENT)
+        stage=GUEST[GUEST.index("# Stage110: same REAL wl_shm"):GUEST.index("# Stage105:",GUEST.index("# Stage110: same REAL wl_shm"))]
+        self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_IDENTICAL_AFTER=24",stage)
+        self.assertIn("persistent_GPU_Wayland_identical_client_commit_not_accepted",stage)
+        self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_IDENTICAL_CLIENT_FRAME25_ACKED=true",stage)
 
 if __name__=="__main__":
     unittest.main()
