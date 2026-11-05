@@ -38,6 +38,7 @@ pub mod native_gpu_watch;
 pub mod native_output_dispatch;
 pub mod native_kms_scanout;
 pub mod native_drm_flip;
+pub mod native_output_topology;
 pub mod native_flip_ledger;
 pub mod native_gbm_scanout;
 pub mod control_io;
