@@ -1608,15 +1608,11 @@ grep -q '^MELANIA_RUST_KMS_RESTORE_VERIFIED=true' "$managed_kms_log" ||
   fatal 'managed_role_did_not_restore_original_CRTC'
 grep -q '^MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' "$managed_kms_log" ||
   fatal 'managed_connector_route_not_restored'
-grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=14
-rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
-report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
-report 'MELANIA_QEMU_MANAGED_MINIMIZE_RESTORE_14_KMS_ACKS_PASS=true'
-
- "$managed_kms_log" ||
+grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=14$' "$managed_kms_log" ||
   fatal 'kernel_scanout_route_not_verified_managed_kms_log_14'
 rm -f "$managed_server_log" "$managed_kms_log" "$managed_client_log"
 report 'MELANIA_QEMU_MANAGED_XDG_12_REAL_KMS_ACKS_PASS=true'
+report 'MELANIA_QEMU_MANAGED_MINIMIZE_RESTORE_14_KMS_ACKS_PASS=true'
 
 # Stage82D: two genuine Wayland roles share one Rust KMS stream.
 # The xdg toplevel sends odd frames; bottom Top-layer panel sends evens.
