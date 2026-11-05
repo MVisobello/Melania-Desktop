@@ -65,6 +65,8 @@ use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
 use melania_native::native_popup_layout::PopupPlacement;
+use melania_native::snap_layout::SnapZone;
+use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
 use smithay::utils::Rectangle;
 use melania_native::keyboard_window_cycle::{KeyboardWindowCycle,ShortcutResult};
 use signal_hook::consts::signal::{SIGINT,SIGTERM};
@@ -162,6 +164,7 @@ struct BridgeState {
     native_popup_roles:Vec<(PopupSurface,WlSurface)>,
     window_interaction:WindowInteraction,
     keyboard_window_cycle:KeyboardWindowCycle,
+    snap_keys:SnapKeyHandler,
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
     last_xdg_press:Option<(WlSurface,Serial)>,
@@ -1042,6 +1045,46 @@ impl BridgeState {
         println!("MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED={enabled}");
     }
 
+    /// Super+arrow from a real registered libinput keyboard, never IPC.
+    /// A configure only changes the requested size. Actual window pixels
+    /// move on the matching client wl_shm commit and subsequent real KMS ACK.
+    fn request_managed_snap(&mut self,top:ToplevelSurface,zone:Option<SnapZone>) {
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.multi_window_mode || !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {
+            return;
+        }
+        let surface=top.wl_surface().clone();
+        let Some((_,window))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface) else {return;};
+        let changed=match zone {
+            Some(zone)=>window.snap(zone),
+            None=>{
+                if matches!(window.state(),
+                    WindowDisplayState::Snapped(_)|WindowDisplayState::Maximized) {
+                    window.restore()
+                } else {false}
+            },
+        };
+        if !changed {return;}
+        let Some(rect)=window.geometry() else {return;};
+        self.cancel_surface_grab(&surface);
+        top.with_pending_state(|pending|{
+            pending.states.unset(xdg_toplevel::State::Resizing);
+            pending.states.unset(xdg_toplevel::State::Maximized);
+            pending.states.unset(xdg_toplevel::State::Fullscreen);
+            pending.size=Some((rect.width,rect.height).into());
+        });
+        top.send_pending_configure();
+        self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+        self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+        self.managed_pending_sizes.push((
+            surface.clone(),(rect.width as usize,rect.height as usize)
+        ));
+        println!("MELANIA_NATIVE_SUPER_SNAP_CONFIGURED={:?} {}x{} at {},{}",
+                 zone,rect.width,rect.height,rect.x,rect.y);
+    }
+
     /// The disposable QEMU output is a single 1280x800 display. The optional
     /// xdg fullscreen output hint is therefore ignored, not mistaken for a
     /// real multi-output KMS policy. The client still owns its pixels.
@@ -1506,6 +1549,29 @@ impl CompositorHandler for BridgeState {
                         eprintln!("continuous Wayland client receipt capacity exceeded");
                         return;
                     }
+                }
+                // Real mapped XDG clients must receive keyboard focus
+                // before libinput Super+arrows can target them. Stage120's
+                // QEMU client submitted and KMS-presented frame 1, but the
+                // continuous commit path returned before the legacy focus
+                // fallback, leaving self.focused=None indefinitely.
+                //
+                // Grant initial focus ONLY after a validated client-owned
+                // wl_shm buffer has entered the scene/ledger. Reject
+                // unconfigured roles, layer shell and popups; never create
+                // synthetic keyboard input or imply native login readiness.
+                if self.managed_xdg_mode && self.dynamic_window_mode &&
+                   self.focused.is_none() && self.lifecycle.seat_active() &&
+                   self.xdg_shell.toplevel_surfaces().iter()
+                       .any(|top|top.wl_surface()==surface) {
+                    let keyboard=self.seat.get_keyboard().expect("keyboard");
+                    keyboard.set_focus(self,Some(surface.clone()),
+                        SERIAL_COUNTER.next_serial());
+                    self.focused=Some(surface.clone());
+                    if let Some(key)=self.known_window_surfaces.id_of(surface) {
+                        println!("MELANIA_NATIVE_FIRST_COMMITTED_XDG_FOCUSED={key}");
+                    }
+                    let _=std::io::stdout().flush();
                 }
                 self.note_scene_change();
                 if let Err(error)=self.submit_continuous_frame() {
@@ -2118,6 +2184,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.last_xdg_press=None;
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
+            state.snap_keys.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
         InputEvent::Keyboard {event} => {
@@ -2137,6 +2204,14 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 let _=std::io::stdout().flush();
             }
             if !device_registered {return;}
+            // The model sees real libinput codes (XKB = evdev + 8) even
+            // when the experimental GTK Super handler consumes Meta first.
+            let code:u32=event.key_code().into();
+            let snap_action=if state.managed_xdg_mode &&
+               state.dynamic_window_mode && state.multi_window_mode {
+                state.snap_keys.event(code.checked_sub(8),
+                    event.state()==KeyState::Pressed)
+            } else {SnapKeyAction::Forward};
             // Stage87: ACTUAL USB-keyboard -> libinput -> private GTK Start IPC.
             // The isolated QEMU shell has no initial keyboard-focused xdg
             // client, so the legacy focused-only filter would drop Super.
@@ -2180,6 +2255,42 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 if event.state()==KeyState::Pressed {
                     state.qemu_start_super_down=None;
                 }
+            }
+            // Super+arrows have priority over forwarded client keyboard
+            // events. Do not deliver unmatched release events to a client.
+            // This path is still QEMU-only behind managed_xdg_mode.
+            match snap_action {
+                SnapKeyAction::Forward=>{},
+                SnapKeyAction::Consume=>return,
+                SnapKeyAction::Snap(zone)=>{
+                    let top=state.focused.as_ref().and_then(|focused|
+                        state.xdg_shell.toplevel_surfaces().iter()
+                            .find(|role|role.wl_surface()==focused).cloned());
+                    if state.window_interaction.active_key().is_none() {
+                        if let Some(top)=top {state.request_managed_snap(top,Some(zone));}
+                    }
+                    return;
+                },
+                SnapKeyAction::Restore=>{
+                    let top=state.focused.as_ref().and_then(|focused|
+                        state.xdg_shell.toplevel_surfaces().iter()
+                            .find(|role|role.wl_surface()==focused).cloned());
+                    if state.window_interaction.active_key().is_none() {
+                        if let Some(top)=top {state.request_managed_snap(top,None);}
+                    }
+                    return;
+                },
+                SnapKeyAction::Maximize=>{
+                    let top=state.focused.as_ref().and_then(|focused|
+                        state.xdg_shell.toplevel_surfaces().iter()
+                            .find(|role|role.wl_surface()==focused).cloned());
+                    if state.window_interaction.active_key().is_none() &&
+                       state.lifecycle.seat_active() &&
+                       !state.native_presentation_guard.permanently_revoked() {
+                        if let Some(top)=top {state.request_managed_maximize(top,true);}
+                    }
+                    return;
+                },
             }
             // The actual physical XKB keycode (evdev +8) is the sole
             // source of Alt/Tab. Never switch on an IPC command or a client
@@ -2609,6 +2720,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         native_popup_roles:Vec::new(),
         window_interaction:WindowInteraction::default(),
         keyboard_window_cycle:KeyboardWindowCycle::default(),
+        snap_keys:SnapKeyHandler::default(),
         last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
@@ -2651,6 +2763,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 state.last_xdg_press=None;
                 state.window_interaction.cancel();
                 state.keyboard_window_cycle.reset();
+            state.snap_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
@@ -2690,6 +2803,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.continuous_pending=None;
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
+            state.snap_keys.reset();
         }
     })?;
     events.handle().insert_source(udev,|event,_,state|{

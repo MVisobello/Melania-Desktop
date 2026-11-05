@@ -1488,6 +1488,89 @@ rm -f "$auth_server_log" "$auth_client_log"
 report 'MELANIA_QEMU_AUTHENTICATED_XDG_RESIZE_REAL_KMS_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage120: genuine QMP USB Super+arrows -> XDG ACK -> client wl_shm
+# -> real GBM/DRM scanout, screenshots and confirmed original CRTC restore.
+snap_client=/mnt/melania-native/melania-super-snap-client
+[[ -x "$snap_client" ]] || fatal 'super_snap_client_missing'
+snap_server_log="$(mktemp -t melania-snap-server-XXXXXX)"
+snap_client_log="$(mktemp -t melania-snap-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$snap_server_log" 2>&1 &
+snap_server_pid=$!
+snap_socket=''
+for attempt in $(seq 1 100); do
+  snap_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$snap_server_log" | head -n 1)"
+  [[ -n "$snap_socket" ]] && break
+  kill -0 "$snap_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$snap_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$snap_server_log"; then
+  cat "$snap_server_log"
+  kill -TERM "$snap_server_pid" 2>/dev/null || true
+  fatal 'super_snap_GPU_wayland_not_ready'
+fi
+tail -n +1 -f -s 0.05 "$snap_server_log" > /dev/ttyS0 &
+snap_server_tail_pid=$!
+tail -n +1 -f -s 0.05 "$snap_client_log" > /dev/ttyS0 &
+snap_client_tail_pid=$!
+report 'MELANIA_QEMU_SUPER_SNAP_STAGE_STARTED=true'
+if ! MELANIA_QEMU_SUPER_SNAP_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$snap_socket" \
+   timeout --signal=TERM --kill-after=3s 135s \
+   "$snap_client" > "$snap_client_log" 2>&1; then
+  cat "$snap_client_log" "$snap_server_log"
+  kill -TERM "$snap_server_pid" 2>/dev/null || true
+  fatal 'real_super_snap_client_failed'
+fi
+for frame in 1 2 3; do
+  grep -q "^MELANIA_NATIVE_SNAP_CLIENT_FRAME$frame""_ACK=true$" "$snap_client_log" ||
+    fatal "snap_client_frame_$frame""_missing"
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$frame$" "$snap_server_log" ||
+    fatal "snap_GPU_CRTC_$frame""_missing"
+done
+for receipt in \
+  'MELANIA_NATIVE_SNAP_CLIENT_XDG_HALF_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_XDG_RESTORE_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_ALL_THREE_REAL_FRAMES_PASS=true'; do
+  grep -qx "$receipt" "$snap_client_log" || fatal "snap_client_missing_$receipt"
+done
+grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=Some(LeftHalf) 640x800 at 0,0$' "$snap_server_log" ||
+  fatal 'Super_Left_missing_real_XDG_configure'
+grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=None 360x224 at 160,120$' "$snap_server_log" ||
+  fatal 'Super_Down_missing_real_XDG_restore'
+kill -TERM "$snap_server_pid"
+if ! wait "$snap_server_pid"; then
+  cat "$snap_server_log" "$snap_client_log"
+  fatal 'snap_GPU_rollback_failed'
+fi
+kill "$snap_server_tail_pid" "$snap_client_tail_pid" 2>/dev/null || true
+wait "$snap_server_tail_pid" "$snap_client_tail_pid" 2>/dev/null || true
+for receipt in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$receipt" "$snap_server_log" || fatal "snap_rollback_missing_$receipt"
+done
+rm -f "$snap_server_log" "$snap_client_log"
+report 'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS3_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage116: real USB Alt+Tab cycles two genuine Wayland clients. Unlike
 # model-only tests, the client must receive wl_keyboard.Enter(B), then (A).
 # The compositor must raise A and present the *owned* wl_shm scene at CRTC13.
