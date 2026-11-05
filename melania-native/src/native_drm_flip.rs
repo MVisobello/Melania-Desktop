@@ -21,7 +21,7 @@ pub fn wait_for_kms_page_flip(
     card: &(impl ControlDevice + AsFd),
     expected_crtc: crtc::Handle,
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     if timeout.is_zero() {
         return Err("DRM page flip timeout must be positive".into());
     }
@@ -54,7 +54,7 @@ pub fn wait_for_kms_page_flip(
             .map_err(|error|format!("DRM receive_events failed: {error}"))? {
             if let control::Event::PageFlip(done)=event {
                 if done.crtc==expected_crtc {
-                    return Ok(());
+                    return Ok(done.frame);
                 }
             }
         }
