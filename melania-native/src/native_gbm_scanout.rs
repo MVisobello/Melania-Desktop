@@ -346,8 +346,14 @@ pub fn qemu_wayland_gpu_scene_stream(
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
             stream.read_exact(&mut pixels)?;
-            if have_prior_pixels && prior_pixels==pixels {
-                return Err("GPU Wayland composed scene did not change pixels".into());
+            if have_prior_pixels && prior_pixels==pixels && !persistent {
+                // Preserve the finite QEMU pixel-change acceptance. In a
+                // persistent desktop, however, a real Wayland client may
+                // commit the same image again (e.g. frame callback request,
+                // unmodified canvas or expose). It must not kill the session.
+                // This still submits a real KMS frame: the client receives
+                // no ACK until the kernel pageflip/FB_ID route is verified.
+                return Err("GPU Wayland finite probe did not change pixels".into());
             }
 
             // This is the native compositor's real, owned Wayland wl_shm
