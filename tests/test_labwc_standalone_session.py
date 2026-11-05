@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 SESSION=(ROOT/"scripts/melania-labwc-session").read_text()
 SUPERVISOR=(ROOT/"scripts/melania-labwc-supervisor").read_text()
+RUST_SUPERVISOR=(ROOT/"melania-services/src/supervisor.rs").read_text()
 HOTKEY=(ROOT/"scripts/melania-labwc-hotkey").read_text()
 
 def load(path, name):
@@ -141,8 +142,12 @@ class LabwcStandaloneSession(unittest.TestCase):
         self.assertIn('exec labwc -C "$ROOT/integration/labwc"',SESSION)
         self.assertNotIn("sudo install",SESSION)
         self.assertNotIn("apt install",SUPERVISOR)
-        self.assertIn('trap cleanup EXIT',SUPERVISOR)
-        self.assertIn('kill "$pid"',SUPERVISOR)
+        self.assertIn('exec "$BIN/melania-session-supervisor"',SUPERVISOR)
+        self.assertIn('MELANIA_LABWC_RESTART_SCHEDULED=',RUST_SUPERVISOR)
+        self.assertIn('MELANIA_LABWC_SHELL_FAILURE=',RUST_SUPERVISOR)
+        self.assertIn('process_group(0)',RUST_SUPERVISOR)
+        self.assertIn('Policy::FailClosed',RUST_SUPERVISOR)
+        self.assertNotIn('pkill',SUPERVISOR+RUST_SUPERVISOR)
         self.assertIn("TOGGLE_START",HOTKEY+Path(ROOT/"scripts/melania-labwc-control.py").read_text())
 
     def test_labwc_shortcuts_and_isolated_config_are_well_formed(self):
