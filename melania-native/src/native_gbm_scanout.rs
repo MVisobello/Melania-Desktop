@@ -160,13 +160,19 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                 // Only that error is retryable and the deadline is bounded.
                 let until=Instant::now()+Duration::from_secs(3);
                 loop {
-                    match card.page_flip(crtc,handles[index],PageFlipFlags::empty(),None) {
+                    match card.page_flip(crtc,handles[index],PageFlipFlags::EVENT,None) {
                         Ok(())=>break,
                         Err(error) if error.raw_os_error()==Some(11) && Instant::now()<until =>
                             thread::sleep(Duration::from_millis(20)),
                         Err(error)=>return Err(error.into()),
                     }
                 }
+            }
+            if index>0 {
+                crate::native_drm_flip::wait_for_kms_page_flip(
+                    &card,crtc,Duration::from_secs(3),
+                )?;
+                println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             wait_for_scanout(&card,crtc,connector,handles[index])?;
             println!("MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE={}",index+1);
