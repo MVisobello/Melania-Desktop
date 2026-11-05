@@ -4,7 +4,7 @@ use std::{error::Error,fs::OpenOptions,io::{Read,Write},net::Shutdown,
     os::{fd::AsFd,unix::net::UnixStream},thread,time::{Duration,Instant}};
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
-    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
+    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback,wl_seat,wl_keyboard},
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_wm_base,xdg_surface,xdg_toplevel,
@@ -19,6 +19,12 @@ struct Client {
     wm:Option<xdg_wm_base::XdgWmBase>,
     shm:Option<wl_shm::WlShm>,
     output:Option<wl_output::WlOutput>,
+    seat:Option<wl_seat::WlSeat>,
+    alt_tab_probe:bool,
+    first_surface:Option<wl_surface::WlSurface>,
+    second_surface:Option<wl_surface::WlSurface>,
+    saw_focus_b:bool,
+    saw_focus_a:bool,
     output_mode_received:bool,
     xdg_acked:bool,
     buffer_released:bool,
@@ -39,7 +45,29 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "xdg_wm_base"=>state.wm=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_shm"=>state.shm=Some(registry.bind(name,version.min(1),qh,())),
                 "wl_output"=>state.output=Some(registry.bind(name,version.min(3),qh,())),
+                "wl_seat"=>state.seat=Some(registry.bind(name,version.min(7),qh,())),
                 _=>{}
+            }
+        }
+    }
+}
+impl Dispatch<wl_seat::WlSeat,()> for Client {
+    fn event(_: &mut Self,_:&wl_seat::WlSeat,_:wl_seat::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>){}
+}
+impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
+    fn event(s:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if !s.alt_tab_probe || s.frame_done_count<12 {return;}
+        if let wl_keyboard::Event::Enter{surface,..}=event {
+            if s.second_surface.as_ref()==Some(&surface) && !s.saw_focus_b {
+                s.saw_focus_b=true;
+                println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=B");
+                let _=std::io::stdout().flush();
+            } else if s.first_surface.as_ref()==Some(&surface) && s.saw_focus_b {
+                s.saw_focus_a=true;
+                println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A");
+                let _=std::io::stdout().flush();
             }
         }
     }
@@ -170,6 +198,8 @@ fn main()->Result<(),Box<dyn Error>> {
     let mut state=Client::default();
     let managed_role_pixels=std::env::var("MELANIA_QEMU_MANAGED_ROLE_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
+    state.alt_tab_probe=std::env::var("MELANIA_QEMU_ALT_TAB_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
     state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM") || managed_role_pixels;
     queue.roundtrip(&mut state)?;
@@ -177,10 +207,15 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.output_mode_received {
         return Err("two-window continuous client did not see VM 1280x800 output".into());
     }
+    let _keyboard=if state.alt_tab_probe {
+        Some(state.seat.as_ref().ok_or("real wl_seat required for Alt+Tab")?
+            .get_keyboard(&qh,()))
+    } else {None};
     let compositor=state.compositor.take().ok_or("wl_compositor missing")?;
     let wm=state.wm.take().ok_or("xdg_wm_base missing")?;
     let shm=state.shm.take().ok_or("wl_shm missing")?;
     let first=compositor.create_surface(&qh,());
+    state.first_surface=Some(first.clone());
     let first_xdg=wm.get_xdg_surface(&first,&qh,1u8);
     let first_top=first_xdg.get_toplevel(&qh,1u8);
     first_top.set_title("Melania QEMU retained continuous A".into());
@@ -192,6 +227,7 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.xdg_acked {return Err("first xdg configure not received".into());}
     state.xdg_acked=false;
     let second=compositor.create_surface(&qh,());
+    state.second_surface=Some(second.clone());
     let second_xdg=wm.get_xdg_surface(&second,&qh,2u8);
     let second_top=second_xdg.get_toplevel(&qh,2u8);
     second_top.set_title("Melania QEMU retained continuous B".into());
@@ -305,7 +341,9 @@ fn main()->Result<(),Box<dyn Error>> {
         // The same disposable VM runs Stage48 before Stage49. Use a distinct
         // source filename in the reopen scenario: create_new must not
         // overwrite earlier client-owned wl_shm fixtures.
-        let path=if managed_role_pixels {
+        let path=if state.alt_tab_probe {
+            format!("/run/melania-native-qemu/alt-tab-client-{index}.bgra")
+        } else if managed_role_pixels {
             // Stage81B runs after Stage48 in the SAME QEMU guest: create_new
             // must not collide with earlier two-window fixture filenames.
             format!("/run/melania-native-qemu/managed-role-client-{index}.bgra")
@@ -353,6 +391,28 @@ fn main()->Result<(),Box<dyn Error>> {
         std::io::stdout().flush()?;
         buffer.destroy();
         pool.destroy();
+    }
+    // An independent Stage116 physical USB keyboard proves actual Smithay
+    // wl_keyboard enter on B then A. The event itself comes only from QMP's
+    // private virtual keyboard and the live libinput seat, never IPC.
+    if state.alt_tab_probe {
+        if managed_role_pixels || dynamic {
+            return Err("Alt-Tab QEMU proof requires ordinary stable XDG client pixels".into());
+        }
+        println!("MELANIA_QEMU_ALT_TAB_TWO_WAYLAND_SURFACES_READY=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(70);
+        while !state.saw_focus_a {
+            if Instant::now()>=deadline {
+                return Err("QEMU USB Alt+Tab did not switch real keyboard focus B then A".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        println!("MELANIA_NATIVE_ALT_TAB_TWO_REAL_KEYBOARD_ENTERS_PASS=true");
+        std::io::stdout().flush()?;
+        // Keep the genuine windows mapped for the host's independent QMP
+        // CRTC screenshot after the compositor-only KMS frame 13 ACK.
+        thread::sleep(Duration::from_secs(15));
     }
     // Optional Stage99 end-to-end experiment: keep both real xdg roles
     // connected, hide A via panel IPC and require a new DRM scanout with
