@@ -1488,6 +1488,85 @@ rm -f "$auth_server_log" "$auth_client_log"
 report 'MELANIA_QEMU_AUTHENTICATED_XDG_RESIZE_REAL_KMS_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage116: real USB Alt+Tab cycles two genuine Wayland clients. Unlike
+# model-only tests, the client must receive wl_keyboard.Enter(B), then (A).
+# The compositor must raise A and present the *owned* wl_shm scene at CRTC13.
+# Keep KMS persistent solely within the disposable QEMU guest; libseat VT
+# and original atomic output state must be restored on SIGTERM.
+alt_client=/mnt/melania-native/melania-two-continuous-client
+alt_server_log="$(mktemp -t melania-native-alt-tab-server-XXXXXX)"
+alt_client_log="$(mktemp -t melania-native-alt-tab-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$alt_server_log" 2>&1 &
+alt_server_pid=$!
+alt_socket=''
+for attempt in $(seq 1 100); do
+  alt_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$alt_server_log" | head -n 1)"
+  [[ -n "$alt_socket" ]] && break
+  kill -0 "$alt_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$alt_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$alt_server_log"; then
+  cat "$alt_server_log"
+  kill -TERM "$alt_server_pid" 2>/dev/null || true
+  fatal 'real_USB_Alt_Tab_managed_GPU_Wayland_server_missing'
+fi
+tail -n +1 -f -s 0.05 "$alt_server_log" > /dev/ttyS0 &
+alt_server_tail_pid=$!
+tail -n +1 -f -s 0.05 "$alt_client_log" > /dev/ttyS0 &
+alt_client_tail_pid=$!
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
+      MELANIA_QEMU_ALT_TAB_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$alt_socket" \
+      timeout --signal=TERM --kill-after=3s 130s \
+      "$alt_client" > "$alt_client_log" 2>&1; then
+  cat "$alt_client_log" "$alt_server_log"
+  kill -TERM "$alt_server_pid" 2>/dev/null || true
+  fatal 'real_Alt_Tab_client_keyboard_focus_failed'
+fi
+# CRTC13 must already have reached kernel confirmation while both clients
+# remained mapped for the host's independent QMP physical screen capture.
+grep -q '^MELANIA_NATIVE_ALT_TAB_TWO_REAL_KEYBOARD_ENTERS_PASS=true' "$alt_client_log" ||
+  fatal 'real_Wayland_keyboard_enter_B_then_A_not_observed'
+grep -q '^MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=2$' "$alt_server_log" ||
+  fatal 'USB_Alt_Tab_B_not_focused'
+grep -q '^MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=1$' "$alt_server_log" ||
+  fatal 'USB_Alt_Tab_A_not_focused'
+grep -q '^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=13$' "$alt_server_log" ||
+  fatal 'real_Alt_Tab_gpu_CRTC13_not_confirmed'
+kill -TERM "$alt_server_pid"
+if ! wait "$alt_server_pid"; then
+  cat "$alt_server_log" "$alt_client_log"
+  fatal 'Alt_Tab_GPU_KMS_original_CRTC_restore_failed'
+fi
+kill "$alt_server_tail_pid" "$alt_client_tail_pid" 2>/dev/null || true
+wait "$alt_server_tail_pid" "$alt_client_tail_pid" 2>/dev/null || true
+for marker in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$marker" "$alt_server_log" ||
+    fatal "Alt_Tab_virtual_GPU_restore_missing_$marker"
+done
+rm -f "$alt_server_log" "$alt_client_log"
+report 'MELANIA_QEMU_REAL_USB_ALT_TAB_WAYLAND_KMS_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage105: an actual ONE-PROCESS QEMU DRM/Wayland compositor must remain
 # alive after its 24th real client frame. SIGTERM triggers orderly stream
 # EOF, verified original CRTC/connector rollback and libseat device release.
