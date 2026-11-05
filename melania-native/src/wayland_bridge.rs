@@ -153,6 +153,9 @@ struct BridgeState {
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
     window_interaction:WindowInteraction,
+    // One-shot move authorization minted from a real libinput left click,
+    // scoped to its Wayland surface and the exact wl_pointer button serial.
+    last_xdg_press:Option<(WlSurface,Serial)>,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
@@ -183,6 +186,14 @@ struct BridgeState {
     delivered_buttons: u32,
     delivered_motions: u32,
     delivered_scroll_frames: u32,
+}
+
+// A client-provided serial alone is never permission to move another window.
+// Consume even an incorrect/replayed token; no request may reuse a click.
+fn take_xdg_pointer_press<T:PartialEq>(
+    token:&mut Option<(T,Serial)>, surface:&T, serial:Serial,
+)->bool {
+    token.take().is_some_and(|(pressed,issued)|&pressed==surface && issued==serial)
 }
 
 struct PendingAsyncFrame {
@@ -1519,7 +1530,31 @@ impl XdgShellHandler for BridgeState {
     fn new_popup(&mut self,popup:PopupSurface,_:PositionerState) {
         let _=popup.send_configure();
     }
-    fn move_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,_:Serial){}
+    fn move_request(&mut self,top:ToplevelSurface,_:wl_seat::WlSeat,serial:Serial){
+        // Stage113: accept only a real left-button serial issued to this
+        // exact focused xdg_toplevel while the libseat KMS epoch is active.
+        // This shares the actual pointer-motion -> scene -> KMS ACK path;
+        // it does not create a synthetic move or change window decorations.
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {
+            return;
+        }
+        let surface=top.wl_surface();
+        if self.focused.as_ref()!=Some(surface) ||
+           !take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial) {
+            return;
+        }
+        let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
+        let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
+        let rect=WindowRect{x,y,width:width as i32,height:height as i32};
+        if self.window_interaction.begin(
+            key,rect,self.pointer_position.x,self.pointer_position.y,
+            InteractionKind::Move,
+        ) {
+            println!("MELANIA_NATIVE_XDG_CLIENT_MOVE_GRANTED={key}");
+        }
+    }
     fn resize_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,
                       _:Serial,_:xdg_toplevel::ResizeEdge){}
     fn maximize_request(&mut self,top:ToplevelSurface) {
@@ -1571,6 +1606,9 @@ impl XdgShellHandler for BridgeState {
     }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
+        if self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|pressed==&surface) {
+            self.last_xdg_press=None;
+        }
         self.managed_windows.retain(|(role,_)|role!=&surface);
         self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
         if self.dynamic_xdg_resize_mode {
@@ -1742,8 +1780,11 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         .ticket(state.lifecycle.seat_active()).is_none() {return;}
     match event {
         InputEvent::DeviceAdded {device} =>register(state,device),
-        InputEvent::DeviceRemoved {device} =>
-            state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device)),
+        InputEvent::DeviceRemoved {device} => {
+            state.last_xdg_press=None;
+            state.window_interaction.cancel();
+            state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
+        },
         InputEvent::Keyboard {event} => {
             let device_registered=state.lifecycle.input_registry_mut()
                 .event(&InputDevice::id(&event.device())).is_ok();
@@ -1909,6 +1950,19 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 return;
             }
             let point=state.pointer_position;
+            // The token is minted from the SAME serial forwarded to the
+            // client by wl_pointer.button. Never authorize synthetic QEMU
+            // host actions, a secondary mouse button, or another client.
+            let button_serial=SERIAL_COUNTER.next_serial();
+            if event.button_code()==0x110 {
+                if event.state()==ButtonState::Pressed &&
+                   state.managed_xdg_mode && state.dynamic_window_mode {
+                    state.last_xdg_press=state.pointer_target(point)
+                        .map(|(surface,_)|(surface,button_serial));
+                } else {
+                    state.last_xdg_press=None;
+                }
+            }
             if state.multi_window_mode {
                 let target_key=if state.dynamic_window_mode {
                     state.dynamic_scene.hit_test(point.x,point.y)
@@ -1990,7 +2044,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             }
             pointer.button(state,&ButtonEvent{
                 button:event.button_code(),state:event.state(),
-                serial:SERIAL_COUNTER.next_serial(),time:event.time_msec(),
+                serial:button_serial,time:event.time_msec(),
             });
             pointer.frame(state);
             if state.multi_window_mode && event.button_code()==0x110 &&
@@ -2149,6 +2203,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_windows:Vec::new(),
         managed_pending_sizes:Vec::new(),
         window_interaction:WindowInteraction::default(),
+        last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
                 WindowSlots::with_capacity(16).expect("bounded QEMU window registry")
@@ -2187,6 +2242,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                state.last_xdg_press=None;
+                state.window_interaction.cancel();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
@@ -2255,6 +2312,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.render_scheduler.set_seat_active(false);
             state.continuous_redraw.set_seat_active(false);
             state.window_interaction.cancel();
+            state.last_xdg_press=None;
             eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
     })?;
@@ -2797,6 +2855,26 @@ mod managed_role_commit_tests {
         assert!(accepts_managed_role_buffer(Some((1280,800)),(1280,800)));
         assert!(!accepts_managed_role_buffer(Some((360,224)),(1280,800)));
         assert!(accepts_managed_role_buffer(Some((360,224)),(360,224)));
+    }
+}
+
+#[cfg(test)]
+mod native_xdg_move_grant_tests {
+    use super::take_xdg_pointer_press;
+    use smithay::utils::SERIAL_COUNTER;
+    #[test]
+    fn exact_real_press_serial_surface_and_one_shot_are_required() {
+        let serial=SERIAL_COUNTER.next_serial();
+        let unrelated=SERIAL_COUNTER.next_serial();
+        let mut grant=Some((42u64,serial));
+        assert!(!take_xdg_pointer_press(&mut grant,&42u64,unrelated));
+        assert!(grant.is_none());
+        grant=Some((42,serial));
+        assert!(!take_xdg_pointer_press(&mut grant,&43,serial));
+        assert!(grant.is_none());
+        grant=Some((42,serial));
+        assert!(take_xdg_pointer_press(&mut grant,&42,serial));
+        assert!(!take_xdg_pointer_press(&mut grant,&42,serial));
     }
 }
 
