@@ -240,28 +240,7 @@ panel_pid="$(sed -n 's/^MELANIA_LABWC_SERVICE_STARTED=panel pid=//p' "$temp/sess
 kill -TERM "$panel_pid"
 recovery=0
 for _ in {1..95}; do
-  if grep -q '^MELANIA_LABWC_COMPONENT_RECOVERED=panel
-    s.shutdown(socket.SHUT_WR)
-    assert s.recv(100)==b"OK\nEND\n"
-PY
-for _ in {1..80}; do
-  if ! kill -0 "$pid" 2>/dev/null; then break; fi
-  sleep .1
-done
-if kill -0 "$pid" 2>/dev/null; then
-  echo "MELANIA_LABWC_SMOKE_FAIL=logout_did_not_terminate_session" >&2
-  exit 1
-fi
-wait "$pid" || {
-  cat "$temp/session.log" >&2
-  echo "MELANIA_LABWC_SMOKE_FAIL=labwc_exit_failed" >&2
-  exit 1
-}
-pid=''
-socket_path=''
-echo "MELANIA_LABWC_REAL_LOGOUT_PASS=true"
-echo "MELANIA_LABWC_REAL_NESTED_SESSION_PASS=true"
- "$temp/session.log"; then
+  if grep -q '^MELANIA_LABWC_COMPONENT_RECOVERED=panel$' "$temp/session.log"; then
     recovery=1
     break
   fi
