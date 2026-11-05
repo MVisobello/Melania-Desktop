@@ -38,7 +38,7 @@ class KernelEventRouterStage106(unittest.TestCase):
             self.assertIn("DrmFlipEventRouter::default()",path)
             self.assertIn("wait_for_kms_page_flip_routed(",path)
             self.assertIn("&mut event_router,",path)
-            self.assertIn("flip_ledger.complete_flip(kernel_frame)",path)
+            self.assertIn("flip_ledger.complete_vm_flip(kernel_frame)",path)
             self.assertIn("PageFlipFlags::EVENT",path)
         self.assertIn("MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=24",GUEST)
         self.assertIn("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK=2",GUEST)
