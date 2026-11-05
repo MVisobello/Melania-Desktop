@@ -18,10 +18,13 @@ use smithay::backend::{
     },
     drm::{gbm::framebuffer_from_dmabuf, DrmDeviceFd},
     egl::{EGLContext, EGLDisplay},
-    renderer::{gles::GlesRenderer, Bind, Color32F, Frame, Renderer},
+    renderer::{gles::GlesRenderer, Bind, Color32F, Frame, ImportMem, Renderer},
 };
 use smithay::utils::{DeviceFd, Rectangle, Transform};
-use std::{error::Error, os::fd::OwnedFd, thread, time::{Duration, Instant}};
+use std::{
+    error::Error, io::{Read,Write}, os::{fd::OwnedFd,unix::net::UnixStream},
+    thread, time::{Duration, Instant},
+};
 
 struct Restore<'a> {
     card: &'a DrmDeviceFd,
@@ -227,5 +230,174 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
         println!("MELANIA_NATIVE_GBM_KMS_REUSED_DMA_BUFS=2");
         println!("MELANIA_NATIVE_GBM_KMS_24_GPU_FRAMES_PASS=true");
     }
+    Ok(())
+}
+
+
+/// Stage109: a REAL Wayland scene drawn on the GPU and submitted to KMS.
+///
+/// The input is the same versioned 1280x800 owned wl_shm compositor scene
+/// produced by wayland_bridge.rs for Stage105. The only change is that each
+/// authenticated scene snapshot is uploaded via Smithay ImportMem to a GLES
+/// texture, rendered into alternating genuine GBM scanout DMA-BUFs, then
+/// submitted to an actual VirtIO DRM CRTC. No synthetic color frames or
+/// screenshot files enter this path. libseat owns the original descriptor.
+///
+/// This remains an EXPLICIT 24-frame QEMU checkpoint. The Wayland server
+/// gates the libseat session, DMI and dedicated TTY before calling it.
+/// Nothing here registers a production login or enables native readiness.
+pub fn qemu_wayland_gpu_scene_stream(
+    mut stream:UnixStream, card_fd:OwnedFd,
+)->Result<(),Box<dyn Error>> {
+    const W:usize=1280;
+    const H:usize=800;
+    const TOTAL:u64=24;
+    stream.set_read_timeout(Some(Duration::from_secs(12)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(7)))?;
+    let card=DrmDeviceFd::new(DeviceFd::from(card_fd));
+    let topology=crate::native_output_topology::inspect_stable_active_outputs(&card)?;
+    let route=topology.single_active()?;
+    let crtc=route.crtc;
+    let connector=route.connector;
+    let original=card.get_crtc(crtc)?;
+    let mode=original.mode().ok_or("Wayland GPU CRTC has no active mode")?;
+    if mode.size()!=(W as u16,H as u16) ||
+       original.framebuffer()!=Some(route.original_fb) {
+        return Err("Wayland GPU CRTC baseline framebuffer/mode changed".into());
+    }
+    crate::renderer::validate_gbm_output_dimensions(W as u32,H as u32,2)?;
+
+    let gbm=GbmDevice::new(card.clone())?;
+    let mut allocator=DmabufAllocator(GbmAllocator::new(
+        gbm.clone(),GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+    ));
+    let mut a=allocator.create_buffer(W as u32,H as u32,
+        Fourcc::Argb8888,&[Modifier::Linear])?;
+    let mut b=allocator.create_buffer(W as u32,H as u32,
+        Fourcc::Argb8888,&[Modifier::Linear])?;
+    let fb_a=framebuffer_from_dmabuf(&card,&gbm,&a,true,true)?;
+    let fb_b=framebuffer_from_dmabuf(&card,&gbm,&b,true,true)?;
+    let handles=[*fb_a.as_ref(),*fb_b.as_ref()];
+    let display=unsafe {EGLDisplay::new(gbm)}?;
+    let context=EGLContext::new(&display)?;
+    let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    // The XRGB8888 wl_shm scene has no meaningful alpha channel.
+    // Never interpret padding bytes as transparency on the target.
+    if !renderer.mem_formats().any(|fmt|fmt==Fourcc::Xrgb8888) {
+        return Err("QEMU GLES cannot import the compositor's XRGB8888 image".into());
+    }
+    let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
+    let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
+    let mut rollback=Restore {
+        card:&card,original,connector,submitted:false,restored:false,
+    };
+    println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_READY=true");
+    println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",
+             topology.active.len());
+    let attempt=(||->Result<(),Box<dyn Error>> {
+        let mut prior_identity:Option<(u64,u64,u64)>=None;
+        let mut prior_pixels:Option<Vec<u8>>=None;
+        for index in 0..TOTAL {
+            let mut header=[0u8;32];
+            stream.read_exact(&mut header)?;
+            if &header[..4]!=b"MLF1" {
+                return Err("GPU Wayland frame header has wrong protocol version".into());
+            }
+            let epoch=u64::from_le_bytes(header[4..12].try_into()?);
+            let sequence=u64::from_le_bytes(header[12..20].try_into()?);
+            let generation=u64::from_le_bytes(header[20..28].try_into()?);
+            let length=u32::from_le_bytes(header[28..32].try_into()?) as usize;
+            if length!=W*H*4 || sequence==0 {
+                return Err("GPU Wayland scene has invalid frame buffer dimensions".into());
+            }
+            if prior_identity.is_some_and(|(old_epoch,old_sequence,old_generation)|
+                epoch!=old_epoch || sequence<=old_sequence || generation<=old_generation
+            ) {
+                return Err("GPU Wayland compositor sent stale or reordered frame".into());
+            }
+            let mut pixels=vec![0u8;W*H*4];
+            stream.read_exact(&mut pixels)?;
+            if prior_pixels.as_ref().is_some_and(|old|*old==pixels) {
+                return Err("GPU Wayland composed scene did not change pixels".into());
+            }
+
+            // This is the native compositor's real, owned Wayland wl_shm
+            // composite, not a test card or synthetic EGL clear color.
+            let texture=renderer.import_memory(
+                &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
+            )?;
+            let target=if index%2==0 {&mut a} else {&mut b};
+            let mut bound=renderer.bind(target)?;
+            let mut frame=renderer.render(&mut bound,
+                (W as i32,H as i32).into(),Transform::Normal)?;
+            let output_rect=Rectangle::from_size((W as i32,H as i32).into());
+            let src=Rectangle::from_size((W as f64,H as f64).into());
+            frame.clear(Color32F::new(0.0,0.0,0.0,1.0),&[output_rect])?;
+            // GlesFrame's concrete overload expects custom shader args
+            // even when the default texture shader is selected.
+            frame.render_texture_from_to(
+                &texture,src,output_rect,&[output_rect],&[],
+                Transform::Normal,1.0,None,&[],
+            )?;
+            frame.finish()?.wait()?;
+            drop(bound);
+
+            let framebuffer=handles[index as usize%2];
+            if index==0 {
+                rollback.submitted=true;
+                card.set_crtc(crtc,Some(framebuffer),original.position(),
+                              &[connector],Some(mode))?;
+            } else {
+                flip_ledger.begin_flip()
+                    .map_err(|err|format!("Wayland GPU duplicate flip: {err:?}"))?;
+                let deadline=Instant::now()+Duration::from_secs(3);
+                loop {
+                    match card.page_flip(crtc,framebuffer,PageFlipFlags::EVENT,None) {
+                        Ok(())=>break,
+                        Err(err) if err.raw_os_error()==Some(11) &&
+                            Instant::now()<deadline => {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(err)=>return Err(err.into()),
+                    }
+                }
+                let vblank=crate::native_drm_flip::wait_for_kms_page_flip_routed(
+                    &card,crtc,Duration::from_secs(3),&mut event_router,
+                )?;
+                flip_ledger.complete_vm_flip(vblank)
+                    .map_err(|err|format!("Wayland GPU VBlank mismatch: {err:?}"))?;
+            }
+            // A kernel page flip event alone is NOT evidence that the desired
+            // framebuffer was routed to this physical CRTC/connector.
+            wait_for_scanout(&card,crtc,connector,framebuffer)?;
+            println!("MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE={}",index+1);
+            if index>0 {
+                println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
+                         flip_ledger.completed_count());
+            }
+            if index+1==TOTAL {
+                // Parent Smithay must not return success before restored VT.
+                rollback.restore()?;
+            }
+            let mut ack=[0u8;29];
+            ack[..4].copy_from_slice(b"MLA1");
+            ack[4..12].copy_from_slice(&epoch.to_le_bytes());
+            ack[12..20].copy_from_slice(&sequence.to_le_bytes());
+            ack[20..28].copy_from_slice(&generation.to_le_bytes());
+            ack[28]=0;
+            stream.write_all(&ack)?;
+            stream.flush()?;
+            println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
+            prior_identity=Some((epoch,sequence,generation));
+            prior_pixels=Some(pixels);
+        }
+        Ok(())
+    })();
+    let restored=rollback.restore();
+    attempt?;
+    restored?;
+    println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");
+    println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
+    println!("NATIVE_SESSION_READY=false");
     Ok(())
 }

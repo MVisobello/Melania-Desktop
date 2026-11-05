@@ -1210,6 +1210,81 @@ rm -f "$long_server_log" "$long_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage109: prove a real Smithay Wayland client-owned wl_shm scene is
+# imported into a GLES texture, rendered into real GPU-backed GBM DMA-BUF
+# scanout targets and presented by kernel DRM KMS. This is not the
+# synthetic standalone GPU clear test or CPU dumb-buffer compositor.
+gpu_scene_server_log="$(mktemp -t melania-gpu-scene-server-XXXXXX)"
+gpu_scene_client_log="$(mktemp -t melania-gpu-scene-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_QEMU_FRAME_TARGET=24 \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=24 \
+  timeout --signal=TERM --kill-after=3s 120s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$gpu_scene_server_log" 2>&1 &
+gpu_scene_server_pid=$!
+gpu_scene_socket=''
+for attempt in $(seq 1 100); do
+  gpu_scene_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$gpu_scene_server_log" | head -n 1)"
+  [[ -n "$gpu_scene_socket" ]] && break
+  kill -0 "$gpu_scene_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$gpu_scene_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$gpu_scene_server_log"; then
+  cat "$gpu_scene_server_log"
+  kill "$gpu_scene_server_pid" 2>/dev/null || true
+  fatal 'GPU_Wayland_KMS_server_never_started'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24 WAYLAND_DISPLAY="$gpu_scene_socket" \
+  timeout --signal=TERM --kill-after=3s 105s \
+  "$continuous_client" > "$gpu_scene_client_log" 2>&1; then
+  cat "$gpu_scene_server_log" "$gpu_scene_client_log"
+  kill "$gpu_scene_server_pid" 2>/dev/null || true
+  fatal 'GPU_Wayland_scene_client_failed'
+fi
+if ! wait "$gpu_scene_server_pid"; then
+  cat "$gpu_scene_server_log" "$gpu_scene_client_log"
+  fatal 'GPU_Wayland_KMS_owner_failed'
+fi
+for index in $(seq 1 24); do
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE=$index$" "$gpu_scene_server_log" ||
+    fatal "GPU_real_Wayland_scene_frame_${index}_not_on_CRTC"
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index$" "$gpu_scene_server_log" ||
+    fatal "GPU_real_Wayland_scene_frame_${index}_missing_kernel_ack"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$gpu_scene_server_log" ||
+    fatal "GPU_real_Wayland_frame_${index}_not_retired"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$gpu_scene_client_log" ||
+    fatal "GPU_real_Wayland_client_${index}_not_released"
+done
+for marker in \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_READY=true' \
+  'MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS=1' \
+  'MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER=23' \
+  'MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2' \
+  'MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=24' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -q "^$marker$" "$gpu_scene_server_log" || {
+    cat "$gpu_scene_server_log"
+    fatal "GPU_Wayland_scene_missing_${marker}"
+  }
+done
+rm -f "$gpu_scene_server_log" "$gpu_scene_client_log"
+report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_GBM_24_FRAMES_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage105: an actual ONE-PROCESS QEMU DRM/Wayland compositor must remain
 # alive after its 24th real client frame. SIGTERM triggers orderly stream
 # EOF, verified original CRTC/connector rollback and libseat device release.
