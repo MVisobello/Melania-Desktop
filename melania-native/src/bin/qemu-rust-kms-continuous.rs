@@ -242,9 +242,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 // EOF at a frame boundary is an orderly shutdown request.
                 // EOF mid-header/pixels is a fatal truncated transmission.
                 if stream.read(&mut header[..1])?==0 {
-                    if frames_seen==0 {
-                        return Err("persistent DRM closed before first frame".into());
-                    }
+                    // A desktop may exit before any window has ever been
+                    // mapped. No modeset was submitted: restore is a no-op.
                     break;
                 }
                 stream.read_exact(&mut header[1..])?;
