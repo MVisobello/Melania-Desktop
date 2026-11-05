@@ -33,7 +33,6 @@ on:
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
       - scripts/capture-qemu-real-xdg-popup.py
-      - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
       - scripts/capture-qemu-real-layer-panel.py
@@ -69,7 +68,6 @@ on:
       - tests/test_native_xdg_qmp_role_pixels.py
       - tests/test_native_authenticated_resize_qemu_stage114.py
       - tests/test_native_alt_tab_qemu_stage116.py
-      - tests/test_native_xdg_popup_qemu_stage118.py
       - tests/test_native_xdg_popup_qemu_stage118.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
