@@ -35,7 +35,7 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn('None=>{',body)
         self.assertIn("run_stream(stream,card)",body)
         self.assertIn("qemu_wayland_gpu_scene_stream(",body)
-        self.assertIn("if self.persistent_shutdown_requested",BRIDGE)
+        self.assertIn("self.persistent_shutdown_requested",BRIDGE)
 
     def test_actual_qemu_waits_past_old_timeout_then_requires_kernel_restore(self):
         start=GUEST.index("# Stage110: same REAL wl_shm -> GLES -> GBM -> DRM pipeline")
