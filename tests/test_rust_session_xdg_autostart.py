@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 SRC=(ROOT/"melania-settings/src/autostart_main.rs").read_text()
 CARGO=(ROOT/"melania-settings/Cargo.toml").read_text()
 SUP=(ROOT/"scripts/melania-labwc-supervisor").read_text()
+RUST_SUP=(ROOT/"melania-services/src/supervisor.rs").read_text()
 LAUNCH=(ROOT/"scripts/melania-labwc-session").read_text()
 CI=(ROOT/".github/workflows/linux-verify.yml").read_text()
 class XdgAutostartContracts(unittest.TestCase):
@@ -30,11 +31,11 @@ class XdgAutostartContracts(unittest.TestCase):
         self.assertIn('MELANIA_EXTERNAL_COMPOSITOR',SRC)
     def test_supervisor_runs_autostart_once_only_in_full_login(self):
         self.assertIn('if [[ "${MELANIA_NESTED_SESSION:-0}" != 1 ]]; then',SUP)
-        self.assertIn('"$BIN/melania-autostart" &',SUP)
-        self.assertIn('MELANIA_LABWC_XDG_AUTOSTART_DISPATCHED=true',SUP)
-        self.assertIn('melania-autostart melania-inputctl; do',LAUNCH)
+        self.assertIn('bin.join("melania-autostart")',RUST_SUP)
+        self.assertIn('MELANIA_LABWC_XDG_AUTOSTART_DISPATCHED=true',RUST_SUP)
+        self.assertIn('melania-autostart melania-inputctl melania-session-supervisor; do',LAUNCH)
         self.assertIn('cargo test -p melania-settings --bin melania-autostart',CI)
-        self.assertNotIn('sudo ',SUP)
+        self.assertNotIn('sudo ',SUP+RUST_SUP)
         for path in ("scripts/melania-labwc-session","scripts/melania-labwc-supervisor"):
             result=subprocess.run(["bash","-n",str(ROOT/path)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
