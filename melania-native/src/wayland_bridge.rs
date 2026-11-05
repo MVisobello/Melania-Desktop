@@ -889,6 +889,14 @@ impl BridgeState {
 }
 
 impl BridgeState {
+    /// A state change must revoke the grab of its own surface, not one
+    /// belonging to a different Wayland client.
+    fn cancel_surface_grab(&mut self,surface:&WlSurface) {
+        if let Some(key)=self.known_window_surfaces.id_of(surface) {
+            self.window_interaction.cancel_for_key(key);
+        }
+    }
+
     /// Apply actual xdg_toplevel requests to the QEMU compositor state and
     /// configure the client. A new client commit is still required for the
     /// maximized-sized wl_shm content to become visible at its full size.
@@ -911,7 +919,9 @@ impl BridgeState {
             } else {false}
         };
         let rectangle=window.geometry();
+        if changed { self.cancel_surface_grab(&surface); }
         top.with_pending_state(|pending| {
+            pending.states.unset(xdg_toplevel::State::Resizing);
             if enabled {
                 pending.states.set(xdg_toplevel::State::Maximized);
                 pending.states.unset(xdg_toplevel::State::Fullscreen);
@@ -956,7 +966,9 @@ impl BridgeState {
             } else {false}
         };
         let rectangle=window.geometry();
+        if changed { self.cancel_surface_grab(&surface); }
         top.with_pending_state(|pending| {
+            pending.states.unset(xdg_toplevel::State::Resizing);
             if enabled {
                 pending.states.set(xdg_toplevel::State::Fullscreen);
                 pending.states.unset(xdg_toplevel::State::Maximized);

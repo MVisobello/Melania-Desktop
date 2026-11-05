@@ -142,6 +142,13 @@ impl WindowInteraction {
     /// revokes the current grab. A late motion is then ignored.
     pub fn end(&mut self)->Option<u64> { self.active.take().map(|a|a.key) }
     pub fn cancel(&mut self) { self.active=None; }
+    /// Reject stale role changes from other clients without dropping
+    /// the pointer grab currently owned by this window.
+    pub fn cancel_for_key(&mut self,key:u64)->bool {
+        if self.active_key()!=Some(key) {return false;}
+        self.cancel();
+        true
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +217,19 @@ mod tests {
                    Some((5,WindowRect{x:0,y:0,width:520,height:344})));
         assert_eq!(active.motion(1279.0,799.0),
                    Some((5,WindowRect{x:424,y:272,width:96,height:72})));
+    }
+
+    #[test]
+    fn role_transition_cancels_only_matching_grab() {
+        let mut model=WindowInteraction::default();
+        assert!(model.begin(7,rect(),200.0,140.0,
+                            InteractionKind::Resize(ResizeDirection::TopLeft)));
+        assert!(!model.cancel_for_key(8));
+        assert_eq!(model.active_key(),Some(7));
+        assert!(model.cancel_for_key(7));
+        assert_eq!(model.active_key(),None);
+        assert!(model.motion(320.0,260.0).is_none());
+        assert!(!model.cancel_for_key(7));
     }
 
     #[test]

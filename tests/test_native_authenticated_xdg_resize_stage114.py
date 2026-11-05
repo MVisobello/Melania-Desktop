@@ -70,6 +70,27 @@ class NativeAuthenticatedResize114(unittest.TestCase):
         self.assertLess(section.index("self.dynamic_scene.upsert(key,x,y,pixels)"),
                         section.index("window.update_normal_geometry("))
 
+    def test_role_switch_revokes_only_its_grab_and_clears_resizing(self):
+        begin=BRIDGE.index("fn cancel_surface_grab(&mut self,surface:&WlSurface)")
+        end=BRIDGE.index("fn request_managed_maximize(",begin)
+        helper=BRIDGE[begin:end]
+        self.assertIn("self.known_window_surfaces.id_of(surface)",helper)
+        self.assertIn("self.window_interaction.cancel_for_key(key)",helper)
+        for start_marker,end_marker in (
+            ("fn request_managed_maximize(", "fn request_managed_fullscreen("),
+            ("fn request_managed_fullscreen(", "\\n}\\n\\nimpl BridgeState {"),
+        ):
+            start=BRIDGE.index(start_marker)
+            end=BRIDGE.find(end_marker,start)
+            self.assertGreater(end,start)
+            role=BRIDGE[start:end]
+            self.assertIn("if changed { self.cancel_surface_grab(&surface); }",role)
+            self.assertIn("pending.states.unset(xdg_toplevel::State::Resizing)",role)
+            self.assertLess(role.index("self.cancel_surface_grab(&surface)"),
+                            role.index("top.send_pending_configure()"))
+        self.assertIn("fn role_transition_cancels_only_matching_grab()",GEOMETRY)
+        self.assertIn("pub fn cancel_for_key(&mut self,key:u64)->bool",GEOMETRY)
+
     def test_releasing_real_mouse_clears_resizing_state(self):
         start=BRIDGE.index("InputEvent::PointerButton {event} =>")
         end=BRIDGE.index("state.delivered_buttons+=1;",start)
