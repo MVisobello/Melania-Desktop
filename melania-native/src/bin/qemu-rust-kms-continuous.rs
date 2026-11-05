@@ -212,14 +212,45 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         else if real_gtk_panel {Some(1)}
         else {None};
     let configured=std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok();
-    let total=melania_native::native_frame_budget::receiver_frame_budget(
-        configured.as_deref(),gtk_expected,
-    )?;
+    // The new VM-only mode runs until the in-process Wayland owner closes its
+    // transport on SIGTERM/SIGINT. No implicit frame budget or host login.
+    // Legacy QMP tests keep their exact, finite frame contracts.
+    let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+        .as_deref()==Ok("YES_DISPOSABLE_QEMU");
+    if persistent && (
+        std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()!=Ok("YES_QEMU_VM") ||
+        configured.is_some() || gtk_expected.is_some() ||
+        std::env::var_os("MELANIA_NATIVE_QEMU_FRAME_TARGET").is_some()
+    ) {
+        return Err("persistent DRM requires one-process QEMU, no legacy frame budget or GTK proof".into());
+    }
+    let total=if persistent {None} else {
+        Some(melania_native::native_frame_budget::receiver_frame_budget(
+            configured.as_deref(),gtk_expected,
+        )?)
+    };
+    let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut previous_identity:Option<(u64,u64,u64)>=None;
-        for index in 0..total {
+        // One CRTC+two retained dumb buffers, with bounded transport and
+        // kernel event verification on each flip. No ordinal limit here.
+        loop {
+            if total.is_some_and(|limit|frames_seen>=limit) {break;}
+            let index=frames_seen;
             let mut header=[0u8;32];
-            stream.read_exact(&mut header)?;
+            if persistent {
+                // EOF at a frame boundary is an orderly shutdown request.
+                // EOF mid-header/pixels is a fatal truncated transmission.
+                if stream.read(&mut header[..1])?==0 {
+                    if frames_seen==0 {
+                        return Err("persistent DRM closed before first frame".into());
+                    }
+                    break;
+                }
+                stream.read_exact(&mut header[1..])?;
+            } else {
+                stream.read_exact(&mut header)?;
+            }
             if &header[..4]!=b"MLF1" {
                 return Err("QEMU continuous KMS frame magic mismatch".into());
             }
@@ -344,7 +375,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 std::io::stdout().flush()?;
             }
             if std::env::var("MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS")
-                    .as_deref()==Ok("YES_QEMU_VM") && index+1==total {
+                    .as_deref()==Ok("YES_QEMU_VM") && total==Some(index+1) {
                 println!("MELANIA_RUST_CONTINUOUS_TWO_WINDOW_FRAME_VISIBLE={}",index+1);
                 std::io::stdout().flush()?;
             }
@@ -373,14 +404,15 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // QMP needs time to capture the actual framebuffer on the
             // seventh and twelfth presentations (not just its FB_ID).
             thread::sleep(Duration::from_millis(
-                if (reopen && (index==12 || index==13)) ||
+                if persistent {0}
+                else if (reopen && (index==12 || index==13)) ||
                    (pointer_proof && index==12) ||
                    (managed_role_qmp && matches!(index+1,3|5|7|9|13|14)) ||
                    real_gtk_panel || index==6 || index==11 {
                     if real_gtk_start && index==2 {5500} else {2500}
                    } else {350}
             ));
-            if index+1==total {rollback.restore()?;}
+            if total==Some(index+1) {rollback.restore()?;}
             let mut ack=[0u8;29];
             ack[..4].copy_from_slice(b"MLA1");
             ack[4..12].copy_from_slice(&epoch.to_le_bytes());
@@ -390,6 +422,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_ACKED={} generation={}",index+1,generation);
+            frames_seen=frames_seen.checked_add(1)
+                .ok_or("persistent DRM frame counter exhausted")?;
             if pointer_proof && index+1==12 {
                 // This exact scenario marker is delivered LIVE to the QMP
                 // host via the serial tail of the KMS log; the Smithay
@@ -408,7 +442,11 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         card.destroy_framebuffer(fb1)?;
         card.destroy_dumb_buffer(db2)?;
         card.destroy_dumb_buffer(db1)?;
-        println!("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}");
+        if persistent {
+            println!("MELANIA_RUST_PERSISTENT_KMS_STOPPED_FRAMES={frames_seen}");
+        } else {
+            println!("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={frames_seen}");
+        }
         if real_gtk_two_frame {
             println!("MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true");
         }
