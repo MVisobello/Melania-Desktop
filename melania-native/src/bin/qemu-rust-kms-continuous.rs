@@ -155,7 +155,24 @@ pub(crate) fn run_embedded(stream:UnixStream,card:File)->Result<(),Box<dyn Error
     if std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()!=Ok("YES_QEMU_VM") {
         return Err("embedded KMS needs explicit QEMU opt-in".into());
     }
-    run_stream(stream,card)
+    // QEMU-only Stage109: actual owned wl_shm scene pixels -> GLES texture
+    // -> reused GBM DMA-BUF -> DRM page flip -> verified CRTC -> MLA1 ACK.
+    // The existing CPU dumb-buffer path remains the default and rollback
+    // behavior is unchanged unless this exact VM experiment is requested.
+    match std::env::var("MELANIA_NATIVE_GPU_WAYLAND_KMS").ok().as_deref() {
+        None=>run_stream(stream,card),
+        Some("YES_DISPOSABLE_QEMU")=>{
+            if std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").is_ok() ||
+               std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").as_deref()!=Ok("24") ||
+               std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").as_deref()!=Ok("24") {
+                return Err("GPU Wayland scene requires explicit finite 24-frame isolated QEMU mode".into());
+            }
+            melania_native::native_gbm_scanout::qemu_wayland_gpu_scene_stream(
+                stream,card.into(),
+            )
+        }
+        Some(_)=>Err("unknown native GPU Wayland opt-in denied".into()),
+    }
 }
 
 fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
