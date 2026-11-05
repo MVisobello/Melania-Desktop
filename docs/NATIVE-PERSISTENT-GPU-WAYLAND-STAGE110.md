@@ -26,10 +26,14 @@ the default for non-GPU QEMU tests.
 - A GPU/pageflip/read/protocol failure aborts the session instead of
   returning a successful Wayland callback or silently reverting to CPU.
 
-QEMU now performs real client scene updates for 24 frames, verifies each
-actual GPU presentation and client ACK, waits 15 seconds without damage,
-confirms the compositor is still alive, terminates it by SIGTERM and
-checks GPU kernel CRTC rollback and libseat release.
+QEMU now performs real client scene updates for 48 frames, verifies each
+actual GPU presentation and client ACK, pauses 15 seconds after frame 24,
+resumes to frame 48, then checks another 15-second idle, SIGTERM shutdown,
+kernel CRTC rollback and libseat release. The end-to-end client watchdog
+allows 240 seconds for 48 actual page flips under TCG software emulation.
+The previous 105-second watchdog demonstrably expired after 46 successful
+kernel-confirmed frames in CI; this change does not waive any ACK, frame,
+rollback, or per-frame validation requirement.
 
 ## Why COSMIC remains the architectural reference
 
