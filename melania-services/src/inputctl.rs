@@ -180,7 +180,7 @@ fn load(p:&Path)->Result<InputPrefs,String>{
     let text=fs::read_to_string(p).map_err(|e|e.to_string())?;
     InputPrefs::parse(&text)
 }
-fn render(p:InputPrefs)->Result<String,String>{
+fn render(p:InputPrefs,shortcuts:&ShortcutPrefs)->Result<String,String>{
     if TEMPLATE.matches(END).count()!=1{return Err("unexpected labwc template".into());}
     // All interpolated values are numeric or exact yes/no constants.
     let value=|on|if on{"yes"}else{"no"};
@@ -223,7 +223,7 @@ fn prepare(p:InputPrefs,shortcuts:&ShortcutPrefs,base:&Path)->Result<(),String>{
 }
 fn commit_and_reload(prefs:InputPrefs,shortcuts:&ShortcutPrefs,base:&Path,prefs_path:&Path)->Result<(),String>{
     write_atomic(prefs_path,&prefs.encoded())?;
-    prepare(prefs,base)?;
+    prepare(prefs,shortcuts,base)?;
     let status=Command::new("labwc").arg("--reconfigure").status()
         .map_err(|e|format!("cannot reload labwc: {e}"))?;
     if !status.success(){return Err("labwc did not reload input settings".into());}
