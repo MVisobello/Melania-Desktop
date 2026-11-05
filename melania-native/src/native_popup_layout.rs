@@ -63,7 +63,10 @@ mod tests {
         let popup=PopupPlacement::new(3,-55,-30,80,50).unwrap();
         assert_eq!(popup.absolute(20,18,1280,800),Some((-35,-12)));
         assert_eq!(popup.absolute(-1000,-1000,1280,800),None);
-        assert_eq!(popup.absolute(1280,2,1280,800),None);
+        // A popup can remain partly visible even when its parent origin is
+        // at the output edge; only reject it once its own left edge is offscreen.
+        assert_eq!(popup.absolute(1280,2,1280,800),Some((1225,-28)));
+        assert_eq!(popup.absolute(1335,2,1280,800),None);
         assert_eq!(popup.absolute(100,120,0,800),None);
         assert!(PopupPlacement::new(0,0,0,40,40).is_none());
         assert!(PopupPlacement::new(1,0,0,0,40).is_none());
