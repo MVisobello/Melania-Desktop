@@ -445,7 +445,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         if persistent {
             println!("MELANIA_RUST_PERSISTENT_KMS_STOPPED_FRAMES={frames_seen}");
         } else {
-            println!("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={frames_seen}");
+            let total=total.expect("finite QEMU proof must have a frame limit");
+            println!("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}");
         }
         if real_gtk_two_frame {
             println!("MELANIA_RUST_REAL_GTK_TWO_FRAME_KMS_PASS=true");
