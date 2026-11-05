@@ -33,7 +33,7 @@ impl DisplayRect {
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum LayoutError {InvalidOutput,OverlappingOutputs,CapacityExceeded}
+pub enum LayoutError {InvalidOutput,DuplicateOutput,OverlappingOutputs,CapacityExceeded}
 #[derive(Debug,Default)]
 pub struct OutputLayout {
     outputs:Vec<DisplayRect>,revision:u64,
@@ -61,6 +61,41 @@ impl OutputLayout {
         }
         self.revision=self.revision.wrapping_add(1);
         Ok(())
+    }
+    /// Apply one whole DRM connector/layout generation atomically. A pair
+    /// of real monitors may swap positions (or a dock may add/remove several
+    /// outputs at once); sequential set() calls would reject the intermediate
+    /// overlap although the final layout is valid. In case of a stale, duplicate,
+    /// overlapping or oversized snapshot the old routing stays untouched.
+    ///
+    /// Empty layouts are permitted for VT pause/all-disconnected: callers
+    /// MUST treat them as no drawable surface, never invent an output.
+    pub fn reconfigure(
+        &mut self, requested:impl IntoIterator<Item=DisplayRect>
+    )->Result<bool,LayoutError> {
+        let mut next=Vec::new();
+        for rect in requested {
+            if next.len()>=MAX_LAYOUT_OUTPUTS {
+                return Err(LayoutError::CapacityExceeded);
+            }
+            if !rect.valid() {
+                return Err(LayoutError::InvalidOutput);
+            }
+            if next.iter().any(|old:&DisplayRect|old.id==rect.id) {
+                return Err(LayoutError::DuplicateOutput);
+            }
+            if next.iter().any(|old:&DisplayRect|old.intersects(rect)) {
+                return Err(LayoutError::OverlappingOutputs);
+            }
+            next.push(rect);
+        }
+        next.sort_unstable_by_key(|rect|rect.id);
+        let mut old=self.outputs.clone();
+        old.sort_unstable_by_key(|rect|rect.id);
+        if old==next {return Ok(false);}
+        self.outputs=next;
+        self.revision=self.revision.wrapping_add(1);
+        Ok(true)
     }
     pub fn remove(&mut self,id:u32)->bool {
         if let Some(index)=self.outputs.iter().position(|o|o.id==id) {
@@ -103,6 +138,49 @@ mod tests {
         assert_eq!(m.revision(),revision);
         assert_eq!(m.get(1),Some(a(1,0,0,100,100)));
         assert!(!m.remove(0));
+    }
+    #[test]
+    fn atomic_monitor_swap_and_hotplug_no_transient_overlap() {
+        let mut m=OutputLayout::default();
+        assert_eq!(m.reconfigure([
+            a(1,0,0,1920,1080),a(2,1920,0,1280,800)
+        ]),Ok(true));
+        let first=m.revision();
+        // A sequential update would temporarily overlap the other output.
+        assert_eq!(m.set(a(1,1280,0,1920,1080)),Err(LayoutError::OverlappingOutputs));
+        assert_eq!(m.reconfigure([
+            a(2,0,0,1280,800),a(1,1280,0,1920,1080)
+        ]),Ok(true));
+        assert_eq!(m.revision(),first+1);
+        assert_eq!(m.route(1279.0,100.0),Some((2,1279.0,100.0)));
+        assert_eq!(m.route(1280.0,100.0),Some((1,0.0,100.0)));
+        let epoch=m.revision();
+        assert_eq!(m.reconfigure([
+            a(1,1280,0,1920,1080),a(2,0,0,1280,800)
+        ]),Ok(false));
+        assert_eq!(m.revision(),epoch);
+        assert_eq!(m.reconfigure([a(2,0,0,1280,800)]),Ok(true));
+        assert_eq!(m.route(1280.0,100.0),None);
+        assert_eq!(m.reconfigure([]),Ok(true));
+        assert_eq!(m.route(100.0,100.0),None);
+    }
+    #[test]
+    fn atomic_reconfigure_rejects_bad_topology_without_losing_active_outputs() {
+        let mut m=OutputLayout::default();
+        m.reconfigure([a(1,0,0,1280,800)]).unwrap();
+        let original=m.outputs().to_vec();
+        let epoch=m.revision();
+        let invalid=[
+            (vec![a(1,0,0,1280,800),a(1,1280,0,1920,1080)],LayoutError::DuplicateOutput),
+            (vec![a(1,0,0,1280,800),a(2,1279,0,1920,1080)],LayoutError::OverlappingOutputs),
+            (vec![a(1,0,0,1280,800),a(2,1280,0,0,1080)],LayoutError::InvalidOutput),
+            ((1..=9).map(|id|a(id,(id as i32-1)*100,0,100,100)).collect(),LayoutError::CapacityExceeded),
+        ];
+        for (snapshot,error) in invalid {
+            assert_eq!(m.reconfigure(snapshot),Err(error));
+            assert_eq!(m.outputs(),original.as_slice());
+            assert_eq!(m.revision(),epoch);
+        }
     }
     #[test]
     fn hotplug_replacement_and_capacity_are_bounded() {
