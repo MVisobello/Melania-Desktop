@@ -145,6 +145,40 @@ done
 rm -f "$gpu_kms_log"
 report 'MELANIA_QEMU_NATIVE_GBM_KMS_TWO_REAL_FRAMES_PASS=true'
 
+# Stage108: prove that the same GPU/GBM KMS path reuses exactly two
+# output-sized DMA-BUFs for 24 real GLES renders and kernel page flips.
+# Every flip must be acknowledged by the kernel and validated on the CRTC
+# before its buffer is available for the next frame. This is NOT a login.
+gpu_stress_log="$(mktemp -t melania-gbm-stress-XXXXXX)"
+if ! MELANIA_NATIVE_VM_GBM_KMS=YES_DISPOSABLE_QEMU \
+     MELANIA_NATIVE_VM_GBM_STRESS=YES_DISPOSABLE_QEMU \
+    timeout --signal=TERM --kill-after=3s 90s \
+    "$binary" --experimental-gbm-kms-scanout < /dev/tty1 \
+    > "$gpu_stress_log" 2>&1; then
+  cat "$gpu_stress_log"
+  fatal 'native_24_GLES_DMA_BUF_KMS_scanouts_failed'
+fi
+for index in $(seq 1 24); do
+  grep -q "^MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=$index$" "$gpu_stress_log" ||
+    fatal "GPU_stress_real_CRTC_frame_${index}_missing"
+done
+for marker in \
+  'MELANIA_NATIVE_GBM_KMS_TOPOLOGY_STABLE_OUTPUTS=1' \
+  'MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK=24' \
+  'MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED=23' \
+  'MELANIA_NATIVE_GBM_KMS_REUSED_DMA_BUFS=2' \
+  'MELANIA_NATIVE_GBM_KMS_24_GPU_FRAMES_PASS=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true'; do
+  grep -q "^$marker$" "$gpu_stress_log" || {
+    cat "$gpu_stress_log"
+    fatal "GPU_stress_missing_${marker}"
+  }
+done
+rm -f "$gpu_stress_log"
+report 'MELANIA_QEMU_NATIVE_GBM_KMS_24_GPU_FRAMES_PASS=true'
+
 # Verify live old framebuffer metadata and acquired GEM handle lifecycle.
 # This audit opens DRM only INSIDE the disposable QEMU guest and calls
 # drmModeGetFB2 then GEM_CLOSE for each distinct returned GEM handle.
