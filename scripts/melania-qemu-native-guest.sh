@@ -1317,13 +1317,13 @@ if [[ -z "$persist_gpu_socket" ]] ||
   kill -TERM "$persist_gpu_server_pid" 2>/dev/null || true
   fatal 'persistent_GPU_Wayland_server_not_ready'
 fi
+# The guest uses QEMU TCG software CPU/GPU emulation. Allow time for
+# 48 *real* DRM event/GBM presentations plus the intentional 15s idle.
+# Comments must stay OUTSIDE the backslash-continued environment assignment:
+# otherwise Bash runs the client without its Wayland/48-frame parameters.
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=48 \
   MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
-  # The guest uses QEMU TCG software CPU/GPU emulation. This client
-  # needs enough time for 48 *real* DRM event/GBM presentations, plus the
-  # intentional 15-second idle, without weakening any kernel ACK assertion.
-  # The bounded watchdog still fails if the GPU truly stalls.
   timeout --signal=TERM --kill-after=3s 240s \
   "$continuous_client" > "$persist_gpu_client_log" 2>&1; then
   cat "$persist_gpu_server_log" "$persist_gpu_client_log"
@@ -1344,12 +1344,18 @@ if ! wait "$persist_gpu_server_pid"; then
   fatal 'persistent_GPU_Wayland_signal_rollback_failed'
 fi
 for index in $(seq 1 48); do
-  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE=$index$" "$persist_gpu_server_log" ||
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE=$index$" "$persist_gpu_server_log" || {
+    cat "$persist_gpu_server_log" "$persist_gpu_client_log"
     fatal "persistent_GPU_Wayland_CRTC_frame_${index}_missing"
-  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index$" "$persist_gpu_server_log" ||
+  }
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index$" "$persist_gpu_server_log" || {
+    cat "$persist_gpu_server_log" "$persist_gpu_client_log"
     fatal "persistent_GPU_Wayland_kernel_ack_${index}_missing"
-  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$persist_gpu_client_log" ||
+  }
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$persist_gpu_client_log" || {
+    cat "$persist_gpu_server_log" "$persist_gpu_client_log"
     fatal "persistent_GPU_Wayland_client_ack_${index}_missing"
+  }
 done
 for marker in \
   'MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true' \
