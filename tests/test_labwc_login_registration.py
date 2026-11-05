@@ -114,6 +114,7 @@ class ReversibleLabwcLogin(unittest.TestCase):
         folder.mkdir(mode=0o700)
         path=folder/login.USER_FILE
         path.write_text("other user's login setup\n")
+        path.chmod(0o600)
         with self.assertRaisesRegex(ValueError,"not managed"):
             login.register_user(self.config,self.checkout,verify=False)
         path.unlink()
