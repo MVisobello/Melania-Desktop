@@ -1285,6 +1285,85 @@ rm -f "$gpu_scene_server_log" "$gpu_scene_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_GBM_24_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage110: same REAL wl_shm -> GLES -> GBM -> DRM pipeline, but it must
+# remain alive without an artificial frame budget or socket idle timeout.
+# The signal is delivered to the real server; libseat owns the device and
+# must release it only after the GPU presenter restores the old CRTC.
+persist_gpu_server_log="$(mktemp -t melania-persist-gpu-server-XXXXXX)"
+persist_gpu_client_log="$(mktemp -t melania-persist-gpu-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$persist_gpu_server_log" 2>&1 &
+persist_gpu_server_pid=$!
+persist_gpu_socket=''
+for attempt in $(seq 1 100); do
+  persist_gpu_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$persist_gpu_server_log" | head -n 1)"
+  [[ -n "$persist_gpu_socket" ]] && break
+  kill -0 "$persist_gpu_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$persist_gpu_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$persist_gpu_server_log"; then
+  cat "$persist_gpu_server_log"
+  kill -TERM "$persist_gpu_server_pid" 2>/dev/null || true
+  fatal 'persistent_GPU_Wayland_server_not_ready'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
+  timeout --signal=TERM --kill-after=3s 105s \
+  "$continuous_client" > "$persist_gpu_client_log" 2>&1; then
+  cat "$persist_gpu_server_log" "$persist_gpu_client_log"
+  kill -TERM "$persist_gpu_server_pid" 2>/dev/null || true
+  fatal 'persistent_GPU_Wayland_client_failed'
+fi
+# This idle hold also proves that the GPU receiver doesn't reuse the
+# historical 12-second socket read deadline after the last KMS receipt.
+sleep 15
+if ! kill -0 "$persist_gpu_server_pid" 2>/dev/null; then
+  cat "$persist_gpu_server_log" "$persist_gpu_client_log"
+  fatal 'persistent_GPU_Wayland_exited_during_idle'
+fi
+kill -TERM "$persist_gpu_server_pid"
+if ! wait "$persist_gpu_server_pid"; then
+  cat "$persist_gpu_server_log" "$persist_gpu_client_log"
+  fatal 'persistent_GPU_Wayland_signal_rollback_failed'
+fi
+for index in $(seq 1 24); do
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE=$index$" "$persist_gpu_server_log" ||
+    fatal "persistent_GPU_Wayland_CRTC_frame_${index}_missing"
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index$" "$persist_gpu_server_log" ||
+    fatal "persistent_GPU_Wayland_kernel_ack_${index}_missing"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$persist_gpu_client_log" ||
+    fatal "persistent_GPU_Wayland_client_ack_${index}_missing"
+done
+for marker in \
+  'MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true' \
+  'MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -q "^$marker$" "$persist_gpu_server_log" || {
+    cat "$persist_gpu_server_log"
+    fatal "persistent_GPU_Wayland_missing_${marker}"
+  }
+done
+grep -Eq '^MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES=([2-9][4-9]|[3-9][0-9]|[1-9][0-9]{2,})$' "$persist_gpu_server_log" ||
+  fatal 'persistent_GPU_Wayland_end_frame_counter_missing'
+rm -f "$persist_gpu_server_log" "$persist_gpu_client_log"
+report 'MELANIA_QEMU_IN_PROCESS_PERSISTENT_GPU_WAYLAND_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage105: an actual ONE-PROCESS QEMU DRM/Wayland compositor must remain
 # alive after its 24th real client frame. SIGTERM triggers orderly stream
 # EOF, verified original CRTC/connector rollback and libseat device release.
