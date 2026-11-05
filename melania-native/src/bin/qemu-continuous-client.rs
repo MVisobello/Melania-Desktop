@@ -131,6 +131,17 @@ fn main()->Result<(),Box<dyn Error>> {
     let total=frame_budget(
         std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES").ok().as_deref(),12
     )? as u32;
+    // Only the Stage110 disposable-QEMU proof deliberately suspends client
+    // commits and resumes afterwards. No callback may be synthesized in the
+    // idle interval, and all resumed commits still require a real KMS ACK.
+    let pause_after=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER").ok();
+    let pause_for_gpu=match pause_after.as_deref() {
+        None=>false,
+        Some("24") if total==48 &&
+            std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT").as_deref()==Ok("YES_QEMU_VM")=>
+            true,
+        Some(_)=>return Err("GPU Wayland idle-resume proof requires exactly 48 QEMU client frames".into()),
+    };
     for index in 1..=total {
         // Every frame has a different real client-owned wl_shm image.
         let mut pixels=vec![0u8;W*H*4];
@@ -178,6 +189,15 @@ fn main()->Result<(),Box<dyn Error>> {
         std::io::stdout().flush()?;
         buffer.destroy();
         pool.destroy();
+        if pause_for_gpu && index==24 {
+            println!("MELANIA_NATIVE_GPU_WAYLAND_CLIENT_IDLE_AFTER_24=true");
+            std::io::stdout().flush()?;
+            // 15s exceeds the historical 12s DRM socket deadline. The
+            // compositor MUST remain healthy and accept frame 25 afterward.
+            thread::sleep(Duration::from_secs(15));
+            println!("MELANIA_NATIVE_GPU_WAYLAND_CLIENT_RESUMED_AFTER_IDLE=true");
+            std::io::stdout().flush()?;
+        }
     }
     if total==12 {
         println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_12_FRAMES_PASS=true");
