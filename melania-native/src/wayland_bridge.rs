@@ -12,7 +12,7 @@ use std::{
     io::{Read,Write},
     os::unix::{fs::PermissionsExt,net::{UnixDatagram,UnixListener,UnixStream}},
     path::{Path,PathBuf},
-    sync::Arc,
+    sync::{Arc,atomic::{AtomicBool,Ordering}},
     time::{Duration,Instant},
 };
 use smithay::{
@@ -64,6 +64,7 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+use signal_hook::consts::signal::{SIGINT,SIGTERM};
 
 struct NativeControlSocket(PathBuf);
 impl Drop for NativeControlSocket {
@@ -98,6 +99,10 @@ struct BridgeState {
     continuous_pending:Option<PlannedSceneFrame>,
     // Opt-in, disposable QEMU continuous renderer; the legacy proof is intact.
     continuous_kms_mode:bool,
+    // Strictly disposable QEMU mode: continue dispatching damage until a
+    // real SIGINT/SIGTERM, then drain ACKs and restore the owned CRTC.
+    persistent_kms_mode:bool,
+    persistent_shutdown_requested:bool,
     continuous_worker:Option<ContinuousKmsWorker>,
     // Keep one pending wl_shm buffer per real client surface, not globally.
     continuous_inflight:Option<(PlannedSceneFrame,Vec<(WlSurface,wl_buffer::WlBuffer)>)>,
@@ -256,7 +261,8 @@ impl BridgeState {
     // Stage46: in this isolated mode ContinuousRedraw is authoritative.
     // All DRM socket writes and ACK reads happen off the Smithay thread.
     fn submit_continuous_frame(&mut self)->Result<(),Box<dyn Error>> {
-        if !self.continuous_kms_mode || self.continuous_inflight.is_some() {
+        if !self.continuous_kms_mode || self.continuous_inflight.is_some()
+            || self.persistent_shutdown_requested {
             return Ok(());
         }
         // A fresh frame must originate from the currently active libseat
@@ -587,7 +593,7 @@ impl BridgeState {
                         // The dynamic scene is presented through the existing
                         // asynchronous real-ACK KMS path, never on mouse
                         // motion without a verified framebuffer result.
-                        if self.continuous_frame_count<self.continuous_frame_target {
+                        if (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
                             if let Err(error)=self.submit_continuous_frame() {
                                 eprintln!("dynamic QEMU drag KMS rejected: {error}");
                             }
@@ -986,7 +992,7 @@ impl BridgeState {
                 if changed {
                     self.note_scene_change();
                     if self.continuous_kms_mode &&
-                       self.continuous_frame_count<self.continuous_frame_target {
+                       (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
                         if let Err(error)=self.submit_continuous_frame(){
                             eprintln!("native IPC restore KMS rejected: {error}");
                         }
@@ -1540,7 +1546,7 @@ impl XdgShellHandler for BridgeState {
                self.dynamic_scene.set_visible(key,false)==Ok(true) {
                 self.note_scene_change();
                 if self.continuous_kms_mode &&
-                   self.continuous_frame_count<self.continuous_frame_target {
+                   (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
                     if let Err(error)=self.submit_continuous_frame(){
                         eprintln!("managed xdg minimize repaint refused: {error}");
                     }
@@ -1581,7 +1587,7 @@ impl XdgShellHandler for BridgeState {
             };
             if removed { self.note_scene_change(); }
             if removed && self.continuous_kms_mode &&
-               self.continuous_frame_count<self.continuous_frame_target {
+               (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
                 // A destroyed xdg surface changes retained pixels even if
                 // no surviving client submits a new wl_shm buffer.
                 if let Err(error)=self.submit_continuous_frame() {
@@ -1688,7 +1694,7 @@ impl WlrLayerShellHandler for BridgeState {
                 self.note_scene_change();
                 // The layer's old pixels must be invalidated and replaced
                 // by a subsequently ACKed native KMS frame.
-                if self.continuous_frame_count<self.continuous_frame_target {
+                if (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
                     let _=self.submit_continuous_frame();
                 }
             }
@@ -1933,7 +1939,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                             if state.dynamic_window_mode {
                                 if state.dynamic_scene.raise(id).unwrap_or(false) {
                                     state.note_scene_change();
-                                    if state.continuous_frame_count<state.continuous_frame_target {
+                                    if (state.persistent_kms_mode || state.continuous_frame_count<state.continuous_frame_target) {
                                         if let Err(error)=state.submit_continuous_frame() {
                                             eprintln!("dynamic QEMU raise KMS rejected: {error}");
                                         }
@@ -2083,6 +2089,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_redraw:ContinuousRedraw::default(),continuous_pending:None,
         continuous_kms_mode:std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
             .as_deref()==Ok("YES_QEMU_VM"),
+        persistent_kms_mode:std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+            .as_deref()==Ok("YES_DISPOSABLE_QEMU"),
+        persistent_shutdown_requested:false,
         continuous_worker:None,continuous_inflight:None,
         continuous_presentation_token:None,
         native_presentation_guard:NativePresentationGuard::default(),
@@ -2356,13 +2365,35 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // production GPU, atomic rollback or login-manager session.
     let integrated_kms=std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
+    let persistent_kms=state.persistent_kms_mode;
+    if persistent_kms && (
+        !integrated_kms || !state.dynamic_window_mode ||
+        !state.multi_window_mode || !state.managed_xdg_mode ||
+        state.continuous_reopen_mode || state.dynamic_pointer_proof_mode ||
+        state.dynamic_xdg_resize_mode || state.real_gtk_pixel_kms_mode ||
+        state.gtk_layer_mode || state.layer_pixels_mode ||
+        std::env::var_os("MELANIA_NATIVE_QEMU_FRAME_TARGET").is_some() ||
+        std::env::var_os("MELANIA_QEMU_CONTINUOUS_FRAMES").is_some()
+    ) {
+        return Err("persistent KMS restricted to managed dynamic two-window, in-process QEMU without finite proofs".into());
+    }
+    // Never register native login or run outside the existing disposable
+    // VM + dedicated VT guard in main.rs/receiver.
+    let shutdown_flag=Arc::new(AtomicBool::new(false));
+    if persistent_kms {
+        for signal in [SIGINT,SIGTERM] {
+            signal_hook::flag::register(signal,shutdown_flag.clone())?;
+        }
+        println!("MELANIA_NATIVE_PERSISTENT_KMS_STARTED=true");
+    }
     if integrated_kms && (
         !state.continuous_kms_mode || !state.live_stream ||
         !state.frame_callbacks_probe || state.async_kms_mode ||
         std::env::var("MELANIA_QEMU_CONTINUOUS_KMS").as_deref()
             !=Ok("YES_DISPOSABLE_QEMU") ||
-        std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
-            .ok().as_deref()!=Some(state.continuous_frame_target.to_string().as_str())
+        (!persistent_kms &&
+         std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")
+             .ok().as_deref()!=Some(state.continuous_frame_target.to_string().as_str()))
     ) {
         return Err("in-process KMS requires matching QEMU frame targets and explicit safeguards".into());
     }
@@ -2474,7 +2505,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // Always unwind the integrated renderer before libseat drops its FD.
     // A client error, libseat pause or Wayland dispatch failure must NOT
     // bypass KMS rollback by returning directly from this function.
-    while Instant::now()<deadline {
+    while (persistent_kms && !shutdown_flag.load(Ordering::Relaxed)) ||
+          (!persistent_kms && Instant::now()<deadline) {
         // Accept the Rust DRM consumer before processing client commits;
         // the socket is private to this disposable VM, not the host.
         if state.live_stream && state.stream.is_none() && state.async_stream.is_none() && state.continuous_worker.is_none() {
@@ -2523,7 +2555,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.poll_continuous_kms()?;
         }
         display.flush_clients()?;
-        if state.continuous_kms_mode &&
+        if state.continuous_kms_mode && !persistent_kms &&
            state.continuous_frame_count==state.continuous_frame_target {
             // Frame 13 in the optional tablet proof is compositor-owned
             // damage: NO new client commit and therefore NO callback.
@@ -2691,6 +2723,42 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             println!("MELANIA_NATIVE_SESSION_READY=false");
             return Ok(());
         }
+    }
+    if persistent_kms && shutdown_flag.load(Ordering::Relaxed) {
+        // Stop generating new KMS jobs, but allow an already-submitted frame
+        // to finish its real CRTC/vblank receipt before closing the transport.
+        // A timeout or transport failure exits via the ERROR cleanup branch.
+        state.persistent_shutdown_requested=true;
+        let drain_deadline=Instant::now()+Duration::from_secs(4);
+        while state.continuous_inflight.is_some() &&
+              Instant::now()<drain_deadline {
+            state.poll_continuous_kms()?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if state.continuous_inflight.is_some() {
+            state.native_presentation_guard.revoke();
+            return Err("persistent KMS failed to drain pending DRM flip before shutdown".into());
+        }
+        state.native_presentation_guard.revoke();
+        // With no jobs in flight this shuts down the writer; the receiver
+        // observes EOF at a complete frame boundary, rolls the CRTC back,
+        // frees FB objects and returns before libseat closes the device.
+        state.continuous_worker.take();
+        if let Some(join)=integrated_thread.take() {
+            join.join()
+                .map_err(|_|"persistent DRM rollback thread panicked")?
+                .map_err(|error|format!("persistent DRM rollback failed: {error}"))?;
+        } else {
+            return Err("persistent DRM missing owned presenter thread".into());
+        }
+        let Some(mut owner)=integrated_drm.take() else {
+            return Err("persistent DRM lost its libseat owner".into());
+        };
+        owner.release().map_err(|error|format!("{error}"))?;
+        println!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true");
+        println!("MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true");
+        println!("NATIVE_SESSION_READY=false");
+        return Ok(());
     }
     Err(format!(
         "QEMU Wayland input bridge incomplete: focused={} keys={} buttons={}",
