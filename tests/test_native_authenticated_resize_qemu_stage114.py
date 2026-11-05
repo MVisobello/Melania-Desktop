@@ -46,7 +46,7 @@ class RealAuthenticatedResizeQemu114(unittest.TestCase):
         for marker in (
             "MELANIA_NATIVE_XDG_CLIENT_RESIZE_GRANTED=1 edge=TopLeft",
             "MELANIA_NATIVE_XDG_RESIZE_CONFIGURE=1 x=",
-            "x+w!=520 or y+h!=344",
+            "x+w==520 and y+h==344",
             '"execute":"screendump"',
             "old-top-left-cleared",
             "new-client-pixels",
