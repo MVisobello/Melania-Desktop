@@ -207,7 +207,8 @@ fn main()->Result<()> {
     if !state.initial_configure {return Err("initial xdg configure missing".into());}
     paint_frame(&surface,&shm,&mut queue,&mut state,(W,H),1)?;
     let deadline=Instant::now()+Duration::from_secs(38);
-    while !state.resized_acked {
+    while !(state.resized_acked &&
+             state.resized_size.is_some_and(|(w,h)|w<W && h<H)) {
         if Instant::now()>=deadline {
             return Err("real pointer-authenticated XDG configure absent".into());
         }

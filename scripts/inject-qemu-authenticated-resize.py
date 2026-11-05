@@ -71,13 +71,25 @@ def main()->int:
     tablet(args.qmp,200,160,"press")
     wait_marker(args.serial,"MELANIA_NATIVE_XDG_CLIENT_RESIZE_GRANTED=1 edge=TopLeft",deadline)
     tablet(args.qmp,240,180)
-    log=wait_marker(args.serial,"MELANIA_NATIVE_XDG_RESIZE_CONFIGURE=1 x=",deadline)
-    candidate=re.findall(r"MELANIA_NATIVE_XDG_RESIZE_CONFIGURE=1 x=(\d+) y=(\d+) w=(\d+) h=(\d+)",log)
-    if not candidate:
-        raise RuntimeError("actual resize geometry missing")
-    x,y,w,h=map(int,candidate[-1])
-    if x+w!=520 or y+h!=344 or not (0<x<520 and 0<y<344 and 96<=w<360 and 72<=h<224):
-        raise ValueError(f"TopLeft did not preserve opposite edges: {(x,y,w,h)}")
+    # QMP ABS X and Y may be delivered as separate libinput events.
+    # The first XDG configure may only resize one axis: never pass on it.
+    rect=None
+    while time.monotonic()<deadline:
+        log=args.serial.read_text(errors="replace") if args.serial.exists() else ""
+        if EXIT in log:
+            raise RuntimeError("guest exited before final 2D XDG configure")
+        rows=re.findall(r"MELANIA_NATIVE_XDG_RESIZE_CONFIGURE=1 x=(\d+) y=(\d+) w=(\d+) h=(\d+)",log)
+        for parts in reversed(rows):
+            x,y,w,h=map(int,parts)
+            if x+w==520 and y+h==344 and 0<x<520 and 0<y<344 and 96<=w<360 and 72<=h<224:
+                rect=(x,y,w,h)
+                break
+        if rect is not None:
+            break
+        time.sleep(.06)
+    if rect is None:
+        raise RuntimeError("no valid 2-axis TopLeft configure with anchored opposite edges")
+    x,y,w,h=rect
     wait_marker(args.serial,"MELANIA_NATIVE_AUTH_RESIZE_FRAME2_ACK=true",deadline)
     qmp(args.qmp,{"execute":"screendump","arguments":{
         "filename":str(args.output.resolve()),"format":"ppm"}})
