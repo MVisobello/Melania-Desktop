@@ -25,6 +25,20 @@ class MelaniaInputConfig(unittest.TestCase):
             self.assertIn(element,RUST)
         self.assertIn('target/debug/melania-inputctl',CI)
 
+    def test_shortcuts_use_strict_rust_backend_and_real_gtk_controls(self):
+        shortcuts=(ROOT/"melania-settings/src/keyboard_shortcuts.rs").read_text()
+        self.assertIn("mod keyboard_shortcuts;",MAIN)
+        self.assertIn("keyboard_shortcuts::append(&keyboard);",MAIN)
+        self.assertIn('Command::new("melania-inputctl").arg("shortcuts-show")',shortcuts)
+        self.assertIn('Command::new("melania-inputctl").arg("shortcuts-apply")',shortcuts)
+        self.assertIn('DropDown::from_strings(&LABELS)',shortcuts)
+        self.assertIn('SHORTCUT_CHOICES:[&str;12]',RUST)
+        self.assertIn('fn render_shortcuts(',RUST)
+        self.assertIn('shortcut-prefs',RUST)
+        self.assertIn('ShortcutPrefs::from_values(',RUST)
+        self.assertIn('session_guard()?;',RUST)
+        self.assertNotIn('sh -c',shortcuts)
+
     def test_private_config_does_not_reconfigure_cinnamon(self):
         self.assertIn('MELANIA_NESTED_SESSION',RUST)
         self.assertIn('MELANIA_EXTERNAL_COMPOSITOR',RUST)
