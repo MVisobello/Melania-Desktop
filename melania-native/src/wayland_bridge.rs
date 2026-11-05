@@ -926,6 +926,7 @@ impl BridgeState {
                 // The configure is only a request. A previous wl_shm image
                 // must NOT be moved or submitted to KMS before the matching
                 // client buffer has been committed and validated.
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.push((
                     surface.clone(),(rect.width as usize,rect.height as usize)
@@ -972,6 +973,7 @@ impl BridgeState {
                 // The configure is only a request. A previous wl_shm image
                 // must NOT be moved or submitted to KMS before the matching
                 // client buffer has been committed and validated.
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
                 self.managed_pending_sizes.push((
                     surface.clone(),(rect.width as usize,rect.height as usize)
@@ -1643,6 +1645,9 @@ impl XdgShellHandler for BridgeState {
         let Some((_,model))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {return;};
         if !model.minimize(){return;}
+        self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+        self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+        self.window_interaction.cancel();
         if let Some(key)=self.known_window_surfaces.id_of(&surface){
             if self.dynamic_scene.geometry(key).is_some() &&
                self.dynamic_scene.set_visible(key,false)==Ok(true) {
