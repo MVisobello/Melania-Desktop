@@ -15,6 +15,7 @@ pub mod output_layout;
 pub mod gtk_layer_geometry;
 pub mod window_slots;
 pub mod window_interaction;
+pub mod native_popup_layout;
 pub mod keyboard_window_cycle;
 pub mod async_kms_stream;
 pub mod render_scheduler;
