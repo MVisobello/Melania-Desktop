@@ -180,6 +180,10 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                 println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             wait_for_scanout(&card,crtc,connector,handles[index])?;
+            if index>0 {
+                println!("MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED={}",
+                         flip_ledger.completed_count());
+            }
             println!("MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE={}",index+1);
             // Keep a visible interval for an isolated future QMP pixel check.
             thread::sleep(Duration::from_millis(450));
