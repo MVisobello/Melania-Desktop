@@ -630,11 +630,30 @@ impl BridgeState {
                     }
                 }
             },
-            Some(InteractionKind::ResizeBottomRight)=>{
-                // A real xdg.configure + client ACK must precede actual
-                // resize/scanout. For now this is a non-destructive preview.
-                println!("MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW={} w={} h={}",
-                         key,rect.width,rect.height);
+            Some(InteractionKind::ResizeBottomRight | InteractionKind::Resize(_))=>{
+                if !self.managed_xdg_mode || !self.dynamic_window_mode {
+                    println!("MELANIA_NATIVE_WINDOW_RESIZE_PREVIEW={} w={} h={}",
+                             key,rect.width,rect.height);
+                    return;
+                }
+                let Some(surface)=self.known_window_surfaces.get(key).cloned() else{return;};
+                let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned() else{return;};
+                if self.managed_pending_resize.iter().any(|(role,pending)|
+                    role==&surface && *pending==rect) {return;}
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+                self.managed_pending_resize.push((surface.clone(),rect));
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_sizes.push((
+                    surface.clone(),(rect.width as usize,rect.height as usize)
+                ));
+                top.with_pending_state(|pending|{
+                    pending.states.set(xdg_toplevel::State::Resizing);
+                    pending.size=Some((rect.width,rect.height).into());
+                });
+                top.send_pending_configure();
+                println!("MELANIA_NATIVE_XDG_RESIZE_CONFIGURE={} x={} y={} w={} h={}",
+                         key,rect.x,rect.y,rect.width,rect.height);
             },
             None=>{},
         }
