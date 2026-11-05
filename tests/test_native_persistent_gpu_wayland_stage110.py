@@ -37,6 +37,24 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn("qemu_wayland_gpu_scene_stream(",body)
         self.assertIn("self.persistent_shutdown_requested",BRIDGE)
 
+    def test_guest_client_environment_is_one_shell_command(self):
+        """Do not detach WAYLAND_DISPLAY/48 frames from 'timeout' with comments."""
+        start=GUEST.index("if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM")
+        end=GUEST.index('"$continuous_client" > "$persist_gpu_client_log" 2>&1; then',start)
+        invocation=GUEST[start:end]
+        lines=invocation.splitlines()
+        # A comment after a line ending in a backslash terminates the Bash
+        # logical command. This caused QEMU to run the default client instead
+        # of the 48-frame client with its dedicated Wayland socket.
+        for previous,current in zip(lines,lines[1:]):
+            if previous.rstrip().endswith("\\"):
+                self.assertFalse(current.lstrip().startswith("#"),
+                                 "comment broke 48-frame client env chain")
+        self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=48",invocation)
+        self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER=24",invocation)
+        self.assertIn('WAYLAND_DISPLAY="$persist_gpu_socket"',invocation)
+        self.assertIn("timeout --signal=TERM --kill-after=3s 240s",invocation)
+
     def test_actual_qemu_waits_past_old_timeout_then_requires_kernel_restore(self):
         start=GUEST.index("# Stage110: same REAL wl_shm -> GLES -> GBM -> DRM pipeline")
         end=GUEST.index("MELANIA_QEMU_IN_PROCESS_PERSISTENT_GPU_WAYLAND_PASS=true",start)
