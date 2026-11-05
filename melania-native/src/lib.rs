@@ -11,6 +11,7 @@ pub mod dynamic_window_scene;
 pub mod damage_regions;
 pub mod region_compositor;
 pub mod window_placement;
+pub mod snap_layout;
 pub mod output_layout;
 pub mod gtk_layer_geometry;
 pub mod window_slots;
