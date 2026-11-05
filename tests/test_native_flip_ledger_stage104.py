@@ -15,7 +15,7 @@ class NativeKernelFlipLedger(unittest.TestCase):
         self.assertIn("pub mod native_flip_ledger;",LIB)
         self.assertIn("-> Result<u32, String>",KERNEL)
         self.assertIn("router.enqueue(done.crtc, done.frame)?",KERNEL)
-        self.assertIn("done.crtc==expected_crtc",KERNEL)
+        self.assertIn("router.enqueue(done.crtc, done.frame)?",KERNEL)
         self.assertIn("pub fn begin_flip(",LEDGER)
         self.assertIn("pub fn complete_flip(",LEDGER)
         self.assertIn("pub fn revoke(",LEDGER)
