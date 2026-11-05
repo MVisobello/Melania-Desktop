@@ -298,6 +298,7 @@ jobs:
           test -x target/debug/qemu-layer-panel-client
           test -x target/debug/qemu-gtk-five-roles
           test -x target/debug/qemu-authenticated-resize-client
+          test -x target/debug/qemu-super-snap-client
           test -x target/debug/qemu-shell-client
           test -x target/debug/qemu-client-window
           test -x target/debug/qemu-rust-kms-frames
