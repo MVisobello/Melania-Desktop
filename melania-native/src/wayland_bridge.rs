@@ -1950,19 +1950,6 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 return;
             }
             let point=state.pointer_position;
-            // The token is minted from the SAME serial forwarded to the
-            // client by wl_pointer.button. Never authorize synthetic QEMU
-            // host actions, a secondary mouse button, or another client.
-            let button_serial=SERIAL_COUNTER.next_serial();
-            if event.button_code()==0x110 {
-                if event.state()==ButtonState::Pressed &&
-                   state.managed_xdg_mode && state.dynamic_window_mode {
-                    state.last_xdg_press=state.pointer_target(point)
-                        .map(|(surface,_)|(surface,button_serial));
-                } else {
-                    state.last_xdg_press=None;
-                }
-            }
             if state.multi_window_mode {
                 let target_key=if state.dynamic_window_mode {
                     state.dynamic_scene.hit_test(point.x,point.y)
@@ -2016,7 +2003,12 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                                                 point.y>=bottom-16.0 {
                                         Some(InteractionKind::ResizeBottomRight)
                                     } else if point.y>=f64::from(y) &&
-                                              point.y<f64::from(y+26) {
+                                              point.y<f64::from(y+26) &&
+                                              !(state.managed_xdg_mode && state.dynamic_window_mode) {
+                                        // For managed xdg clients, respect the
+                                        // actual xdg_toplevel.move request
+                                        // rather than imposing a fixed 26px
+                                        // server-side titlebar grab.
                                         Some(InteractionKind::Move)
                                     } else {None};
                                     if let Some(kind)=kind {
@@ -2040,6 +2032,19 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                             let _=std::io::stdout().flush();
                         }
                     }
+                }
+            }
+            // Mint AFTER pointer.motion and keyboard focus changes: serials
+            // must follow their actual Wayland event emission order.
+            // The authorization token is the precise forwarded button serial.
+            let button_serial=SERIAL_COUNTER.next_serial();
+            if event.button_code()==0x110 {
+                if event.state()==ButtonState::Pressed &&
+                   state.managed_xdg_mode && state.dynamic_window_mode {
+                    state.last_xdg_press=state.pointer_target(point)
+                        .map(|(surface,_)|(surface,button_serial));
+                } else {
+                    state.last_xdg_press=None;
                 }
             }
             pointer.button(state,&ButtonEvent{
