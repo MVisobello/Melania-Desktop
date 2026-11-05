@@ -1,6 +1,7 @@
 //! Stage 48: two independent Wayland xdg_toplevel surfaces, each retained across real KMS flips.
 //! VM-only scenario; every buffer release and callback requires a KMS ACK.
-use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd,thread,time::{Duration,Instant}};
+use std::{error::Error,fs::OpenOptions,io::{Read,Write},net::Shutdown,
+    os::{fd::AsFd,unix::net::UnixStream},thread,time::{Duration,Instant}};
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
@@ -127,6 +128,35 @@ impl Dispatch<wl_buffer::WlBuffer,()> for Client {
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
         if let wl_buffer::Event::Release=event {state.buffer_released=true;}
     }
+}
+
+/// The same bounded IPC used by Melania Panel. Stage99 exercises a
+/// *real* compositor-only transition without attaching a new client buffer.
+fn control_request(path:&str,command:&str)->Result<String,Box<dyn Error>>{
+    let mut stream=UnixStream::connect(path)?;
+    stream.set_read_timeout(Some(Duration::from_millis(700)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(700)))?;
+    stream.write_all(command.as_bytes())?;
+    stream.shutdown(Shutdown::Write)?;
+    let mut reply=String::new();
+    stream.take(8192).read_to_string(&mut reply)?;
+    Ok(reply)
+}
+
+fn await_presented_frame(frame:u32)->Result<(),Box<dyn Error>>{
+    let path=format!("/run/melania-native-qemu/managed-minimize-frame{frame}-acked");
+    let deadline=Instant::now()+Duration::from_secs(20);
+    while !std::path::Path::new(&path).is_file(){
+        if Instant::now()>=deadline{
+            return Err(format!("no verified kernel CRTC ACK for compositor-only frame {frame}").into());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    let marker=std::fs::read_to_string(&path)?;
+    if marker!="verified CRTC route and framebuffer ACK\n" {
+        return Err(format!("invalid compositor/DRM ACK marker for frame {frame}").into());
+    }
+    Ok(())
 }
 
 fn main()->Result<(),Box<dyn Error>> {
@@ -323,6 +353,44 @@ fn main()->Result<(),Box<dyn Error>> {
         std::io::stdout().flush()?;
         buffer.destroy();
         pool.destroy();
+    }
+    // Optional Stage99 end-to-end experiment: keep both real xdg roles
+    // connected, hide A via panel IPC and require a new DRM scanout with
+    // its old pixels REMOVED. Then restore A with no new wl_shm commit and
+    // require a second real scanout with its *retained* pixels visible.
+    if std::env::var("MELANIA_QEMU_MANAGED_MINIMIZE_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM") {
+        if !managed_role_pixels {
+            return Err("minimize pixel probe requires real managed xdg roles".into());
+        }
+        let socket=std::env::var("MELANIA_CONTROL_SOCKET")
+            .map_err(|_|"managed minimize probe missing panel IPC socket")?;
+        if control_request(&socket,"MINIMIZE 1\n")?!="OK\nEND\n" {
+            return Err("native compositor rejected real MINIMIZE 1".into());
+        }
+        let minimized=control_request(&socket,"LIST\n")?;
+        if !minimized.lines().any(|line|line.starts_with("WINDOW\t1\t0\t1\t")) {
+            return Err("minimized A not reported hidden by native compositor".into());
+        }
+        await_presented_frame(13)?;
+        println!("MELANIA_NATIVE_MANAGED_MINIMIZE_CLIENT_KMS13_PASS=true");
+        std::io::stdout().flush()?;
+        if control_request(&socket,"ACTIVATE 1\n")?!="OK\nEND\n" {
+            return Err("native compositor rejected ACTIVATE of minimized A".into());
+        }
+        let restored=control_request(&socket,"LIST\n")?;
+        if !restored.lines().any(|line|line.starts_with("WINDOW\t1\t1\t0\t")) {
+            return Err("restored A not active in native compositor".into());
+        }
+        await_presented_frame(14)?;
+        // Explicitly complete the real xdg configure exchange while
+        // the Wayland surface is still alive; the old wl_shm pixels are
+        // compositor-owned, not fabricated by the test.
+        queue.roundtrip(&mut state)?;
+        first.commit();
+        connection.flush()?;
+        println!("MELANIA_NATIVE_MANAGED_MINIMIZE_CLIENT_KMS14_PASS=true");
+        std::io::stdout().flush()?;
     }
     println!("MELANIA_NATIVE_CONTINUOUS_TWO_WINDOW_12_FRAMES_PASS=true");
     if managed_role_pixels {
