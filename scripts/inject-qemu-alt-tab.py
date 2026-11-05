@@ -78,7 +78,7 @@ def verify_ppm(image:Path)->None:
     for label,point,expected in (
         ("background",(40,40),(27,33,58)),
         ("retained_client_A_frame11",(200,200),(217,191,78)),
-        ("retained_client_B_frame12",(740,260),(34,42,121)),
+        ("retained_client_B_frame12",(740,260),(34,222,121)),
         ("outside_client_B",(1060,490),(27,33,58)),
     ):
         actual=pixel(*point)
