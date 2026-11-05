@@ -55,6 +55,86 @@ fn parse_speed(s:&str)->Result<i32,String>{
     if !(-100..=100).contains(&n){return Err("speed range must be -100..100".into());}
     Ok(n)
 }
+
+const SHORTCUT_ACTIONS:[&str;5]=["start","files","settings","lock","terminal"];
+const SHORTCUT_DEFAULTS:[&str;5]=["W-space","W-e","W-i","W-l","W-Return"];
+// A bounded set of labwc key syntax. No arbitrary XML or command strings.
+const SHORTCUT_CHOICES:[&str;12]=[
+    "W-space","W-e","W-i","W-l","W-Return","W-f","W-k","W-d",
+    "W-t","W-p","C-A-e","C-A-t"
+];
+#[derive(Clone,Debug,PartialEq,Eq)]
+struct ShortcutPrefs{keys:[String;5]}
+impl Default for ShortcutPrefs{
+    fn default()->Self{
+        Self{keys:SHORTCUT_DEFAULTS.map(str::to_owned)}
+    }
+}
+impl ShortcutPrefs{
+    fn parse(source:&str)->Result<Self,String>{
+        if source.len()>1024{return Err("shortcuts too large".into());}
+        let mut result=Self::default();
+        for line in source.lines(){
+            let (key,value)=line.split_once('=').ok_or("invalid shortcut preference")?;
+            let Some(index)=SHORTCUT_ACTIONS.iter().position(|v|*v==key) else{
+                return Err("unknown shortcut action".into());
+            };
+            result.keys[index]=value.to_owned();
+        }
+        result.validate()?;
+        Ok(result)
+    }
+    fn from_values(values:&[String])->Result<Self,String>{
+        if values.len()!=SHORTCUT_ACTIONS.len(){
+            return Err("exactly five shortcuts required".into());
+        }
+        let keys: [String;5]=values.to_vec().try_into()
+            .map_err(|_|"invalid shortcuts array")?;
+        let result=Self{keys};
+        result.validate()?;
+        Ok(result)
+    }
+    fn validate(&self)->Result<(),String>{
+        let mut unique=std::collections::HashSet::new();
+        for value in &self.keys{
+            if !SHORTCUT_CHOICES.contains(&value.as_str()) ||
+                !unique.insert(value.as_str()){
+                return Err("shortcut unavailable or duplicated".into());
+            }
+        }
+        Ok(())
+    }
+    fn encoded(&self)->String{
+        SHORTCUT_ACTIONS.iter().zip(self.keys.iter())
+            .map(|(name,value)|format!("{name}={value}\n")).collect()
+    }
+}
+fn read_shortcuts(path:&Path)->Result<ShortcutPrefs,String>{
+    match fs::symlink_metadata(path){
+        Ok(meta) if meta.file_type().is_file() => {
+            ShortcutPrefs::parse(&fs::read_to_string(path).map_err(|e|e.to_string())?)
+        },
+        Ok(_) => Err("shortcuts preference file is not regular".into()),
+        Err(error) if error.kind()==io::ErrorKind::NotFound => Ok(ShortcutPrefs::default()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+fn render_shortcuts(source:&str,shortcuts:&ShortcutPrefs)->Result<String,String>{
+    shortcuts.validate()?;
+    let mut xml=source.to_owned();
+    for (index,original) in SHORTCUT_DEFAULTS.iter().enumerate(){
+        let needle=format!("<keybind key=\"{original}\">");
+        if xml.matches(&needle).count()!=1{
+            return Err(format!("missing expected shortcut {original}"));
+        }
+        xml=xml.replacen(&needle,&format!("<keybind key=\"MELANIA_SLOT_{index}\">"),1);
+    }
+    for (index,configured) in shortcuts.keys.iter().enumerate(){
+        xml=xml.replace(&format!("MELANIA_SLOT_{index}"),configured);
+    }
+    Ok(xml)
+}
+
 fn config_home()->Result<PathBuf,String>{
     let base=env::var_os("XDG_CONFIG_HOME").filter(|x|!x.is_empty())
         .map(PathBuf::from).or_else(||env::var_os("HOME")
@@ -117,7 +197,8 @@ fn render(p:InputPrefs)->Result<String,String>{
     </device>
   </libinput>
 "#,value(p.tap),value(p.natural_scroll),value(p.left_handed),p.speed as f64/100.0);
-    Ok(format!("{CONFIG_HEADER}\n{}",TEMPLATE.replace(END,&format!("{block}{END}"))))
+    let xml=render_shortcuts(TEMPLATE,shortcuts)?;
+    Ok(format!("{CONFIG_HEADER}\n{}",xml.replace(END,&format!("{block}{END}"))))
 }
 fn session_guard()->Result<(),String>{
     if env::var("MELANIA_EXTERNAL_COMPOSITOR").as_deref()!=Ok("labwc")
@@ -128,7 +209,7 @@ fn session_guard()->Result<(),String>{
     Ok(())
 }
 fn generated_path(base:&Path)->PathBuf{base.join("labwc").join("rc.xml")}
-fn prepare(p:InputPrefs,base:&Path)->Result<(),String>{
+fn prepare(p:InputPrefs,shortcuts:&ShortcutPrefs,base:&Path)->Result<(),String>{
     let out=generated_path(base);
     if out.exists() {
         let previous=fs::read_to_string(&out).map_err(|e|e.to_string())?;
@@ -136,11 +217,11 @@ fn prepare(p:InputPrefs,base:&Path)->Result<(),String>{
             return Err("refuse to overwrite manually edited labwc config".into());
         }
     }
-    write_atomic(&out,&render(p)?)?;
+    write_atomic(&out,&render(p,shortcuts)?)?;
     println!("MELANIA_LABWC_INPUT_CONFIG={}",out.display());
     Ok(())
 }
-fn commit_and_reload(prefs:InputPrefs,base:&Path,prefs_path:&Path)->Result<(),String>{
+fn commit_and_reload(prefs:InputPrefs,shortcuts:&ShortcutPrefs,base:&Path,prefs_path:&Path)->Result<(),String>{
     write_atomic(prefs_path,&prefs.encoded())?;
     prepare(prefs,base)?;
     let status=Command::new("labwc").arg("--reconfigure").status()
@@ -153,19 +234,21 @@ fn run()->Result<(),String>{
     let args=env::args().skip(1).collect::<Vec<_>>();
     let base=config_home()?;
     let prefs_path=base.join("input-prefs");
+    let shortcuts_path=base.join("shortcut-prefs");
+    let shortcuts=read_shortcuts(&shortcuts_path)?;
     let mut prefs=load(&prefs_path)?;
     match args.as_slice(){
         [command] if command=="show"=>{
             print!("{}",prefs.encoded());Ok(())
         },
         [command] if command=="prepare"=>{
-            session_guard()?;prepare(prefs,&base)
+            session_guard()?;prepare(prefs,&shortcuts,&base)
         },
         [command,key,value] if command=="set"=>{
             session_guard()?;
             if env::var("WAYLAND_DISPLAY").is_err(){return Err("no Wayland session".into());}
             prefs.update(key,value)?;
-            commit_and_reload(prefs,&base,&prefs_path)
+            commit_and_reload(prefs,&shortcuts,&base,&prefs_path)
         },
         [command,tap,natural,left,speed] if command=="apply"=>{
             session_guard()?;
@@ -176,7 +259,26 @@ fn run()->Result<(),String>{
             prefs.update("speed",speed)?;
             commit_and_reload(prefs,&base,&prefs_path)
         },
-        _=>Err("usage: melania-inputctl show|prepare|set <key> <value>|apply <tap> <scroll> <left> <speed>".into()),
+
+        [command] if command=="shortcuts-show"=>{
+            print!("{}",shortcuts.encoded());Ok(())
+        },
+        [command,one,two,three,four,five] if command=="shortcuts-apply"=>{
+            session_guard()?;
+            if env::var("WAYLAND_DISPLAY").is_err(){return Err("no Wayland session".into());}
+            let chosen=ShortcutPrefs::from_values(
+                &[one.clone(),two.clone(),three.clone(),four.clone(),five.clone()])?;
+            // Check the template BEFORE persisting user preferences.
+            render(prefs,&chosen)?;
+            write_atomic(&shortcuts_path,&chosen.encoded())?;
+            prepare(prefs,&chosen,&base)?;
+            let status=Command::new("labwc").arg("--reconfigure").status()
+                .map_err(|e|format!("cannot reload labwc shortcuts: {e}"))?;
+            if !status.success(){return Err("labwc did not reload shortcuts".into());}
+            println!("MELANIA_LABWC_SHORTCUTS_RECONFIGURED=true");
+            Ok(())
+        },
+        _=>Err("usage: melania-inputctl show|prepare|set <key> <value>|apply <tap> <scroll> <left> <speed>|shortcuts-show|shortcuts-apply <start> <files> <settings> <lock> <terminal>".into()),
     }
 }
 fn main()->ExitCode{
@@ -199,8 +301,27 @@ mod tests{
         assert!(p.update("tap","true").is_err());
         assert!(p.update("evil-key","yes").is_err());
     }
+    #[test]
+    fn shortcuts_are_unique_whitelisted_and_replace_every_original_key(){
+        let mut s=ShortcutPrefs::default();
+        s.keys[0]="W-p".into();
+        s.keys[1]="W-f".into();
+        assert!(s.validate().is_ok());
+        let parsed=ShortcutPrefs::parse(&s.encoded()).unwrap();
+        assert_eq!(parsed,s);
+        let out=render(InputPrefs::default(),&s).unwrap();
+        assert!(out.contains(r#"<keybind key="W-p">"#));
+        assert!(out.contains(r#"<keybind key="W-f">"#));
+        assert!(!out.contains("MELANIA_SLOT_"));
+        let mut duplicate=s.clone();
+        duplicate.keys[2]="W-f".into();
+        assert!(duplicate.validate().is_err());
+        assert!(ShortcutPrefs::parse("start=Alt-F4\n").is_err());
+        assert!(ShortcutPrefs::parse("start=W-p\nunknown=W-i\n").is_err());
+        assert!(ShortcutPrefs::parse("start=W-p\nstart=W-p\n").is_ok());
+    }
     #[test]fn generated_xml_is_valid_labwc_input_and_contains_no_shell(){
-        let value=render(InputPrefs::default()).unwrap();
+        let value=render(InputPrefs::default(),&ShortcutPrefs::default()).unwrap();
         assert!(value.starts_with(CONFIG_HEADER));
         assert!(value.contains("<device category=\"touchpad\">"));
         assert!(value.contains("<tap>yes</tap>"));
