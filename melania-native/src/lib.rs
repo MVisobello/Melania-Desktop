@@ -40,6 +40,7 @@ pub mod native_kms_scanout;
 pub mod native_drm_flip;
 pub mod native_output_topology;
 pub mod native_flip_ledger;
+pub mod native_gbm_swapchain;
 pub mod native_gbm_scanout;
 pub mod control_io;
 use std::{collections::BTreeMap, path::PathBuf};
