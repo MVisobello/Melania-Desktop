@@ -171,20 +171,19 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
        resources.connectors().len()>8 {
         return Err("QEMU stream requires exactly one active CRTC".into());
     }
-    let crtc_handle=resources.crtcs()[0];
+    let topology=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
+    let route=topology.single_active()?;
+    println!("MELANIA_RUST_KMS_TOPOLOGY_STABLE_OUTPUTS={}",topology.active.len());
+    let crtc_handle=route.crtc;
     let original=card.get_crtc(crtc_handle)?;
     let mode=original.mode().ok_or("QEMU CRTC has no active mode")?;
     if mode.size()!=(W as u16,H as u16) || original.framebuffer().is_none() {
         return Err("QEMU streaming requires active 1280x800 framebuffer".into());
     }
-    let connected=resources.connectors().iter().filter_map(|&conn|{
-        let info=card.get_connector(conn,false).ok()?;
-        let enc_info=card.get_encoder(info.current_encoder()?).ok()?;
-        (enc_info.crtc()==Some(crtc_handle)).then_some(conn)
-    }).collect::<Vec<_>>();
-    if connected.len()!=1 {
-        return Err("QEMU streaming requires one active connector".into());
+    if original.framebuffer()!=Some(route.original_fb) {
+        return Err("QEMU streaming original FB_ID changed after topology capture".into());
     }
+    let connected=vec![route.connector];
 
     let mut db1=card.create_dumb_buffer((W as u32,H as u32),DrmFourcc::Xrgb8888,32)?;
     let mut db2=card.create_dumb_buffer((W as u32,H as u32),DrmFourcc::Xrgb8888,32)?;
@@ -195,6 +194,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
+    let mut event_router=melania_native::native_drm_flip::DrmFlipEventRouter::default();
 
     // Stage84 allows one real GTK image only with the explicit VM opt-in.
     // All historical tests retain the stricter 8..=64-frame count.
@@ -316,8 +316,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // before any framebuffer or Wayland callback is acknowledged.
             // This fails closed (no polling-only success) on kernel timeout.
             if index>0 {
-                let kernel_frame=melania_native::native_drm_flip::wait_for_kms_page_flip(
-                    &card,crtc_handle,Duration::from_secs(2),
+                let kernel_frame=melania_native::native_drm_flip::wait_for_kms_page_flip_routed(
+                    &card,crtc_handle,Duration::from_secs(2),&mut event_router,
                 )?;
                 flip_ledger.complete_vm_flip(kernel_frame)
                     .map_err(|error|format!("DRM kernel flip event rejected: {error:?}"))?;
