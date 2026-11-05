@@ -58,7 +58,8 @@ pub fn list_in(dir:&Path)->Vec<AutostartItem>{
             continue;
         }
         let Ok(content)=fs::read_to_string(entry.path()) else {continue};
-        if !valid_desktop_file(&content) {continue;}
+        if !valid_desktop_file(&content) ||
+            is_managed_system_override(&content) {continue;}
         let title=key(&content,"Name").unwrap_or(&name).chars().take(90).collect();
         let hidden=key(&content,"Hidden")==Some("true");
         let x_disabled=key(&content,"X-GNOME-Autostart-enabled")==Some("false");
@@ -202,6 +203,126 @@ pub fn add_installed_in(dir:&Path,roots:&[PathBuf],file_name:&str)->io::Result<(
     result
 }
 
+
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct SystemAutostartItem {
+    pub file_name:String,
+    pub name:String,
+    pub enabled:bool,
+}
+
+/// XDG_CONFIG_DIRS entries are read-only. A Melania session gives user
+/// ~/.config/autostart a higher precedence; never edit /etc/xdg directly.
+fn system_autostart_dirs()->Vec<PathBuf>{
+    let data=std::env::var_os("XDG_CONFIG_DIRS").filter(|value|!value.is_empty())
+        .unwrap_or_else(||"/etc/xdg".into());
+    std::env::split_paths(&data).filter(|dir|dir.is_absolute())
+        .map(|dir|dir.join("autostart")).collect()
+}
+fn matches_melania(value:&str)->bool{
+    value.split(';').any(|part|
+        part.eq_ignore_ascii_case("Melania") || part.eq_ignore_ascii_case("labwc"))
+}
+fn is_system_candidate(content:&str)->bool{
+    valid_desktop_file(content) &&
+    key(content,"Exec").is_some_and(|v|!v.is_empty()) &&
+    key(content,"Hidden")!=Some("true") &&
+    key(content,"X-GNOME-Autostart-enabled")!=Some("false") &&
+    key(content,"X-MATE-Autostart-enabled")!=Some("false") &&
+    key(content,"X-XFCE-Autostart-enabled")!=Some("false") &&
+    !key(content,"OnlyShowIn").is_some_and(|v|!matches_melania(v)) &&
+    !key(content,"NotShowIn").is_some_and(matches_melania)
+}
+fn is_managed_system_override(contents:&str)->bool{
+    valid_desktop_file(contents) &&
+    key(contents,"Hidden")==Some("true") &&
+    key(contents,"X-Melania-System-Autostart-Override")==Some("true")
+}
+
+/// Return system launchers that would run in Melania, except entries
+/// already customized by the user (listed in the personal section instead).
+/// Managed per-user suppression stubs remain visible with enabled=false.
+pub fn list_system_in(roots:&[PathBuf],user_dir:&Path)->Vec<SystemAutostartItem>{
+    let mut found=std::collections::HashSet::new();
+    let mut items=Vec::new();
+    for root in roots {
+        if !fs::symlink_metadata(root).is_ok_and(|meta|meta.file_type().is_dir()){
+            continue;
+        }
+        let Ok(entries)=fs::read_dir(root) else {continue};
+        for entry in entries.flatten().take(512) {
+            let name=entry.file_name().to_string_lossy().to_string();
+            if !valid_filename(&name) ||
+                !entry.file_type().is_ok_and(|ty|ty.is_file()) ||
+                !found.insert(name.clone()){continue;}
+            let Ok(content)=fs::read_to_string(entry.path()) else {continue};
+            if !is_system_candidate(&content){continue;}
+            let enabled=match fs::symlink_metadata(user_dir.join(&name)){
+                Ok(meta) if meta.file_type().is_file() => {
+                    let Ok(user_content)=fs::read_to_string(user_dir.join(&name))
+                    else {continue};
+                    if !is_managed_system_override(&user_content){continue;}
+                    false
+                }
+                Ok(_) => continue,
+                Err(error) if error.kind()==io::ErrorKind::NotFound => true,
+                Err(_) => continue,
+            };
+            items.push(SystemAutostartItem {
+                file_name:name.clone(),
+                name:key(&content,"Name").unwrap_or(&name).chars().take(90).collect(),
+                enabled,
+            });
+        }
+    }
+    items.sort_by_key(|item|item.name.to_lowercase());
+    items
+}
+
+/// Disable a system autostart launcher using a user-level Hidden=true stub.
+/// Re-enable by removing ONLY stubs marked as created by Melania. Existing
+/// user customizations are never replaced, removed, or followed as symlinks.
+pub fn set_system_enabled_in(
+    user_dir:&Path, roots:&[PathBuf], file_name:&str, enabled:bool
+)->io::Result<()>{
+    if !valid_filename(file_name) ||
+        !list_system_in(roots,user_dir).iter().any(|item|item.file_name==file_name) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "Applicazione di sistema non gestibile"));
+    }
+    if enabled {
+        if !fs::symlink_metadata(user_dir)?.file_type().is_dir(){
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,"Directory collegata"));
+        }
+        let dest=user_dir.join(file_name);
+        if !fs::symlink_metadata(&dest)?.file_type().is_file() ||
+            !is_managed_system_override(&fs::read_to_string(&dest)?) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                "Impostazione personale non creata da Melania"));
+        }
+        fs::remove_file(dest)
+    }else{
+        if !user_dir.exists(){
+            let parent=user_dir.parent().ok_or_else(||io::Error::new(
+                io::ErrorKind::InvalidInput,"Directory non valida"))?;
+            if !fs::symlink_metadata(parent)?.file_type().is_dir(){
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied,"Directory collegata"));
+            }
+            fs::create_dir(user_dir)?;
+        }
+        if !fs::symlink_metadata(user_dir)?.file_type().is_dir(){
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,"Directory collegata"));
+        }
+        let destination=user_dir.join(file_name);
+        let mut file=fs::OpenOptions::new().write(true).create_new(true)
+            .mode(0o600).open(&destination)?;
+        let contents="[Desktop Entry]\nType=Application\nHidden=true\nX-Melania-System-Autostart-Override=true\n";
+        let saved=(||{file.write_all(contents.as_bytes())?;file.sync_all()})();
+        if saved.is_err(){let _=fs::remove_file(destination);}
+        saved
+    }
+}
+
 fn make_label(text:&str,class:&str)->Label{
     let label=Label::new(Some(text));
     label.set_xalign(0.0);
@@ -245,6 +366,44 @@ pub fn session_page()->GtkBox {
             }
         });
     }
+
+    body.append(&make_label("Applicazioni di sistema","settings-section-heading"));
+    body.append(&make_label(
+        "Disattiva l'avvio nella sola sessione personale: i file di sistema non saranno modificati.",
+        "settings-row-description"));
+    for item in list_system_in(&system_autostart_dirs(),&dir){
+        let row=GtkBox::new(Orientation::Horizontal,11);
+        row.add_css_class("settings-card");
+        let words=GtkBox::new(Orientation::Vertical,3);
+        words.set_hexpand(true);
+        words.append(&make_label(&item.name,"settings-row-title"));
+        words.append(&make_label(&item.file_name,"settings-row-description"));
+        let feedback=make_label("","settings-row-description");
+        words.append(&feedback);
+        row.append(&words);
+        let toggle=Switch::builder().active(item.enabled).build();
+        toggle.set_valign(gtk::Align::Center);
+        let guard=Rc::new(Cell::new(false));
+        let in_transition=guard.clone();
+        let local_dir=dir.clone();
+        let roots=system_autostart_dirs();
+        let file_name=item.file_name.clone();
+        toggle.connect_active_notify(move |sw|{
+            if in_transition.get(){return;}
+            match set_system_enabled_in(&local_dir,&roots,&file_name,sw.is_active()){
+                Ok(())=>feedback.set_text("Preferenza salvata per il prossimo accesso."),
+                Err(error)=>{
+                    feedback.set_text(&format!("Impossibile salvare: {error}"));
+                    in_transition.set(true);
+                    sw.set_active(!sw.is_active());
+                    in_transition.set(false);
+                }
+            }
+        });
+        row.append(&toggle);
+        body.append(&row);
+    }
+
     body.append(&make_label("Applicazioni configurate","settings-section-heading"));
     let entries=list_in(&dir);
     if entries.is_empty(){
@@ -331,6 +490,39 @@ mod tests {
         fs::remove_dir_all(&autostart).unwrap();
         std::os::unix::fs::symlink(&external,&autostart).unwrap();
         assert!(add_installed_in(&autostart,&roots,"sample.desktop").is_err());
+        fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn system_autostart_uses_user_override_and_preserves_existing_customizations(){
+        let base=std::env::temp_dir().join(format!("melania-system-start-{}",std::process::id()));
+        let root=base.join("system/autostart");
+        let config=base.join("config");
+        let user=config.join("autostart");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&config).unwrap();
+        fs::write(root.join("demo.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Demo\nExec=/bin/true\n").unwrap();
+        fs::write(root.join("foreign.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Foreign\nExec=/bin/true\nOnlyShowIn=XFCE;\n").unwrap();
+        let roots=vec![root.clone()];
+        assert_eq!(list_system_in(&roots,&user).len(),1);
+        set_system_enabled_in(&user,&roots,"demo.desktop",false).unwrap();
+        assert!(!list_system_in(&roots,&user)[0].enabled);
+        assert!(list_in(&user).is_empty());
+        assert!(set_system_enabled_in(&user,&roots,"demo.desktop",false).is_err());
+        set_system_enabled_in(&user,&roots,"demo.desktop",true).unwrap();
+        assert!(list_system_in(&roots,&user)[0].enabled);
+        fs::write(user.join("demo.desktop"),
+            "[Desktop Entry]\nType=Application\nExec=/bin/false\n").unwrap();
+        assert!(list_system_in(&roots,&user).is_empty());
+        assert!(set_system_enabled_in(&user,&roots,"demo.desktop",true).is_err());
+        assert!(fs::read_to_string(user.join("demo.desktop")).unwrap().contains("/bin/false"));
+        fs::remove_file(user.join("demo.desktop")).unwrap();
+        fs::remove_dir_all(&user).unwrap();
+        let outside=base.join("external");
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside,&user).unwrap();
+        assert!(set_system_enabled_in(&user,&roots,"demo.desktop",false).is_err());
         fs::remove_dir_all(base).unwrap();
     }
     #[test]

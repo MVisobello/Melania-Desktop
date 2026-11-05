@@ -27,7 +27,7 @@ La corrispondenza non va confusa con parità già ottenuta.
 | Rete / Bluetooth | Informazioni NetworkManager e BlueZ |
 | Display | Enumerazione monitor e sensori, lettura |
 | Energia | Stato batterie e selezione esplicita di profili power-profiles-daemon, se disponibili |
-| App preferite | Browser http/https e gestore email mailto tramite GIO |
+| App preferite | Browser http/https, gestore email mailto e cartelle inode/directory tramite GIO |
 | Sessione e avvio | Abilita/disabilita voci di autostart già presenti nell'XDG_CONFIG_HOME dell'utente, con salvataggio atomico e protezione symlink |
 | Associazioni MIME | Editor GIO per tipi comuni o MIME inserito dall'utente |
 | File manager | Melania Files gestisce già file, cartelle, Cestino e trasferimenti |
@@ -84,7 +84,7 @@ manuale delle icone e rotazione ciclica restano da sviluppare.
 - Energia: sleep, ibernazione, coperchio laptop, tasti e profili energia.
 - Sessione: gestione delle voci autostart di sistema, creazione di comandi personalizzati, salvataggio e ripristino applicazioni.
 - Blocca schermo, salvaschermo, policy di inattività.
-- Applicazioni: terminale, file manager predefinito, azioni speciali e MIME avanzati.
+- Applicazioni: terminale predefinito, applicazioni che ignorano inode/directory, azioni speciali e MIME avanzati.
 - Gestore file: tutte le preferenze persistenti di visualizzazione, colonne e supporti remoti.
 - Rimovibili: auto-mount, autorun e associazioni per tipo di supporto.
 - Stampanti, ICC/colord, XDG portal, varie azioni hardware.
@@ -104,3 +104,11 @@ più applicazioni predefinite, MIME e autostart personale operativi**. Non dichi
 ## Incremento: applicazioni installate all'avvio
 
 La pagina **Sessione e avvio** ora consente di aggiungere voci per applicazioni già presenti nelle directory XDG `applications/`. Il launcher installato viene copiato nella directory personale `~/.config/autostart` con la voce abilitata: si conservano `Exec`, argomenti e sezioni dell'applicazione. Non vengono lanciate istruzioni durante la configurazione e non si modificano i file di sistema. Sono esclusi launcher nascosti, privi di `Exec`, link simbolici e percorsi non validi; una voce personale esistente non viene sovrascritta. I test Rust coprono aggiunta, conservazione argomenti, duplicati, voci malformate e directory linkate. La compilazione CI e il collaudo Wayland restano necessari prima di dichiarare questa funzione pronta.
+
+## Incremento: override di sistema e gestore file
+
+La pagina Sessione e avvio mostra ora le applicazioni di autostart presenti nelle directory XDG di sistema, purché valide e applicabili alla sessione Melania. La disattivazione crea un file personale `Hidden=true` con marcatore Melania nella directory autostart; la riattivazione elimina **solo** override riconosciuti come generati da Melania. Le configurazioni personali non gestite da Melania e i file di sistema non vengono alterati. La gestione riguarda la sessione Melania e non un ambiente Cinnamon/XFCE ospitante.
+
+Applicazioni preferite aggiunge la selezione tramite GIO dell'associazione XDG `inode/directory` per l'apertura delle cartelle; non promette di cambiare le applicazioni che ignorano l'associazione.
+
+Queste modifiche richiedono CI verde e collaudo reale prima di considerarle pronte per il rilascio.
