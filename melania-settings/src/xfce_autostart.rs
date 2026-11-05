@@ -235,14 +235,11 @@ pub fn session_page()->GtkBox {
         let feedback=make_label("Le modifiche saranno attive al prossimo accesso.","settings-row-description");
         body.append(&feedback);
         let selected_dir=dir.clone();
-        let list=body.clone();
         add.connect_clicked(move |_| {
             let Some(app)=installed.get(choice.selected() as usize) else {return;};
             match add_installed_in(&selected_dir,&roots,&app.file_name){
                 Ok(())=>{
                     feedback.set_text(&format!("{} aggiunta. Riapri questa pagina per gestire il nuovo interruttore.",app.name));
-                    // The next settings visit refreshes the list from disk.
-                    list.set_tooltip_text(Some("Nuova applicazione di avvio salvata"));
                 }
                 Err(e)=>feedback.set_text(&format!("Impossibile aggiungere {}: {e}",app.name))
             }
@@ -319,7 +316,7 @@ mod tests {
         fs::create_dir_all(&apps).unwrap();
         fs::create_dir_all(&config).unwrap();
         let launcher=apps.join("sample.desktop");
-        fs::write(&launcher,"[Desktop Entry]\\nType=Application\\nName=Sample\\nExec=/usr/bin/sample --arg\\nHidden=false\\n").unwrap();
+        fs::write(&launcher,"[Desktop Entry]\nType=Application\nName=Sample\nExec=/usr/bin/sample --arg\nHidden=false\n").unwrap();
         let roots=vec![apps.clone()];
         assert_eq!(installed_in(&roots)[0].file_name,"sample.desktop");
         add_installed_in(&autostart,&roots,"sample.desktop").unwrap();
@@ -327,7 +324,7 @@ mod tests {
             .contains("Exec=/usr/bin/sample --arg"));
         assert!(add_installed_in(&autostart,&roots,"sample.desktop").is_err());
         assert!(add_installed_in(&autostart,&roots,"../bad.desktop").is_err());
-        fs::write(apps.join("bad.desktop"),"[Desktop Entry]\\nType=Application\\nName=Bad\\n").unwrap();
+        fs::write(apps.join("bad.desktop"),"[Desktop Entry]\nType=Application\nName=Bad\n").unwrap();
         assert!(add_installed_in(&autostart,&roots,"bad.desktop").is_err());
         let external=base.join("external");
         fs::create_dir_all(&external).unwrap();
