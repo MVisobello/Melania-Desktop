@@ -59,7 +59,8 @@ use crate::{native_client_frame,qemu_continuous_receiver};
 use smithay::reexports::rustix::fs::OFlags;
 use std::os::fd::OwnedFd;
 use melania_control::{start_toggle_socket_path,SOCKET_ENV,
-    Command as ControlCommand,WindowInfo,ACK,read_command,respond_list,respond_workspace,respond_error};
+    Command as ControlCommand,WindowInfo,ACK,respond_list,respond_workspace,respond_error};
+use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
 
@@ -2342,6 +2343,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_CONTROL_SOCKET_READY={}",path.display());
         Some((listener,cleanup))
     } else {None};
+    let mut control_poller=NativeControlPoller::new();
     let listener=ListeningSocket::bind_auto("melania-native-seat",1..=8)?;
     let socket=listener.socket_name().ok_or("Missing native Wayland socket name")?;
     println!("MELANIA_NATIVE_WAYLAND_SOCKET_READY={}",socket.to_string_lossy());
@@ -2415,25 +2417,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
-        // Execute only complete, bounded messages on the isolated socket.
-        // Invalid/incomplete commands are rejected, never partially applied.
+        // The QEMU native IPC socket cannot stall the Wayland/libinput
+        // thread while a peer waits to send EOF or read a large LIST reply.
         if let Some((listener,_cleanup))=&control_listener {
-            for _ in 0..8 {
-                match listener.accept(){
-                    Ok((mut client,_))=>{
-                        let _=client.set_read_timeout(Some(Duration::from_millis(40)));
-                        let _=client.set_write_timeout(Some(Duration::from_millis(120)));
-                        let response=match read_command(&mut client){
-                            Ok(Some(command))=>state.control_command(command),
-                            Ok(None)=>respond_error("Comando incompleto o non valido"),
-                            Err(error)=>respond_error(&format!("Lettura IPC: {error}")),
-                        };
-                        let _=client.write_all(response.as_bytes());
-                    },
-                    Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,
-                    Err(error)=>{eprintln!("native control accept failed: {error}");break;}
-                }
-            }
+            control_poller.pump(listener,|request|state.control_command(request))?;
         }
         if state.async_kms_mode && state.async_stream.is_some() {
             state.poll_async_kms()?;
