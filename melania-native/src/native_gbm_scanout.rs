@@ -128,6 +128,7 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
     let display=unsafe {EGLDisplay::new(gbm)}?;
     let context=EGLContext::new(&display)?;
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
     let mut rollback=Restore {
         card:&card, original, connector, submitted:false, restored:false,
     };
@@ -158,6 +159,8 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
             } else {
                 // EAGAIN means the prior asynchronous flip has not retired.
                 // Only that error is retryable and the deadline is bounded.
+                flip_ledger.begin_flip()
+                    .map_err(|error|format!("GBM flip already pending or revoked: {error:?}"))?;
                 let until=Instant::now()+Duration::from_secs(3);
                 loop {
                     match card.page_flip(crtc,handles[index],PageFlipFlags::EVENT,None) {
@@ -169,12 +172,21 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                 }
             }
             if index>0 {
-                crate::native_drm_flip::wait_for_kms_page_flip(
+                let kernel_frame=crate::native_drm_flip::wait_for_kms_page_flip(
                     &card,crtc,Duration::from_secs(3),
                 )?;
+                flip_ledger.complete_vm_flip(kernel_frame)
+                    .map_err(|error|format!("GBM kernel flip event rejected: {error:?}"))?;
+                if flip_ledger.unreliable_vm_counter() {
+                    println!("MELANIA_NATIVE_GBM_KMS_VBLANK_COUNTER_UNRELIABLE_QEMU=true");
+                }
                 println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             wait_for_scanout(&card,crtc,connector,handles[index])?;
+            if index>0 {
+                println!("MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED={}",
+                         flip_ledger.completed_count());
+            }
             println!("MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE={}",index+1);
             // Keep a visible interval for an isolated future QMP pixel check.
             thread::sleep(Duration::from_millis(450));

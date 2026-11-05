@@ -133,6 +133,7 @@ for marker in \
   'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=1' \
   'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=2' \
   'MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK=2' \
+  'MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED=1' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_TWO_GPU_FRAMES_PASS=true' \
@@ -1079,6 +1080,8 @@ for index in $(seq 1 12); do
   grep -q "^MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index$" "$integrated_client_log" ||
     fatal "integrated_client_frame_$index_not_released"
 done
+grep -q '^MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED=11$' "$integrated_server_log" ||
+  fatal 'in-process presenter missing monotonic kernel flip receipts'
 grep -q '^MELANIA_RUST_KMS_VBLANK_EVENT_ACK=12$' "$integrated_server_log" ||
   fatal 'in-process renderer missing real DRM vblank completion event'
 grep -q '^MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=12$' "$integrated_server_log" ||

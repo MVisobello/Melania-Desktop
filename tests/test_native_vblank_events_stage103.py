@@ -30,7 +30,7 @@ class VBlankGateContract(unittest.TestCase):
         self.assertIn("PageFlipFlags::EVENT",GBM)
         self.assertNotIn("PageFlipFlags::empty()",DRM)
         self.assertNotIn("PageFlipFlags::empty()",GBM)
-        start=DRM.index("if index>0 {\n                melania_native::native_drm_flip")
+        start=DRM.index("if index>0 {\n                let kernel_frame=melania_native::native_drm_flip")
         event=DRM.index("wait_for_kms_page_flip(",start)
         crtc=DRM.index("wait_for_fb(&card,crtc_handle,framebuffer)?;",event)
         receipt=DRM.index("stream.write_all(&ack)?",crtc)
