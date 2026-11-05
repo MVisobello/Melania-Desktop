@@ -626,6 +626,7 @@ pub fn build_page(stack:&Stack, key:&str)->Option<GtkBox> {
         "devices" => {
         let devices = page("Dispositivi", "input-keyboard");
         group(&devices, "Hardware");
+        crate::input_controls::append(&devices);
         crate::system_integrations::append_tool(&devices,crate::system_integrations::Tool::Printers);
         devices.append(&info_row("input-keyboard", "Input e periferiche",
             "Tastiera, mouse e dispositivi USB vengono gestiti dal sottosistema Linux."));

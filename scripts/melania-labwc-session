@@ -13,7 +13,7 @@ BIN=""
 for candidate in "${MELANIA_BIN_DIR:-}" "$ROOT/target/release" "$ROOT/target/debug"; do
   [[ -n "$candidate" && -d "$candidate" ]] || continue
   good=1
-  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart; do
+  for name in melania-panel melania-desktop-surface melania-files melania-settings melania-notifyd melania-sessionctl melania-autostart melania-inputctl; do
     [[ -x "$candidate/$name" ]] || good=0
   done
   if (( good )); then BIN="$candidate"; break; fi
@@ -105,7 +105,18 @@ case "$MODE" in
     echo "MELANIA_LABWC_START=real_lifecycle"
     # -C isolates labwc settings; -s exists in Ubuntu 24.04 labwc 0.7.1.
     # labwc owns KMS/VT, not the experimental melania-native binary.
-    exec labwc -C "$ROOT/integration/labwc" -s "melania-labwc-supervisor"
+    if [[ "$MODE" == --nested-test || "$MODE" == --nested-in-bus ]]; then
+      # Cinnamon/VirtualBox always use the untouched repository preset.
+      exec labwc -C "$ROOT/integration/labwc" -s "melania-labwc-supervisor"
+    fi
+    # Real login: write ONLY Melania private validated 0700 XDG config.
+    "$BIN/melania-inputctl" prepare ||
+      fail "impossibile preparare impostazioni mouse/touchpad Melania"
+    MELANIA_LABWC_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/melania/labwc"
+    [[ "$MELANIA_LABWC_CONFIG_DIR" == /* &&
+       -f "$MELANIA_LABWC_CONFIG_DIR/rc.xml" ]] ||
+      fail "configurazione privata labwc non valida"
+    exec labwc -C "$MELANIA_LABWC_CONFIG_DIR" -s "melania-labwc-supervisor"
     ;;
   *) echo "Uso: $0 --check|--stage|--run|--nested-test" >&2; exit 2 ;;
 esac

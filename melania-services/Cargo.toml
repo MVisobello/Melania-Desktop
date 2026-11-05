@@ -15,3 +15,7 @@ path = "src/main.rs"
 [[bin]]
 name = "melania-sessionctl"
 path = "src/sessionctl.rs"
+
+[[bin]]
+name = "melania-inputctl"
+path = "src/inputctl.rs"

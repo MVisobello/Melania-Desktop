@@ -64,6 +64,22 @@ La disponibilità reale di ScreenCast, permessi dei portali e selettore
 sorgente **deve essere provata su hardware reale**: la sola configurazione
 non conferma che un browser riesca già a condividere lo schermo.
 
+## Mouse e touchpad (configurazione Rust Melania)
+
+Melania Settings → Dispositivi offre ora quattro controlli funzionanti:
+tocco per clic, scorrimento naturale, pulsante mouse primario e velocità
+del puntatore (-100…100). Il servizio Rust `melania-inputctl` scrive
+impostazioni utente validate e un file `rc.xml` generato
+**soltanto in** `~/.config/melania/labwc/`. Non altera mai
+`~/.config/labwc`, Cinnamon, XFCE o i parametri libinput globali.
+
+Solo la sessione autonoma Melania impiega il file generato. Il comando
+`melania-inputctl apply` salva e chiede `labwc --reconfigure`,
+senza riavviare il desktop. L'anteprima annidata continua a usare
+`integration/labwc/rc.xml` e disabilita i controlli.
+La configurazione per singolo dispositivo, gesture avanzate e
+calibrazione touch non sono ancora complete.
+
 ## Limitazioni e verifica prima di sostituire Cinnamon
 
 Il launcher è una prima implementazione: la sessione completa deve ancora
