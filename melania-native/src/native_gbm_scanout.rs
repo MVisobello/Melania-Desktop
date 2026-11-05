@@ -106,6 +106,9 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
         return Err("QEMU GBM original FB_ID changed after topology capture".into());
     }
     let connector=route.connector;
+    // drm-rs set_crtc expects a connector slice; retain exactly the
+    // verified connector from this stable kernel topology snapshot.
+    let connected=[connector];
 
     // Use SCANOUT as well as RENDERING; a renderable-only BO must not be
     // misrepresented as suitable for DRM KMS.
