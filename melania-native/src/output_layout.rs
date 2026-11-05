@@ -33,7 +33,7 @@ impl DisplayRect {
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum LayoutError {InvalidOutput,DuplicateOutput,OverlappingOutputs,CapacityExceeded}
+pub enum LayoutError {InvalidOutput,DuplicateOutput,OverlappingOutputs,CapacityExceeded,StaleRevision}
 #[derive(Debug,Default)]
 pub struct OutputLayout {
     outputs:Vec<DisplayRect>,revision:u64,
@@ -96,6 +96,21 @@ impl OutputLayout {
         self.outputs=next;
         self.revision=self.revision.wrapping_add(1);
         Ok(true)
+    }
+    /// Reject an obsolete hotplug snapshot rather than overwriting a newer
+    /// layout. The caller captures revision before probing DRM and must pass
+    /// that revision back when the entire connector scan has finished.
+    /// On conflict, no output or revision is modified; the caller must
+    /// re-enumerate the real kernel topology before trying again.
+    pub fn reconfigure_if_revision(
+        &mut self,
+        expected_revision:u64,
+        requested:impl IntoIterator<Item=DisplayRect>,
+    )->Result<bool,LayoutError> {
+        if self.revision!=expected_revision {
+            return Err(LayoutError::StaleRevision);
+        }
+        self.reconfigure(requested)
     }
     pub fn remove(&mut self,id:u32)->bool {
         if let Some(index)=self.outputs.iter().position(|o|o.id==id) {
@@ -181,6 +196,21 @@ mod tests {
             assert_eq!(m.outputs(),original.as_slice());
             assert_eq!(m.revision(),epoch);
         }
+    }
+    #[test]
+    fn stale_hotplug_snapshot_cannot_restore_disconnected_monitor() {
+        let mut m=OutputLayout::default();
+        let initial=m.revision();
+        m.reconfigure_if_revision(initial,[a(1,0,0,1920,1080)]).unwrap();
+        let before_unplug=m.revision();
+        m.reconfigure_if_revision(before_unplug,[]).unwrap();
+        let after_unplug=m.revision();
+        assert_eq!(m.reconfigure_if_revision(before_unplug,
+            [a(1,0,0,1920,1080)]),Err(LayoutError::StaleRevision));
+        assert!(m.outputs().is_empty());
+        assert_eq!(m.revision(),after_unplug);
+        assert_eq!(m.reconfigure_if_revision(after_unplug,[]),Ok(false));
+        assert_eq!(m.revision(),after_unplug);
     }
     #[test]
     fn hotplug_replacement_and_capacity_are_bounded() {
