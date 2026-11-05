@@ -195,6 +195,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
+    let mut event_router=melania_native::native_drm_flip::DrmFlipEventRouter::default();
 
     // Stage84 allows one real GTK image only with the explicit VM opt-in.
     // All historical tests retain the stricter 8..=64-frame count.
@@ -316,8 +317,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // before any framebuffer or Wayland callback is acknowledged.
             // This fails closed (no polling-only success) on kernel timeout.
             if index>0 {
-                let kernel_frame=melania_native::native_drm_flip::wait_for_kms_page_flip(
-                    &card,crtc_handle,Duration::from_secs(2),
+                let kernel_frame=melania_native::native_drm_flip::wait_for_kms_page_flip_routed(
+                    &card,crtc_handle,Duration::from_secs(2),&mut event_router,
                 )?;
                 flip_ledger.complete_flip(kernel_frame)
                     .map_err(|error|format!("DRM kernel flip event rejected: {error:?}"))?;
