@@ -252,7 +252,21 @@ pub fn qemu_wayland_gpu_scene_stream(
     const W:usize=1280;
     const H:usize=800;
     const TOTAL:u64=24;
-    stream.set_read_timeout(Some(Duration::from_secs(12)))?;
+    let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
+        .as_deref()==Ok("YES_DISPOSABLE_QEMU");
+    if persistent &&
+       std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").as_deref()
+           !=Ok("YES_DISPOSABLE_QEMU") {
+        return Err("persistent GPU Wayland must be owned by persistent QEMU libseat session".into());
+    }
+    // Idle is not a GPU failure. Only explicit socket shutdown after
+    // SIGTERM/SIGINT ends the persistent renderer. Preserve the finite
+    // test's 12-second stalled-transport timeout.
+    stream.set_read_timeout(if persistent {
+        None
+    } else {
+        Some(Duration::from_secs(12))
+    })?;
     stream.set_write_timeout(Some(Duration::from_secs(7)))?;
     let card=DrmDeviceFd::new(DeviceFd::from(card_fd));
     let topology=crate::native_output_topology::inspect_stable_active_outputs(&card)?;
@@ -294,12 +308,22 @@ pub fn qemu_wayland_gpu_scene_stream(
     println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_READY=true");
     println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",
              topology.active.len());
+    let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut prior_identity:Option<(u64,u64,u64)>=None;
         let mut prior_pixels:Option<Vec<u8>>=None;
-        for index in 0..TOTAL {
+        loop {
+            if !persistent && frames_seen>=TOTAL {break;}
+            let index=frames_seen;
             let mut header=[0u8;32];
-            stream.read_exact(&mut header)?;
+            if persistent {
+                // EOF is valid only at a complete frame boundary, never
+                // after a partially transferred MLF1 header or image.
+                if stream.read(&mut header[..1])?==0 {break;}
+                stream.read_exact(&mut header[1..])?;
+            } else {
+                stream.read_exact(&mut header)?;
+            }
             if &header[..4]!=b"MLF1" {
                 return Err("GPU Wayland frame header has wrong protocol version".into());
             }
@@ -375,8 +399,8 @@ pub fn qemu_wayland_gpu_scene_stream(
                 println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
                          flip_ledger.completed_count());
             }
-            if index+1==TOTAL {
-                // Parent Smithay must not return success before restored VT.
+            if !persistent && index+1==TOTAL {
+                // Finite mode must restore before its last client ACK.
                 rollback.restore()?;
             }
             let mut ack=[0u8;29];
@@ -388,6 +412,8 @@ pub fn qemu_wayland_gpu_scene_stream(
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
+            frames_seen=frames_seen.checked_add(1)
+                .ok_or("GPU Wayland compositor frame counter exhausted")?;
             prior_identity=Some((epoch,sequence,generation));
             prior_pixels=Some(pixels);
         }
@@ -397,7 +423,12 @@ pub fn qemu_wayland_gpu_scene_stream(
     attempt?;
     restored?;
     println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");
-    println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
+    if persistent {
+        println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES={frames_seen}");
+        println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true");
+    } else {
+        println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
+    }
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }

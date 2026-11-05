@@ -160,12 +160,33 @@ pub(crate) fn run_embedded(stream:UnixStream,card:File)->Result<(),Box<dyn Error
     // The existing CPU dumb-buffer path remains the default and rollback
     // behavior is unchanged unless this exact VM experiment is requested.
     match std::env::var("MELANIA_NATIVE_GPU_WAYLAND_KMS").ok().as_deref() {
-        None=>run_stream(stream,card),
+        None=>{
+            if std::env::var_os("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND").is_some() {
+                return Err("persistent GPU mode requires explicit GPU Wayland backend".into());
+            }
+            run_stream(stream,card)
+        },
         Some("YES_DISPOSABLE_QEMU")=>{
-            if std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").is_ok() ||
-               std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").as_deref()!=Ok("24") ||
-               std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").as_deref()!=Ok("24") {
-                return Err("GPU Wayland scene requires explicit finite 24-frame isolated QEMU mode".into());
+            let persistent_gpu=
+                std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
+                    .ok();
+            match persistent_gpu.as_deref() {
+                None=>{
+                    if std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").is_ok() ||
+                       std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").as_deref()!=Ok("24") ||
+                       std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").as_deref()!=Ok("24") {
+                        return Err("GPU Wayland scene requires explicit finite 24-frame isolated QEMU mode".into());
+                    }
+                }
+                Some("YES_DISPOSABLE_QEMU")=>{
+                    if std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+                            .as_deref()!=Ok("YES_DISPOSABLE_QEMU") ||
+                       std::env::var_os("MELANIA_QEMU_CONTINUOUS_FRAMES").is_some() ||
+                       std::env::var_os("MELANIA_NATIVE_QEMU_FRAME_TARGET").is_some() {
+                        return Err("persistent GPU Wayland requires no finite frame budget and isolated QEMU libseat".into());
+                    }
+                }
+                Some(_)=>return Err("invalid persistent GPU Wayland opt-in".into()),
             }
             melania_native::native_gbm_scanout::qemu_wayland_gpu_scene_stream(
                 stream,card.into(),

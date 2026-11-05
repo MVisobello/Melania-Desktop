@@ -54,7 +54,7 @@ class NativeGpuWaylandScene109(unittest.TestCase):
         self.assertIn('MELANIA_NATIVE_IN_PROCESS_KMS',section)
         self.assertIn('MELANIA_NATIVE_GPU_WAYLAND_KMS',section)
         self.assertIn('Some("YES_DISPOSABLE_QEMU")',section)
-        self.assertIn('None=>run_stream(stream,card)',section)
+        self.assertIn('run_stream(stream,card)',section)
         self.assertIn('qemu_wayland_gpu_scene_stream(',section)
         self.assertIn('MELANIA_QEMU_CONTINUOUS_FRAMES',section)
         self.assertIn('MELANIA_NATIVE_QEMU_FRAME_TARGET',section)
