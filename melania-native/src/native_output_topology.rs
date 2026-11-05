@@ -113,7 +113,7 @@ pub fn inspect_active_outputs(
             return Err("DRM topology exceeds supported active output capacity".into());
         }
     }
-    active.sort_by_key(|route|route.connector);
+    active.sort_by_key(|route|format!("{:?}",route.connector));
     validate_active_routes(&active)?;
     Ok(NativeOutputTopology{active})
 }
