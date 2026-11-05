@@ -333,9 +333,11 @@ pub fn qemu_wayland_gpu_scene_stream(
             let output_rect=Rectangle::from_size((W as i32,H as i32).into());
             let src=Rectangle::from_size((W as f64,H as f64).into());
             frame.clear(Color32F::new(0.0,0.0,0.0,1.0),&[output_rect])?;
+            // GlesFrame's concrete overload expects custom shader args
+            // even when the default texture shader is selected.
             frame.render_texture_from_to(
                 &texture,src,output_rect,&[output_rect],&[],
-                Transform::Normal,1.0,
+                Transform::Normal,1.0,None,&[],
             )?;
             frame.finish()?.wait()?;
             drop(bound);
