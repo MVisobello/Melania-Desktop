@@ -33,6 +33,10 @@ pub struct ContinuousKmsJob {
 pub struct ContinuousKmsResult {
     pub planned: PlannedSceneFrame,
     pub status: Result<(), String>,
+    // The compositor's exact owned pixels return with the verified ACK.
+    // Do not copy a complete output frame into a second staging Vec.
+    // The bridge must NOT promote these pixels on a rejected/stale ACK.
+    pub pixels: Vec<u8>,
 }
 
 /// Single bounded queued job, single worker, and no blocking operations on
@@ -98,10 +102,15 @@ impl ContinuousKmsWorker {
             while let Ok(job) = jobs.recv() {
                 let status = transfer(&mut stream, &job);
                 let failed = status.is_err();
+                // transfer only borrowed the pixels; move the SAME allocation
+                // back to the compositor. No 1280x800 staging copy or second
+                // output-size allocation occurs at this ACK boundary.
+                let result=ContinuousKmsResult {
+                    planned:job.planned,status,pixels:job.pixels,
+                };
                 // Never block the worker while handing results to a stalled
                 // compositor: a full result channel is a fatal desync.
-                if results.try_send(ContinuousKmsResult { planned: job.planned, status }).is_err()
-                    || failed {
+                if results.try_send(result).is_err() || failed {
                     // A partially transferred frame or bad ACK poisons this
                     // stream. Never reuse it or invent a successful callback.
                     break;
