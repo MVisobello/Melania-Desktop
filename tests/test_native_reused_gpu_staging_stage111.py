@@ -46,7 +46,7 @@ class NativeReusedGpuStaging111(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_IDENTICAL_CLIENT_FRAME25_ACKED=true",CLIENT)
         stage=GUEST[GUEST.index("# Stage110: same REAL wl_shm"):GUEST.index("# Stage105:",GUEST.index("# Stage110: same REAL wl_shm"))]
         self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_IDENTICAL_AFTER=24",stage)
-        self.assertIn("persistent_GPU_Wayland_identical_client_commit_not_accepted",stage)
+        self.assertIn("GPU_Wayland_same_frame_failed",stage)
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_IDENTICAL_CLIENT_FRAME25_ACKED=true",stage)
 
 if __name__=="__main__":
