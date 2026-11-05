@@ -1320,7 +1320,11 @@ fi
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=48 \
   MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
-  timeout --signal=TERM --kill-after=3s 105s \
+  # The guest uses QEMU TCG software CPU/GPU emulation. This client
+  # needs enough time for 48 *real* DRM event/GBM presentations, plus the
+  # intentional 15-second idle, without weakening any kernel ACK assertion.
+  # The bounded watchdog still fails if the GPU truly stalls.
+  timeout --signal=TERM --kill-after=3s 240s \
   "$continuous_client" > "$persist_gpu_client_log" 2>&1; then
   cat "$persist_gpu_server_log" "$persist_gpu_client_log"
   kill -TERM "$persist_gpu_server_pid" 2>/dev/null || true
