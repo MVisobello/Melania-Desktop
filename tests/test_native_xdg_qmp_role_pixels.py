@@ -38,6 +38,26 @@ class QmpManagedXdgPixelVerifierTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "A_maximized_top_left"):
             module.verify_frame(bytes(picture),3)
 
+    def test_real_qmp_hide_and_reveal_have_inverse_pixels(self):
+        # In both cases B12 must remain in VRAM unchanged; A11 is the only
+        # content hidden/revealed, without any new client wl_shm upload.
+        hidden = module.expected_samples(13)
+        restored = module.expected_samples(14)
+        self.assertEqual(hidden["B_retained_last_buffer"],
+                         restored["B_retained_last_buffer"])
+        self.assertEqual(hidden["A_retained_or_hidden"][1], (27, 33, 58))
+        self.assertEqual(restored["A_retained_or_hidden"][1], module.client_color(11))
+        self.assertNotEqual(hidden["A_retained_or_hidden"][1],
+                            restored["A_retained_or_hidden"][1])
+        for frame in (13, 14):
+            self.assertGreaterEqual(len(module.verify_frame(example_fixture(frame),frame)),7)
+        corrupted = bytearray(example_fixture(13))
+        header = len(corrupted) - module.W*module.H*3
+        i = header + (200*module.W+200)*3
+        corrupted[i:i+3] = bytes(module.client_color(11))
+        with self.assertRaisesRegex(ValueError, "A_retained_or_hidden"):
+            module.verify_frame(bytes(corrupted),13)
+
     def test_rejects_wrong_size_and_unrecognized_frame(self):
         with self.assertRaises(ValueError):
             module.verify_frame(b"P6\n1 1\n255\n\x00\x00\x00",3)
