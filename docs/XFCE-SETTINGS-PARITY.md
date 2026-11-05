@@ -82,7 +82,7 @@ manuale delle icone e rotazione ciclica restano da sviluppare.
 - Input: libinput mouse/touchpad, layout e ripetizione tastiera, mappature tasti.
 - Display: modi, rotazioni, profili monitor con rollback.
 - Energia: sleep, ibernazione, coperchio laptop, tasti e profili energia.
-- Sessione: gestione delle voci autostart di sistema, creazione nuove voci, salvataggio, logout e ripristino applicazioni.
+- Sessione: gestione delle voci autostart di sistema, creazione di comandi personalizzati, salvataggio e ripristino applicazioni.
 - Blocca schermo, salvaschermo, policy di inattività.
 - Applicazioni: terminale, file manager predefinito, azioni speciali e MIME avanzati.
 - Gestore file: tutte le preferenze persistenti di visualizzazione, colonne e supporti remoti.
@@ -100,3 +100,7 @@ senza backend non conta come funzione completata.**
 
 Questa milestone costituisce **fase 1: copertura navigabile dell'inventario,
 più applicazioni predefinite, MIME e autostart personale operativi**. Non dichiara completezza funzionale.
+
+## Incremento: applicazioni installate all'avvio
+
+La pagina **Sessione e avvio** ora consente di aggiungere voci per applicazioni già presenti nelle directory XDG `applications/`. Il launcher installato viene copiato nella directory personale `~/.config/autostart` con la voce abilitata: si conservano `Exec`, argomenti e sezioni dell'applicazione. Non vengono lanciate istruzioni durante la configurazione e non si modificano i file di sistema. Sono esclusi launcher nascosti, privi di `Exec`, link simbolici e percorsi non validi; una voce personale esistente non viene sovrascritta. I test Rust coprono aggiunta, conservazione argomenti, duplicati, voci malformate e directory linkate. La compilazione CI e il collaudo Wayland restano necessari prima di dichiarare questa funzione pronta.
