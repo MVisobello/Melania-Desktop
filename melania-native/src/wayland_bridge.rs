@@ -21,6 +21,7 @@ use smithay::{
                 AbsolutePositionEvent, PointerAxisEvent, Axis, AxisSource, Event, KeyState},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
+        udev::{UdevBackend,UdevEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
     delegate_data_device,
@@ -52,7 +53,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -167,6 +168,9 @@ struct BridgeState {
     focused: Option<WlSurface>,
     pointer_position: Point<f64,Logical>,
     lifecycle: NativeLifecycle,
+    // Real libseat/udev seat monitor. Any DRM topology change permanently
+    // revokes this QEMU resource generation until a fresh acquisition.
+    gpu_watch:NativeGpuWatch,
     delivered_keys: u32,
     // Only the disposable QEMU Stage87 experiment tracks one Super key.
     // Any intervening key press cancels the standalone-press shortcut.
@@ -2022,6 +2026,17 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     // Main has already required explicit consent, QEMU DMI and dedicated VT.
     let (mut session,notifier)=LibSeatSession::new()?;
     let seat_name=session.seat();
+    // Like a production Smithay backend, monitor DRM devices through the
+    // SAME seat/event loop as libinput and libseat. This is read-only udev
+    // discovery: only the isolated KMS experiment may open a DRM card.
+    let udev=UdevBackend::new(&seat_name)?;
+    let gpu_watch=NativeGpuWatch::from_discovered(
+        udev.device_list().map(|(device_id,path)|
+            (device_id as u64,path.to_path_buf()))
+    );
+    if gpu_watch.revoked() {
+        return Err("native DRM device baseline contains conflicting IDs".into());
+    }
     let mut context=Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
         session.clone().into()
     );
@@ -2143,7 +2158,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         layer_surfaces:Vec::new(),
         xdg_toplevel_count:0,layer_surface_count:0,
         seats,seat,focused:None,pointer_position:(0.0,0.0).into(),
-        lifecycle:NativeLifecycle::default(),delivered_keys:0,
+        lifecycle:NativeLifecycle::default(),gpu_watch,delivered_keys:0,
         qemu_start_super_down:None,delivered_buttons:0,delivered_motions:0,
         delivered_scroll_frames:0,
     };
@@ -2203,6 +2218,38 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         if !active {
             state.continuous_pending=None;
             state.window_interaction.cancel();
+        }
+    })?;
+    events.handle().insert_source(udev,|event,_,state|{
+        // Do not trust an old framebuffer, CRTC route or GBM handle after
+        // any real udev GPU topology change. This bridge cannot re-acquire
+        // and rebuild those kernel resources, so it must abort safely.
+        let change=match &event {
+            UdevEvent::Added{device_id,path}=>DeviceChange::Added{
+                id:*device_id as u64,path:path.to_path_buf()},
+            UdevEvent::Changed{device_id}=>DeviceChange::Changed{
+                id:*device_id as u64},
+            UdevEvent::Removed{device_id}=>DeviceChange::Removed{
+                id:*device_id as u64},
+        };
+        let reason=state.gpu_watch.observe(&change);
+        state.lifecycle.on_udev(event);
+        if let Some(reason)=reason {
+            // Revoke BEFORE KMS transport teardown. The outer error branch
+            // joins the presenter, attempts CRTC rollback and calls libseat
+            // close() on the original device FD; no Wayland callback is sent.
+            state.native_presentation_guard.revoke();
+            state.continuous_worker.take();
+            state.continuous_inflight.take();
+            state.continuous_presentation_token.take();
+            state.continuous_pending=None;
+            state.dynamic_submitted_frame=None;
+            state.dynamic_confirmed_frame=None;
+            state.lifecycle.on_session(SessionEvent::PauseSession);
+            state.render_scheduler.set_seat_active(false);
+            state.continuous_redraw.set_seat_active(false);
+            state.window_interaction.cancel();
+            eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
     })?;
 
@@ -2446,7 +2493,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         // before resuming. The Stage89 VM bridge deliberately has no such
         // operation: exit instead of accepting stale DRM ACKs or input.
         if state.native_presentation_guard.permanently_revoked() {
-            return Err("native QEMU bridge stopped: libseat paused; safe revalidation unavailable".into());
+            return Err("native QEMU bridge stopped: libseat paused or DRM hotplug; safe revalidation unavailable".into());
         }
         while let Some(stream)=listener.accept()? {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
