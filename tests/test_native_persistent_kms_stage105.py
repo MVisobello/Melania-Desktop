@@ -36,7 +36,7 @@ class PersistentKmsStage105(unittest.TestCase):
         self.assertIn("if frames_seen==0",RECEIVER)
         self.assertIn("let restored=rollback.restore();",RECEIVER)
         self.assertIn("MELANIA_RUST_PERSISTENT_KMS_STOPPED_FRAMES={frames_seen}",RECEIVER)
-        self.assertIn("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={frames_seen}",RECEIVER)
+        self.assertIn("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}",RECEIVER)
 
     def test_wayland_runs_until_signal_and_revokes_before_device_release(self):
         self.assertIn("signal_hook::flag::register(signal,shutdown_flag.clone())?",BRIDGE)
