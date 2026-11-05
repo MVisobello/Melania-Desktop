@@ -53,7 +53,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind},managed_window::{ManagedWindow,WindowDisplayState}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -152,6 +152,8 @@ struct BridgeState {
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
+    // A top/left edge moves only with the matching new client buffer.
+    managed_pending_resize:Vec<(WlSurface,WindowRect)>,
     window_interaction:WindowInteraction,
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
@@ -186,6 +188,21 @@ struct BridgeState {
     delivered_buttons: u32,
     delivered_motions: u32,
     delivered_scroll_frames: u32,
+}
+
+fn xdg_resize_direction(edge:xdg_toplevel::ResizeEdge)->Option<ResizeDirection>{
+    use xdg_toplevel::ResizeEdge as Edge;
+    Some(match edge {
+        Edge::Top=>ResizeDirection::Top,
+        Edge::Bottom=>ResizeDirection::Bottom,
+        Edge::Left=>ResizeDirection::Left,
+        Edge::Right=>ResizeDirection::Right,
+        Edge::TopLeft=>ResizeDirection::TopLeft,
+        Edge::TopRight=>ResizeDirection::TopRight,
+        Edge::BottomLeft=>ResizeDirection::BottomLeft,
+        Edge::BottomRight=>ResizeDirection::BottomRight,
+        _=>return None,
+    })
 }
 
 // A client-provided serial alone is never permission to move another window.
@@ -1555,8 +1572,33 @@ impl XdgShellHandler for BridgeState {
             println!("MELANIA_NATIVE_XDG_CLIENT_MOVE_GRANTED={key}");
         }
     }
-    fn resize_request(&mut self,_:ToplevelSurface,_:wl_seat::WlSeat,
-                      _:Serial,_:xdg_toplevel::ResizeEdge){}
+    fn resize_request(&mut self,top:ToplevelSurface,_:wl_seat::WlSeat,
+                      serial:Serial,edge:xdg_toplevel::ResizeEdge){
+        let Some(direction)=xdg_resize_direction(edge) else{return;};
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.multi_window_mode || !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {
+            return;
+        }
+        let surface=top.wl_surface();
+        if self.focused.as_ref()!=Some(surface) ||
+           !take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial) {
+            return;
+        }
+        if !self.managed_windows.iter().any(|(role,window)|
+            role==surface && window.state()==WindowDisplayState::Normal) {
+            return;
+        }
+        let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
+        let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
+        let rect=WindowRect{x,y,width:width as i32,height:height as i32};
+        if self.window_interaction.begin(
+            key,rect,self.pointer_position.x,self.pointer_position.y,
+            InteractionKind::Resize(direction),
+        ) {
+            println!("MELANIA_NATIVE_XDG_CLIENT_RESIZE_GRANTED={key} edge={direction:?}");
+        }
+    }
     fn maximize_request(&mut self,top:ToplevelSurface) {
         self.request_managed_maximize(top,true);
     }
@@ -2207,6 +2249,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
         managed_pending_sizes:Vec::new(),
+        managed_pending_resize:Vec::new(),
         window_interaction:WindowInteraction::default(),
         last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
