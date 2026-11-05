@@ -341,7 +341,7 @@ mod tests{
         assert!(source.contains("Policy::FailClosed"));
         assert!(source.contains("Policy::Once"));
         assert!(source.contains("terminate_owned_labwc"));
-        assert!(!source.contains("pkill"));
+        assert!(source.matches("libc::kill").count()>=2);
     }
 
     #[test]fn actual_short_lived_child_recovers_but_crash_loop_fails_closed(){
