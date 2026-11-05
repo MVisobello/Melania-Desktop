@@ -21,7 +21,7 @@ class VBlankGateContract(unittest.TestCase):
         self.assertIn("poll(&mut fds,timeout_ms)",POLL)
         self.assertIn("card.receive_events()",POLL)
         self.assertIn("control::Event::PageFlip(done)",POLL)
-        self.assertIn("done.crtc==expected_crtc",POLL)
+        self.assertIn("router.enqueue(done.crtc, done.frame)?",POLL)
         self.assertIn("DRM page flip vblank event timed out",POLL)
         self.assertIn("PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL",POLL)
 
@@ -31,7 +31,7 @@ class VBlankGateContract(unittest.TestCase):
         self.assertNotIn("PageFlipFlags::empty()",DRM)
         self.assertNotIn("PageFlipFlags::empty()",GBM)
         start=DRM.index("if index>0 {\n                let kernel_frame=melania_native::native_drm_flip")
-        event=DRM.index("wait_for_kms_page_flip(",start)
+        event=DRM.index("wait_for_kms_page_flip_routed(",start)
         crtc=DRM.index("wait_for_fb(&card,crtc_handle,framebuffer)?;",event)
         receipt=DRM.index("stream.write_all(&ack)?",crtc)
         self.assertLess(event,crtc)
