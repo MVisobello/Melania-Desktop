@@ -78,6 +78,8 @@ class XfceSettingsParity(unittest.TestCase):
         self.assertIn("create_new(true).mode(0o600)", autostart)
         self.assertIn("fs::rename(&temp,&path)", autostart)
         self.assertIn("xfce_defaults::preferred_apps_page()", PAGES)
+        self.assertIn("set_system_enabled_in(", autostart)
+        self.assertIn("X-Melania-System-Autostart-Override", autostart)
 
     def test_page_titles_go_directly_to_controls_without_introductions(self):
         main = (ROOT / "melania-settings/src/main.rs").read_text()
@@ -101,6 +103,7 @@ class XfceSettingsParity(unittest.TestCase):
         self.assertIn("fn is_valid_type(mime:&str)->bool",MIME)
         self.assertNotIn("Command::new(",MIME)
         self.assertIn("gio::AppInfo::all_for_type(mime)", MIME)
+        self.assertIn('"inode/directory",false', MIME)
 
 if __name__=="__main__":
     unittest.main(verbosity=2)
