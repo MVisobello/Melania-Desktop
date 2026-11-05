@@ -22,6 +22,9 @@ pub struct NativeFlipLedger {
     pending: bool,
     revoked: bool,
     last_vblank: Option<u32>,
+    // Some virtual DRM devices do not publish a stable incrementing vblank
+    // counter. Never relax this check for ordinary hardware.
+    unreliable_vm_counter: bool,
     completed: u64,
 }
 
@@ -29,6 +32,7 @@ impl NativeFlipLedger {
     pub fn has_pending(&self) -> bool { self.pending }
     pub fn completed_count(&self) -> u64 { self.completed }
     pub fn revoked(&self) -> bool { self.revoked }
+    pub fn unreliable_vm_counter(&self) -> bool { self.unreliable_vm_counter }
 
     /// The output backend must first own a live DRM card and submit exactly
     /// one flip. This reservation prevents a concurrent second request.
@@ -62,6 +66,39 @@ impl NativeFlipLedger {
         self.completed=completed;
         self.pending=false;
         Ok(())
+    }
+
+    /// A dedicated VirtIO/QEMU-only exception for kernel drivers that deliver
+    /// a real PageFlip event but reuse or reset the reported VBlank counter.
+    /// This is NOT an ACK and MUST be followed by actual kernel FB_ID and
+    /// connector routing verification before returning a frame to Wayland.
+    ///
+    /// The caller is responsible for the QEMU DMI, dedicated VT, libseat,
+    /// explicit opt-in and matching-CRTC event-reader guards. This never runs
+    /// in a production login compositor or on a host physical GPU.
+    pub fn complete_vm_flip(&mut self, frame: u32) -> Result<(), FlipLedgerError> {
+        if self.revoked { return Err(FlipLedgerError::Revoked); }
+        if !self.pending { return Err(FlipLedgerError::UnexpectedCompletion); }
+        let counter_moved_forward = self.last_vblank.is_none_or(|last| {
+            let distance=frame.wrapping_sub(last);
+            distance!=0 && distance < (1u32 << 31)
+        });
+        if !counter_moved_forward {
+            self.unreliable_vm_counter=true;
+        }
+        // A previously unreliable virtual counter cannot be treated as an
+        // authoritative sequence again within the same device epoch.
+        if self.unreliable_vm_counter {
+            let Some(completed)=self.completed.checked_add(1) else {
+                self.revoke();
+                return Err(FlipLedgerError::Revoked);
+            };
+            self.completed=completed;
+            self.last_vblank=Some(frame);
+            self.pending=false;
+            return Ok(());
+        }
+        self.complete_flip(frame)
     }
 
     /// A VT pause, GPU hotplug, failed flip or disputed kernel receipt must
@@ -125,6 +162,31 @@ mod tests {
         }
         assert_eq!(ledger.completed_count(),4096);
         assert!(!ledger.revoked());
+    }
+
+    #[test]
+    fn virtio_can_report_repeated_or_reset_counters_with_real_events() {
+        let mut ledger=NativeFlipLedger::default();
+        for frame in [100u32,100,99,99,101] {
+            ledger.begin_flip().unwrap();
+            ledger.complete_vm_flip(frame).unwrap();
+        }
+        assert_eq!(ledger.completed_count(),5);
+        assert!(ledger.unreliable_vm_counter());
+        assert!(!ledger.has_pending());
+        assert!(!ledger.revoked());
+    }
+
+    #[test]
+    fn vm_counter_compatibility_never_invents_an_event_or_rearms_failure() {
+        let mut ledger=NativeFlipLedger::default();
+        assert_eq!(ledger.complete_vm_flip(1),Err(FlipLedgerError::UnexpectedCompletion));
+        ledger.begin_flip().unwrap();
+        ledger.complete_vm_flip(0).unwrap();
+        assert_eq!(ledger.complete_vm_flip(0),Err(FlipLedgerError::UnexpectedCompletion));
+        ledger.revoke();
+        assert_eq!(ledger.begin_flip(),Err(FlipLedgerError::Revoked));
+        assert_eq!(ledger.complete_vm_flip(2),Err(FlipLedgerError::Revoked));
     }
 
     #[test]
