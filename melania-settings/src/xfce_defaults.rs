@@ -91,6 +91,9 @@ pub fn preferred_apps_page() -> GtkBox {
         "Per i collegamenti http e https.","x-scheme-handler/http",true));
     body.append(&association_row("Posta elettronica",
         "Per i collegamenti mailto.","x-scheme-handler/mailto",false));
+    body.append(&association_row("Gestore file",
+        "Per aprire cartelle con le applicazioni che rispettano l'associazione XDG inode/directory.",
+        "inode/directory",false));
     body
 }
 
