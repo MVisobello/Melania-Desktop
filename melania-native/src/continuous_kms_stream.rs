@@ -226,6 +226,32 @@ mod tests {
     }
 
     #[test]
+    fn verified_ack_returns_same_scene_allocation_without_a_frame_clone() {
+        let (client, mut peer)=UnixStream::pair().unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        let worker=ContinuousKmsWorker::spawn(client).unwrap();
+        let frame=plan(19, 1, 73);
+        let pixels=vec![0x6au8;IMAGE_BYTES];
+        let original_ptr=pixels.as_ptr();
+        let original_capacity=pixels.capacity();
+        let responder=thread::spawn(move || {
+            assert_eq!(consume(&mut peer),frame);
+            peer.write_all(&ack(frame,0)).unwrap();
+        });
+        worker.submit(ContinuousKmsJob{planned:frame,pixels}).unwrap();
+        let receipt=result_for(&worker);
+        assert_eq!(receipt.planned,frame);
+        assert!(receipt.status.is_ok());
+        assert_eq!(receipt.pixels.len(),IMAGE_BYTES);
+        assert_eq!(receipt.pixels.capacity(),original_capacity);
+        assert_eq!(receipt.pixels.as_ptr(),original_ptr,
+                   "transport must return original allocation, not its clone");
+        assert!(receipt.pixels.iter().all(|&byte|byte==0x6a));
+        responder.join().unwrap();
+    }
+
+    #[test]
     fn polling_does_not_block_while_peer_delays_ack() {
         let (client, mut peer) = UnixStream::pair().unwrap();
         client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
