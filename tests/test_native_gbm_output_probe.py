@@ -20,9 +20,14 @@ class NativeGbmOutputProbe(unittest.TestCase):
         self.assertIn('inspect_connectors(device.device_fd())', NATIVE)
         self.assertIn('recommended_mode_for_budget(', NATIVE)
         self.assertIn('smoke_render_gbm_output_buffers(', NATIVE)
-        self.assertIn('device.device_fd().clone(),mode.width,mode.height,2', NATIVE)
+        # The kernel topology, not one EDID-derived mode, drives GPU probes.
+        self.assertIn('inspect_stable_active_outputs(', NATIVE)
+        self.assertIn('plan_active_output_probes(&topology)', NATIVE)
+        self.assertIn('plan.iter().try_for_each(|probe|', NATIVE)
+        self.assertIn('device.device_fd().clone(),probe.width,probe.height,2', NATIVE)
         self.assertIn('MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED=', NATIVE)
-        self.assertIn('No connected monitor mode fits the GPU memory budget', NATIVE)
+        self.assertIn('MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED=', NATIVE)
+        self.assertNotIn('No connected monitor mode fits the GPU memory budget', NATIVE)
 
     def test_active_crtc_mode_and_gpu_dimension_budget_are_hard_gates(self):
         # QEMU EDID may advertise a 5120px mode while the active CRTC is
@@ -37,6 +42,8 @@ class NativeGbmOutputProbe(unittest.TestCase):
         self.assertLess(NATIVE.index('let supported=conn.advertised_modes'),
                         NATIVE.index('let candidate=melania_native::outputs::recommended_mode_for_budget('))
         self.assertIn('width>4096 || height>4096', RENDERER)
+        self.assertIn('let plan=active_output_plan.as_ref()', NATIVE)
+        self.assertIn('plan.iter().try_for_each(|probe|', NATIVE)
 
     def test_not_installable_and_no_kms_mutation_in_probe(self):
         self.assertIn('--experimental-gbm-output', NATIVE)
