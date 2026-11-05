@@ -227,6 +227,38 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                 initialized+=1;
                 println!("Melania DRM {}: atomic={} CRTCs={}",
                     path.display(),device.is_atomic(),device.crtcs().len());
+                // A usable physical output requires a stable, kernel-read
+                // connector -> encoder -> CRTC -> original FB_ID route, not
+                // merely an EDID mode. The double read detects topology
+                // changes during the snapshot. It never modesets or claims
+                // a display. Mirrors/shared CRTCs fail closed until explicit
+                // per-output KMS ownership is implemented.
+                let stable_output_routes=match
+                    melania_native::native_output_topology::inspect_stable_active_outputs(
+                        device.device_fd()
+                    ) {
+                    Ok(topology)=>{
+                        println!("MELANIA_NATIVE_ACTIVE_DRM_ROUTES={} (READ_ONLY)",
+                                 topology.active.len());
+                        for route in &topology.active {
+                            println!("MELANIA_NATIVE_ACTIVE_DRM_ROUTE connector={:?} crtc={:?} original_fb={:?} size={}x{} (NOT MODIFIED)",
+                                     route.connector,route.crtc,route.original_fb,
+                                     route.width,route.height);
+                        }
+                        true
+                    },
+                    Err(error)=>{
+                        eprintln!("MELANIA_NATIVE_ACTIVE_DRM_ROUTE_UNVERIFIED: {error}");
+                        false
+                    },
+                };
+                // An offscreen buffer advertised as "output sized" must
+                // correspond to a verifiable active route. A disconnected
+                // or changing physical monitor is not a valid target.
+                if output_sized && !stable_output_routes {
+                    eprintln!("Melania native output-sized probe refused unstable physical DRM topology");
+                    continue;
+                }
                 // Inspect only: never call set_crtc, reset_state or surface
                 // creation. No mode is applied by this probe.
                 let mut probe_mode=None;
