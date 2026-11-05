@@ -260,6 +260,15 @@ impl DynamicWindowScene {
         true
     }
 
+    /// Topmost to bottommost *visible normal-layer* client windows only.
+    /// Never select GTK layer-shell, minimized, or disconnected surfaces in
+    /// the keyboard task switcher; their wl_surface IDs are not focus targets.
+    pub fn focusable_normal_keys_top_first(&self)->Vec<u64> {
+        self.windows.iter().rev()
+            .filter(|w|w.visible && w.layer==Layer::Normal)
+            .map(|w|w.key).collect()
+    }
+
     pub fn position(&self,key:u64)->Option<(i32,i32)> {
         self.windows.iter().find(|w|w.key==key).map(|w|(w.x,w.y))
     }
@@ -350,6 +359,26 @@ impl DynamicWindowScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_switcher_filters_minimized_and_layer_shell_windows() {
+        let mut scene=DynamicWindowScene::new(128,90,[1,2,3,0]).unwrap();
+        let make=||WindowPixels::new(12,12,DynamicAlpha::Opaque,
+                                    vec![42;12*12*4]).unwrap();
+        scene.upsert(1,1,1,make()).unwrap();
+        scene.upsert(2,2,2,make()).unwrap();
+        scene.upsert(3,3,3,make()).unwrap();
+        scene.upsert_in_layer(4,4,4,Layer::Top,make()).unwrap();
+        assert_eq!(scene.focusable_normal_keys_top_first(),vec![3,2,1]);
+        scene.set_visible(2,false).unwrap();
+        assert_eq!(scene.focusable_normal_keys_top_first(),vec![3,1]);
+        scene.raise(1).unwrap();
+        assert_eq!(scene.focusable_normal_keys_top_first(),vec![1,3]);
+        scene.remove(1);
+        assert_eq!(scene.focusable_normal_keys_top_first(),vec![3]);
+        scene.set_visible(3,false).unwrap();
+        assert!(scene.focusable_normal_keys_top_first().is_empty());
+    }
 
     fn solid(w:usize,h:usize,color:[u8;4],alpha:DynamicAlpha)->WindowPixels {
         let mut data=vec![0;w*h*4];
