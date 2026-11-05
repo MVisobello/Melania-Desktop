@@ -39,7 +39,7 @@ class NativeKernelFlipLedger(unittest.TestCase):
         self.assertIn("flip_ledger.begin_flip()",GBM)
         self.assertIn("flip_ledger.complete_vm_flip(kernel_frame)",GBM)
         self.assertLess(GBM.index("flip_ledger.complete_vm_flip(kernel_frame)"),
-                        GBM.index("wait_for_scanout(&card,crtc,connector,handles[index])?"))
+                        GBM.index("wait_for_scanout(&card,crtc,connector,handles[slot])?"))
     def test_qemu_proof_needs_actual_second_and_twelfth_frame_events(self):
         self.assertIn("MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED=1",GUEST)
         self.assertIn("MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED=11",GUEST)
