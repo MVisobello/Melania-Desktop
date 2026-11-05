@@ -91,7 +91,10 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
     if resources.crtcs().len()!=1 || resources.connectors().is_empty() {
         return Err("QEMU GBM scanout requires exactly one active CRTC".into());
     }
-    let crtc=resources.crtcs()[0];
+    let topology=crate::native_output_topology::inspect_stable_active_outputs(&card)?;
+    let route=topology.single_active()?;
+    println!("MELANIA_NATIVE_GBM_KMS_TOPOLOGY_STABLE_OUTPUTS={}",topology.active.len());
+    let crtc=route.crtc;
     let original=card.get_crtc(crtc)?;
     let mode=original.mode().ok_or("QEMU GPU scanout requires an active CRTC mode")?;
     if original.framebuffer().is_none() {
@@ -99,15 +102,10 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
     }
     let (w,h)=mode.size();
     crate::renderer::validate_gbm_output_dimensions(u32::from(w),u32::from(h),2)?;
-    let connected=resources.connectors().iter().filter_map(|&conn| {
-        let info=card.get_connector(conn,false).ok()?;
-        let encoder=card.get_encoder(info.current_encoder()?).ok()?;
-        (encoder.crtc()==Some(crtc)).then_some(conn)
-    }).collect::<Vec<_>>();
-    if connected.len()!=1 {
-        return Err("QEMU GPU scanout requires one attached connector".into());
+    if original.framebuffer()!=Some(route.original_fb) {
+        return Err("QEMU GBM original FB_ID changed after topology capture".into());
     }
-    let connector=connected[0];
+    let connector=route.connector;
 
     // Use SCANOUT as well as RENDERING; a renderable-only BO must not be
     // misrepresented as suitable for DRM KMS.
