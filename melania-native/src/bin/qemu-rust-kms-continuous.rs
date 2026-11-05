@@ -310,7 +310,11 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // following hold, before any later client frame is presented.
             let managed_role_qmp=std::env::var("MELANIA_QEMU_CONTINUOUS_MANAGED_ROLE_QMP")
                 .as_deref()==Ok("YES_QEMU_VM");
-            if managed_role_qmp && matches!(index+1,3|5|7|9) {
+            if managed_role_qmp && matches!(index+1,3|5|7|9|13|14) {
+                // A physical CRTC/connector scanout has already been
+                // verified, and the framebuffer is still owned by QEMU.
+                // Frames 13/14 are compositor-driven hide/reveal changes;
+                // they carry NO new wl_shm buffer and NO new client callback.
                 println!("MELANIA_RUST_CONTINUOUS_MANAGED_ROLE_FRAME_VISIBLE={}",index+1);
             }
             // Real-time serial QMP watcher must receive this while FB is live.
@@ -352,7 +356,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             thread::sleep(Duration::from_millis(
                 if (reopen && (index==12 || index==13)) ||
                    (pointer_proof && index==12) ||
-                   (managed_role_qmp && matches!(index+1,3|5|7|9)) ||
+                   (managed_role_qmp && matches!(index+1,3|5|7|9|13|14)) ||
                    real_gtk_panel || index==6 || index==11 {
                     if real_gtk_start && index==2 {5500} else {2500}
                    } else {350}
