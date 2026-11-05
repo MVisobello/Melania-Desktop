@@ -78,7 +78,7 @@ class NativeAuthenticatedResize114(unittest.TestCase):
         self.assertIn("self.window_interaction.cancel_for_key(key)",helper)
         for start_marker,end_marker in (
             ("fn request_managed_maximize(", "fn request_managed_fullscreen("),
-            ("fn request_managed_fullscreen(", "\\n}\\n\\nimpl BridgeState {"),
+            ("fn request_managed_fullscreen(", "impl BridgeState {"),
         ):
             start=BRIDGE.index(start_marker)
             end=BRIDGE.find(end_marker,start)
