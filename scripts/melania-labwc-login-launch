@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# MELANIA_LOGIN_WRAPPER_V1
+# Root-installed, generic LightDM/GDM entry. Every user opts in separately.
+# This wrapper never executes a checkout belonging to another user, and
+# does not replace any other distribution or desktop session entry.
+set -euo pipefail
+fail() { echo "MELANIA_LOGIN_BLOCKED: $*" >&2; exit 78; }
+[[ "$(id -u)" -ne 0 ]] || fail "cannot launch a graphical login as root"
+config_base="${XDG_CONFIG_HOME:-$HOME/.config}"
+[[ "$config_base" == /* && "$HOME" == /* ]] ||
+  fail "XDG_CONFIG_HOME and HOME must be absolute"
+[[ ! -L "$config_base" && ! -L "$config_base/melania" ]] ||
+  fail "linked config directory"
+root_file="$config_base/melania/labwc-login-root"
+[[ -f "$root_file" && ! -L "$root_file" ]] ||
+  fail "this account has not registered Melania"
+[[ "$(stat -c %u "$root_file")" == "$(id -u)" ]] ||
+  fail "registration belongs to a different user"
+mode="$(stat -c %a "$root_file")"
+(( (8#$mode & 8#77) == 0 )) || fail "registration file is not private"
+mapfile -t lines < "$root_file"
+[[ "${#lines[@]}" -eq 2 &&
+   "${lines[0]}" == "MELANIA_LABWC_USER_ROOT_V1" &&
+   "${lines[1]}" == /* ]] || fail "invalid registration data"
+root="${lines[1]}"
+[[ -d "$root" && ! -L "$root" &&
+   -f "$root/scripts/melania-labwc-session" &&
+   ! -L "$root/scripts/melania-labwc-session" ]] ||
+  fail "registered checkout unavailable"
+# The checkout script will check all compiled binaries, private runtime,
+# login lock tools, and any existing graphical session before launching.
+# No shell evaluation of the saved path, and no root privileges inherited.
+exec /usr/bin/env bash "$root/scripts/melania-labwc-session" --run
