@@ -4,8 +4,10 @@ import unittest
 BRIDGE=(Path(__file__).resolve().parents[1]/"melania-native/src/wayland_bridge.rs").read_text()
 class RealManagedXdgFocus(unittest.TestCase):
     def test_focus_after_validated_client_buffer_not_role_configure(self):
-        start=BRIDGE.index("match self.continuous_client_ledger.stage(surface.clone(),buffer)")
-        end=BRIDGE.index("self.note_scene_change();",start)
+        focus=BRIDGE.index("                // Real mapped XDG clients must receive keyboard focus")
+        start=BRIDGE.rfind("match self.continuous_client_ledger.stage(surface.clone(),buffer)",0,focus)
+        self.assertGreaterEqual(start,0)
+        end=BRIDGE.index("self.note_scene_change();",focus)
         body=BRIDGE[start:end]
         for token in (
             "self.managed_xdg_mode && self.dynamic_window_mode",
