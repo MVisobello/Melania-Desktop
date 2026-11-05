@@ -64,6 +64,8 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+use melania_native::native_popup_layout::PopupPlacement;
+use smithay::utils::Rectangle;
 use signal_hook::consts::signal::{SIGINT,SIGTERM};
 
 struct NativeControlSocket(PathBuf);
@@ -154,6 +156,9 @@ struct BridgeState {
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
     // A top/left edge moves only with the matching new client buffer.
     managed_pending_resize:Vec<(WlSurface,WindowRect)>,
+    // Configured xdg_popup children; only ACKed client pixels enter KMS.
+    // Parent identity is retained to follow real parent drags/destroy.
+    native_popup_roles:Vec<(PopupSurface,WlSurface)>,
     window_interaction:WindowInteraction,
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
@@ -613,6 +618,9 @@ impl BridgeState {
                             }
                         }
                     }
+                    if self.managed_xdg_mode && self.dynamic_window_mode {
+                        self.reposition_native_popups_for_parent(key);
+                    }
                     self.note_scene_change();
                     println!("MELANIA_NATIVE_WINDOW_DRAG_MODEL={} x={} y={}",
                              key,rect.x,rect.y);
@@ -889,6 +897,37 @@ impl BridgeState {
 }
 
 impl BridgeState {
+    fn evict_native_popup(&mut self,surface:&WlSurface) {
+        self.native_popup_roles.retain(|(popup,_)|popup.wl_surface()!=surface);
+        if let Some(key)=self.known_window_surfaces.remove(surface) {
+            if self.dynamic_scene.remove(key) {
+                self.note_scene_change();
+                if self.continuous_kms_mode &&
+                   (self.persistent_kms_mode ||
+                    self.continuous_frame_count<self.continuous_frame_target) {
+                    if let Err(error)=self.submit_continuous_frame() {
+                        eprintln!("native popup removal KMS damage rejected: {error}");
+                    }
+                }
+            }
+            self.window_interaction.cancel_for_key(key);
+        }
+    }
+    fn reposition_native_popups_for_parent(&mut self,parent_key:u64) {
+        let Some((px,py,_,_))=self.dynamic_scene.geometry(parent_key) else {return;};
+        let moves=self.native_popup_roles.iter().filter_map(|(popup,parent)|{
+            if self.known_window_surfaces.id_of(parent)!=Some(parent_key) {return None;}
+            let child_key=self.known_window_surfaces.id_of(popup.wl_surface())?;
+            let g=popup.with_committed_state(|state|state.map(|s|s.geometry))?;
+            let placement=PopupPlacement::new(parent_key,g.loc.x,g.loc.y,g.size.w,g.size.h)?;
+            let (x,y)=placement.absolute(px,py,1280,800)?;
+            Some((child_key,x,y))
+        }).collect::<Vec<_>>();
+        for (child_key,x,y) in moves {
+            let _=self.dynamic_scene.move_to(child_key,x,y);
+        }
+    }
+
     /// A state change must revoke the grab of its own surface, not one
     /// belonging to a different Wayland client.
     fn cancel_surface_grab(&mut self,surface:&WlSurface) {
@@ -1276,9 +1315,22 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     };
+                    let popup_parent=self.native_popup_roles.iter()
+                        .find(|(popup,_)|popup.wl_surface()==surface)
+                        .map(|(popup,parent)|(popup.clone(),parent.clone()));
+                    // Do not turn an unconfigured / rejected XDG popup into a
+                    // free-floating normal window by registering its buffer.
+                    if self.managed_xdg_mode &&
+                       popup_parent.is_none() &&
+                       self.xdg_shell.popup_surfaces().iter()
+                           .any(|role|role.wl_surface()==surface) {
+                        eprintln!("MELANIA_NATIVE_XDG_POPUP_PARENT_REJECTED=true");
+                        buffer.release();
+                        return;
+                    }
                     // Refuse stale-size buffers during a managed role switch.
                     // A successful client ACK alone did not provide pixels.
-                    if self.managed_xdg_mode {
+                    if self.managed_xdg_mode && popup_parent.is_none() {
                         let expected=self.managed_pending_sizes.iter()
                             .find(|(role,_)|role==surface).map(|(_,size)|*size);
                         if !accepts_managed_role_buffer(expected,(pixels.width(),pixels.height())) {
@@ -1287,8 +1339,43 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     }
+                    // Popup geometry is XDG positioner state ACKed by the
+                    // client, relative to its mapped parent, NEVER a guessed
+                    // slot or a toplevel's default placement.
+                    let placement=if let Some((popup,parent))=&popup_parent {
+                        let Some(parent_key)=self.known_window_surfaces.id_of(parent) else {
+                            buffer.release();
+                            return;
+                        };
+                        let Some((px,py,_,_))=self.dynamic_scene.geometry(parent_key) else {
+                            buffer.release();
+                            return;
+                        };
+                        let Some(geometry)=popup.with_committed_state(|state|
+                            state.map(|state|state.geometry)) else {
+                            eprintln!("MELANIA_NATIVE_XDG_POPUP_UNACKED_BUFFER_REJECTED=true");
+                            buffer.release();
+                            return;
+                        };
+                        let Some(layout)=PopupPlacement::new(
+                            parent_key,geometry.loc.x,geometry.loc.y,
+                            geometry.size.w,geometry.size.h
+                        ) else {
+                            buffer.release();
+                            return;
+                        };
+                        if !layout.matches_buffer(pixels.width(),pixels.height()) ||
+                           layout.absolute(px,py,1280,800).is_none() {
+                            eprintln!("MELANIA_NATIVE_XDG_POPUP_SIZE_MISMATCH=true");
+                            buffer.release();
+                            return;
+                        }
+                        layout.absolute(px,py,1280,800)
+                    } else {None};
                     // Keep the current position across later wl_shm commits.
-                    let (x,y)=if self.managed_xdg_mode {
+                    let (x,y)=if let Some(position)=placement {
+                        position
+                    } else if self.managed_xdg_mode {
                         // The top/left edge moves with the exact matching
                         // resized wl_shm commit, not when XDG configure is sent.
                         self.managed_pending_resize.iter()
@@ -1304,12 +1391,16 @@ impl CompositorHandler for BridgeState {
                     };
                     let width=pixels.width() as i32;
                     let height=pixels.height() as i32;
-                    if self.dynamic_scene.upsert(key,x,y,pixels).is_err() {
+                    if (if popup_parent.is_some() {
+                        self.dynamic_scene.upsert_in_layer(key,x,y,SceneLayer::Top,pixels)
+                    } else {
+                        self.dynamic_scene.upsert(key,x,y,pixels)
+                    }).is_err() {
                         eprintln!("dynamic QEMU client image rejected");
                         buffer.release();
                         return;
                     }
-                    if self.managed_xdg_mode {
+                    if self.managed_xdg_mode && popup_parent.is_none() {
                         // Change the remembered normal geometry only after
                         // the owned client pixels actually entered the scene.
                         if let Some((_,window))=self.managed_windows.iter_mut()
@@ -1319,6 +1410,9 @@ impl CompositorHandler for BridgeState {
                         self.managed_pending_sizes.retain(|(role,_)|role!=surface);
                         self.managed_pending_resize.retain(|(role,_)|role!=surface);
                         println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
+                    }
+                    if popup_parent.is_some() {
+                        println!("MELANIA_NATIVE_XDG_POPUP_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
                     }
                 } else {
                     let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
@@ -1584,8 +1678,49 @@ impl XdgShellHandler for BridgeState {
         top.send_configure();
         println!("MELANIA_NATIVE_XDG_TOPLEVEL_CONFIGURE_SENT=true");
     }
-    fn new_popup(&mut self,popup:PopupSurface,_:PositionerState) {
+    fn new_popup(&mut self,popup:PopupSurface,positioner:PositionerState) {
+        if !self.managed_xdg_mode || !self.dynamic_window_mode {
+            let _=popup.send_configure();
+            return;
+        }
+        let Some(parent)=popup.get_parent_surface() else {
+            popup.send_popup_done();
+            return;
+        };
+        let Some(parent_id)=self.known_window_surfaces.id_of(&parent) else {
+            popup.send_popup_done();
+            return;
+        };
+        let Some((parent_x,parent_y,_,_))=self.dynamic_scene.geometry(parent_id) else {
+            popup.send_popup_done();
+            return;
+        };
+        if self.native_popup_roles.len()>=8 {
+            popup.send_popup_done();
+            return;
+        }
+        let output=Rectangle::from_loc_and_size(
+            (-parent_x,-parent_y),(1280,800));
+        let geometry=positioner.get_unconstrained_geometry(output);
+        let Some(placement)=PopupPlacement::new(
+            parent_id,geometry.loc.x,geometry.loc.y,
+            geometry.size.w,geometry.size.h
+        ) else {
+            popup.send_popup_done();
+            return;
+        };
+        if placement.absolute(parent_x,parent_y,1280,800).is_none() {
+            popup.send_popup_done();
+            return;
+        }
+        popup.with_pending_state(|pending|{
+            pending.positioner=positioner;
+            pending.geometry=geometry;
+        });
+        self.native_popup_roles.push((popup.clone(),parent));
         let _=popup.send_configure();
+        println!("MELANIA_NATIVE_XDG_POPUP_CONFIGURED={}x{}",
+                 placement.width,placement.height);
     }
     fn move_request(&mut self,top:ToplevelSurface,seat:wl_seat::WlSeat,serial:Serial){
         // Stage113: accept only a real left-button serial issued to this
@@ -1737,6 +1872,16 @@ impl XdgShellHandler for BridgeState {
             }
             let _=std::io::stdout().flush();
         }
+        // A closed parent invalidates every XDG popup that was attached
+        // to its old surface identity, including their retained GPU pixels.
+        // A new toplevel cannot inherit an orphaned popup.
+        let descendants=self.native_popup_roles.iter()
+            .filter(|(_,parent)|parent==&surface)
+            .map(|(popup,_)|popup.clone()).collect::<Vec<_>>();
+        for popup in descendants {
+            popup.send_popup_done();
+            self.evict_native_popup(popup.wl_surface());
+        }
         if self.focused.as_ref()==Some(&surface) {
             // Do not forward keys or pointer events to a destroyed Wayland
             // role. Where possible retarget the remaining window beneath the
@@ -1756,8 +1901,43 @@ impl XdgShellHandler for BridgeState {
         }
     }
     fn grab(&mut self,_:PopupSurface,_:wl_seat::WlSeat,_:Serial){}
-    fn reposition_request(&mut self,popup:PopupSurface,_:PositionerState,token:u32){
+    fn reposition_request(&mut self,popup:PopupSurface,positioner:PositionerState,token:u32){
+        if !self.managed_xdg_mode || !self.dynamic_window_mode {
+            popup.send_repositioned(token);
+            return;
+        }
+        let Some((_,parent))=self.native_popup_roles.iter()
+            .find(|(role,_)|role.wl_surface()==popup.wl_surface()) else {
+            popup.send_popup_done();
+            return;
+        };
+        let Some(parent_id)=self.known_window_surfaces.id_of(parent) else {
+            popup.send_popup_done();
+            return;
+        };
+        let Some((px,py,_,_))=self.dynamic_scene.geometry(parent_id) else {
+            popup.send_popup_done();
+            return;
+        };
+        let target=Rectangle::from_loc_and_size((-px,-py),(1280,800));
+        let geometry=positioner.get_unconstrained_geometry(target);
+        let Some(placement)=PopupPlacement::new(parent_id,geometry.loc.x,geometry.loc.y,
+                                               geometry.size.w,geometry.size.h) else {
+            popup.send_popup_done();
+            return;
+        };
+        if placement.absolute(px,py,1280,800).is_none() {
+            popup.send_popup_done();
+            return;
+        }
+        popup.with_pending_state(|pending|{
+            pending.positioner=positioner;
+            pending.geometry=geometry;
+        });
         popup.send_repositioned(token);
+    }
+    fn popup_destroyed(&mut self,popup:PopupSurface) {
+        self.evict_native_popup(popup.wl_surface());
     }
 }
 impl WlrLayerShellHandler for BridgeState {
@@ -2311,6 +2491,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_windows:Vec::new(),
         managed_pending_sizes:Vec::new(),
         managed_pending_resize:Vec::new(),
+        native_popup_roles:Vec::new(),
         window_interaction:WindowInteraction::default(),
         last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
