@@ -20,8 +20,11 @@ class NativeXdgMoveGrant113(unittest.TestCase):
             "serial:button_serial,time:event.time_msec()",
         ):
             self.assertIn(piece,button)
+        # wl_pointer.motion has its own serial; only the actual button
+        # event must reuse the move-authorization serial.
+        button_event=button[button.index("pointer.button(state,&ButtonEvent{"):]
         self.assertNotIn("serial:SERIAL_COUNTER.next_serial(),time:event.time_msec()",
-                         button)
+                         button_event)
 
     def test_xdg_client_move_reuses_real_window_interaction_not_synthetic_repaint(self):
         start=BRIDGE.index("fn move_request(&mut self,top:ToplevelSurface")
