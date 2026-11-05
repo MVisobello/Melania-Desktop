@@ -385,7 +385,19 @@ fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
     // The native GPU/KMS probe must finish (and restore the CRTC)
     // before the original libseat device is released.
     let cloned=fd.try_clone()?;
-    let outcome=melania_native::native_gbm_scanout::qemu_two_gpu_frames(cloned);
+    // The optional longer test reuses exactly TWO real DMA-BUF/DRM FB_ID
+    // objects for twelve CRTC-confirmed GPU frames. Its gate remains VM,
+    // dedicated tty, libseat and this *separate* explicit opt-in only.
+    let reuse=match env::var("MELANIA_NATIVE_VM_GBM_REUSE").as_deref() {
+        Ok("YES_DISPOSABLE_QEMU")=>true,
+        Err(_)=>false,
+        _=>return Err("invalid QEMU GBM reuse opt-in value".into()),
+    };
+    let outcome=if reuse {
+        melania_native::native_gbm_scanout::qemu_reused_gpu_frames(cloned)
+    } else {
+        melania_native::native_gbm_scanout::qemu_two_gpu_frames(cloned)
+    };
     let released=session.close(fd);
     drop(notifier);
     println!("MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED={}",released.is_ok());
