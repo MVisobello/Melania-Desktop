@@ -25,3 +25,5 @@ drm = "0.14"
 # FD readiness for kernel page-flip completion, without unsafe ioctl or busy polling.
 rustix = { version = "0.38", features = ["event"] }
 melania-control = { path = "../melania-control" }
+# VM-only clean signal shutdown of the experimental persistent seat + DRM owner.
+signal-hook = "0.3"
