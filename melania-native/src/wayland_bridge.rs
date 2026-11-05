@@ -1796,6 +1796,14 @@ impl XdgShellHandler for BridgeState {
            !take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial) {
             return;
         }
+        // A valid click does not authorize dragging a maximized, fullscreen,
+        // minimized or destroyed role. The click serial was already consumed.
+        // Requiring a normal managed role also prevents moving a stale scene
+        // slot whose XDG role is no longer eligible for interactive movement.
+        if !self.managed_windows.iter().any(|(role,window)|
+            role==surface && window.state()==WindowDisplayState::Normal) {
+            return;
+        }
         let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
         let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
         let rect=WindowRect{x,y,width:width as i32,height:height as i32};
