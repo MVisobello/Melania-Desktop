@@ -18,6 +18,14 @@ console="$(readlink /proc/self/fd/0)" || deny 'controlling TTY unavailable'
 [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR" ]] ||
   deny 'XDG_RUNTIME_DIR missing'
 [[ -d /dev/dri ]] || deny 'DRM device directory missing'
+[[ -n "${HOME:-}" && -d "$HOME" ]] || deny 'HOME missing'
+[[ "$(stat -c %u "$XDG_RUNTIME_DIR")" == "$(id -u)" ]] ||
+  deny 'XDG_RUNTIME_DIR belongs to a different user'
+if command -v systemd-detect-virt >/dev/null; then
+  if systemd-detect-virt --vm --quiet; then
+    deny 'VM detected: virtual DRM cannot certify physical hardware'
+  fi
+fi
 command -v timeout >/dev/null || deny 'GNU timeout required'
 root="$(cd "$(dirname "$0")/.." && pwd)"
 binary="${MELANIA_NATIVE_BINARY:-$root/target/debug/melania-native}"
@@ -50,7 +58,9 @@ probe() {
   fi
 }
 probe seat_enum 35 '^MELANIA_NATIVE_INPUT_ENUMERATED ' --experimental-seat
+[[ "$failure" -eq 0 ]] || deny 'no validated live libseat input inventory; refusing GPU probes'
 probe drm_routes 60 '^MELANIA_NATIVE_ACTIVE_DRM_ROUTES=[1-9][0-9]* \(READ_ONLY\)' --experimental-drm
+[[ "$failure" -eq 0 ]] || deny 'no validated stable physical CRTC route; refusing GPU probes'
 probe gbm_offscreen 120 'Melania native offscreen GLES frames: OK \(NOT displayed\)' --experimental-offscreen
 probe gbm_output 120 '^MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED=[0-9]+x[0-9]+x2$' --experimental-gbm-output
 printf 'NATIVE_SESSION_READY=false\n' | tee -a "$report/manifest.txt"
