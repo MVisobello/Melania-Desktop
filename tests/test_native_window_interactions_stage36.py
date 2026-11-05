@@ -22,7 +22,7 @@ class NativeWindowInteractionsStage36(unittest.TestCase):
             "const OUT_H:i32=800",
             "const MIN_W:i32=96",
             "const MIN_H:i32=72",
-            "pub enum InteractionKind { Move, ResizeBottomRight }",
+            "pub enum InteractionKind {Move, ResizeBottomRight, Resize(ResizeDirection)}",
             "pub fn begin(", "pub fn motion(", "pub fn end(", "pub fn cancel(",
             "self.active.is_some()", "self.x0",  # replaced below
             "fn drag_moves_without_resizing_and_bounds_to_virtual_output()",
