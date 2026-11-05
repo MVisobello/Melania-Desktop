@@ -19,7 +19,8 @@ kernel page-flip/vblank and framebuffer/connector verification for every
 asynchronous presentation, and sends `MLA1` only after the real kernel
 checks. In persistent mode it accepts a clean EOF **only at a complete
 frame boundary**. It then rolls back the original connector/CRTC and releases
-its owned kernel framebuffer resources. EOF mid-header/pixel frame is fatal.
+its owned kernel framebuffer resources. EOF mid-header/pixel frame is fatal. Clean EOF with zero frames is
+also safe: no modeset took place and resource restoration is a no-op.
 
 The Wayland loop registers safe SIGINT/SIGTERM handlers (signal-hook) instead
 of an unconditional test deadline. On a signal it:
