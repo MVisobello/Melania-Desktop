@@ -1318,15 +1318,17 @@ if [[ -z "$persist_gpu_socket" ]] ||
   fatal 'persistent_GPU_Wayland_server_not_ready'
 fi
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
-  MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=48 \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
   timeout --signal=TERM --kill-after=3s 105s \
   "$continuous_client" > "$persist_gpu_client_log" 2>&1; then
   cat "$persist_gpu_server_log" "$persist_gpu_client_log"
   kill -TERM "$persist_gpu_server_pid" 2>/dev/null || true
   fatal 'persistent_GPU_Wayland_client_failed'
 fi
-# This idle hold also proves that the GPU receiver doesn't reuse the
-# historical 12-second socket read deadline after the last KMS receipt.
+# A second idle hold after resuming and presenting 48 frames verifies
+# both mid-session recovery and final quiet shutdown. In addition, the
+# actual Wayland client paused for 15 seconds between frames 24 and 25.
 sleep 15
 if ! kill -0 "$persist_gpu_server_pid" 2>/dev/null; then
   cat "$persist_gpu_server_log" "$persist_gpu_client_log"
@@ -1337,7 +1339,7 @@ if ! wait "$persist_gpu_server_pid"; then
   cat "$persist_gpu_server_log" "$persist_gpu_client_log"
   fatal 'persistent_GPU_Wayland_signal_rollback_failed'
 fi
-for index in $(seq 1 24); do
+for index in $(seq 1 48); do
   grep -q "^MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE=$index$" "$persist_gpu_server_log" ||
     fatal "persistent_GPU_Wayland_CRTC_frame_${index}_missing"
   grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index$" "$persist_gpu_server_log" ||
@@ -1358,8 +1360,16 @@ for marker in \
     fatal "persistent_GPU_Wayland_missing_${marker}"
   }
 done
-grep -Eq '^MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES=[0-9]+$' "$persist_gpu_server_log" ||
-  fatal 'persistent_GPU_Wayland_end_frame_counter_missing'
+grep -q '^MELANIA_NATIVE_GPU_WAYLAND_CLIENT_IDLE_AFTER_24=true$' "$persist_gpu_client_log" ||
+  fatal 'GPU_Wayland_client_never_entered_idle'
+grep -q '^MELANIA_NATIVE_GPU_WAYLAND_CLIENT_RESUMED_AFTER_IDLE=true$' "$persist_gpu_client_log" ||
+  fatal 'GPU_Wayland_client_did_not_resume_after_idle'
+grep -q '^MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER=47$' "$persist_gpu_server_log" ||
+  fatal 'GPU_Wayland_kernel_flip_47_not_accepted'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS=48$' "$persist_gpu_client_log" ||
+  fatal 'GPU_Wayland_client_did_not_complete_48_frames'
+grep -Eq '^MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES=48$' "$persist_gpu_server_log" ||
+  fatal 'persistent_GPU_Wayland_did_not_terminate_after_48_verified_frames'
 rm -f "$persist_gpu_server_log" "$persist_gpu_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_PERSISTENT_GPU_WAYLAND_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
