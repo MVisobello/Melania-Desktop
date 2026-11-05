@@ -29,7 +29,7 @@ class NativeEdgeDropQemu(unittest.TestCase):
         for name in (
             'wl_pointer::Event::Button',
             's.entered && !s.requested && s.callbacks==1',
-            'top.move_(seat,serial)',
+            'top._move(seat,serial)',
             'role.ack_configure(serial)',
             'surface.commit()',
             'state.callbacks<index',

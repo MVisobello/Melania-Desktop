@@ -62,7 +62,7 @@ impl Dispatch<wl_pointer::WlPointer,()> for State {
                 if let (Some(top),Some(seat))=(&s.toplevel,&s.seat) {
                     // Protocol-authenticated XDG move using the real
                     // wl_pointer serial from this window's left click.
-                    top.move_(seat,serial);
+                    top._move(seat,serial);
                     s.requested=true;
                     println!("MELANIA_NATIVE_EDGE_DROP_CLIENT_MOVE_REQUESTED=true");
                     let _=std::io::stdout().flush();
