@@ -268,7 +268,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 // until wait_for_fb verifies the actual CRTC framebuffer.
                 let flip_deadline=Instant::now()+Duration::from_secs(2);
                 loop {
-                    match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::empty(),None) {
+                    match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::EVENT,None) {
                         Ok(())=>break,
                         Err(error) if error.raw_os_error()==Some(11) &&
                             Instant::now()<flip_deadline => {
@@ -278,7 +278,17 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                     }
                 }
             }
-            // Only verified CRTC scanout may produce a success ACK.
+            // The modeset on the first frame is synchronous. Every actual
+            // subsequent flip must deliver a DRM page-flip/vblank event
+            // before any framebuffer or Wayland callback is acknowledged.
+            // This fails closed (no polling-only success) on kernel timeout.
+            if index>0 {
+                melania_native::native_drm_flip::wait_for_kms_page_flip(
+                    &card,crtc_handle,Duration::from_secs(2),
+                )?;
+                println!("MELANIA_RUST_KMS_VBLANK_EVENT_ACK={}",index+1);
+            }
+            // A vblank alone is insufficient: verify the real scanout state.
             wait_for_fb(&card,crtc_handle,framebuffer)?;
             // Stage96 exercises the SAME kernel-backed verifier exported to
             // the future native output loop: framebuffer ID plus the live
