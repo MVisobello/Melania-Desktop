@@ -142,12 +142,22 @@ fn main()->Result<(),Box<dyn Error>> {
             true,
         Some(_)=>return Err("GPU Wayland idle-resume proof requires exactly 48 QEMU client frames".into()),
     };
+    // A real desktop must survive a second wl_surface.commit with pixels
+    // equal to the preceding already-presented frame. This opt-in is valid
+    // only in the persistent 48-frame GPU experiment with its 15s idle gap.
+    let replay_same=match std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_IDENTICAL_AFTER").ok().as_deref() {
+        None=>false,
+        Some("24") if pause_for_gpu=>true,
+        Some(_)=>return Err("identical Wayland replay requires persistent QEMU GPU idle proof".into()),
+    };
     for index in 1..=total {
-        // Every frame has a different real client-owned wl_shm image.
+        // Only the opt-in frame 25 repeats frame 24 exactly; all other
+        // frames change the client's *real* owned wl_shm buffer.
+        let color_index=if replay_same && index==25 {24} else {index};
         let mut pixels=vec![0u8;W*H*4];
-        let red=(30+(index*17)%200) as u8;
-        let green=(40+(index*31)%190) as u8;
-        let blue=(25+(index*43)%210) as u8;
+        let red=(30+(color_index*17)%200) as u8;
+        let green=(40+(color_index*31)%190) as u8;
+        let blue=(25+(color_index*43)%210) as u8;
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[blue,green,red,0]);
         }
@@ -186,6 +196,9 @@ fn main()->Result<(),Box<dyn Error>> {
             return Err("continuous client received duplicate frame callback".into());
         }
         println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED={index}");
+        if replay_same && index==25 {
+            println!("MELANIA_NATIVE_GPU_WAYLAND_IDENTICAL_CLIENT_FRAME25_ACKED=true");
+        }
         std::io::stdout().flush()?;
         buffer.destroy();
         pool.destroy();
