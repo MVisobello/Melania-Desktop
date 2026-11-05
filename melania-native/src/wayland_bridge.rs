@@ -2367,15 +2367,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     let persistent_kms=state.persistent_kms_mode;
     if persistent_kms && (
-        !integrated_kms || !state.dynamic_window_mode ||
-        !state.multi_window_mode || !state.managed_xdg_mode ||
-        state.continuous_reopen_mode || state.dynamic_pointer_proof_mode ||
-        state.dynamic_xdg_resize_mode || state.real_gtk_pixel_kms_mode ||
-        state.gtk_layer_mode || state.layer_pixels_mode ||
+        !integrated_kms || state.continuous_reopen_mode ||
+        state.dynamic_pointer_proof_mode || state.dynamic_xdg_resize_mode ||
+        state.real_gtk_pixel_kms_mode || state.gtk_layer_mode ||
+        state.layer_pixels_mode ||
         std::env::var_os("MELANIA_NATIVE_QEMU_FRAME_TARGET").is_some() ||
         std::env::var_os("MELANIA_QEMU_CONTINUOUS_FRAMES").is_some()
     ) {
-        return Err("persistent KMS restricted to managed dynamic two-window, in-process QEMU without finite proofs".into());
+        return Err("persistent KMS requires in-process QEMU without finite DRM/GTK proofs".into());
     }
     // Never register native login or run outside the existing disposable
     // VM + dedicated VT guard in main.rs/receiver.
