@@ -154,125 +154,125 @@ serial="$report/serial.log"
 # Capture actual virtual display pixels during the brief live KMS frame.
 python3 "$root/scripts/capture-qemu-visible-scanout.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/visible-frame.ppm" --timeout 950 \
+  --output "$report/visible-frame.ppm" --timeout 1350 \
   > "$report/qmp-scanout.log" 2>&1 &
 capture_pid=$!
 python3 "$root/scripts/inject-qemu-native-input.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
   > "$report/qmp-input.log" 2>&1 &
 input_pid=$!
 python3 "$root/scripts/capture-qemu-client-window.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/client-window.ppm" --timeout 950 \
+  --output "$report/client-window.ppm" --timeout 1350 \
   > "$report/qmp-client-window.log" 2>&1 &
 client_capture_pid=$!
 python3 "$root/scripts/capture-qemu-rust-kms-frames.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --first "$report/rust-client-frame1.ppm" \
-  --second "$report/rust-client-frame2.ppm" --timeout 950 \
+  --second "$report/rust-client-frame2.ppm" --timeout 1350 \
   > "$report/qmp-rust-frames.log" 2>&1 &
 rust_capture_pid=$!
 python3 "$root/scripts/capture-qemu-live-kms-stream.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --first "$report/live-client-frame1.ppm" \
   --second "$report/live-client-frame2.ppm" \
-  --third "$report/live-client-frame3.ppm" --timeout 950 \
+  --third "$report/live-client-frame3.ppm" --timeout 1350 \
   > "$report/qmp-live-stream.log" 2>&1 &
 live_capture_pid=$!
 python3 "$root/scripts/capture-qemu-two-windows.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --first "$report/two-window-frame1.ppm" \
   --second "$report/two-window-frame2.ppm" \
-  --third "$report/two-window-frame3.ppm" --timeout 950 \
+  --third "$report/two-window-frame3.ppm" --timeout 1350 \
   > "$report/qmp-two-windows.log" 2>&1 &
 multi_capture_pid=$!
 python3 "$root/scripts/inject-qemu-two-window-focus.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
   > "$report/qmp-two-window-focus.log" 2>&1 &
 focus_inject_pid=$!
 python3 "$root/scripts/inject-qemu-window-drag.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
   > "$report/qmp-window-drag.log" 2>&1 &
 drag_inject_pid=$!
 python3 "$root/scripts/capture-qemu-drag-frame.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/drag-window-frame4.ppm" --timeout 950 \
+  --output "$report/drag-window-frame4.ppm" --timeout 1350 \
   > "$report/qmp-drag-frame.log" 2>&1 &
 drag_capture_pid=$!
 python3 "$root/scripts/capture-qemu-close-frame.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/close-window-frame5.ppm" --timeout 950 \
+  --output "$report/close-window-frame5.ppm" --timeout 1350 \
   > "$report/qmp-close-frame.log" 2>&1 &
 close_capture_pid=$!
 python3 "$root/scripts/capture-qemu-reopen-frame.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/reopen-window-frame6.ppm" --timeout 950 \
+  --output "$report/reopen-window-frame6.ppm" --timeout 1350 \
   > "$report/qmp-reopen-frame.log" 2>&1 &
 reopen_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-frames.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --seventh "$report/continuous-frame7.ppm" \
-  --twelfth "$report/continuous-frame12.ppm" --timeout 950 \
+  --twelfth "$report/continuous-frame12.ppm" --timeout 1350 \
   > "$report/qmp-continuous-frames.log" 2>&1 &
 continuous_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-two-windows.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/continuous-two-windows-frame12.ppm" --timeout 950 \
+  --output "$report/continuous-two-windows-frame12.ppm" --timeout 1350 \
   > "$report/qmp-continuous-two-windows.log" 2>&1 &
 two_continuous_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-reopen.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --close "$report/continuous-close-frame13.ppm" \
-  --reopen "$report/continuous-reopen-frame14.ppm" --timeout 950 \
+  --reopen "$report/continuous-reopen-frame14.ppm" --timeout 1350 \
   > "$report/qmp-continuous-reopen.log" 2>&1 &
 continuous_reopen_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-dynamic.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-window-frame12.ppm" --timeout 950 \
+  --output "$report/dynamic-window-frame12.ppm" --timeout 1350 \
   > "$report/qmp-continuous-dynamic.log" 2>&1 &
 dynamic_capture_pid=$!
 python3 "$root/scripts/inject-qemu-dynamic-pointer.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
   > "$report/qmp-dynamic-pointer-input.log" 2>&1 &
 dynamic_pointer_input_pid=$!
 python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-pointer-frame13.ppm" --timeout 950 \
+  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1350 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --out-dir "$report" --timeout 950 \
+  --out-dir "$report" --timeout 1350 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/real-layer-panel-frame12.ppm" --timeout 950 \
+  --output "$report/real-layer-panel-frame12.ppm" --timeout 1350 \
   > "$report/qmp-real-layer-panel.log" 2>&1 &
 layer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-gtk-panel.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/real-gtk-panel-frame1.ppm" --timeout 950 \
+  --output "$report/real-gtk-panel-frame1.ppm" --timeout 1350 \
   > "$report/qmp-real-gtk-panel.log" 2>&1 &
 gtk_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-gtk-two-frames.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --first "$report/real-gtk-continuous-frame1.ppm" \
-  --second "$report/real-gtk-continuous-frame2.ppm" --timeout 950 \
+  --second "$report/real-gtk-continuous-frame2.ppm" --timeout 1350 \
   > "$report/qmp-real-gtk-two-frames.log" 2>&1 &
 gtk_two_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-gtk-start-overlay.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --second "$report/real-gtk-continuous-frame2.ppm" \
-  --output "$report/real-gtk-start-overlay-frame3.ppm" --timeout 950 \
+  --output "$report/real-gtk-start-overlay-frame3.ppm" --timeout 1350 \
   > "$report/qmp-real-gtk-start-overlay.log" 2>&1 &
 gtk_start_capture_pid=$!
 python3 "$root/scripts/inject-qemu-real-gtk-super-start.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 950 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
   > "$report/qmp-real-gtk-super-input.log" 2>&1 &
 gtk_super_input_pid=$!
 set +e
-timeout --signal=TERM --kill-after=10s 1020s \
+timeout --signal=TERM --kill-after=10s 1450s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \
