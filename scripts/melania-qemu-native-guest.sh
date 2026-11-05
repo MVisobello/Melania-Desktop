@@ -1323,7 +1323,7 @@ fi
 # otherwise Bash runs the client without its Wayland/48-frame parameters.
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=48 \
-  MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_IDLE_AFTER=24 MELANIA_QEMU_CONTINUOUS_CLIENT_IDENTICAL_AFTER=24 WAYLAND_DISPLAY="$persist_gpu_socket" \
   timeout --signal=TERM --kill-after=3s 240s \
   "$continuous_client" > "$persist_gpu_client_log" 2>&1; then
   cat "$persist_gpu_server_log" "$persist_gpu_client_log"
@@ -1374,6 +1374,7 @@ grep -q '^MELANIA_NATIVE_GPU_WAYLAND_CLIENT_IDLE_AFTER_24=true$' "$persist_gpu_c
   fatal 'GPU_Wayland_client_never_entered_idle'
 grep -q '^MELANIA_NATIVE_GPU_WAYLAND_CLIENT_RESUMED_AFTER_IDLE=true$' "$persist_gpu_client_log" ||
   fatal 'GPU_Wayland_client_did_not_resume_after_idle'
+grep -q '^MELANIA_NATIVE_GPU_WAYLAND_IDENTICAL_CLIENT_FRAME25_ACKED=true$' "$persist_gpu_client_log" || fatal 'GPU_Wayland_same_frame_failed'
 grep -q '^MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER=47$' "$persist_gpu_server_log" ||
   fatal 'GPU_Wayland_kernel_flip_47_not_accepted'
 grep -q '^MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS=48$' "$persist_gpu_client_log" ||

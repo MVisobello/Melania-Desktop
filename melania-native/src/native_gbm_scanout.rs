@@ -311,7 +311,13 @@ pub fn qemu_wayland_gpu_scene_stream(
     let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut prior_identity:Option<(u64,u64,u64)>=None;
-        let mut prior_pixels:Option<Vec<u8>>=None;
+        // Retain two fixed-size CPU staging buffers for the entire GPU
+        // presenter lifetime. Neither a client commit nor a KMS flip may
+        // allocate another 4 MiB scene Vec. The previous buffer is marked
+        // confirmed ONLY after the kernel scanout check and successful ACK.
+        let mut pixels=vec![0u8;W*H*4];
+        let mut prior_pixels=vec![0u8;W*H*4];
+        let mut have_prior_pixels=false;
         loop {
             if !persistent && frames_seen>=TOTAL {break;}
             let index=frames_seen;
@@ -339,10 +345,15 @@ pub fn qemu_wayland_gpu_scene_stream(
             ) {
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
-            let mut pixels=vec![0u8;W*H*4];
             stream.read_exact(&mut pixels)?;
-            if prior_pixels.as_ref().is_some_and(|old|*old==pixels) {
-                return Err("GPU Wayland composed scene did not change pixels".into());
+            if have_prior_pixels && prior_pixels==pixels && !persistent {
+                // Preserve the finite QEMU pixel-change acceptance. In a
+                // persistent desktop, however, a real Wayland client may
+                // commit the same image again (e.g. frame callback request,
+                // unmodified canvas or expose). It must not kill the session.
+                // This still submits a real KMS frame: the client receives
+                // no ACK until the kernel pageflip/FB_ID route is verified.
+                return Err("GPU Wayland finite probe did not change pixels".into());
             }
 
             // This is the native compositor's real, owned Wayland wl_shm
@@ -415,7 +426,8 @@ pub fn qemu_wayland_gpu_scene_stream(
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("GPU Wayland compositor frame counter exhausted")?;
             prior_identity=Some((epoch,sequence,generation));
-            prior_pixels=Some(pixels);
+            std::mem::swap(&mut pixels,&mut prior_pixels);
+            have_prior_pixels=true;
         }
         Ok(())
     })();
