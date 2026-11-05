@@ -311,7 +311,13 @@ fn run()->Result<(),String>{
 fn main()->ExitCode {
     match run(){
         Ok(())=>ExitCode::SUCCESS,
-        Err(e)=>{eprintln!("MELANIA_LABWC_FATAL={e}"); ExitCode::from(78)}
+        Err(e)=>{
+            eprintln!("MELANIA_LABWC_FATAL={e}");
+            // Startup failures (including missing secure lock) must not
+            // strand the user in an unprotected labwc graphical login.
+            terminate_owned_labwc();
+            ExitCode::from(78)
+        }
     }
 }
 #[cfg(test)]
@@ -336,6 +342,40 @@ mod tests{
         assert!(source.contains("Policy::Once"));
         assert!(source.contains("terminate_owned_labwc"));
         assert!(!source.contains("pkill"));
+    }
+
+    #[test]fn actual_short_lived_child_recovers_but_crash_loop_fails_closed(){
+        let mut svc=Service::new("test-false",PathBuf::from("/bin/false"),
+            vec![],Policy::RecoverCritical);
+        svc.start().unwrap();
+        for n in 0..MAX_RESTARTS {
+            let base=Instant::now();
+            let deadline=base+Duration::from_secs(1);
+            while svc.child.as_mut().unwrap().try_wait().unwrap().is_none() {
+                assert!(Instant::now()<deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(svc.poll(base).unwrap());
+            assert!(svc.child.is_none());
+            assert!(svc.poll(base+REST_DELAY+Duration::from_millis(1)).unwrap());
+            assert!(svc.child.is_some(),"restarted child #{}",n+1);
+        }
+        let deadline=Instant::now()+Duration::from_secs(1);
+        while svc.child.as_mut().unwrap().try_wait().unwrap().is_none() {
+            assert!(Instant::now()<deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(svc.poll(Instant::now()).unwrap_err().contains("crash-loop"));
+        svc.stop();
+    }
+    #[test]fn optional_service_is_disabled_after_budget_exhaustion(){
+        let mut s=Service::new("test-optional",PathBuf::from("/bin/false"),
+            vec![],Policy::RecoverOptional);
+        for _ in 0..MAX_RESTARTS {assert!(s.budget.allow(Instant::now()));}
+        assert!(!s.budget.allow(Instant::now()));
+        s.disabled=true;
+        assert!(s.poll(Instant::now()).unwrap());
+        assert!(s.child.is_none());
     }
     #[test]fn socket_requires_private_owned_runtime_and_never_follows_symlinks(){
         let dir=std::env::temp_dir().join(format!("melania-supervisor-{}",std::process::id()));
