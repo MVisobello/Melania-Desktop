@@ -129,6 +129,7 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
     let context=EGLContext::new(&display)?;
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
     let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
+    let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
     let mut rollback=Restore {
         card:&card, original, connector, submitted:false, restored:false,
     };
@@ -172,8 +173,8 @@ pub fn qemu_two_gpu_frames(card_fd:OwnedFd) -> Result<(),Box<dyn Error>> {
                 }
             }
             if index>0 {
-                let kernel_frame=crate::native_drm_flip::wait_for_kms_page_flip(
-                    &card,crtc,Duration::from_secs(3),
+                let kernel_frame=crate::native_drm_flip::wait_for_kms_page_flip_routed(
+                    &card,crtc,Duration::from_secs(3),&mut event_router,
                 )?;
                 flip_ledger.complete_flip(kernel_frame)
                     .map_err(|error|format!("GBM kernel flip event rejected: {error:?}"))?;
