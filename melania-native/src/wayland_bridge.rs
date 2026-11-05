@@ -2124,7 +2124,22 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             pointer.frame(state);
             if state.multi_window_mode && event.button_code()==0x110 &&
                event.state()==ButtonState::Released {
+                let was_resize=matches!(state.window_interaction.active_kind(),
+                    Some(InteractionKind::ResizeBottomRight | InteractionKind::Resize(_)));
                 if let Some(id)=state.window_interaction.end() {
+                    if was_resize && state.managed_xdg_mode {
+                        if let Some(surface)=state.known_window_surfaces.get(id) {
+                            if let Some(top)=state.xdg_shell.toplevel_surfaces().iter()
+                                .find(|top|top.wl_surface()==surface) {
+                                // XDG requires a final configure with the
+                                // Resizing state cleared after button release.
+                                top.with_pending_state(|pending|{
+                                    pending.states.unset(xdg_toplevel::State::Resizing);
+                                });
+                                top.send_pending_configure();
+                            }
+                        }
+                    }
                     println!("MELANIA_NATIVE_WINDOW_INTERACTION_END={id}");
                 }
             }
