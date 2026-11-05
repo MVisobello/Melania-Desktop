@@ -44,7 +44,7 @@ use smithay::{
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
             ClientDndGrabHandler,ServerDndGrabHandler}},
         output::{OutputHandler,OutputManagerState},
-        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData},
+        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer,
                            Anchor as WlrAnchor,LayerSurfaceCachedState}},
@@ -898,8 +898,28 @@ impl BridgeState {
     }
 }
 
+// Smithay 0.7 exposes the ACKed-at-commit popup geometry through
+// XdgPopupSurfaceData.current/current_serial, not with_committed_state()
+// (which only exists on newer Smithay APIs). Never use server_pending:
+// a sent configure is not proof of a client ACKed buffer.
+fn acked_native_popup_geometry(surface:&WlSurface)->Option<Rectangle<i32,Logical>> {
+    with_states(surface,|states|{
+        let role=states.data_map.get::<XdgPopupSurfaceData>()?.lock().ok()?;
+        role.current_serial.map(|_|role.current.geometry)
+    })
+}
+
 impl BridgeState {
     fn evict_native_popup(&mut self,surface:&WlSurface) {
+        // Close nested popups before the parent: otherwise children keep
+        // retained KMS pixels and stale scene slots after ancestor teardown.
+        let descendants=self.native_popup_roles.iter()
+            .filter(|(_,parent)|parent==surface)
+            .map(|(popup,_)|popup.clone()).collect::<Vec<_>>();
+        for child in descendants {
+            child.send_popup_done();
+            self.evict_native_popup(child.wl_surface());
+        }
         self.native_popup_roles.retain(|(popup,_)|popup.wl_surface()!=surface);
         if let Some(key)=self.known_window_surfaces.remove(surface) {
             if self.dynamic_scene.remove(key) {
@@ -916,17 +936,31 @@ impl BridgeState {
         }
     }
     fn reposition_native_popups_for_parent(&mut self,parent_key:u64) {
-        let Some((px,py,_,_))=self.dynamic_scene.geometry(parent_key) else {return;};
-        let moves=self.native_popup_roles.iter().filter_map(|(popup,parent)|{
-            if self.known_window_surfaces.id_of(parent)!=Some(parent_key) {return None;}
-            let child_key=self.known_window_surfaces.id_of(popup.wl_surface())?;
-            let g=popup.with_committed_state(|state|state.map(|s|s.geometry))?;
-            let placement=PopupPlacement::new(parent_key,g.loc.x,g.loc.y,g.size.w,g.size.h)?;
-            let (x,y)=placement.absolute(px,py,1280,800)?;
-            Some((child_key,x,y))
-        }).collect::<Vec<_>>();
-        for (child_key,x,y) in moves {
-            let _=self.dynamic_scene.move_to(child_key,x,y);
+        // Traverse the bounded parent/popup tree in depth-first order.
+        // Moving only immediate children would strand nested submenus.
+        let mut pending=vec![parent_key];
+        let mut visited=0usize;
+        while let Some(key)=pending.pop() {
+            visited+=1;
+            if visited>9 {
+                eprintln!("native popup hierarchy exceeded bounded depth");
+                break;
+            }
+            let Some((px,py,_,_))=self.dynamic_scene.geometry(key) else {continue;};
+            let moves=self.native_popup_roles.iter().filter_map(|(popup,parent)|{
+                if self.known_window_surfaces.id_of(parent)!=Some(key) {return None;}
+                let child_key=self.known_window_surfaces.id_of(popup.wl_surface())?;
+                let g=acked_native_popup_geometry(popup.wl_surface())?;
+                let placement=PopupPlacement::new(key,g.loc.x,g.loc.y,g.size.w,g.size.h)?;
+                let (x,y)=placement.absolute(px,py,1280,800)?;
+                Some((child_key,x,y))
+            }).collect::<Vec<_>>();
+            for (child_key,x,y) in moves {
+                if self.dynamic_scene.position(child_key)!=Some((x,y)) {
+                    let _=self.dynamic_scene.move_to(child_key,x,y);
+                }
+                pending.push(child_key);
+            }
         }
     }
 
@@ -1304,19 +1338,6 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     };
-                    let key=match self.known_window_surfaces.register(surface.clone()) {
-                        Ok(key)=>key,
-                        Err(_)=>{
-                            eprintln!("dynamic QEMU client has no scene slot");
-                            buffer.release();
-                            return;
-                        }
-                    };
-                    let Some(default_pos)=melania_native::window_placement::default_position(key,1280,800) else {
-                        eprintln!("dynamic QEMU client outside bounded placement policy");
-                        buffer.release();
-                        return;
-                    };
                     let popup_parent=self.native_popup_roles.iter()
                         .find(|(popup,_)|popup.wl_surface()==surface)
                         .map(|(popup,parent)|(popup.clone(),parent.clone()));
@@ -1330,6 +1351,21 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     }
+                    // An invalid/rejected popup must never reserve a stable
+                    // client slot and block unrelated mapped windows.
+                    let key=match self.known_window_surfaces.register(surface.clone()) {
+                        Ok(key)=>key,
+                        Err(_)=>{
+                            eprintln!("dynamic QEMU client has no scene slot");
+                            buffer.release();
+                            return;
+                        }
+                    };
+                    let Some(default_pos)=melania_native::window_placement::default_position(key,1280,800) else {
+                        eprintln!("dynamic QEMU client outside bounded placement policy");
+                        buffer.release();
+                        return;
+                    };
                     // Refuse stale-size buffers during a managed role switch.
                     // A successful client ACK alone did not provide pixels.
                     if self.managed_xdg_mode && popup_parent.is_none() {
@@ -1353,8 +1389,7 @@ impl CompositorHandler for BridgeState {
                             buffer.release();
                             return;
                         };
-                        let Some(geometry)=popup.with_committed_state(|state|
-                            state.map(|state|state.geometry)) else {
+                        let Some(geometry)=acked_native_popup_geometry(popup.wl_surface()) else {
                             eprintln!("MELANIA_NATIVE_XDG_POPUP_UNACKED_BUFFER_REJECTED=true");
                             buffer.release();
                             return;
