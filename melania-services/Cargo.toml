@@ -19,3 +19,10 @@ path = "src/sessionctl.rs"
 [[bin]]
 name = "melania-inputctl"
 path = "src/inputctl.rs"
+
+[[bin]]
+name = "melania-session-supervisor"
+path = "src/supervisor.rs"
+
+[dependencies]
+libc = "0.2"
