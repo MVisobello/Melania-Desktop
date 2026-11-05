@@ -1,62 +1,193 @@
-//! Kernel vblank acknowledgement for a real DRM page flip.
+//! Kernel DRM page-flip event routing for Melania's native outputs.
 //!
-//! This helper is used by Melania's isolated VirtIO KMS/GBM renderers.
-//! The caller MUST already own the active libseat DRM descriptor and have
-//! submitted PageFlipFlags::EVENT on this same card/CRTC. A completion event
-//! alone is not proof of scanout: the caller also verifies framebuffer ID,
-//! connector route, and presentation generation before notifying Wayland.
+//! A shared DRM card can report completion for DIFFERENT CRTCs in the same
+//! receive_events() batch. Dropping the others is unsafe for a later
+//! multi-monitor renderer. This bounded router drains the entire batch,
+//! preserves events for other CRTCs, and rejects duplicate/misrouted events.
 //!
-//! Intentionally no hardcoded frame budget, sleep-based successful ACK or
-//! implicit fallback to polling CRTC state when a kernel event is absent.
+//! KMS event delivery only proves that a flip completed on a CRTC. Callers
+//! MUST additionally validate their per-output flip ledger and the live
+//! framebuffer + connector -> encoder -> CRTC route before releasing any
+//! Wayland frame callback or buffer.
 
 use drm::control::{self, crtc, Device as ControlDevice};
 use rustix::event::{poll, PollFd, PollFlags};
-use std::{os::fd::AsFd, time::{Duration, Instant}};
+use std::{collections::VecDeque, os::fd::AsFd, time::{Duration, Instant}};
 
-/// Wait for the *kernel* completion event associated with the only outstanding
-/// page flip on this device/CRTC. This uses a deadline-bounded FD poll rather
-/// than repeatedly polling the CRTC or busy-spinning. A wrong CRTC, VBlank,
-/// signal/error or timeout cannot finish the frame.
-pub fn wait_for_kms_page_flip(
+/// Each CRTC should have one outstanding KMS flip. A bounded queue protects
+/// the display event loop against stale notifications and unbounded growth.
+/// GPU hotplug, libseat pause or error requires a FRESH router/device epoch.
+const MAX_PENDING_CRTC_EVENTS: usize = 16;
+
+#[derive(Debug, Default)]
+pub struct DrmFlipEventRouter {
+    events: VecDeque<(crtc::Handle, u32)>,
+    poisoned: bool,
+}
+
+impl DrmFlipEventRouter {
+    pub fn queued(&self) -> usize { self.events.len() }
+    pub fn poisoned(&self) -> bool { self.poisoned }
+
+    /// Permanently discard this device-epoch routing state. Reuse after VT
+    /// pause, device replacement, or an ambiguous batch is forbidden.
+    pub fn revoke(&mut self) {
+        self.events.clear();
+        self.poisoned = true;
+    }
+
+    /// Route one real kernel PageFlip event. Never silently drop a different
+    /// CRTC's completion simply because another output is being serviced.
+    /// More than one queued event for the same CRTC is ambiguous when
+    /// page_flip has no per-request token exposed by drm-rs 0.14.
+    pub fn enqueue(&mut self, crtc: crtc::Handle, frame: u32) -> Result<(), String> {
+        if self.poisoned {
+            return Err("DRM event router revoked".into());
+        }
+        if self.events.len() >= MAX_PENDING_CRTC_EVENTS ||
+           self.events.iter().any(|(pending, _)| *pending == crtc) {
+            self.revoke();
+            return Err("DRM event router ambiguous or at capacity".into());
+        }
+        self.events.push_back((crtc, frame));
+        Ok(())
+    }
+
+    /// Consume only the expected output's completion; preserve every other
+    /// output's pending event until its caller takes it.
+    pub fn take(&mut self, expected: crtc::Handle) -> Result<Option<u32>, String> {
+        if self.poisoned {
+            return Err("DRM event router revoked".into());
+        }
+        let Some(index) = self.events.iter().position(|(crtc,_)| *crtc == expected) else {
+            return Ok(None);
+        };
+        Ok(self.events.remove(index).map(|(_,frame)| frame))
+    }
+}
+
+/// Wait on an owned DRM FD, routing *all* events in each read batch so a
+/// future multi-CRTC caller does not discard another display's vblank event.
+/// The router must be owned alongside the same DRM device+libseat epoch and
+/// not shared across paused, unplugged or reopened devices.
+pub fn wait_for_kms_page_flip_routed(
     card: &(impl ControlDevice + AsFd),
     expected_crtc: crtc::Handle,
     timeout: Duration,
+    router: &mut DrmFlipEventRouter,
 ) -> Result<u32, String> {
     if timeout.is_zero() {
         return Err("DRM page flip timeout must be positive".into());
+    }
+    if let Some(frame) = router.take(expected_crtc)? {
+        return Ok(frame);
     }
     let deadline=Instant::now().checked_add(timeout)
         .ok_or("DRM page flip timeout overflow")?;
     loop {
         let remaining=deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
+            router.revoke();
             return Err("DRM page flip vblank event timed out".into());
         }
-        // rustix 0.38 accepts a millisecond i32 timeout (rather than
-        // the timespec API in rustix 1.x). Round up short deadlines without
-        // spinning, and keep all kernel waits strictly bounded.
+        // rustix 0.38 takes a millisecond i32 deadline rather than Timespec.
         let timeout_ms=remaining.as_millis().clamp(1,i32::MAX as u128) as i32;
         let mut fds=[PollFd::new(card, PollFlags::IN)];
         let ready=match poll(&mut fds,timeout_ms) {
             Ok(ready)=>ready,
             Err(rustix::io::Errno::INTR)=>continue,
-            Err(error)=>return Err(format!("DRM event poll failed: {error}")),
+            Err(error)=>{
+                router.revoke();
+                return Err(format!("DRM event poll failed: {error}"));
+            }
         };
         if ready==0 {
+            router.revoke();
             return Err("DRM page flip vblank event timed out".into());
         }
         let revents=fds[0].revents();
         if revents.intersects(PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL) {
+            router.revoke();
             return Err("DRM event FD lost, hung up or became invalid".into());
         }
         if !revents.contains(PollFlags::IN) { continue; }
-        for event in card.receive_events()
-            .map_err(|error|format!("DRM receive_events failed: {error}"))? {
+        let events=card.receive_events()
+            .map_err(|error|{
+                router.revoke();
+                format!("DRM receive_events failed: {error}")
+            })?;
+        // Fully drain the read before returning. Returning early would lose
+        // other CRTCs' events because the drm-rs iterator owns this batch.
+        for event in events {
             if let control::Event::PageFlip(done)=event {
-                if done.crtc==expected_crtc {
-                    return Ok(done.frame);
-                }
+                router.enqueue(done.crtc, done.frame)?;
             }
         }
+        if let Some(frame)=router.take(expected_crtc)? {
+            return Ok(frame);
+        }
+    }
+}
+
+/// Legacy single-output compatibility, used only by isolated one-CRTC
+/// probes. Multi-output DRM owners MUST retain one DrmFlipEventRouter across
+/// all their output handlers and call wait_for_kms_page_flip_routed instead.
+pub fn wait_for_kms_page_flip(
+    card: &(impl ControlDevice + AsFd),
+    expected_crtc: crtc::Handle,
+    timeout: Duration,
+) -> Result<u32, String> {
+    let mut router=DrmFlipEventRouter::default();
+    wait_for_kms_page_flip_routed(card, expected_crtc, timeout, &mut router)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn crtc(id:u32)->crtc::Handle {
+        control::from_u32(id).expect("nonzero typed DRM CRTC handle")
+    }
+
+    #[test]
+    fn preserves_interleaved_kernel_events_from_other_monitors() {
+        let mut events=DrmFlipEventRouter::default();
+        let first=crtc(41);
+        let second=crtc(42);
+        let third=crtc(43);
+        events.enqueue(second,100).unwrap();
+        events.enqueue(first,101).unwrap();
+        events.enqueue(third,102).unwrap();
+        assert_eq!(events.queued(),3);
+        assert_eq!(events.take(first).unwrap(),Some(101));
+        assert_eq!(events.take(second).unwrap(),Some(100));
+        assert_eq!(events.take(third).unwrap(),Some(102));
+        assert_eq!(events.take(first).unwrap(),None);
+    }
+
+    #[test]
+    fn duplicate_same_crtc_event_revokes_device_epoch() {
+        let mut events=DrmFlipEventRouter::default();
+        let monitor=crtc(51);
+        events.enqueue(monitor,1).unwrap();
+        assert!(events.enqueue(monitor,2).is_err());
+        assert!(events.poisoned());
+        assert_eq!(events.queued(),0);
+        assert!(events.take(monitor).is_err());
+        assert!(events.enqueue(monitor,3).is_err());
+    }
+
+    #[test]
+    fn bounded_pending_outputs_and_independent_new_epoch() {
+        let mut events=DrmFlipEventRouter::default();
+        for id in 1..=MAX_PENDING_CRTC_EVENTS as u32 {
+            events.enqueue(crtc(id),id).unwrap();
+        }
+        assert_eq!(events.queued(),MAX_PENDING_CRTC_EVENTS);
+        assert!(events.enqueue(crtc(99),99).is_err());
+        assert!(events.poisoned());
+        let mut replacement=DrmFlipEventRouter::default();
+        replacement.enqueue(crtc(99),1).unwrap();
+        assert_eq!(replacement.take(crtc(99)).unwrap(),Some(1));
     }
 }
