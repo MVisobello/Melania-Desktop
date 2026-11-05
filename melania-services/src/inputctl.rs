@@ -257,7 +257,7 @@ fn run()->Result<(),String>{
             prefs.update("natural_scroll",natural)?;
             prefs.update("left_handed",left)?;
             prefs.update("speed",speed)?;
-            commit_and_reload(prefs,&base,&prefs_path)
+            commit_and_reload(prefs,&shortcuts,&base,&prefs_path)
         },
 
         [command] if command=="shortcuts-show"=>{
