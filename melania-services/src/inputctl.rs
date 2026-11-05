@@ -74,11 +74,13 @@ impl ShortcutPrefs{
     fn parse(source:&str)->Result<Self,String>{
         if source.len()>1024{return Err("shortcuts too large".into());}
         let mut result=Self::default();
+        let mut seen=std::collections::HashSet::new();
         for line in source.lines(){
             let (key,value)=line.split_once('=').ok_or("invalid shortcut preference")?;
             let Some(index)=SHORTCUT_ACTIONS.iter().position(|v|*v==key) else{
                 return Err("unknown shortcut action".into());
             };
+            if !seen.insert(index){return Err("duplicate shortcut action".into());}
             result.keys[index]=value.to_owned();
         }
         result.validate()?;
@@ -318,7 +320,7 @@ mod tests{
         assert!(duplicate.validate().is_err());
         assert!(ShortcutPrefs::parse("start=Alt-F4\n").is_err());
         assert!(ShortcutPrefs::parse("start=W-p\nunknown=W-i\n").is_err());
-        assert!(ShortcutPrefs::parse("start=W-p\nstart=W-p\n").is_ok());
+        assert!(ShortcutPrefs::parse("start=W-p\nstart=W-p\n").is_err());
     }
     #[test]fn generated_xml_is_valid_labwc_input_and_contains_no_shell(){
         let value=render(InputPrefs::default(),&ShortcutPrefs::default()).unwrap();
