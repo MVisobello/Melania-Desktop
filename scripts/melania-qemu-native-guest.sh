@@ -1173,6 +1173,85 @@ rm -f "$long_server_log" "$long_client_log"
 report 'MELANIA_QEMU_IN_PROCESS_WAYLAND_KMS_24_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage105: an actual ONE-PROCESS QEMU DRM/Wayland compositor must remain
+# alive after its 24th real client frame. SIGTERM triggers orderly stream
+# EOF, verified original CRTC/connector rollback and libseat device release.
+# No receiver frame budget or compositor frame target is permitted.
+persistent_server_log="$(mktemp -t melania-persistent-server-XXXXXX)"
+persistent_client_log="$(mktemp -t melania-persistent-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$persistent_server_log" 2>&1 &
+persistent_server_pid=$!
+persistent_socket=''
+for attempt in $(seq 1 100); do
+  persistent_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$persistent_server_log" | head -n 1)"
+  [[ -n "$persistent_socket" ]] && break
+  kill -0 "$persistent_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$persistent_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_PERSISTENT_KMS_STARTED=true' "$persistent_server_log"; then
+  cat "$persistent_server_log"
+  kill -TERM "$persistent_server_pid" 2>/dev/null || true
+  fatal 'persistent_integrated_Smithay_KMS_process_never_started'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES=24 WAYLAND_DISPLAY="$persistent_socket" \
+  timeout --signal=TERM --kill-after=3s 100s \
+  "$continuous_client" > "$persistent_client_log" 2>&1; then
+  cat "$persistent_server_log" "$persistent_client_log"
+  kill -TERM "$persistent_server_pid" 2>/dev/null || true
+  fatal 'persistent_Wayland_client_failed'
+fi
+# A fixed-length receiver would have exited here after the client reached 24.
+# This process must still own the Wayland socket and its libseat KMS session.
+sleep 1
+if ! kill -0 "$persistent_server_pid" 2>/dev/null; then
+  cat "$persistent_server_log" "$persistent_client_log"
+  fatal 'persistent_Smithay_exited_at_twenty_four_frames'
+fi
+kill -TERM "$persistent_server_pid"
+if ! wait "$persistent_server_pid"; then
+  cat "$persistent_server_log" "$persistent_client_log"
+  fatal 'persistent_sigterm_CRTC_rollback_or_libseat_release_failed'
+fi
+for index in $(seq 1 24); do
+  grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$persistent_server_log" ||
+    fatal "persistent_kernel_frame_${index}_not_acknowledged"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$persistent_server_log" ||
+    fatal "persistent_Wayland_frame_${index}_not_retired"
+done
+for marker in \
+  'MELANIA_NATIVE_PERSISTENT_KMS_STARTED=true' \
+  'MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED=23' \
+  'MELANIA_RUST_KMS_VBLANK_EVENT_ACK=24' \
+  'MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=24' \
+  'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
+  'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -q "^$marker$" "$persistent_server_log" || {
+    cat "$persistent_server_log"
+    fatal "persistent_KMS_missing_${marker}"
+  }
+done
+grep -Eq '^MELANIA_RUST_PERSISTENT_KMS_STOPPED_FRAMES=[0-9]+$' "$persistent_server_log" ||
+  fatal 'persistent_receiver_missing_orderly_EOF_count'
+grep -q '^MELANIA_NATIVE_CONTINUOUS_CLIENT_EXTENDED_FRAMES_PASS=24$' "$persistent_client_log" ||
+  fatal 'persistent_client_missed_real_ack'
+rm -f "$persistent_server_log" "$persistent_client_log"
+report 'MELANIA_QEMU_IN_PROCESS_PERSISTENT_KMS_SIGTERM_ROLLBACK_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
 
 # Stage48: two INDEPENDENT xdg_toplevel surfaces alternate twelve real
 # wl_shm commits. Every one requires real KMS FB_ID, frame.done and release.
