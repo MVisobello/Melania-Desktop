@@ -76,6 +76,31 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_XDG_POPUP_USB_ESC_POPUP_DONE=true",HOST)
         self.assertIn("MELANIA_QEMU_XDG_POPUP_DESTROY_CRTC_CLEARED=true",HOST)
 
+    def test_minimize_and_parent_close_evict_nested_popups_atomically(self):
+        # The real bridge must hide the toplevel *before* repairing focus,
+        # remove all child roles, then submit a single KMS scene update.
+        self.assertIn("pub fn popup_descendant_teardown_order",POLICY)
+        self.assertIn("parent_minimize_clears_all_nested_menus",POLICY)
+        lifecycle=BRIDGE[BRIDGE.index("fn minimize_request(&mut self"): ]
+        minimize=lifecycle[:lifecycle.index("fn toplevel_destroyed(")]
+        close=lifecycle[lifecycle.index("fn toplevel_destroyed("):
+                        lifecycle.index("fn grab(&mut self")]
+        self.assertLess(minimize.index("self.dynamic_scene.set_visible(key,false)"),
+                        minimize.index("self.evict_native_popup_tree(&surface,true,true)"))
+        self.assertLess(minimize.index("self.evict_native_popup_tree(&surface,true,true)"),
+                        minimize.index("self.submit_continuous_frame()"))
+        self.assertIn("scene_changed|=self.evict_native_popup_tree(&surface,true,true)",minimize)
+        self.assertIn("if removed || popup_damage { self.note_scene_change(); }",close)
+        self.assertIn("let popup_damage=self.evict_native_popup_tree(&surface,true,true)",close)
+        self.assertIn("if (removed || popup_damage) && self.continuous_kms_mode",close)
+        self.assertNotIn("for popup in descendants",close)
+        cleanup=BRIDGE[BRIDGE.index("fn evict_native_popup_tree("):
+                       BRIDGE.index("/// Esc from the real active libinput seat")]
+        self.assertIn("popup_descendant_teardown_order(",cleanup)
+        self.assertIn("if scene_changed && !defer_redraw",cleanup)
+        self.assertLess(cleanup.index("self.native_popup_roles.retain("),
+                        cleanup.index("keyboard.set_focus(self,replacement.clone()"))
+
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
         sockets=[]
