@@ -11,6 +11,7 @@ pub struct ManagedWindow {
     before_minimise:WindowDisplayState,
     output_width:i32,
     output_height:i32,
+    work_area:WindowRect,
 }
 impl ManagedWindow {
     pub fn new(geometry:WindowRect,width:i32,height:i32)->Option<Self> {
@@ -20,17 +21,35 @@ impl ManagedWindow {
             normal:geometry,state:WindowDisplayState::Normal,
             before_minimise:WindowDisplayState::Normal,
             output_width:width,output_height:height,
+            work_area:WindowRect{x:0,y:0,width,height},
         })
     }
     pub fn state(&self)->WindowDisplayState {self.state}
+    pub fn work_area(&self)->WindowRect {self.work_area}
+    /// A mapped layer-shell panel may reserve an inset region of an output.
+    /// Reject invalid/incomplete reservations and never use it for fullscreen.
+    /// The caller must send a real XDG configure for any changed geometry.
+    pub fn set_work_area(&mut self,area:WindowRect)->bool {
+        if !area.valid_for(self.output_width,self.output_height) ||
+           area==self.work_area {return false;}
+        self.work_area=area;
+        for state in [&mut self.state,&mut self.before_minimise] {
+            if let WindowDisplayState::Snapped(zone)=*state {
+                if snap_rect(zone,area,self.output_width,self.output_height).is_none() {
+                    *state=WindowDisplayState::Normal;
+                }
+            }
+        }
+        true
+    }
     pub fn geometry(&self)->Option<WindowRect> {
         match self.state {
             WindowDisplayState::Normal=>Some(self.normal),
-            WindowDisplayState::Maximized | WindowDisplayState::Fullscreen=>
+            WindowDisplayState::Maximized=>Some(self.work_area),
+            WindowDisplayState::Fullscreen=>
                 Some(WindowRect{x:0,y:0,width:self.output_width,height:self.output_height}),
             WindowDisplayState::Snapped(zone)=>snap_rect(zone,
-                WindowRect{x:0,y:0,width:self.output_width,height:self.output_height},
-                self.output_width,self.output_height),
+                self.work_area,self.output_width,self.output_height),
             WindowDisplayState::Minimized=>None,
         }
     }
@@ -49,8 +68,8 @@ impl ManagedWindow {
     /// for its real wl_shm commit before repainting the actual KMS scene.
     pub fn snap(&mut self,zone:SnapZone)->bool {
         if self.state==WindowDisplayState::Minimized ||
-           snap_rect(zone,WindowRect{x:0,y:0,width:self.output_width,
-                height:self.output_height},self.output_width,self.output_height).is_none() ||
+           snap_rect(zone,self.work_area,
+                self.output_width,self.output_height).is_none() ||
            self.state==WindowDisplayState::Snapped(zone) {return false;}
         self.state=WindowDisplayState::Snapped(zone);
         true
@@ -82,6 +101,9 @@ impl ManagedWindow {
         if width<96 || height<72 || width>16384 || height>16384{return false;}
         self.output_width=width;
         self.output_height=height;
+        // A changed connector mode invalidates old panel reservations.
+        // A newly mapped layer-shell surface must explicitly reapply them.
+        self.work_area=WindowRect{x:0,y:0,width,height};
         self.normal.width=self.normal.width.min(width);
         self.normal.height=self.normal.height.min(height);
         self.normal.x=self.normal.x.clamp(0,width-self.normal.width);
@@ -183,6 +205,76 @@ mod tests {
         assert_eq!(w.geometry(),Some(WindowRect{x:960,y:0,width:960,height:540}));
         assert!(w.restore());
         assert_eq!(w.geometry(),Some(window()));
+    }
+    #[test]
+    fn live_taskbar_reservations_reflow_snap_and_maximize_but_not_fullscreen() {
+        let mut w=ManagedWindow::new(window(),1280,800).unwrap();
+        assert!(w.snap(SnapZone::RightHalf));
+        let panel=WindowRect{x:0,y:0,width:1280,height:748};
+        assert!(w.set_work_area(panel));
+        assert_eq!(w.geometry(),Some(WindowRect{x:640,y:0,width:640,height:748}));
+        assert!(w.snap(SnapZone::RightThird));
+        assert_eq!(w.geometry(),Some(WindowRect{x:853,y:0,width:427,height:748}));
+        assert!(w.maximize());
+        assert_eq!(w.geometry(),Some(panel));
+        assert!(w.fullscreen());
+        assert_eq!(w.geometry(),Some(WindowRect{x:0,y:0,width:1280,height:800}));
+        assert!(w.restore());
+        assert_eq!(w.geometry(),Some(window()));
+        assert_eq!(w.work_area(),panel);
+        assert!(w.snap(SnapZone::BottomLeft));
+        assert_eq!(w.geometry(),Some(WindowRect{x:0,y:374,width:640,height:374}));
+        assert!(w.set_work_area(WindowRect{x:0,y:40,width:1280,height:760}));
+        assert_eq!(w.geometry(),Some(WindowRect{x:0,y:420,width:640,height:380}));
+        assert!(!w.set_work_area(w.work_area()));
+    }
+    #[test]
+    fn invalid_panel_or_hotplug_rejected_and_minimized_snap_revalidated() {
+        let mut w=ManagedWindow::new(window(),1280,800).unwrap();
+        assert!(w.snap(SnapZone::MiddleThird));
+        assert!(w.minimize());
+        let unchanged=w.work_area();
+        for area in [
+            WindowRect{x:0,y:0,width:0,height:800},
+            WindowRect{x:0,y:740,width:1280,height:60},
+            WindowRect{x:1100,y:0,width:300,height:800},
+        ] {
+            assert!(!w.set_work_area(area));
+            assert_eq!(w.work_area(),unchanged);
+        }
+        assert!(w.set_work_area(WindowRect{x:0,y:0,width:250,height:140}));
+        assert!(w.restore());
+        assert_eq!(w.state(),WindowDisplayState::Normal);
+        assert_eq!(w.geometry(),Some(window()));
+        assert!(w.reconfigure_output(1920,1080));
+        assert_eq!(w.work_area(),WindowRect{x:0,y:0,width:1920,height:1080});
+        assert!(w.snap(SnapZone::LeftThird));
+        assert_eq!(w.geometry(),Some(WindowRect{x:0,y:0,width:640,height:1080}));
+    }
+    #[test]
+    fn real_layer_shell_reservation_feeds_snap_geometry_without_touching_fullscreen() {
+        use crate::layer_surface_layout::{
+            place,Anchors,Insets,LayerRequest,ShellLayer,WorkAreaReservations
+        };
+        let taskbar=place(LayerRequest {
+            layer:ShellLayer::Top,
+            anchors:Anchors{top:false,bottom:true,left:true,right:true},
+            width:0,height:52,
+            margins:Insets::default(),exclusive_zone:52
+        },1280,800).unwrap();
+        let mut reservations=WorkAreaReservations::default();
+        reservations.add(taskbar.reservation);
+        let area=reservations.normal_area(1280,800).unwrap();
+        let mut window=ManagedWindow::new(window(),1280,800).unwrap();
+        assert!(window.set_work_area(WindowRect{
+            x:area.x,y:area.y,width:area.width as i32,height:area.height as i32
+        }));
+        assert!(window.snap(SnapZone::MiddleThird));
+        assert_eq!(window.geometry(),Some(WindowRect{x:426,y:0,width:427,height:748}));
+        assert!(window.maximize());
+        assert_eq!(window.geometry(),Some(WindowRect{x:0,y:0,width:1280,height:748}));
+        assert!(window.fullscreen());
+        assert_eq!(window.geometry(),Some(WindowRect{x:0,y:0,width:1280,height:800}));
     }
     #[test]
     fn tiny_output_drops_invalid_snap_without_changing_restore_rectangle() {
