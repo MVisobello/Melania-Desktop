@@ -32,6 +32,14 @@ class ReleaseInvariants(unittest.TestCase):
         for token in ['init_layer_shell()', 'fn start_window', 'fn quick_window', 'fn taskbar']:
             self.assertIn(token, source)
 
+    def test_panel_defers_external_quick_probes_until_mapped(self):
+        panel = (ROOT/'melania-panel/src/main.rs').read_text()
+        binary = panel.split('fn binary(', 1)[1].split('fn slider(', 1)[0]
+        slider = panel.split('fn slider(', 1)[1].split('fn quick_window(', 1)[0]
+        self.assertIn('b.connect_map(move |button|', binary)
+        self.assertIn('scale.connect_map(move |_|', slider)
+        self.assertIn('MELANIA_PANEL_STAGE=taskbar_presented', panel)
+
     def test_wayland_smoke_requires_real_gtk_window(self):
         smoke = (ROOT/'scripts/smoke-nested-wayland.sh').read_text()
         self.assertIn('melania-files before smoke test', smoke)
