@@ -133,6 +133,21 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
                         close.index("self.submit_continuous_frame()"))
         self.assertEqual(close.count("self.submit_continuous_frame()"),1)
 
+    def test_minimized_buffer_commit_remains_hidden_and_cannot_gain_focus(self):
+        commit=BRIDGE[BRIDGE.index("// A valid buffer committed AFTER minimize"):]
+        commit=commit[:commit.index("// Retain at most one not-yet-submitted")]
+        self.assertIn("window.state()==WindowDisplayState::Minimized",commit)
+        self.assertIn("self.dynamic_scene.set_visible(key,false)",commit)
+        self.assertLess(BRIDGE.index("self.dynamic_scene.upsert(key,x,y,pixels)"),
+                        BRIDGE.index("self.dynamic_scene.set_visible(key,false)",
+                                     BRIDGE.index("// A valid buffer committed AFTER minimize")))
+        focus=BRIDGE[BRIDGE.index("// Never grant first keyboard focus to a minimized role"):]
+        focus=focus[:focus.index("self.note_scene_change();")]
+        self.assertIn("self.dynamic_scene.is_visible(key)==Some(true)",focus)
+        model=(ROOT/"melania-native/src/dynamic_window_scene.rs").read_text()
+        self.assertIn("fn minimized_layered_window_retains_pixels_but_never_captures_pointer()",model)
+        self.assertIn("if self.is_visible(key)==Some(true)",model)
+
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
         sockets=[]
