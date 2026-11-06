@@ -2427,6 +2427,8 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.last_xdg_press=None;
             state.last_popup_press=None;
             state.suppressed_popup_button=None;
+            // A removed physical input device cannot retain a popup grab.
+            state.grabbed_popup_roles.clear();
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
@@ -3116,6 +3118,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
                 state.suppressed_popup_button=None;
+                // A suspended libseat session loses all active input grabs.
+                state.grabbed_popup_roles.clear();
                 state.window_interaction.cancel();
                 state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
