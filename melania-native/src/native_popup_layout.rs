@@ -85,6 +85,41 @@ pub fn popup_teardown_order<T:Clone+PartialEq>(
     order
 }
 
+/// Select grabbed XDG popup roots to dismiss after a real pointer press.
+///
+/// A click in the topmost popup (including its registered descendants) keeps
+/// the entire grab stack. A click in an earlier grabbed parent dismisses just
+/// the more recent submenus, while a click on an unrelated application or
+/// the parent toplevel dismisses the whole stack. Output is inner-to-outer.
+///
+/// Bounded iterative parent traversal tolerates duplicate/cyclic relationships
+/// without a recursive stack overflow or an unrelated surface hit.
+pub fn popup_click_dismissals<T:Clone+PartialEq>(
+    grabbed:&[T], clicked:Option<&T>, relationships:&[(T,T)]
+)->Vec<T> {
+    fn within<T:Clone+PartialEq>(
+        clicked:&T, root:&T, relationships:&[(T,T)]
+    )->bool {
+        let mut pending=vec![clicked.clone()];
+        let mut seen=Vec::with_capacity(relationships.len().saturating_add(1));
+        while let Some(current)=pending.pop() {
+            if &current==root {return true;}
+            if seen.contains(&current) {continue;}
+            seen.push(current.clone());
+            for (parent,child) in relationships {
+                if child==&current && !seen.contains(parent) {
+                    pending.push(parent.clone());
+                }
+            }
+        }
+        false
+    }
+    let keep=clicked.and_then(|hit| grabbed.iter().enumerate().rev()
+        .find(|(_,root)|within(hit,root,relationships))
+        .map(|(index,_)|index+1)).unwrap_or(0);
+    grabbed[keep..].iter().rev().cloned().collect()
+}
+
 /// Remove only descendant popup roles, never their live parent toplevel.
 /// Used when a toplevel is minimized or destroyed; preserving the root role
 /// identity during minimize prevents an accidental client disconnect.
@@ -173,7 +208,7 @@ pub fn escape_popup_target(
 
 #[cfg(test)]
 mod popup_escape_tests {
-    use super::{escape_popup_target,popup_teardown_order,popup_descendant_teardown_order};
+    use super::{escape_popup_target,popup_teardown_order,popup_descendant_teardown_order,popup_click_dismissals};
 
     #[test]
     fn deepest_mapped_child_only_under_focused_parent() {
@@ -197,6 +232,27 @@ mod popup_escape_tests {
     fn nested_popup_chain_is_bounded_even_on_corrupt_parent_cycles() {
         let roles=[(1,2,true),(2,3,true),(3,2,true)];
         assert_eq!(escape_popup_target(1,&roles),None);
+    }
+
+    #[test]
+    fn grabbed_popup_click_preserves_only_matching_ancestor_chain() {
+        let tree=[(1,2),(2,3),(3,4),(8,9)];
+        let stack=[2,3];
+        assert_eq!(popup_click_dismissals(&stack,Some(&3),&tree),Vec::<i32>::new());
+        assert_eq!(popup_click_dismissals(&stack,Some(&4),&tree),Vec::<i32>::new());
+        assert_eq!(popup_click_dismissals(&stack,Some(&2),&tree),vec![3]);
+        assert_eq!(popup_click_dismissals(&stack,Some(&1),&tree),vec![3,2]);
+        assert_eq!(popup_click_dismissals(&stack,Some(&9),&tree),vec![3,2]);
+        assert_eq!(popup_click_dismissals(&stack,None,&tree),vec![3,2]);
+        assert!(popup_click_dismissals::<i32>(&[],None,&tree).is_empty());
+    }
+
+    #[test]
+    fn malformed_popup_grab_cycles_cannot_hijack_other_client() {
+        let edges=[(1,2),(2,3),(3,2),(4,5)];
+        assert_eq!(popup_click_dismissals(&[2,3],Some(&5),&edges),vec![3,2]);
+        assert_eq!(popup_click_dismissals(&[2,3],Some(&2),&edges),Vec::<i32>::new());
+        assert_eq!(popup_click_dismissals(&[2,3],Some(&1),&edges),vec![3,2]);
     }
 
     #[test]

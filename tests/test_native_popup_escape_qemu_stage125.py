@@ -148,6 +148,105 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertIn("fn minimized_layered_window_retains_pixels_but_never_captures_pointer()",model)
         self.assertIn("if self.is_visible(key)==Some(true)",model)
 
+    def test_real_xdg_popup_grab_checks_seat_press_serial_and_nested_stack(self):
+        self.assertIn("pub fn popup_click_dismissals",POLICY)
+        self.assertIn("grabbed_popup_click_preserves_only_matching_ancestor_chain",POLICY)
+        self.assertIn("malformed_popup_grab_cycles_cannot_hijack_other_client",POLICY)
+        grab=BRIDGE[BRIDGE.index("fn grab(&mut self,popup:PopupSurface"):
+                    BRIDGE.index("fn reposition_request(",BRIDGE.index("fn grab(&mut self,popup:PopupSurface"))]
+        for required in ("self.seat.owns(&seat)","self.lifecycle.seat_active()",
+                         "pressed==&parent && *issued==serial",
+                         "self.grabbed_popup_roles.last().is_none_or(",
+                         "self.grabbed_popup_roles.len()>=8",
+                         "self.grabbed_popup_roles.push(popup.wl_surface().clone())",
+                         "MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true"):
+            self.assertIn(required,grab)
+        self.assertLess(grab.index("if !serial_matches || !nested_ok"),
+                        grab.index("self.grabbed_popup_roles.push("))
+        self.assertIn("if popup_pressed_removed {self.last_popup_press=None;}",BRIDGE)
+        self.assertIn("self.grabbed_popup_roles.retain(|role|!removal.contains(role))",BRIDGE)
+
+    def test_real_outside_press_closes_once_without_click_through(self):
+        handler=BRIDGE[BRIDGE.index("InputEvent::PointerButton {event} =>"): ]
+        # PointerButton is the last input arm; bound its block at the real
+        # emitted button frame, not at a nonexistent later InputEvent arm.
+        end=handler.index("pointer.frame(state);",
+                          handler.index("let button_serial=SERIAL_COUNTER.next_serial();"))
+        handler=handler[:end+len("pointer.frame(state);")]
+        self.assertIn("state.dismiss_grabbed_popups_on_press(point)",handler)
+        self.assertIn("state.suppressed_popup_button=Some(event.button_code());",handler)
+        self.assertIn("if state.suppressed_popup_button==Some(event.button_code())",handler)
+        self.assertLess(handler.index("state.dismiss_grabbed_popups_on_press(point)"),
+                        handler.index("pointer.button(state,&ButtonEvent{"))
+        self.assertIn("state.last_popup_press=state.pointer_target(point)",handler)
+        dismissal=BRIDGE[BRIDGE.index("fn dismiss_grabbed_popups_on_press("):
+                         BRIDGE.index("/// Esc from the real active libinput seat")]
+        self.assertIn("popup_click_dismissals(",dismissal)
+        self.assertIn("let outermost=removals.last()",dismissal)
+        self.assertEqual(dismissal.count("self.evict_native_popup(&outermost)"),1)
+        self.assertIn("self.grabbed_popup_roles.is_empty()",dismissal)
+        for lifecycle in ("InputEvent::DeviceRemoved", "SessionEvent::PauseSession"):
+            block=BRIDGE[BRIDGE.index(lifecycle):BRIDGE.index(lifecycle)+350]
+            self.assertIn("state.last_popup_press=None;",block)
+            self.assertIn("state.suppressed_popup_button=None;",block)
+
+    def test_real_qemu_usb_click_issues_wl_pointer_grab_before_popup_map(self):
+        for token in ("wl_pointer::Event::Button","wl_seat::WlSeat",
+                      "MELANIA_NATIVE_REAL_POPUP_GRAB_PARENT_READY=true",
+                      "MELANIA_NATIVE_REAL_POPUP_USB_BUTTON_SERIAL_RECEIVED=true",
+                      "popup.grab(&seat,serial)",
+                      "MELANIA_NATIVE_REAL_POPUP_GRAB_REQUEST_FROM_USB_SERIAL=true"):
+            self.assertIn(token,CLIENT)
+        self.assertLess(CLIENT.index("popup.grab(&seat,serial)"),
+                        CLIENT.index("popup_surface.commit();"))
+        self.assertIn("MELANIA_QEMU_XDG_POPUP_GRAB=YES_QEMU_VM",GUEST)
+        for token in ('qmp_mouse(args.qmp,"press")',
+                      'MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true',
+                      'qmp_mouse(args.qmp,"release")',
+                      "MELANIA_QEMU_XDG_POPUP_REAL_USB_GRAB=true"):
+            self.assertIn(token,QMP)
+        self.assertLess(QMP.index('qmp_mouse(args.qmp,"press")'),
+                        QMP.index("MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true"))
+        self.assertLess(QMP.index("MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true"),
+                        QMP.index('qmp_mouse(args.qmp,"release")'))
+        self.assertIn("MELANIA_QEMU_XDG_POPUP_REAL_USB_GRAB=true",HOST)
+        fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_mouse"]
+        for action in ("move","press","release"):
+            sockets=[]
+            def make_socket(*_):
+                sock=_FakeSocket()
+                sockets.append(sock)
+                return sock
+            fake=SimpleNamespace(AF_UNIX=1,SOCK_STREAM=1,socket=make_socket)
+            with patch.dict(fn.__globals__,{"socket":fake}):
+                fn(Path("/unused-QMP"),action)
+            payload=sockets[0].io.sent[1]["arguments"]["events"]
+            self.assertEqual(sockets[0].io.sent[1]["execute"],"input-send-event")
+            if action=="move":
+                self.assertEqual([e["type"] for e in payload],["abs","abs"])
+            else:
+                self.assertEqual(payload[0]["data"]["button"],"left")
+                self.assertEqual(payload[0]["data"]["down"],action=="press")
+
+    def test_udev_gpu_loss_revokes_popup_input_grabs_without_seat_callback(self):
+        # The udev callback directly changes NativeLifecycle; there is no
+        # subsequent SessionEvent::PauseSession that would do this cleanup.
+        callback=BRIDGE[BRIDGE.index("let reason=state.gpu_watch.observe(&change);"):]
+        callback=callback[:callback.index("let live_stream=std::env::var(")]
+        self.assertIn("state.lifecycle.on_session(SessionEvent::PauseSession);",callback)
+        for token in ("state.last_xdg_press=None;",
+                      "state.last_popup_press=None;",
+                      "state.suppressed_popup_button=None;",
+                      "state.grabbed_popup_roles.clear();",
+                      "state.popup_escape_held=false;",
+                      "state.snap_keys.reset();",
+                      "state.keyboard_window_cycle.reset();"):
+            self.assertIn(token,callback)
+        self.assertLess(callback.index("state.native_presentation_guard.revoke();"),
+                        callback.index("state.grabbed_popup_roles.clear();"))
+        self.assertLess(callback.index("state.grabbed_popup_roles.clear();"),
+                        callback.index('MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED='))
+
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
         sockets=[]
