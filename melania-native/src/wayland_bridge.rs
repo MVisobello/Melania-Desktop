@@ -3220,7 +3220,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.render_scheduler.set_seat_active(false);
             state.continuous_redraw.set_seat_active(false);
             state.window_interaction.cancel();
+            // The udev handler directly revokes the seat lifecycle; it does
+            // not pass through SessionEvent::PauseSession above. Explicitly
+            // discard every input capability minted by the old GPU/VT epoch,
+            // including popup serials and the click-through suppression flag.
+            // Reacquiring a DRM route must never resurrect those grabs.
             state.last_xdg_press=None;
+            state.last_popup_press=None;
+            state.suppressed_popup_button=None;
+            state.grabbed_popup_roles.clear();
+            state.popup_escape_held=false;
+            state.snap_keys.reset();
+            state.keyboard_window_cycle.reset();
             eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
     })?;
