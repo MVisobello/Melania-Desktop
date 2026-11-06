@@ -25,6 +25,7 @@ struct Client {
     root_configured:bool,
     popup_configured:bool,
     dismissed_unexpectedly:bool,
+    popup_done_after_frame2:bool,
     popup_rect:Option<(i32,i32,i32,i32)>,
     frame_callbacks:u32,
     buffer_released:bool,
@@ -65,8 +66,14 @@ impl Dispatch<xdg_popup::XdgPopup,u8> for Client {
             s.popup_rect=Some((x,y,width,height));
         }
         if let xdg_popup::Event::PopupDone=e {
-            s.dismissed_unexpectedly=true;
-            eprintln!("MELANIA_NATIVE_POPUP_UNEXPECTED_DISMISSAL=true");
+            if s.frame_callbacks>=2 {
+                s.popup_done_after_frame2=true;
+                println!("MELANIA_NATIVE_REAL_POPUP_CLIENT_POPUP_DONE_AFTER_ESCAPE=true");
+                let _=std::io::stdout().flush();
+            } else {
+                s.dismissed_unexpectedly=true;
+                eprintln!("MELANIA_NATIVE_POPUP_UNEXPECTED_DISMISSAL=true");
+            }
         }
     }
 }
@@ -199,9 +206,18 @@ fn main()->Result<()> {
     draw(&popup_surface,&shm,&mut queue,&mut state,POP_W,POP_H,(245,180,50),2)?;
     // Keep popup mapped while the host captures the genuine GPU scanout.
     thread::sleep(Duration::from_secs(10));
-    queue.roundtrip(&mut state)?;
-    if state.dismissed_unexpectedly {
-        return Err("popup dismissed before QEMU CRTC capture".into());
+    // Host first validates the actual popup pixels on the virtual CRTC,
+    // then sends a real USB Escape. Only the compositor's xdg_popup.popup_done
+    // may trigger teardown. Do not pre-emptively remove the client pixels.
+    let deadline=Instant::now()+Duration::from_secs(35);
+    while !state.popup_done_after_frame2 {
+        if Instant::now()>=deadline {
+            return Err("real QEMU USB Escape did not deliver xdg_popup.popup_done".into());
+        }
+        queue.roundtrip(&mut state)?;
+        if state.dismissed_unexpectedly {
+            return Err("popup dismissed before QEMU CRTC capture".into());
+        }
     }
     popup.destroy();
     popup_xdg.destroy();
