@@ -114,13 +114,16 @@ pub fn escape_popup_target(
 )->Option<u64> {
     if focused==0 {return None;}
     let mut current=focused;
+    let mut visited=vec![focused];
     let mut selected=children.iter().any(|(_,child,mapped)|
         *child==focused && *mapped).then_some(focused);
     for _ in 0..8 {
         let Some((_,child,_))=children.iter().rev().find(|(parent,child,mapped)|
             *parent==current && *child!=current && *mapped
         ) else {break;};
-        if selected==Some(*child) {break;}
+        // A malformed/cyclic parent chain must not hijack input.
+        if visited.contains(child) {return None;}
+        visited.push(*child);
         current=*child;
         selected=Some(current);
     }
@@ -152,6 +155,6 @@ mod popup_escape_tests {
     #[test]
     fn nested_popup_chain_is_bounded_even_on_corrupt_parent_cycles() {
         let roles=[(1,2,true),(2,3,true),(3,2,true)];
-        assert_eq!(escape_popup_target(1,&roles),Some(2));
+        assert_eq!(escape_popup_target(1,&roles),None);
     }
 }
