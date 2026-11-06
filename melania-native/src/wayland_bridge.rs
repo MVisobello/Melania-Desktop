@@ -2413,6 +2413,19 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 ) {
                     ShortcutResult::Forward=>{},
                     ShortcutResult::Consume=>return,
+                    ShortcutResult::Close(key)=>{
+                        // Standard XDG close request. The client owns shutdown
+                        // and its retained wl_shm pixels remain until unmap.
+                        let top=state.known_window_surfaces.get(key).and_then(|surface|
+                            state.xdg_shell.toplevel_surfaces().iter()
+                                .find(|role|role.wl_surface()==surface).cloned());
+                        if let Some(top)=top {
+                            top.send_close();
+                            println!("MELANIA_NATIVE_KEYBOARD_ALT_F4_CLOSE_REQUESTED={key}");
+                            let _=std::io::stdout().flush();
+                        }
+                        return;
+                    },
                     ShortcutResult::Focus(key)=>{
                         let Some(surface)=state.known_window_surfaces.get(key).cloned() else {
                             state.keyboard_window_cycle.cancel_cycle();
