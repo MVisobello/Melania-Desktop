@@ -845,8 +845,23 @@ fn binary(parent:&GtkBox,title:&'static str,getter:fn()->services::Result<bool>,
     caption.set_xalign(0.0);
     row.append(&caption);
     b.set_child(Some(&row));
-    if let Ok(active)=getter(){caption.set_text(&format!("{title}  {}",if active{"● Attivo"}else{"○ Spento"}));}
-    else {b.set_sensitive(false);b.set_tooltip_text(Some("Servizio Linux non disponibile"));}
+    // Do not call external services while creating the *hidden* quick panel.
+    // In VMs these probes can wait for D-Bus/system services and delay the
+    // whole taskbar. Resolve the state only when this control is first mapped.
+    caption.set_text(&format!("{title}  Da verificare"));
+    let mapped_caption=caption.clone();
+    b.connect_map(move |button| {
+        match getter() {
+            Ok(active)=>{
+                mapped_caption.set_text(&format!("{title}  {}",if active{"● Attivo"}else{"○ Spento"}));
+                button.set_sensitive(true);
+            }
+            Err(_)=>{
+                button.set_sensitive(false);
+                button.set_tooltip_text(Some("Servizio Linux non disponibile"));
+            }
+        }
+    });
     let feedback=status.clone();
     b.connect_clicked(move |_| {
         match getter().and_then(|state|setter(!state)).and_then(|_|getter()) {
@@ -858,10 +873,17 @@ fn binary(parent:&GtkBox,title:&'static str,getter:fn()->services::Result<bool>,
 fn slider(parent:&GtkBox,title:&'static str,get:fn()->services::Result<u8>,set:fn(u8)->services::Result<()>,status:&Label){
     parent.append(&label(title,"melania-sub"));
     let row=GtkBox::new(Orientation::Horizontal,8);
-    let value=get().ok();
     let scale=gtk::Scale::with_range(Orientation::Horizontal,0.0,100.0,1.0);
-    scale.set_hexpand(true);scale.set_value(value.unwrap_or(50) as f64);scale.set_sensitive(value.is_some());
-    let apply=Button::with_label("Applica");apply.set_sensitive(value.is_some());
+    // Avoid synchronous wpctl/brightnessctl calls during shell startup.
+    scale.set_hexpand(true);scale.set_value(50.0);scale.set_sensitive(false);
+    let apply=Button::with_label("Applica");apply.set_sensitive(false);
+    let mapped_scale=scale.clone();let mapped_apply=apply.clone();
+    scale.connect_map(move |_| {
+        let value=get().ok();
+        if let Some(value)=value {mapped_scale.set_value(value as f64);}
+        mapped_scale.set_sensitive(value.is_some());
+        mapped_apply.set_sensitive(value.is_some());
+    });
     let s=scale.clone();let feedback=status.clone();
     apply.connect_clicked(move |_|match set(s.value().round().clamp(0.0,100.0) as u8) {
         Ok(())=>feedback.set_text(&format!("{title} aggiornato")),Err(e)=>feedback.set_text(&e.to_string())
@@ -1916,8 +1938,10 @@ fn build(app:&Application){
     // Measure actual GTK construction costs to guide further startup work.
     // Measurements refer to activation, not total compositor boot time.
     let startup = Instant::now();
+    eprintln!("MELANIA_PANEL_STAGE=theme_begin");
     setup_melania_icon_theme();
     let theme_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=theme_end ms={}",theme_ready.as_millis());
     if !gtk4_layer_shell::is_supported() {
         eprintln!("Melania Panel requires Wayland with zwlr_layer_shell_v1 (try the nested compositor)");
         return;
@@ -1930,23 +1954,34 @@ fn build(app:&Application){
     }
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
+    eprintln!("MELANIA_PANEL_STAGE=start_begin");
     let start=start_window(app);
     let start_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=start_end ms={}",start_ready.as_millis());
+    eprintln!("MELANIA_PANEL_STAGE=notifications_begin");
     let notifications=notifications_window(app);
     let notifications_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=notifications_end ms={}",notifications_ready.as_millis());
+    eprintln!("MELANIA_PANEL_STAGE=quick_begin");
     let quick=quick_window(app,&notifications);
     let quick_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=quick_end ms={}",quick_ready.as_millis());
+    eprintln!("MELANIA_PANEL_STAGE=calendar_begin");
     let calendar=calendar_window(app);
     let calendar_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=calendar_end ms={}",calendar_ready.as_millis());
     install_start_hotkey_listener(app,&start,&quick,&notifications,&calendar);
     // Do not present popup windows until the user clicks.
+    eprintln!("MELANIA_PANEL_STAGE=taskbar_begin");
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);
     let taskbar_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=taskbar_end ms={}",taskbar_ready.as_millis());
     if let Some(content)=bar.child().and_then(|child|child.downcast::<GtkBox>().ok()) {
         panel_preferences::attach_live_preferences(
             &bar,&content,&start,&quick,&notifications,&calendar);
     }
     bar.present();
+    eprintln!("MELANIA_PANEL_STAGE=taskbar_presented ms={}",startup.elapsed().as_millis());
     // Disposable QEMU-only second real GTK frame: modify the already-real
     // bar's GTK CSS after the first surface was committed. This deliberately
     // uses GTK rendering/Wayland wl_shm again, never synthesizes a pixel buffer.
