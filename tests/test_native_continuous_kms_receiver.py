@@ -26,13 +26,22 @@ class NativeContinuousReceiverSafety(unittest.TestCase):
         for expected in ('b"MLF1"', 'b"MLA1"', 'read_exact(&mut header)',
                          'wait_for_fb(&card,crtc_handle,framebuffer)?',
                          'stream.write_all(&ack)?',
-                         'epoch!=old_epoch || sequence<=old_sequence || generation<=old_generation',
+                         'native_frame_order::FrameIdentity::new(',
+                         '!identity.accepted_after(previous_identity,persistent)',
                          'rollback.restore()?', 'MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}'):
             self.assertIn(expected, NEW)
         self.assertLess(NEW.index('wait_for_fb(&card,crtc_handle,framebuffer)?'),
                         NEW.index('stream.write_all(&ack)?'))
         self.assertLess(NEW.index('let restored=rollback.restore();'),
                         NEW.index('MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}'))
+        # The real CPU receiver uses the SAME order check as GBM, including
+        # the strict finite-QEMU requirements checked in the helper itself.
+        helper=(ROOT / 'melania-native/src/native_frame_order.rs').read_text()
+        self.assertIn('self.epoch==old.epoch',helper)
+        self.assertIn('self.sequence>old.sequence',helper)
+        self.assertIn('self.generation>old.generation',helper)
+        self.assertIn('(persistent && self.generation==old.generation)',helper)
+        self.assertIn('if self.sequence==0 {return false;}',helper)
         # Stage92 checks the shared parser instead of the removed inline fallback.
         self.assertIn('native_frame_budget::receiver_frame_budget(', NEW)
         self.assertNotIn('.unwrap_or(12);', NEW)
