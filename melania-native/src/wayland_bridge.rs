@@ -32,7 +32,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData,ClientId,DisconnectReason},
             protocol::{wl_buffer,wl_surface::WlSurface,wl_seat,wl_output::WlOutput},
-            Client, Display, ListeningSocket,
+            Client, Display, DisplayHandle, Resource, ListeningSocket,
         },
     },
     utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
@@ -42,7 +42,7 @@ use smithay::{
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
-            ClientDndGrabHandler,ServerDndGrabHandler}},
+            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus}},
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
@@ -105,6 +105,8 @@ struct BridgeState {
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
     data_device:DataDeviceState,
+    // Focus clipboard offers on real client ownership within this Wayland display.
+    display_handle:DisplayHandle,
     output:Output,
     output_manager:OutputManagerState,
     pixel_probe:bool,
@@ -1987,7 +1989,12 @@ impl SeatHandler for BridgeState {
     type PointerFocus=WlSurface;
     type TouchFocus=WlSurface;
     fn seat_state(&mut self)->&mut SeatState<Self> {&mut self.seats}
-    fn focus_changed(&mut self,_:&Seat<Self>,_:Option<&WlSurface>){}
+    fn focus_changed(&mut self,seat:&Seat<Self>,focused:Option<&WlSurface>){
+        // A focus transition transfers wl_data_device offers only to the actual client.
+        // Unmapped or destroyed surfaces revoke the offer instead of keeping stale focus.
+        let client=focused.and_then(|surface|surface.client());
+        set_data_device_focus(&self.display_handle,seat,client);
+    }
     fn cursor_image(&mut self,_:&Seat<Self>,_:CursorImageStatus){}
 }
 // Match the protocol implementations of the nested compositor, but keep
@@ -3012,6 +3019,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
+        display_handle:handle.clone(),
         output_manager:OutputManagerState::new_with_xdg_output::<BridgeState>(&handle),
         output,
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
@@ -3140,6 +3148,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                set_data_device_focus(&state.display_handle,&state.seat,None);
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
                 state.suppressed_popup_button=None;
@@ -3211,6 +3220,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
+            set_data_device_focus(&state.display_handle,&state.seat,None);
             state.continuous_worker.take();
             state.continuous_inflight.take();
             state.continuous_presentation_token.take();
