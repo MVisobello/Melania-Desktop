@@ -121,7 +121,11 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
 
     def test_real_outside_press_closes_once_without_click_through(self):
         handler=BRIDGE[BRIDGE.index("InputEvent::PointerButton {event} =>"): ]
-        handler=handler[:handler.index("InputEvent::",10)]
+        # PointerButton is the last input arm; bound its block at the real
+        # emitted button frame, not at a nonexistent later InputEvent arm.
+        end=handler.index("pointer.frame(state);",
+                          handler.index("let button_serial=SERIAL_COUNTER.next_serial();"))
+        handler=handler[:end+len("pointer.frame(state);")]
         self.assertIn("state.dismiss_grabbed_popups_on_press(point)",handler)
         self.assertIn("state.suppressed_popup_button=Some(event.button_code());",handler)
         self.assertIn("if state.suppressed_popup_button==Some(event.button_code())",handler)
