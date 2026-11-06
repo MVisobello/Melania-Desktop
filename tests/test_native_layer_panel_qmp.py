@@ -33,8 +33,10 @@ class TestPanelProof(unittest.TestCase):
         ):
             self.assertIn(required,stage)
         self.assertNotIn('tail -n +1 -f -s 0.05 "$layer_kms_log"',stage)
+        # The guest also prints diagnostic logs on earlier error branches.
+        # Check the final post-forwarder output, not the first error handler.
         self.assertLess(stage.index('if ! wait "$layer_tail_pid"; then'),
-                        stage.index('cat "$layer_client_log" "$layer_kms_log" "$layer_server_log"'))
+                        stage.rindex('cat "$layer_client_log" "$layer_kms_log" "$layer_server_log"'))
         # The independently captured host screenshot remains mandatory.
         host=(Path(__file__).resolve().parents[1]/
               "scripts/run-qemu-melania-native.sh").read_text()
