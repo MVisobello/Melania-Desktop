@@ -1811,6 +1811,10 @@ grep -q '^MELANIA_NATIVE_REAL_POPUP_CONFIGURE_ACK=280,115 180x100$' "$popup_clie
   fatal 'real_popup_xdg_positioner_ACK_not_received'
 grep -q '^MELANIA_NATIVE_REAL_POPUP_CLIENT_DESTROYED=true$' "$popup_client_log" ||
   fatal 'real_popup_client_never_destroyed_role'
+grep -q '^MELANIA_NATIVE_REAL_POPUP_CLIENT_POPUP_DONE_AFTER_ESCAPE=true$' "$popup_client_log" ||
+  fatal 'real_popup_client_did_not_receive_popup_done'
+grep -q '^MELANIA_NATIVE_XDG_POPUP_ESCAPE_DISMISSED=2$' "$popup_server_log" ||
+  fatal 'real_usb_escape_did_not_dismiss_focused_popup'
 kill -TERM "$popup_server_pid"
 if ! wait "$popup_server_pid"; then
   cat "$popup_server_log" "$popup_client_log"
