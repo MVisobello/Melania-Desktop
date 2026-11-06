@@ -25,6 +25,7 @@ struct Client {
     second_surface:Option<wl_surface::WlSurface>,
     saw_focus_b:bool,
     saw_focus_a:bool,
+    saw_alt_f4_close_a:bool,
     output_mode_received:bool,
     xdg_acked:bool,
     buffer_released:bool,
@@ -99,6 +100,12 @@ impl Dispatch<xdg_surface::XdgSurface,u8> for Client {
 impl Dispatch<xdg_toplevel::XdgToplevel,u8> for Client {
     fn event(state:&mut Self,_:&xdg_toplevel::XdgToplevel,
              event:xdg_toplevel::Event,slot:&u8,_:&Connection,_:&QueueHandle<Self>) {
+        if state.alt_tab_probe && state.saw_focus_a && *slot==1 &&
+           matches!(&event,xdg_toplevel::Event::Close) {
+            state.saw_alt_f4_close_a=true;
+            println!("MELANIA_QEMU_ALT_F4_REAL_XDG_CLOSE_RECEIVED=A");
+            let _=std::io::stdout().flush();
+        }
         if state.dynamic_xdg_resize {
             if let xdg_toplevel::Event::Configure{width,height,..}=event {
                 if width>0 && height>0 {
@@ -413,6 +420,15 @@ fn main()->Result<(),Box<dyn Error>> {
         // Keep the genuine windows mapped for the host's independent QMP
         // CRTC screenshot after the compositor-only KMS frame 13 ACK.
         thread::sleep(Duration::from_secs(15));
+        let deadline=Instant::now()+Duration::from_secs(40);
+        while !state.saw_alt_f4_close_a {
+            if Instant::now()>=deadline {
+                return Err("real USB Alt+F4 did not deliver xdg_toplevel.close to focused A".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        println!("MELANIA_NATIVE_ALT_F4_REAL_XDG_CLOSE_PASS=true");
+        std::io::stdout().flush()?;
     }
     // Optional Stage99 end-to-end experiment: keep both real xdg roles
     // connected, hide A via panel IPC and require a new DRM scanout with

@@ -1719,6 +1719,10 @@ fi
 # remained mapped for the host's independent QMP physical screen capture.
 grep -q '^MELANIA_NATIVE_ALT_TAB_TWO_REAL_KEYBOARD_ENTERS_PASS=true' "$alt_client_log" ||
   fatal 'real_Wayland_keyboard_enter_B_then_A_not_observed'
+grep -q '^MELANIA_NATIVE_ALT_F4_REAL_XDG_CLOSE_PASS=true' "$alt_client_log" ||
+  fatal 'real_Alt_F4_XDG_close_not_received'
+grep -q '^MELANIA_NATIVE_KEYBOARD_ALT_F4_CLOSE_REQUESTED=1$' "$alt_server_log" ||
+  fatal 'real_Alt_F4_not_routed_to_focused_XDG_window'
 grep -q '^MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=2$' "$alt_server_log" ||
   fatal 'USB_Alt_Tab_B_not_focused'
 grep -q '^MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=1$' "$alt_server_log" ||

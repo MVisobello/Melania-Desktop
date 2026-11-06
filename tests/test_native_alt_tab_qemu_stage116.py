@@ -21,6 +21,8 @@ class RealUsbAltTabQemuStage116(unittest.TestCase):
             "keyboard.set_focus(state,Some(surface.clone())",
             "state.submit_continuous_frame()",
             "MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=",
+            "MELANIA_NATIVE_KEYBOARD_ALT_F4_CLOSE_REQUESTED=",
+            "top.send_close()",
         ):
             self.assertIn(marker,NATIVE)
         for marker in (
@@ -33,6 +35,8 @@ class RealUsbAltTabQemuStage116(unittest.TestCase):
             "MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A",
             "MELANIA_QEMU_ALT_TAB_TWO_WAYLAND_SURFACES_READY=true",
             "MELANIA_NATIVE_ALT_TAB_TWO_REAL_KEYBOARD_ENTERS_PASS=true",
+            "MELANIA_QEMU_ALT_F4_REAL_XDG_CLOSE_RECEIVED=A",
+            "MELANIA_NATIVE_ALT_F4_REAL_XDG_CLOSE_PASS=true",
         ):
             self.assertIn(marker,CLIENT)
 
@@ -43,6 +47,8 @@ class RealUsbAltTabQemuStage116(unittest.TestCase):
             "MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM",
             "MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=2",
             "MELANIA_NATIVE_KEYBOARD_ALT_TAB_FOCUS=1",
+            "MELANIA_NATIVE_KEYBOARD_ALT_F4_CLOSE_REQUESTED=1",
+            "MELANIA_NATIVE_ALT_F4_REAL_XDG_CLOSE_PASS=true",
             "MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=13",
             "MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true",
             "MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true",
@@ -55,6 +61,8 @@ class RealUsbAltTabQemuStage116(unittest.TestCase):
             '"type":"key"',
             'key(args.qmp,"alt",True)',
             'key(args.qmp,"tab",True)',
+            'key(args.qmp,"f4",True)',
+            "MELANIA_QEMU_ALT_F4_REAL_WAYLAND_CLOSE=true",
             "MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=B",
             "MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A",
             "MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=13",
