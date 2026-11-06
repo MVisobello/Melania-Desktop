@@ -103,3 +103,58 @@ mod tests {
         assert_eq!(repositioned.absolute(300,100,1280,800),Some((320,150)));
     }
 }
+
+/// Select the deepest mapped popup in the currently focused XDG parent chain.
+///
+/// No unrelated, hidden or uncommitted role may capture Escape. The input
+/// bridge supplies only actual registered/mapped role keys; this pure policy
+/// does not synthesize a grab or keyboard event.
+pub fn escape_popup_target(
+    focused:u64, children:&[(u64,u64,bool)]
+)->Option<u64> {
+    if focused==0 {return None;}
+    let mut current=focused;
+    let mut visited=vec![focused];
+    let mut selected=children.iter().any(|(_,child,mapped)|
+        *child==focused && *mapped).then_some(focused);
+    for _ in 0..8 {
+        let Some((_,child,_))=children.iter().rev().find(|(parent,child,mapped)|
+            *parent==current && *child!=current && *mapped
+        ) else {break;};
+        // A malformed/cyclic parent chain must not hijack input.
+        if visited.contains(child) {return None;}
+        visited.push(*child);
+        current=*child;
+        selected=Some(current);
+    }
+    selected
+}
+
+#[cfg(test)]
+mod popup_escape_tests {
+    use super::escape_popup_target;
+
+    #[test]
+    fn deepest_mapped_child_only_under_focused_parent() {
+        let roles=[(1,2,true),(1,4,true),(2,3,true),(5,6,true)];
+        assert_eq!(escape_popup_target(1,&roles),Some(4));
+        assert_eq!(escape_popup_target(2,&roles),Some(3));
+        assert_eq!(escape_popup_target(5,&roles),Some(6));
+        assert_eq!(escape_popup_target(7,&roles),None);
+        assert_eq!(escape_popup_target(0,&roles),None);
+    }
+    #[test]
+    fn hidden_or_unacknowledged_roles_never_intercept_escape() {
+        let roles=[(1,2,true),(2,3,false),(5,6,true)];
+        assert_eq!(escape_popup_target(1,&roles),Some(2));
+        assert_eq!(escape_popup_target(2,&roles),Some(2));
+        assert_eq!(escape_popup_target(3,&roles),None);
+        assert_eq!(escape_popup_target(4,&roles),None);
+        assert_eq!(escape_popup_target(1,&[(1,2,false)]),None);
+    }
+    #[test]
+    fn nested_popup_chain_is_bounded_even_on_corrupt_parent_cycles() {
+        let roles=[(1,2,true),(2,3,true),(3,2,true)];
+        assert_eq!(escape_popup_target(1,&roles),None);
+    }
+}

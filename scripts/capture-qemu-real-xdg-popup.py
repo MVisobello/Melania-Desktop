@@ -65,6 +65,30 @@ def qmp_capture(qmp:Path,output:Path)->None:
     if not output.is_file():
         raise RuntimeError("VirtIO GPU did not produce framebuffer screenshot")
 
+def qmp_key(path:Path,which:str,pressed:bool)->None:
+    # Actual QEMU USB keyboard -> guest libinput -> Smithay, not direct IPC.
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as sock:
+        sock.settimeout(7)
+        sock.connect(str(path))
+        io=sock.makefile("rwb",buffering=0)
+        if "QMP" not in json.loads(io.readline()):
+            raise RuntimeError("invalid QMP greeting for physical Escape")
+        request={"execute":"input-send-event","arguments":{"events":[{
+            "type":"key","data":{"key":{"type":"qcode","data":which},
+                                 "down":pressed},
+        }]}}
+        for cmd in ({"execute":"qmp_capabilities"},request):
+            io.write((json.dumps(cmd)+"\n").encode())
+            for _ in range(60):
+                response=json.loads(io.readline())
+                if "error" in response:
+                    raise RuntimeError("QMP refused real USB key: "+str(response["error"]))
+                if "return" in response:
+                    break
+            else:
+                raise RuntimeError("QMP USB key not acknowledged")
+
+
 def verify(path:Path,popup_visible:bool)->None:
     blob=path.read_bytes()
     header=re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s",blob)
@@ -115,6 +139,11 @@ def main()->int:
     wait_marker(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=2",deadline)
     capture_until(args.qmp,args.popup,True,min(deadline,time.monotonic()+5))
     print("MELANIA_QEMU_XDG_POPUP_REAL_CRTC_PIXELS=true",flush=True)
+    qmp_key(args.qmp,"esc",True)
+    wait_marker(args.serial,"MELANIA_NATIVE_XDG_POPUP_ESCAPE_DISMISSED=2",deadline)
+    wait_marker(args.serial,"MELANIA_NATIVE_REAL_POPUP_CLIENT_POPUP_DONE_AFTER_ESCAPE=true",deadline)
+    qmp_key(args.qmp,"esc",False)
+    print("MELANIA_QEMU_XDG_POPUP_USB_ESC_POPUP_DONE=true",flush=True)
     wait_marker(args.serial,"MELANIA_NATIVE_REAL_POPUP_CLIENT_DESTROYED=true",deadline)
     wait_marker(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=3",deadline)
     capture_until(args.qmp,args.cleared,False,min(deadline,time.monotonic()+5))
