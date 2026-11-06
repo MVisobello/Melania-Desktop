@@ -24,6 +24,7 @@ struct Client {
     wm:Option<xdg_wm_base::XdgWmBase>,
     root_configured:bool,
     popup_configured:bool,
+    dismissed_unexpectedly:bool,
     popup_rect:Option<(i32,i32,i32,i32)>,
     frame_callbacks:u32,
     buffer_released:bool,
@@ -64,6 +65,7 @@ impl Dispatch<xdg_popup::XdgPopup,u8> for Client {
             s.popup_rect=Some((x,y,width,height));
         }
         if let xdg_popup::Event::PopupDone=e {
+            s.dismissed_unexpectedly=true;
             eprintln!("MELANIA_NATIVE_POPUP_UNEXPECTED_DISMISSAL=true");
         }
     }
@@ -133,6 +135,9 @@ fn draw(
             return Err(format!("popup client frame {index} KMS ACK/release absent").into());
         }
         queue.roundtrip(state)?;
+        if state.dismissed_unexpectedly {
+            return Err("xdg_popup dismissed before pixel evidence".into());
+        }
     }
     if state.frame_callbacks!=index {
         return Err("duplicate or premature popup client callback".into());
@@ -181,6 +186,9 @@ fn main()->Result<()> {
     while !state.popup_configured {
         if Instant::now()>=deadline {return Err("real popup configure/ACK missing".into());}
         queue.roundtrip(&mut state)?;
+        if state.dismissed_unexpectedly {
+            return Err("popup dismissed before XDG configure".into());
+        }
     }
     let (x,y,w,h)=state.popup_rect.ok_or("XDG popup geometry missing")?;
     if (x,y,w,h)!=(280,115,POP_W as i32,POP_H as i32) {
@@ -191,6 +199,10 @@ fn main()->Result<()> {
     draw(&popup_surface,&shm,&mut queue,&mut state,POP_W,POP_H,(245,180,50),2)?;
     // Keep popup mapped while the host captures the genuine GPU scanout.
     thread::sleep(Duration::from_secs(10));
+    queue.roundtrip(&mut state)?;
+    if state.dismissed_unexpectedly {
+        return Err("popup dismissed before QEMU CRTC capture".into());
+    }
     popup.destroy();
     popup_xdg.destroy();
     popup_surface.destroy();

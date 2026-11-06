@@ -1488,6 +1488,177 @@ rm -f "$auth_server_log" "$auth_client_log"
 report 'MELANIA_QEMU_AUTHENTICATED_XDG_RESIZE_REAL_KMS_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage120: genuine QMP USB Super+arrows -> XDG ACK -> client wl_shm
+# -> real GBM/DRM scanout, screenshots and confirmed original CRTC restore.
+snap_client=/mnt/melania-native/melania-super-snap-client
+[[ -x "$snap_client" ]] || fatal 'super_snap_client_missing'
+snap_server_log="$(mktemp -t melania-snap-server-XXXXXX)"
+snap_client_log="$(mktemp -t melania-snap-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$snap_server_log" 2>&1 &
+snap_server_pid=$!
+snap_socket=''
+for attempt in $(seq 1 100); do
+  snap_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$snap_server_log" | head -n 1)"
+  [[ -n "$snap_socket" ]] && break
+  kill -0 "$snap_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$snap_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$snap_server_log"; then
+  cat "$snap_server_log"
+  kill -TERM "$snap_server_pid" 2>/dev/null || true
+  fatal 'super_snap_GPU_wayland_not_ready'
+fi
+tail -n +1 -f -s 0.05 "$snap_server_log" > /dev/ttyS0 &
+snap_server_tail_pid=$!
+tail -n +1 -f -s 0.05 "$snap_client_log" > /dev/ttyS0 &
+snap_client_tail_pid=$!
+report 'MELANIA_QEMU_SUPER_SNAP_STAGE_STARTED=true'
+if ! MELANIA_QEMU_SUPER_SNAP_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$snap_socket" \
+   timeout --signal=TERM --kill-after=3s 135s \
+   "$snap_client" > "$snap_client_log" 2>&1; then
+  cat "$snap_client_log" "$snap_server_log"
+  kill -TERM "$snap_server_pid" 2>/dev/null || true
+  fatal 'real_super_snap_client_failed'
+fi
+for frame in 1 2 3; do
+  grep -q "^MELANIA_NATIVE_SNAP_CLIENT_FRAME$frame""_ACK=true$" "$snap_client_log" ||
+    fatal "snap_client_frame_$frame""_missing"
+  grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$frame$" "$snap_server_log" ||
+    fatal "snap_GPU_CRTC_$frame""_missing"
+done
+for receipt in \
+  'MELANIA_NATIVE_SNAP_CLIENT_XDG_HALF_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_XDG_RESTORE_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_ALL_THREE_REAL_FRAMES_PASS=true'; do
+  grep -qx "$receipt" "$snap_client_log" || fatal "snap_client_missing_$receipt"
+done
+grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=Some(LeftHalf) 640x800 at 0,0$' "$snap_server_log" ||
+  fatal 'Super_Left_missing_real_XDG_configure'
+grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=None 360x224 at 160,120$' "$snap_server_log" ||
+  fatal 'Super_Down_missing_real_XDG_restore'
+kill -TERM "$snap_server_pid"
+if ! wait "$snap_server_pid"; then
+  cat "$snap_server_log" "$snap_client_log"
+  fatal 'snap_GPU_rollback_failed'
+fi
+kill "$snap_server_tail_pid" "$snap_client_tail_pid" 2>/dev/null || true
+wait "$snap_server_tail_pid" "$snap_client_tail_pid" 2>/dev/null || true
+for receipt in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$receipt" "$snap_server_log" || fatal "snap_rollback_missing_$receipt"
+done
+rm -f "$snap_server_log" "$snap_client_log"
+report 'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS3_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
+# Stage121: actual QMP tablet left-button -> XDG move serial -> output edge
+# -> configure/ACK -> client-owned shm -> GPU/GBM/DRM CRTC pixels.
+# Only the disposable VM can exercise this, never a production login.
+edge_client=/mnt/melania-native/melania-edge-drop-client
+[[ -x "$edge_client" ]] || fatal 'edge_drop_real_client_missing'
+edge_server_log="$(mktemp -t melania-edge-server-XXXXXX)"
+edge_client_log="$(mktemp -t melania-edge-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$edge_server_log" 2>&1 &
+edge_server_pid=$!
+edge_socket=''
+for attempt in $(seq 1 100); do
+  edge_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$edge_server_log" | head -n 1)"
+  [[ -n "$edge_socket" ]] && break
+  kill -0 "$edge_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$edge_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$edge_server_log"; then
+  cat "$edge_server_log"
+  kill -TERM "$edge_server_pid" 2>/dev/null || true
+  fatal 'real_edge_drop_wayland_GPU_server_missing'
+fi
+tail -n +1 -f -s 0.05 "$edge_server_log" > /dev/ttyS0 &
+edge_tail_server_pid=$!
+tail -n +1 -f -s 0.05 "$edge_client_log" > /dev/ttyS0 &
+edge_tail_client_pid=$!
+report 'MELANIA_QEMU_EDGE_DROP_STAGE_STARTED=true'
+if ! MELANIA_QEMU_EDGE_DROP_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$edge_socket" \
+   timeout --signal=TERM --kill-after=3s 135s \
+   "$edge_client" > "$edge_client_log" 2>&1; then
+  cat "$edge_client_log" "$edge_server_log"
+  kill -TERM "$edge_server_pid" 2>/dev/null || true
+  fatal 'real_edge_drop_client_failed'
+fi
+for receipt in \
+  'MELANIA_NATIVE_EDGE_DROP_CLIENT_MOVE_REQUESTED=true' \
+  'MELANIA_NATIVE_EDGE_DROP_CLIENT_XDG_HALF_ACK=true' \
+  'MELANIA_NATIVE_EDGE_DROP_CLIENT_FRAME1_ACK=true' \
+  'MELANIA_NATIVE_EDGE_DROP_CLIENT_FRAME2_ACK=true' \
+  'MELANIA_NATIVE_EDGE_DROP_CLIENT_HOST_RELEASE_ACK=true' \
+  'MELANIA_NATIVE_EDGE_DROP_CLIENT_TWO_REAL_FRAMES_PASS=true'; do
+  grep -qx "$receipt" "$edge_client_log" ||
+    fatal "edge_drop_missing_real_client_$receipt"
+done
+grep -q '^MELANIA_NATIVE_XDG_CLIENT_MOVE_GRANTED=1$' "$edge_server_log" ||
+  fatal 'edge_drop_move_was_not_authenticated'
+grep -q '^MELANIA_NATIVE_EDGE_DROP_REQUEST=1 Snap(LeftHalf)$' "$edge_server_log" ||
+  fatal 'edge_drop_compositor_did_not_snap_to_real_left_edge'
+grep -q '^MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED=640x800$' "$edge_server_log" ||
+  fatal 'edge_drop_client_owned_shm_not_accepted'
+grep -q '^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=1$' "$edge_server_log" ||
+  fatal 'edge_drop_initial_kernel_CRTC_missing'
+grep -Eq '^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=([2-9]|[1-9][0-9]+)$' "$edge_server_log" ||
+  fatal 'edge_drop_second_kernel_CRTC_missing'
+kill -TERM "$edge_server_pid"
+if ! wait "$edge_server_pid"; then
+  cat "$edge_server_log" "$edge_client_log"
+  fatal 'edge_drop_KMS_connector_restore_failed'
+fi
+kill "$edge_tail_server_pid" "$edge_tail_client_pid" 2>/dev/null || true
+wait "$edge_tail_server_pid" "$edge_tail_client_pid" 2>/dev/null || true
+for receipt in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$receipt" "$edge_server_log" ||
+    fatal "edge_drop_kernel_rollback_missing_$receipt"
+done
+rm -f "$edge_server_log" "$edge_client_log"
+report 'MELANIA_QEMU_EDGE_DROP_XDG_REAL_CRTC_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage116: real USB Alt+Tab cycles two genuine Wayland clients. Unlike
 # model-only tests, the client must receive wl_keyboard.Enter(B), then (A).
 # The compositor must raise A and present the *owned* wl_shm scene at CRTC13.

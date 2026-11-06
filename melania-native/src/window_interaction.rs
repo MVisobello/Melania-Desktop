@@ -140,6 +140,17 @@ impl WindowInteraction {
 
     /// A real left-button release, libseat pause, disconnect or teardown
     /// revokes the current grab. A late motion is then ignored.
+    /// A click or tiny pointer tremor at an edge must never trigger Snap.
+    /// The compositor validates an actual XDG move grab before using this.
+    pub fn dragged_far_enough(&self,x:f64,y:f64)->bool {
+        let Some(active)=self.active else{return false;};
+        if active.kind!=InteractionKind::Move || !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let dx=x-active.x0;
+        let dy=y-active.y0;
+        dx*dx+dy*dy>=16.0*16.0
+    }
     pub fn end(&mut self)->Option<u64> { self.active.take().map(|a|a.key) }
     pub fn cancel(&mut self) { self.active=None; }
     /// Reject stale role changes from other clients without dropping
@@ -275,6 +286,23 @@ mod tests {
         assert_eq!(model.output_size(),(1280,800));
         assert_eq!(model.active_key(),Some(1));
         assert!(WindowInteraction::with_output(80,80).is_none());
+    }
+
+    #[test]
+    fn only_authenticated_move_grabs_beyond_drag_threshold_can_edge_snap() {
+        let mut model=WindowInteraction::default();
+        assert!(!model.dragged_far_enough(0.0,0.0));
+        assert!(model.begin(9,rect(),200.0,200.0,InteractionKind::Move));
+        assert!(!model.dragged_far_enough(200.0,200.0));
+        assert!(!model.dragged_far_enough(210.0,208.0));
+        assert!(model.dragged_far_enough(220.0,200.0));
+        assert!(!model.dragged_far_enough(f64::NAN,200.0));
+        assert_eq!(model.end(),Some(9));
+        assert!(!model.dragged_far_enough(1279.0,400.0));
+        assert!(model.begin(9,rect(),200.0,200.0,
+                            InteractionKind::Resize(ResizeDirection::Left)));
+        assert!(!model.dragged_far_enough(0.0,200.0));
+        model.cancel();
     }
 
 }

@@ -112,6 +112,7 @@ on:
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
+      - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
       - scripts/capture-qemu-real-layer-panel.py
@@ -147,6 +148,7 @@ on:
       - tests/test_native_xdg_qmp_role_pixels.py
       - tests/test_native_authenticated_resize_qemu_stage114.py
       - tests/test_native_alt_tab_qemu_stage116.py
+      - tests/test_native_xdg_popup_qemu_stage118.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -208,6 +210,8 @@ jobs:
           python3 -m py_compile scripts/inject-qemu-authenticated-resize.py
           python3 -m py_compile scripts/inject-qemu-alt-tab.py
           python3 -m py_compile scripts/capture-qemu-real-xdg-popup.py
+          python3 -m py_compile scripts/inject-qemu-edge-drop.py
+          python3 -m unittest discover -s tests -p 'test_native_edge_drop_qemu_stage121.py' -v
           python3 -m py_compile scripts/capture-qemu-dynamic-pointer.py
           python3 -m unittest discover -s tests -p 'test_qemu_dynamic_pointer_frame13.py' -v
           python3 -m py_compile scripts/capture-qemu-managed-xdg-roles.py
@@ -303,6 +307,8 @@ jobs:
           test -x target/debug/qemu-gtk-five-roles
           test -x target/debug/qemu-xdg-popup-client
           test -x target/debug/qemu-authenticated-resize-client
+          test -x target/debug/qemu-super-snap-client
+          test -x target/debug/qemu-edge-drop-client
           test -x target/debug/qemu-shell-client
           test -x target/debug/qemu-client-window
           test -x target/debug/qemu-rust-kms-frames

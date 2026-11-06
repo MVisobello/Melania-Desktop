@@ -24,6 +24,8 @@ class RealXdgPopupKmsStage118(unittest.TestCase):
             "state.buffer_released",
             "MELANIA_NATIVE_REAL_POPUP_CLIENT_FRAME",
             "popup.destroy()",
+            "dismissed_unexpectedly",
+            "popup dismissed before QEMU CRTC capture",
             "MELANIA_NATIVE_REAL_POPUP_CLIENT_DESTROYED=true",
         ):
             self.assertIn(token,CLIENT)
