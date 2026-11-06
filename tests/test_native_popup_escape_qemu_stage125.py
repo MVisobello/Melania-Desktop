@@ -228,6 +228,25 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
                 self.assertEqual(payload[0]["data"]["button"],"left")
                 self.assertEqual(payload[0]["data"]["down"],action=="press")
 
+    def test_udev_gpu_loss_revokes_popup_input_grabs_without_seat_callback(self):
+        # The udev callback directly changes NativeLifecycle; there is no
+        # subsequent SessionEvent::PauseSession that would do this cleanup.
+        callback=BRIDGE[BRIDGE.index("let reason=state.gpu_watch.observe(&change);"):]
+        callback=callback[:callback.index("let live_stream=std::env::var(")]
+        self.assertIn("state.lifecycle.on_session(SessionEvent::PauseSession);",callback)
+        for token in ("state.last_xdg_press=None;",
+                      "state.last_popup_press=None;",
+                      "state.suppressed_popup_button=None;",
+                      "state.grabbed_popup_roles.clear();",
+                      "state.popup_escape_held=false;",
+                      "state.snap_keys.reset();",
+                      "state.keyboard_window_cycle.reset();"):
+            self.assertIn(token,callback)
+        self.assertLess(callback.index("state.native_presentation_guard.revoke();"),
+                        callback.index("state.grabbed_popup_roles.clear();"))
+        self.assertLess(callback.index("state.grabbed_popup_roles.clear();"),
+                        callback.index('MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED='))
+
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
         sockets=[]
