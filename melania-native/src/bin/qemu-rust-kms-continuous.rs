@@ -281,7 +281,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     };
     let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
-        let mut previous_identity:Option<(u64,u64,u64)>=None;
+        let mut previous_identity:Option<melania_native::native_frame_order::FrameIdentity>=None;
         // One CRTC+two retained dumb buffers, with bounded transport and
         // kernel event verification on each flip. No ordinal limit here.
         loop {
@@ -310,13 +310,14 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if length!=W*H*4 || sequence==0 {
                 return Err("QEMU continuous KMS payload or ticket invalid".into());
             }
-            if previous_identity.is_some_and(|(old_epoch,old_sequence,old_generation)|
-                epoch!=old_epoch || sequence<=old_sequence || generation<=old_generation) {
+            let identity=melania_native::native_frame_order::FrameIdentity::new(
+                epoch,sequence,generation);
+            if !identity.accepted_after(previous_identity,persistent) {
                 return Err("QEMU continuous KMS received stale or reordered scene".into());
             }
             let mut pixels=vec![0u8;W*H*4];
             stream.read_exact(&mut pixels)?;
-            if previous.as_ref().is_some_and(|last|*last==pixels) {
+            if !persistent && previous.as_ref().is_some_and(|last|*last==pixels) {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
             }
             let framebuffer=if index%2==0 {fb1} else {fb2};
@@ -451,7 +452,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 std::io::stdout().flush()?;
             }
             previous=Some(pixels);
-            previous_identity=Some((epoch,sequence,generation));
+            previous_identity=Some(identity);
             // Short observable hold for QMP; no 5-second delay per frame.
             // QMP needs time to capture the actual framebuffer on the
             // seventh and twelfth presentations (not just its FB_ID).
