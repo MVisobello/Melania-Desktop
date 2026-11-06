@@ -3,15 +3,17 @@
 const LEFT_ALT:u32=56;
 const RIGHT_ALT:u32=100;
 const TAB:u32=15;
+const F4:u32=62;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum ShortcutResult {Forward, Consume, Focus(u64)}
+pub enum ShortcutResult {Forward, Consume, Focus(u64), Close(u64)}
 
 #[derive(Default,Debug)]
 pub struct KeyboardWindowCycle {
     left_alt:bool,
     right_alt:bool,
     tab_held:bool,
+    f4_held:bool,
     // Freeze focus order while Alt is held, even after compositor raises
     // the selected window: cycling three windows must not toggle two only.
     order:Vec<u64>,
@@ -40,6 +42,23 @@ impl KeyboardWindowCycle {
                 self.right_alt=pressed;
                 if !self.alt_active(){self.cancel_cycle();}
                 ShortcutResult::Forward
+            },
+            Some(F4)=>{
+                if !pressed {
+                    let consumed=self.f4_held;
+                    self.f4_held=false;
+                    return if consumed {ShortcutResult::Consume} else {ShortcutResult::Forward};
+                }
+                if !self.alt_active() {return ShortcutResult::Forward;}
+                if self.f4_held {return ShortcutResult::Consume;}
+                self.f4_held=true;
+                self.cancel_cycle();
+                // Require the real focused normal-layer XDG role.
+                // This sends a cooperative protocol close, not a process kill.
+                match focused.filter(|id|stack_top_first.contains(id)) {
+                    Some(id)=>ShortcutResult::Close(id),
+                    None=>ShortcutResult::Consume,
+                }
             },
             Some(TAB)=>{
                 if !pressed {
@@ -127,6 +146,30 @@ mod tests {
         key(&mut m,TAB,false,&[3],Some(3));
         m.cancel_cycle();
         assert_eq!(key(&mut m,TAB,true,&[5,3],Some(3)),ShortcutResult::Focus(5));
+    }
+    #[test]
+    fn alt_f4_requests_only_focused_mapped_window_and_consumes_repeat_release() {
+        let mut m=KeyboardWindowCycle::default();
+        assert_eq!(key(&mut m,F4,true,&[2,1],Some(2)),ShortcutResult::Forward);
+        assert_eq!(key(&mut m,F4,false,&[2,1],Some(2)),ShortcutResult::Forward);
+        key(&mut m,LEFT_ALT,true,&[2,1],Some(2));
+        assert_eq!(key(&mut m,F4,true,&[2,1],Some(2)),ShortcutResult::Close(2));
+        assert_eq!(key(&mut m,F4,true,&[2,1],Some(2)),ShortcutResult::Consume);
+        key(&mut m,LEFT_ALT,false,&[2,1],Some(2));
+        assert_eq!(key(&mut m,F4,false,&[2,1],Some(2)),ShortcutResult::Consume);
+        assert_eq!(key(&mut m,F4,true,&[2,1],Some(2)),ShortcutResult::Forward);
+    }
+    #[test]
+    fn alt_f4_never_closes_hidden_nonexistent_or_unfocused_surface() {
+        let mut m=KeyboardWindowCycle::default();
+        key(&mut m,RIGHT_ALT,true,&[3,2],Some(3));
+        assert_eq!(key(&mut m,F4,true,&[3,2],None),ShortcutResult::Consume);
+        key(&mut m,F4,false,&[3,2],None);
+        assert_eq!(key(&mut m,F4,true,&[3,2],Some(1)),ShortcutResult::Consume);
+        m.reset();
+        assert_eq!(key(&mut m,F4,false,&[3,2],Some(3)),ShortcutResult::Forward);
+        key(&mut m,RIGHT_ALT,true,&[3,2],Some(3));
+        assert_eq!(key(&mut m,F4,true,&[3,2],Some(3)),ShortcutResult::Close(3));
     }
     #[test]
     fn ordinary_tab_duplicate_press_and_seat_reset_do_not_switch() {
