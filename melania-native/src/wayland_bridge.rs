@@ -53,7 +53,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -2384,6 +2384,32 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                             .find(|role|role.wl_surface()==focused).cloned());
                     if state.window_interaction.active_key().is_none() {
                         if let Some(top)=top {state.request_managed_snap(top,None);}
+                    }
+                    return;
+                },
+                SnapKeyAction::RestoreOrMinimize=>{
+                    // Windows-style Super+Down restores an already tiled or
+                    // maximized window, then minimizes it on the next press.
+                    // Super+Shift+Down retains the explicit thirds restore.
+                    // Never minimize a fullscreen or already hidden role.
+                    let top=state.focused.as_ref().and_then(|focused|
+                        state.xdg_shell.toplevel_surfaces().iter()
+                            .find(|role|role.wl_surface()==focused).cloned());
+                    if state.window_interaction.active_key().is_none() &&
+                       state.lifecycle.seat_active() &&
+                       !state.native_presentation_guard.permanently_revoked() {
+                        if let Some(top)=top {
+                            let action=state.managed_windows.iter()
+                                .find(|(role,_)|role==top.wl_surface())
+                                .map(|(_,window)|window.down_shortcut_action());
+                            match action {
+                                Some(DownShortcutAction::Restore)=>
+                                    state.request_managed_snap(top,None),
+                                Some(DownShortcutAction::Minimize)=>
+                                    state.minimize_request(top),
+                                _=>{},
+                            }
+                        }
                     }
                     return;
                 },
