@@ -4,6 +4,12 @@ use crate::window_interaction::WindowRect;
 use crate::snap_layout::{snap_rect,SnapZone};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum WindowDisplayState {Normal,Maximized,Fullscreen,Minimized,Snapped(SnapZone)}
+/// Super+Down follows traditional window semantics: a normal window is
+/// minimized, a snapped/maximized one is restored one step, while fullscreen
+/// and already hidden roles are left to the owning client.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum DownShortcutAction { Minimize, Restore, Ignore }
+
 #[derive(Debug)]
 pub struct ManagedWindow {
     normal:WindowRect,
@@ -25,6 +31,15 @@ impl ManagedWindow {
         })
     }
     pub fn state(&self)->WindowDisplayState {self.state}
+    pub fn down_shortcut_action(&self)->DownShortcutAction {
+        match self.state {
+            WindowDisplayState::Normal=>DownShortcutAction::Minimize,
+            WindowDisplayState::Maximized | WindowDisplayState::Snapped(_)=>
+                DownShortcutAction::Restore,
+            WindowDisplayState::Fullscreen | WindowDisplayState::Minimized=>
+                DownShortcutAction::Ignore,
+        }
+    }
     pub fn work_area(&self)->WindowRect {self.work_area}
     /// A mapped layer-shell panel may reserve an inset region of an output.
     /// Reject invalid/incomplete reservations and never use it for fullscreen.
@@ -286,4 +301,38 @@ mod tests {
         assert!(!w.snap(SnapZone::MiddleThird));
     }
 
+}
+
+#[cfg(test)]
+mod down_shortcut_tests {
+    use super::*;
+    #[test]
+    fn super_down_restores_snapped_or_maximized_then_minimizes_normal() {
+        let initial=WindowRect{x:110,y:90,width:420,height:300};
+        let mut w=ManagedWindow::new(initial,1280,800).unwrap();
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Minimize);
+        assert!(w.snap(SnapZone::LeftHalf));
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Restore);
+        assert!(w.restore());
+        assert_eq!(w.geometry(),Some(initial));
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Minimize);
+        assert!(w.minimize());
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Ignore);
+        assert!(w.restore());
+        assert_eq!(w.geometry(),Some(initial));
+        assert!(w.maximize());
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Restore);
+        assert!(w.restore());
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Minimize);
+    }
+    #[test]
+    fn fullscreen_and_hidden_clients_are_not_minimized_by_super_down() {
+        let initial=WindowRect{x:110,y:90,width:420,height:300};
+        let mut w=ManagedWindow::new(initial,1280,800).unwrap();
+        assert!(w.fullscreen());
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Ignore);
+        assert!(w.restore());
+        assert!(w.minimize());
+        assert_eq!(w.down_shortcut_action(),DownShortcutAction::Ignore);
+    }
 }
