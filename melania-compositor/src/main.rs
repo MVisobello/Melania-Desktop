@@ -761,9 +761,6 @@ fn spawn_nested_client(program: OsString, socket: &OsStr, control_path: &Path) -
     Ok((program, child))
 }
 
-/// Cap full-frame nested redraws to the advertised 60 Hz output. Unlike an
-/// uncapped busy loop, this leaves CPU/GPU time for GTK clients on llvmpipe.
-/// When rendering itself exceeds the budget, never add extra latency.
 /// Translate Winit wheel detents (v120) into Wayland pixel scrolling while
 /// retaining v120 precision for clients that support discrete axis events.
 /// Winit's trackpad events already carry pixel deltas; do not rescale them.
@@ -780,6 +777,9 @@ fn scroll_axis_delta(pixels:Option<f64>,steps_v120:Option<f64>)->Option<(f64,Opt
     Some((distance,discrete))
 }
 
+/// Cap full-frame nested redraws to the advertised 60 Hz output. Unlike an
+/// uncapped busy loop, this leaves CPU/GPU time for GTK clients on llvmpipe.
+/// When rendering itself exceeds the budget, never add extra latency.
 fn frame_idle_budget(frame_elapsed: Duration) -> Duration {
     Duration::from_nanos(16_666_667).saturating_sub(frame_elapsed)
 }
