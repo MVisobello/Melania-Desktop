@@ -190,6 +190,44 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
             self.assertIn("state.last_popup_press=None;",block)
             self.assertIn("state.suppressed_popup_button=None;",block)
 
+    def test_real_qemu_usb_click_issues_wl_pointer_grab_before_popup_map(self):
+        for token in ("wl_pointer::Event::Button","wl_seat::WlSeat",
+                      "MELANIA_NATIVE_REAL_POPUP_GRAB_PARENT_READY=true",
+                      "MELANIA_NATIVE_REAL_POPUP_USB_BUTTON_SERIAL_RECEIVED=true",
+                      "popup.grab(&seat,serial)",
+                      "MELANIA_NATIVE_REAL_POPUP_GRAB_REQUEST_FROM_USB_SERIAL=true"):
+            self.assertIn(token,CLIENT)
+        self.assertLess(CLIENT.index("popup.grab(&seat,serial)"),
+                        CLIENT.index("popup_surface.commit();"))
+        self.assertIn("MELANIA_QEMU_XDG_POPUP_GRAB=YES_QEMU_VM",GUEST)
+        for token in ('qmp_mouse(args.qmp,"press")',
+                      'MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true',
+                      'qmp_mouse(args.qmp,"release")',
+                      "MELANIA_QEMU_XDG_POPUP_REAL_USB_GRAB=true"):
+            self.assertIn(token,QMP)
+        self.assertLess(QMP.index('qmp_mouse(args.qmp,"press")'),
+                        QMP.index("MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true"))
+        self.assertLess(QMP.index("MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true"),
+                        QMP.index('qmp_mouse(args.qmp,"release")'))
+        self.assertIn("MELANIA_QEMU_XDG_POPUP_REAL_USB_GRAB=true",HOST)
+        fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_mouse"]
+        for action in ("move","press","release"):
+            sockets=[]
+            def make_socket(*_):
+                sock=_FakeSocket()
+                sockets.append(sock)
+                return sock
+            fake=SimpleNamespace(AF_UNIX=1,SOCK_STREAM=1,socket=make_socket)
+            with patch.dict(fn.__globals__,{"socket":fake}):
+                fn(Path("/unused-QMP"),action)
+            payload=sockets[0].io.sent[1]["arguments"]["events"]
+            self.assertEqual(sockets[0].io.sent[1]["execute"],"input-send-event")
+            if action=="move":
+                self.assertEqual([e["type"] for e in payload],["abs","abs"])
+            else:
+                self.assertEqual(payload[0]["data"]["button"],"left")
+                self.assertEqual(payload[0]["data"]["down"],action=="press")
+
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
         sockets=[]
