@@ -90,9 +90,12 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertLess(minimize.index("self.evict_native_popup_tree(&surface,true,true)"),
                         minimize.index("self.submit_continuous_frame()"))
         self.assertIn("scene_changed|=self.evict_native_popup_tree(&surface,true,true)",minimize)
-        self.assertIn("if removed || popup_damage { self.note_scene_change(); }",close)
+        self.assertIn("if removed || popup_damage {",close)
+        self.assertIn("self.note_scene_change();",close)
         self.assertIn("let popup_damage=self.evict_native_popup_tree(&surface,true,true)",close)
-        self.assertIn("if (removed || popup_damage) && self.continuous_kms_mode",close)
+        self.assertIn("if self.continuous_kms_mode &&",close)
+        self.assertLess(close.index("let popup_damage=self.evict_native_popup_tree("),
+                        close.index("self.note_scene_change();"))
         self.assertNotIn("for popup in descendants",close)
         cleanup=BRIDGE[BRIDGE.index("fn evict_native_popup_tree("):
                        BRIDGE.index("/// Esc from the real active libinput seat")]
@@ -100,6 +103,50 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertIn("if scene_changed && !defer_redraw",cleanup)
         self.assertLess(cleanup.index("self.native_popup_roles.retain("),
                         cleanup.index("keyboard.set_focus(self,replacement.clone()"))
+
+    def test_minimize_revokes_only_own_input_and_old_press_serial(self):
+        lifecycle=BRIDGE[BRIDGE.index("fn minimize_request(&mut self"): ]
+        minimize=lifecycle[:lifecycle.index("fn toplevel_destroyed(")]
+        self.assertIn("self.cancel_surface_grab(&surface);",minimize)
+        self.assertNotIn("self.window_interaction.cancel();",minimize)
+        self.assertIn("self.last_xdg_press=None;",minimize)
+        self.assertLess(minimize.index("if !model.minimize(){return;}"),
+                        minimize.index("self.cancel_surface_grab(&surface);"))
+        self.assertLess(minimize.index("self.last_xdg_press=None;"),
+                        minimize.index("self.evict_native_popup_tree(&surface,true,true)"))
+        # Rust's actual pointer-grab policy must retain a foreign active grab.
+        interaction=(ROOT/"melania-native/src/window_interaction.rs").read_text()
+        self.assertIn("fn role_transition_cancels_only_matching_grab()",interaction)
+        self.assertIn("self.window_interaction.cancel_for_key(key)",BRIDGE)
+
+    def test_close_redraws_orphan_popup_even_without_parent_scene_slot(self):
+        lifecycle=BRIDGE[BRIDGE.index("fn toplevel_destroyed(&mut self"):]
+        close=lifecycle[:lifecycle.index("fn grab(&mut self")]
+        self.assertIn("let parent_key=self.known_window_surfaces.remove(&surface);",close)
+        self.assertIn("} else {false};",close)
+        self.assertIn("if removed || popup_damage {",close)
+        self.assertLess(close.index("let popup_damage=self.evict_native_popup_tree("),
+                        close.index("let parent_key=self.known_window_surfaces.remove("))
+        self.assertLess(close.index("if removed || popup_damage {"),
+                        close.index("if let Some(key)=parent_key {",close.index("if removed || popup_damage {")))
+        self.assertLess(close.index("self.note_scene_change();"),
+                        close.index("self.submit_continuous_frame()"))
+        self.assertEqual(close.count("self.submit_continuous_frame()"),1)
+
+    def test_minimized_buffer_commit_remains_hidden_and_cannot_gain_focus(self):
+        commit=BRIDGE[BRIDGE.index("// A valid buffer committed AFTER minimize"):]
+        commit=commit[:commit.index("// Retain at most one not-yet-submitted")]
+        self.assertIn("window.state()==WindowDisplayState::Minimized",commit)
+        self.assertIn("self.dynamic_scene.set_visible(key,false)",commit)
+        self.assertLess(BRIDGE.index("self.dynamic_scene.upsert(key,x,y,pixels)"),
+                        BRIDGE.index("self.dynamic_scene.set_visible(key,false)",
+                                     BRIDGE.index("// A valid buffer committed AFTER minimize")))
+        focus=BRIDGE[BRIDGE.index("// Never grant first keyboard focus to a minimized role"):]
+        focus=focus[:focus.index("self.note_scene_change();")]
+        self.assertIn("self.dynamic_scene.is_visible(key)==Some(true)",focus)
+        model=(ROOT/"melania-native/src/dynamic_window_scene.rs").read_text()
+        self.assertIn("fn minimized_layered_window_retains_pixels_but_never_captures_pointer()",model)
+        self.assertIn("if self.is_visible(key)==Some(true)",model)
 
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
