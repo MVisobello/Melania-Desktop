@@ -944,9 +944,13 @@ impl BridgeState {
         let edges=self.native_popup_roles.iter()
             .map(|(popup,parent)|(parent.clone(),popup.wl_surface().clone()))
             .collect::<Vec<_>>();
-        let mut removal=melania_native::native_popup_layout::popup_teardown_order(
-            surface,&edges);
-        if keep_root {removal.retain(|candidate|candidate!=surface);}
+        let removal=if keep_root {
+            melania_native::native_popup_layout::popup_descendant_teardown_order(
+                surface,&edges)
+        } else {
+            melania_native::native_popup_layout::popup_teardown_order(
+                surface,&edges)
+        };
         let focused_removed=self.focused.as_ref().is_some_and(|focus|
             removal.contains(focus));
         let pressed_removed=self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|
