@@ -32,6 +32,14 @@ class ReleaseInvariants(unittest.TestCase):
         for token in ['init_layer_shell()', 'fn start_window', 'fn quick_window', 'fn taskbar']:
             self.assertIn(token, source)
 
+    def test_virtualbox_software_preview_is_explicit_opt_in(self):
+        script = (ROOT/'scripts/melania-session').read_text()
+        self.assertIn('--nested|--nested-software)', script)
+        self.assertIn("if [[ \"$1\" == '--nested-software' ]]", script)
+        self.assertIn('export GSK_RENDERER=cairo', script)
+        self.assertIn('export LIBGL_ALWAYS_SOFTWARE=1', script)
+        self.assertIn('run-melania-v018-nested.sh', script)
+
     def test_wayland_smoke_requires_real_gtk_window(self):
         smoke = (ROOT/'scripts/smoke-nested-wayland.sh').read_text()
         self.assertIn('melania-files before smoke test', smoke)
