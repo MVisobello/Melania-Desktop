@@ -109,6 +109,14 @@ def main()->int:
     qmp(args.qmp,{"execute":"screendump","arguments":{
         "filename":str(args.output.resolve()),"format":"ppm"}})
     verify_ppm(args.output)
+    # Keep the physical frame13 screenshot proof before requesting close.
+    key(args.qmp,"alt",True)
+    key(args.qmp,"f4",True)
+    wait_after_ready(args.serial,"MELANIA_NATIVE_KEYBOARD_ALT_F4_CLOSE_REQUESTED=1",deadline)
+    wait_after_ready(args.serial,"MELANIA_QEMU_ALT_F4_REAL_XDG_CLOSE_RECEIVED=A",deadline)
+    key(args.qmp,"f4",False)
+    key(args.qmp,"alt",False)
+    print("MELANIA_QEMU_ALT_F4_REAL_WAYLAND_CLOSE=true",flush=True)
     print("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER_A_B=true",flush=True)
     print("MELANIA_QEMU_ALT_TAB_REAL_KERNEL_CRTC_FRAME13_PIXELS=true",flush=True)
     return 0
