@@ -930,7 +930,13 @@ fn acked_native_popup_geometry(surface:&WlSurface)->Option<Rectangle<i32,Logical
 }
 
 impl BridgeState {
-    fn evict_native_popup(&mut self,surface:&WlSurface) {
+    /// The caller chooses whether the root itself is a popup to remove, or
+    /// a still-live XDG toplevel whose descendants must be dismissed.
+    /// Deferred GPU damage allows a parent minimize/close to publish the
+    /// whole transaction in one KMS frame, never a half-removed menu.
+    fn evict_native_popup_tree(
+        &mut self,surface:&WlSurface,keep_root:bool,defer_redraw:bool
+    )->bool {
         // Treat popup teardown as a single bounded transaction. In particular,
         // a malformed parent cycle must not cause recursive stack overflow,
         // and no intermediate frame/focus update may point at a descendant
@@ -938,8 +944,9 @@ impl BridgeState {
         let edges=self.native_popup_roles.iter()
             .map(|(popup,parent)|(parent.clone(),popup.wl_surface().clone()))
             .collect::<Vec<_>>();
-        let removal=melania_native::native_popup_layout::popup_teardown_order(
+        let mut removal=melania_native::native_popup_layout::popup_teardown_order(
             surface,&edges);
+        if keep_root {removal.retain(|candidate|candidate!=surface);}
         let focused_removed=self.focused.as_ref().is_some_and(|focus|
             removal.contains(focus));
         let pressed_removed=self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|
@@ -964,7 +971,7 @@ impl BridgeState {
         }
         // Request only one compositor-only GPU redraw for the entire
         // subtree, after all old scene pixels have been evicted.
-        if scene_changed {
+        if scene_changed && !defer_redraw {
             self.note_scene_change();
             if self.continuous_kms_mode &&
                (self.persistent_kms_mode ||
@@ -989,6 +996,10 @@ impl BridgeState {
             });
             pointer.frame(self);
         }
+        scene_changed
+    }
+    fn evict_native_popup(&mut self,surface:&WlSurface) {
+        let _=self.evict_native_popup_tree(surface,false,false);
     }
     /// Esc from the real active libinput seat dismisses only a mapped XDG
     /// popup belonging to the focused parent chain, never another app's menu.
@@ -2080,15 +2091,23 @@ impl XdgShellHandler for BridgeState {
         self.managed_pending_resize.retain(|(role,_)|role!=&surface);
         self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
         self.window_interaction.cancel();
-        if let Some(key)=self.known_window_surfaces.id_of(&surface){
-            if self.dynamic_scene.geometry(key).is_some() &&
-               self.dynamic_scene.set_visible(key,false)==Ok(true) {
-                self.note_scene_change();
-                if self.continuous_kms_mode &&
-                   (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
-                    if let Err(error)=self.submit_continuous_frame(){
-                        eprintln!("managed xdg minimize repaint refused: {error}");
-                    }
+        // Hide the toplevel before removing its menus. Otherwise pointer
+        // focus could be transferred straight back onto a now-hidden parent.
+        // Both the parent and every nested popup leave the retained scene
+        // before queuing the *single* compositor-only KMS redraw.
+        let mut scene_changed=false;
+        if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+            scene_changed=self.dynamic_scene.geometry(key).is_some() &&
+                self.dynamic_scene.set_visible(key,false)==Ok(true);
+        }
+        scene_changed|=self.evict_native_popup_tree(&surface,true,true);
+        if scene_changed {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("managed xdg minimize repaint refused: {error}");
                 }
             }
         }
@@ -2120,6 +2139,11 @@ impl XdgShellHandler for BridgeState {
         if self.dynamic_xdg_resize_mode {
             self.dynamic_toplevels.retain(|existing|existing.wl_surface()!=&surface);
         }
+        // The parent and ALL attached child menus belong to one scene
+        // transaction. A destroyed toplevel cannot leave a ghost popup
+        // still mapped, and one child cannot trigger an intermediate KMS
+        // present while siblings are still being removed.
+        let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             // The retained pixel copy and stable slot belong to this client.
             // Never leave a closed window occupying the limited QEMU scene.
@@ -2128,8 +2152,8 @@ impl XdgShellHandler for BridgeState {
             } else {
                 self.multi_scene.remove(key)
             };
-            if removed { self.note_scene_change(); }
-            if removed && self.continuous_kms_mode &&
+            if removed || popup_damage { self.note_scene_change(); }
+            if (removed || popup_damage) && self.continuous_kms_mode &&
                (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
                 // A destroyed xdg surface changes retained pixels even if
                 // no surviving client submits a new wl_shm buffer.
@@ -2156,16 +2180,7 @@ impl XdgShellHandler for BridgeState {
             }
             let _=std::io::stdout().flush();
         }
-        // A closed parent invalidates every XDG popup that was attached
-        // to its old surface identity, including their retained GPU pixels.
-        // A new toplevel cannot inherit an orphaned popup.
-        let descendants=self.native_popup_roles.iter()
-            .filter(|(_,parent)|parent==&surface)
-            .map(|(popup,_)|popup.clone()).collect::<Vec<_>>();
-        for popup in descendants {
-            popup.send_popup_done();
-            self.evict_native_popup(popup.wl_surface());
-        }
+        // All descendant popup roles were evicted before the parent redraw.
         if self.focused.as_ref()==Some(&surface) {
             // Do not forward keys or pointer events to a destroyed Wayland
             // role. Where possible retarget the remaining window beneath the
