@@ -5,7 +5,7 @@ use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd,
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,
-              wl_buffer,wl_callback},
+              wl_buffer,wl_callback,wl_seat,wl_pointer},
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_wm_base,xdg_surface,xdg_toplevel,xdg_popup,xdg_positioner,
@@ -22,6 +22,8 @@ struct Client {
     compositor:Option<wl_compositor::WlCompositor>,
     shm:Option<wl_shm::WlShm>,
     wm:Option<xdg_wm_base::XdgWmBase>,
+    seat:Option<wl_seat::WlSeat>,
+    real_button_serial:Option<u32>,
     root_configured:bool,
     popup_configured:bool,
     dismissed_unexpectedly:bool,
@@ -38,7 +40,25 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "wl_compositor"=>s.compositor=Some(r.bind(name,version.min(4),q,())),
                 "wl_shm"=>s.shm=Some(r.bind(name,version.min(1),q,())),
                 "xdg_wm_base"=>s.wm=Some(r.bind(name,version.min(3),q,())),
+                "wl_seat"=>s.seat=Some(r.bind(name,version.min(5),q,())),
                 _=>{}
+            }
+        }
+    }
+}
+impl Dispatch<wl_seat::WlSeat,()> for Client {
+    fn event(_: &mut Self,_:&wl_seat::WlSeat,_:wl_seat::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>){}
+}
+impl Dispatch<wl_pointer::WlPointer,()> for Client {
+    fn event(s:&mut Self,_:&wl_pointer::WlPointer,e:wl_pointer::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let wl_pointer::Event::Button{serial,button,state,..}=e {
+            if button==0x110 &&
+               matches!(state,wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed)) {
+                s.real_button_serial=Some(serial);
+                println!("MELANIA_NATIVE_REAL_POPUP_USB_BUTTON_SERIAL_RECEIVED=true");
+                let _=std::io::stdout().flush();
             }
         }
     }
@@ -168,6 +188,8 @@ fn main()->Result<()> {
     let compositor=state.compositor.take().ok_or("wl_compositor missing")?;
     let wm=state.wm.take().ok_or("xdg_wm_base missing")?;
     let shm=state.shm.take().ok_or("wl_shm missing")?;
+    let seat=state.seat.take().ok_or("real wl_seat missing")?;
+    let _pointer=seat.get_pointer(&q,());
     let root=compositor.create_surface(&q,());
     let root_xdg=wm.get_xdg_surface(&root,&q,1u8);
     let root_top=root_xdg.get_toplevel(&q,1u8);
@@ -180,6 +202,25 @@ fn main()->Result<()> {
     }
     draw(&root,&shm,&mut queue,&mut state,W,H,(185,50,75),1)?;
 
+    // In the actual VirtIO QEMU integration case, the host first sends a
+    // physical tablet left-button press to this mapped parent. The Wayland
+    // client must use the delivered wl_pointer serial in xdg_popup.grab;
+    // a made-up serial or direct compositor IPC is not a valid substitute.
+    let real_grab=std::env::var("MELANIA_QEMU_XDG_POPUP_GRAB")
+        .as_deref()==Ok("YES_QEMU_VM");
+    let grab_serial=if real_grab {
+        println!("MELANIA_NATIVE_REAL_POPUP_GRAB_PARENT_READY=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(24);
+        loop {
+            if let Some(serial)=state.real_button_serial.take() {break Some(serial);}
+            if Instant::now()>=deadline {
+                return Err("QEMU physical left-click serial never reached wl_pointer".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+    } else {None};
+
     let positioner=wm.create_positioner(&q,());
     positioner.set_size(POP_W as i32,POP_H as i32);
     positioner.set_anchor_rect(220,85,60,30);
@@ -188,6 +229,11 @@ fn main()->Result<()> {
     let popup_surface=compositor.create_surface(&q,());
     let popup_xdg=wm.get_xdg_surface(&popup_surface,&q,2u8);
     let popup=popup_xdg.get_popup(Some(&root_xdg),&positioner,&q,2u8);
+    if let Some(serial)=grab_serial {
+        popup.grab(&seat,serial);
+        println!("MELANIA_NATIVE_REAL_POPUP_GRAB_REQUEST_FROM_USB_SERIAL=true");
+        std::io::stdout().flush()?;
+    }
     popup_surface.commit();
     let deadline=Instant::now()+Duration::from_secs(15);
     while !state.popup_configured {

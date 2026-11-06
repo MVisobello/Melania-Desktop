@@ -1796,7 +1796,8 @@ popup_server_tail_pid=$!
 tail -n +1 -f -s 0.05 "$popup_client_log" > /dev/ttyS0 &
 popup_client_tail_pid=$!
 report 'MELANIA_QEMU_REAL_XDG_POPUP_STAGE118_STARTED=true'
-if ! MELANIA_QEMU_XDG_POPUP_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$popup_socket" \
+if ! MELANIA_QEMU_XDG_POPUP_CLIENT=YES_QEMU_VM \
+      MELANIA_QEMU_XDG_POPUP_GRAB=YES_QEMU_VM WAYLAND_DISPLAY="$popup_socket" \
    timeout --signal=TERM --kill-after=3s 100s \
    "$real_popup_client" > "$popup_client_log" 2>&1; then
   cat "$popup_client_log" "$popup_server_log"
