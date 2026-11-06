@@ -412,6 +412,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! test -s "$report/real-popup-cleared-frame3.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_XDG_POPUP_KMS3_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER_A_B=true' "$report/qmp-alt-tab.log" ||
+    ! grep -q '^MELANIA_QEMU_ALT_F4_REAL_WAYLAND_CLOSE=true' "$report/qmp-alt-tab.log" ||
     ! grep -q '^MELANIA_QEMU_ALT_TAB_REAL_KERNEL_CRTC_FRAME13_PIXELS=true' "$report/qmp-alt-tab.log" ||
     ! test -s "$report/alt-tab-frame13.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_USB_ALT_TAB_WAYLAND_KMS_PASS=true' "$serial" ||
