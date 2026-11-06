@@ -162,7 +162,7 @@ pub fn escape_popup_target(
 
 #[cfg(test)]
 mod popup_escape_tests {
-    use super::escape_popup_target;
+    use super::{escape_popup_target,popup_teardown_order};
 
     #[test]
     fn deepest_mapped_child_only_under_focused_parent() {
