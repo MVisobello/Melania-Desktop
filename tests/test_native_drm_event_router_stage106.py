@@ -33,6 +33,16 @@ class KernelEventRouterStage106(unittest.TestCase):
         self.assertIn("duplicate_same_crtc_event_revokes_device_epoch",ROUTER)
         self.assertIn("bounded_pending_outputs_and_independent_new_epoch",ROUTER)
 
+
+    def test_actual_cpu_and_gbm_presenters_bind_owned_kernel_crtcs(self):
+        self.assertIn("bind_active_crtcs(&[crtc_handle])?;",DRM)
+        self.assertEqual(GBM.count("bind_active_crtcs(&[crtc])?;"),2)
+        self.assertIn("fn check_owned_crtc(&mut self",ROUTER)
+        self.assertIn("self.check_owned_crtc(crtc)?;",ROUTER)
+        self.assertIn("self.check_owned_crtc(expected)?;",ROUTER)
+        self.assertIn("bound_router_preserves_two_owned_outputs_but_rejects_foreign_crtc",ROUTER)
+        self.assertIn("bound_router_rejects_invalid_routes_and_foreign_waits",ROUTER)
+
     def test_real_qemu_kms_and_gbm_use_same_routing_state(self):
         for path in [DRM,GBM]:
             self.assertIn("DrmFlipEventRouter::default()",path)
