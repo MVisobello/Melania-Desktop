@@ -151,9 +151,29 @@ def main()->int:
         ("third-restored-outside-window",520,200,BG),
     ])
     print("MELANIA_QEMU_SUPER_SNAP_THIRD_RESTORE_CRTC_PIXELS=true",flush=True)
+    # Keep the live XDG role mapped while Super+Down minimizes its normal
+    # state. The F8 key arms the client's shutdown gate BEFORE keyboard focus
+    # leaves; it must not remove client-owned pixels before the screenshot.
     key(args.qmp,"f8",True)
     key(args.qmp,"f8",False)
     wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true",deadline)
+    chord(args.qmp,"down")
+    wait(args.serial,"MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true",deadline)
+    wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_MINIMIZE_KEYBOARD_LEAVE=true",deadline)
+    wait(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=6",deadline)
+    screenshot(args.qmp,args.out_dir/"super-snap-minimized-frame6.ppm",[
+        ("minimized-original-client",200,200,BG),
+        ("minimized-original-top-left",160,120,BG),
+        ("minimized-right",1100,500,BG),
+        ("minimized-center",640,400,BG),
+    ])
+    # A role destroy before screendump would be a false positive: empty CRTC
+    # pixels must be caused by the compositor's minimize, not client teardown.
+    current=args.serial.read_text(errors="replace")
+    stage=current[current.rfind(START):]
+    if "MELANIA_NATIVE_SNAP_CLIENT_ROLE_DESTROY_AFTER_MINIMIZE=true" in stage:
+        raise RuntimeError("client destroyed before minimized CRTC capture")
+    print("MELANIA_QEMU_SUPER_SNAP_NORMAL_MINIMIZED_CRTC_PIXELS=true",flush=True)
     return 0
 
 if __name__=="__main__":
