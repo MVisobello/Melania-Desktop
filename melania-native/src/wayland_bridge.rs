@@ -996,6 +996,87 @@ impl BridgeState {
         }
     }
 
+    /// Only imported, mapped layer-shell buffers may reserve normal window
+    /// workspace. This is deliberately bounded to the QEMU output until real
+    /// multi-output KMS owners and their local work areas are operational.
+    fn mapped_normal_work_area(&self)->Option<WindowRect> {
+        let mut reservations=layer_surface_layout::WorkAreaReservations::default();
+        for (_,layer) in &self.layer_surfaces {
+            let surface=layer.wl_surface();
+            let Some(key)=self.known_window_surfaces.id_of(surface) else {continue;};
+            if self.dynamic_scene.geometry(key).is_none() {continue;}
+            let cached=with_states(surface,|states|{
+                *states.cached_state.get::<LayerSurfaceCachedState>().current()
+            });
+            if i32::from(cached.exclusive_zone)<=0 {continue;}
+            let shell_layer=match cached.layer {
+                WlrLayer::Background=>ShellLayer::Background,
+                WlrLayer::Bottom=>ShellLayer::Bottom,
+                WlrLayer::Top=>ShellLayer::Top,
+                WlrLayer::Overlay=>ShellLayer::Overlay,
+            };
+            let request=LayerRequest {
+                layer:shell_layer,
+                anchors:Anchors{
+                    top:cached.anchor.contains(WlrAnchor::TOP),
+                    bottom:cached.anchor.contains(WlrAnchor::BOTTOM),
+                    left:cached.anchor.contains(WlrAnchor::LEFT),
+                    right:cached.anchor.contains(WlrAnchor::RIGHT),
+                },
+                width:cached.size.w.max(0) as u32,
+                height:cached.size.h.max(0) as u32,
+                margins:Insets{
+                    top:cached.margin.top,right:cached.margin.right,
+                    bottom:cached.margin.bottom,left:cached.margin.left,
+                },
+                exclusive_zone:i32::from(cached.exclusive_zone),
+            };
+            let placement=layer_surface_layout::place(request,1280,800).ok()?;
+            reservations.add(placement.reservation);
+        }
+        let area=reservations.normal_area(1280,800).ok()?;
+        let rect=WindowRect{
+            x:area.x,y:area.y,width:area.width as i32,height:area.height as i32
+        };
+        rect.valid_for(1280,800).then_some(rect)
+    }
+
+    /// Reflow existing snapped/maximized windows when a real GTK4 panel
+    /// maps, changes its exclusive zone, or disappears. Never synthesize a
+    /// wl_shm buffer: wait for each client's real XDG configure/commit.
+    fn refresh_managed_work_areas(&mut self) {
+        if !self.gtk_layer_mode || !self.managed_xdg_mode ||
+           !self.dynamic_window_mode {return;}
+        let Some(area)=self.mapped_normal_work_area() else {return;};
+        let mut changes=Vec::new();
+        for (surface,window) in &mut self.managed_windows {
+            let previous=window.geometry();
+            if !window.set_work_area(area) {continue;}
+            let next=window.geometry();
+            if previous!=next {
+                if let Some(rect)=next {changes.push((surface.clone(),rect));}
+            }
+        }
+        for (surface,rect) in changes {
+            let top=self.xdg_shell.toplevel_surfaces().iter()
+                .find(|top|top.wl_surface()==&surface).cloned();
+            let Some(top)=top else {continue;};
+            self.cancel_surface_grab(&surface);
+            top.with_pending_state(|pending|{
+                pending.states.unset(xdg_toplevel::State::Resizing);
+                pending.size=Some((rect.width,rect.height).into());
+            });
+            top.send_pending_configure();
+            self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+            self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+            self.managed_pending_sizes.push((
+                surface.clone(),(rect.width as usize,rect.height as usize)
+            ));
+            println!("MELANIA_NATIVE_XDG_WORK_AREA_REFLOW={}x{} at {},{}",
+                rect.width,rect.height,rect.x,rect.y);
+        }
+    }
+
     /// Apply actual xdg_toplevel requests to the QEMU compositor state and
     /// configure the client. A new client commit is still required for the
     /// maximized-sized wl_shm content to become visible at its full size.
@@ -1357,6 +1438,7 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     }
+                    self.refresh_managed_work_areas();
                     self.note_scene_change();
                     if let Err(error)=self.submit_continuous_frame() {
                         eprintln!("MELANIA_NATIVE_LAYER_KMS_SUBMIT_FAILED={error}");
@@ -1783,13 +1865,21 @@ impl XdgShellHandler for BridgeState {
     fn xdg_shell_state(&mut self)->&mut XdgShellState {&mut self.xdg_shell}
     fn new_toplevel(&mut self,top:ToplevelSurface) {
         self.xdg_toplevel_count=self.xdg_toplevel_count.saturating_add(1);
+        // A window created after GTK4's taskbar has already mapped must
+        // inherit the active work area before any Super+arrow operation.
+        let inherited_work_area=if self.gtk_layer_mode && self.dynamic_window_mode {
+            self.mapped_normal_work_area()
+        } else {None};
         if self.managed_xdg_mode {
             // XDG configure requests may precede the first buffer commit.
             // Reserve its stable role slot without pretending pixels exist.
             if let Ok(key)=self.known_window_surfaces.register(top.wl_surface().clone()) {
                 if let Some((x,y))=melania_native::window_placement::default_position(key,1280,800) {
                     let rect=WindowRect{x,y,width:360,height:224};
-                    if let Some(window)=ManagedWindow::new(rect,1280,800) {
+                    if let Some(mut window)=ManagedWindow::new(rect,1280,800) {
+                        if let Some(work)=inherited_work_area {
+                            window.set_work_area(work);
+                        }
                         self.managed_windows.push((top.wl_surface().clone(),window));
                     }
                 }
@@ -2128,6 +2218,7 @@ impl WlrLayerShellHandler for BridgeState {
         self.layer_surfaces.retain(|(_,existing)|existing.wl_surface()!=&surface);
         if let Some(key)=self.known_window_surfaces.remove(&surface) {
             if self.dynamic_scene.remove(key) {
+                self.refresh_managed_work_areas();
                 self.note_scene_change();
                 // The layer's old pixels must be invalidated and replaced
                 // by a subsequently ACKed native KMS frame.
