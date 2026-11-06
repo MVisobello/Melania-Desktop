@@ -407,6 +407,7 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! grep -q '^MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true' "$serial" ||
     ! test -s "$report/real-layer-panel-frame12.ppm" ||
     ! grep -q '^MELANIA_QEMU_XDG_POPUP_REAL_CRTC_PIXELS=true' "$report/qmp-real-xdg-popup.log" ||
+    ! grep -q '^MELANIA_QEMU_XDG_POPUP_USB_ESC_POPUP_DONE=true' "$report/qmp-real-xdg-popup.log" ||
     ! grep -q '^MELANIA_QEMU_XDG_POPUP_DESTROY_CRTC_CLEARED=true' "$report/qmp-real-xdg-popup.log" ||
     ! test -s "$report/real-popup-frame2.ppm" ||
     ! test -s "$report/real-popup-cleared-frame3.ppm" ||
