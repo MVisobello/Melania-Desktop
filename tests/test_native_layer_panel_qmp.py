@@ -19,6 +19,30 @@ def picture():
         data[offset:offset+3]=bytes(rgb)
     return b"P6\n1280 800\n255\n"+data
 class TestPanelProof(unittest.TestCase):
+    def test_frame12_serial_marker_is_live_from_actual_kms_presenter(self):
+        guest=(Path(__file__).resolve().parents[1]/
+               "scripts/melania-qemu-native-guest.sh").read_text()
+        stage=guest[guest.index("# Stage82D: two genuine Wayland roles"):
+                    guest.index("report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'")]
+        for required in (
+            'mkfifo -m 600 "$layer_kms_fifo"',
+            'tee "$layer_kms_log" < "$layer_kms_fifo" > /dev/ttyS0 &',
+            '"$continuous_kms" < /dev/tty1 > "$layer_kms_fifo" 2>&1 &',
+            'if ! wait "$layer_tail_pid"; then',
+            'grep -q \'^MELANIA_RUST_CONTINUOUS_LAYER_FRAME_VISIBLE=12\' "$layer_kms_log"',
+        ):
+            self.assertIn(required,stage)
+        self.assertNotIn('tail -n +1 -f -s 0.05 "$layer_kms_log"',stage)
+        # The guest also prints diagnostic logs on earlier error branches.
+        # Check the final post-forwarder output, not the first error handler.
+        self.assertLess(stage.index('if ! wait "$layer_tail_pid"; then'),
+                        stage.rindex('cat "$layer_client_log" "$layer_kms_log" "$layer_server_log"'))
+        # The independently captured host screenshot remains mandatory.
+        host=(Path(__file__).resolve().parents[1]/
+              "scripts/run-qemu-melania-native.sh").read_text()
+        self.assertIn("MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true",host)
+        self.assertIn("real-layer-panel-frame12.ppm",host)
+
     def test_correct_pixels(self):self.assertEqual(len(m.verify(picture())),8)
     def test_wrong_edge_fails(self):
         b=bytearray(picture());b[-3:]=b"\x00\x00\x00"

@@ -74,11 +74,18 @@ impl NativeOutputDispatch {
         Ok(())
     }
 
-    /// Record a retained scene change. Multiple changes under one pending
-    /// frame coalesce to the latest generation, without a busy loop.
+    /// Record the latest retained scene generation even during VT pause,
+    /// device reacquisition or first startup. Such notifications are NOT
+    /// permission to submit a frame: the inactive scheduler will reject
+    /// damage, while remembering the newest generation for the mandatory
+    /// full repaint after fresh resource proofs and activation.
+    ///
+    /// Without this, a client commit while the seat was suspended would be
+    /// silently discarded by the dispatch ledger; on resume the old scene
+    /// could be replayed until another client happened to redraw.
     pub fn scene_changed(&mut self, generation: u64) -> bool {
-        if self.resources.phase() != RecoveryPhase::Active { return false; }
-        self.redraw.scene_changed(generation)
+        let queued = self.redraw.scene_changed(generation);
+        self.resources.phase() == RecoveryPhase::Active && queued
     }
 
     /// No blocking DRM calls take place here. The caller must composite and
@@ -298,6 +305,64 @@ mod tests {
         assert_ne!(new.resource.epoch, old.resource.epoch);
         assert!(!s.presented(old, 105, true));
         assert!(s.presented(new, 106, true));
+    }
+
+    #[test]
+    fn vt_paused_scene_updates_replay_newest_only_after_reacquisition() {
+        let mut s = active();
+        assert!(s.scene_changed(40));
+        let old = s.dispatch(10, 100).unwrap().unwrap();
+        s.pause().unwrap();
+        // A client may commit twice while the VT is away. These changes
+        // are retained but are NEVER legal scanout or client callbacks.
+        assert!(!s.scene_changed(41));
+        assert!(!s.scene_changed(42));
+        assert_eq!(s.scene_generation(), Some(42));
+        assert_eq!(s.dispatch(20, 100), Ok(None));
+        assert_eq!(s.presented_generation(), None);
+        let epoch = s.begin_restore().unwrap();
+        assert_eq!(s.activate(epoch), Err(RecoveryError::IncompleteResources));
+        assert_eq!(s.dispatch(21, 100), Ok(None));
+        prove_all(&mut s, epoch);
+        let fresh = s.dispatch(30, 100).unwrap().unwrap();
+        assert_eq!(fresh.scene.generation, 42);
+        assert_ne!(fresh.scene.ticket, old.scene.ticket);
+        assert_ne!(fresh.resource.epoch, old.resource.epoch);
+        assert!(!s.presented(old, 31, true));
+        assert_eq!(s.inflight(), Some(fresh));
+        assert!(s.presented(fresh, 32, true));
+        assert_eq!(s.presented_generation(), Some(42));
+        assert_eq!(s.dispatch(33, 100), Ok(None));
+    }
+
+    #[test]
+    fn first_startup_carries_preexisting_scene_to_first_verified_frame() {
+        let mut s = NativeOutputDispatch::default();
+        assert!(!s.scene_changed(7));
+        assert!(!s.scene_changed(8));
+        assert_eq!(s.scene_generation(), Some(8));
+        assert_eq!(s.dispatch(1, 100), Ok(None));
+        let epoch = s.begin_acquire().unwrap();
+        assert!(!s.scene_changed(9));
+        assert_eq!(s.dispatch(2, 100), Ok(None));
+        prove_all(&mut s, epoch);
+        let first = s.dispatch(3, 100).unwrap().unwrap();
+        assert_eq!(first.scene.generation, 9);
+        assert!(s.presented(first, 4, true));
+        assert_eq!(s.dispatch(5, 100), Ok(None));
+    }
+
+    #[test]
+    fn stale_undeliverable_commits_do_not_rearm_failed_resources() {
+        let mut s = active();
+        assert!(s.scene_changed(1));
+        let frame = s.dispatch(1, 50).unwrap().unwrap();
+        assert!(s.rejected(frame));
+        assert!(!s.scene_changed(2));
+        assert_eq!(s.scene_generation(), Some(2));
+        assert_eq!(s.dispatch(10, 50), Ok(None));
+        assert_eq!(s.phase(), RecoveryPhase::Failed);
+        assert!(!s.native_login_authorized());
     }
 
     #[test]

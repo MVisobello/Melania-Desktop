@@ -1703,6 +1703,15 @@ impl CompositorHandler for BridgeState {
                         return;
                     }
                     if self.managed_xdg_mode && popup_parent.is_none() {
+                        // A valid buffer committed AFTER minimize may replace
+                        // the retained image, but must never unhide the XDG
+                        // role. This also handles minimize-before-first-buffer
+                        // (new scene slots normally default to visible).
+                        let minimized=self.managed_windows.iter().any(|(role,window)|
+                            role==surface && window.state()==WindowDisplayState::Minimized);
+                        if minimized {
+                            let _=self.dynamic_scene.set_visible(key,false);
+                        }
                         // Change the remembered normal geometry only after
                         // the owned client pixels actually entered the scene.
                         if let Some((_,window))=self.managed_windows.iter_mut()
@@ -1762,6 +1771,10 @@ impl CompositorHandler for BridgeState {
                 // synthetic keyboard input or imply native login readiness.
                 if self.managed_xdg_mode && self.dynamic_window_mode &&
                    self.focused.is_none() && self.lifecycle.seat_active() &&
+                   // Never grant first keyboard focus to a minimized role
+                   // merely because it committed an accepted new wl_shm buffer.
+                   self.known_window_surfaces.id_of(surface).is_some_and(|key|
+                       self.dynamic_scene.is_visible(key)==Some(true)) &&
                    self.xdg_shell.toplevel_surfaces().iter()
                        .any(|top|top.wl_surface()==surface) {
                     let keyboard=self.seat.get_keyboard().expect("keyboard");
@@ -2136,7 +2149,13 @@ impl XdgShellHandler for BridgeState {
         if !model.minimize(){return;}
         self.managed_pending_resize.retain(|(role,_)|role!=&surface);
         self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
-        self.window_interaction.cancel();
+        // Minimize only revokes this toplevel's pointer grab. A different
+        // application's live drag must not be cancelled by this request.
+        self.cancel_surface_grab(&surface);
+        // A press serial cannot authorize an XDG move/resize after minimize.
+        if self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|pressed==&surface) {
+            self.last_xdg_press=None;
+        }
         // Hide the toplevel before removing its menus. Otherwise pointer
         // focus could be transferred straight back onto a now-hidden parent.
         // Both the parent and every nested popup leave the retained scene
@@ -2190,23 +2209,29 @@ impl XdgShellHandler for BridgeState {
         // still mapped, and one child cannot trigger an intermediate KMS
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
-        if let Some(key)=self.known_window_surfaces.remove(&surface) {
-            // The retained pixel copy and stable slot belong to this client.
-            // Never leave a closed window occupying the limited QEMU scene.
-            let removed=if self.dynamic_window_mode {
+        let parent_key=self.known_window_surfaces.remove(&surface);
+        // A parent can be destroyed before it ever committed an accepted
+        // wl_shm buffer. Its child roles may still have retained pixels: do
+        // not skip the scene damage just because the parent's slot is absent.
+        let removed=if let Some(key)=parent_key {
+            if self.dynamic_window_mode {
                 self.dynamic_scene.remove(key)
             } else {
                 self.multi_scene.remove(key)
-            };
-            if removed || popup_damage { self.note_scene_change(); }
-            if (removed || popup_damage) && self.continuous_kms_mode &&
-               (self.persistent_kms_mode || self.continuous_frame_count<self.continuous_frame_target) {
-                // A destroyed xdg surface changes retained pixels even if
-                // no surviving client submits a new wl_shm buffer.
+            }
+        } else {false};
+        if removed || popup_damage {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                // One redraw after the entire parent/popup tree is removed.
                 if let Err(error)=self.submit_continuous_frame() {
                     eprintln!("continuous close KMS frame not scheduled: {error}");
                 }
             }
+        }
+        if let Some(key)=parent_key {
             if removed && self.close_redraw_mode &&
                self.multi_scene.window_count()==1 && self.pixel_frame_count>=3 {
                 // Defer the redraw until the outstanding fourth KMS frame

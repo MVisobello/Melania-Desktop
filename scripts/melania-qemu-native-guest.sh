@@ -2401,14 +2401,22 @@ if [[ -z "$layer_socket" || ! -S /run/melania-native-qemu/continuous-frame-strea
   fatal 'real_layer_wayland_socket_missing'
 fi
 # The QMP host monitor must observe the framebuffer BEFORE CRTC restore.
-tail -n +1 -f -s 0.05 "$layer_kms_log" > /dev/ttyS0 &
+# tail -f may drop the final marker when its polling/flush loses the race
+# against the 2.5-second KMS scanout hold. A named-pipe tee forwards each
+# actual Rust presenter log write directly to the guest serial port while
+# preserving a complete file for kernel route and rollback verification.
+# This NEVER synthesizes a frame-12 marker or weakens QMP pixel assertions.
+layer_kms_forward_dir="$(mktemp -d -t melania-layer-serial-XXXXXX)"
+layer_kms_fifo="$layer_kms_forward_dir/frames.fifo"
+mkfifo -m 600 "$layer_kms_fifo"
+tee "$layer_kms_log" < "$layer_kms_fifo" > /dev/ttyS0 &
 layer_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
 MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_QEMU_REAL_LAYER_PANEL=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 72s \
-  "$continuous_kms" < /dev/tty1 > "$layer_kms_log" 2>&1 &
+  "$continuous_kms" < /dev/tty1 > "$layer_kms_fifo" 2>&1 &
 layer_kms_pid=$!
 for attempt in $(seq 1 100); do
   grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$layer_kms_log" && break
@@ -2436,8 +2444,14 @@ if ! wait "$layer_server_pid"; then
   cat "$layer_server_log"
   fatal 'real_layer_Smithay_failed'
 fi
-kill "$layer_tail_pid" 2>/dev/null || true
-wait "$layer_tail_pid" 2>/dev/null || true
+# Ensure all KMS markers have reached /dev/ttyS0 before cleanup.
+# If the stream forwarder failed, QMP could not have observed live pixels.
+if ! wait "$layer_tail_pid"; then
+  cat "$layer_kms_log" "$layer_server_log"
+  fatal 'real_layer_serial_forwarder_failed'
+fi
+rm -f "$layer_kms_fifo"
+rmdir "$layer_kms_forward_dir"
 cat "$layer_client_log" "$layer_kms_log" "$layer_server_log"
 grep -q '^MELANIA_NATIVE_REAL_LAYER_AND_XDG_CONFIGURED=true' "$layer_client_log" ||
   fatal 'real_xdg_and_layer_roles_not_configured'
