@@ -178,6 +178,7 @@ struct BridgeState {
     window_interaction:WindowInteraction,
     keyboard_window_cycle:KeyboardWindowCycle,
     snap_keys:SnapKeyHandler,
+    popup_escape_held:bool,
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
     last_xdg_press:Option<(WlSurface,Serial)>,
@@ -975,6 +976,36 @@ impl BridgeState {
             pointer.frame(self);
         }
     }
+    /// Esc from the real active libinput seat dismisses only a mapped XDG
+    /// popup belonging to the focused parent chain, never another app's menu.
+    /// The client receives the standard popup_done; visible pixels leave the
+    /// DRM scene through the existing verified compositor-only KMS path.
+    fn dismiss_focused_popup_on_escape(&mut self)->bool {
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {return false;}
+        let Some(focused)=self.focused.as_ref().and_then(|role|
+            self.known_window_surfaces.id_of(role)) else {return false;};
+        let roles=self.native_popup_roles.iter().filter_map(|(popup,parent)|{
+            let parent_key=self.known_window_surfaces.id_of(parent)?;
+            let popup_key=self.known_window_surfaces.id_of(popup.wl_surface())?;
+            let mapped=self.dynamic_scene.geometry(popup_key).is_some();
+            Some((parent_key,popup_key,mapped))
+        }).collect::<Vec<_>>();
+        let Some(target)=melania_native::native_popup_layout::escape_popup_target(
+            focused,&roles
+        ) else {return false;};
+        let popup=self.native_popup_roles.iter().find(|(role,_)|
+            self.known_window_surfaces.id_of(role.wl_surface())==Some(target)
+        ).map(|(role,_)|role.clone());
+        let Some(popup)=popup else {return false;};
+        popup.send_popup_done();
+        self.evict_native_popup(popup.wl_surface());
+        println!("MELANIA_NATIVE_XDG_POPUP_ESCAPE_DISMISSED={target}");
+        let _=std::io::stdout().flush();
+        true
+    }
+
     fn reposition_native_popups_for_parent(&mut self,parent_key:u64) {
         // Traverse the bounded parent/popup tree in depth-first order.
         // Moving only immediate children would strand nested submenus.
@@ -2291,6 +2322,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.last_xdg_press=None;
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
+            state.popup_escape_held=false;
             state.snap_keys.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
@@ -2311,6 +2343,23 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 let _=std::io::stdout().flush();
             }
             if !device_registered {return;}
+            // Consume both physical Escape edges for a popup that was really
+            // dismissed; never forward a dangling release to its parent.
+            // EV_KEY 1 is Escape, normalized from Smithay XKB's +8.
+            if state.managed_xdg_mode && state.dynamic_window_mode &&
+               u32::from(event.key_code()).checked_sub(8)==Some(1) {
+                if event.state()==KeyState::Released && state.popup_escape_held {
+                    state.popup_escape_held=false;
+                    return;
+                }
+                if event.state()==KeyState::Pressed {
+                    if state.popup_escape_held {return;}
+                    if state.dismiss_focused_popup_on_escape() {
+                        state.popup_escape_held=true;
+                        return;
+                    }
+                }
+            }
             // The model sees real libinput codes (XKB = evdev + 8) even
             // when the experimental GTK Super handler consumes Meta first.
             let code:u32=event.key_code().into();
@@ -2863,6 +2912,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         window_interaction:WindowInteraction::default(),
         keyboard_window_cycle:KeyboardWindowCycle::default(),
         snap_keys:SnapKeyHandler::default(),
+        popup_escape_held:false,
         last_xdg_press:None,
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
@@ -2905,6 +2955,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 state.last_xdg_press=None;
                 state.window_interaction.cancel();
                 state.keyboard_window_cycle.reset();
+            state.popup_escape_held=false;
             state.snap_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
@@ -2945,6 +2996,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.continuous_pending=None;
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
+            state.popup_escape_held=false;
             state.snap_keys.reset();
         }
     })?;
