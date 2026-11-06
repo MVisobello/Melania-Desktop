@@ -1030,14 +1030,16 @@ impl BridgeState {
         let removals=melania_native::native_popup_layout::popup_click_dismissals(
             &self.grabbed_popup_roles,clicked.as_ref(),&edges);
         if removals.is_empty() {return false;}
-        for surface in removals {
-            if let Some(role)=self.native_popup_roles.iter()
-                .find(|(role,_)|role.wl_surface()==&surface)
-                .map(|(role,_)|role.clone()) {
-                role.send_popup_done();
-            }
-            self.evict_native_popup(&surface);
+        // Evict the outermost affected role once, including all of its
+        // descendants. This sends their popup_done events in bounded
+        // descendant-before-parent order and requests only ONE KMS redraw.
+        let outermost=removals.last().expect("nonempty dismissals").clone();
+        if let Some(role)=self.native_popup_roles.iter()
+            .find(|(role,_)|role.wl_surface()==&outermost)
+            .map(|(role,_)|role.clone()) {
+            role.send_popup_done();
         }
+        self.evict_native_popup(&outermost);
         println!("MELANIA_NATIVE_XDG_POPUP_OUTSIDE_PRESS_DISMISSED=true");
         let _=std::io::stdout().flush();
         // If another grabbed popup still owns input, the click is within
