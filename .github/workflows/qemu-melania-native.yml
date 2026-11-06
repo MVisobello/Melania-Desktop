@@ -69,6 +69,7 @@ on:
       - tests/test_native_authenticated_resize_qemu_stage114.py
       - tests/test_native_alt_tab_qemu_stage116.py
       - tests/test_native_xdg_popup_qemu_stage118.py
+      - tests/test_native_popup_escape_qemu_stage125.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -149,6 +150,7 @@ on:
       - tests/test_native_authenticated_resize_qemu_stage114.py
       - tests/test_native_alt_tab_qemu_stage116.py
       - tests/test_native_xdg_popup_qemu_stage118.py
+      - tests/test_native_popup_escape_qemu_stage125.py
       - scripts/capture-qemu-two-windows.py
       - scripts/capture-qemu-live-kms-stream.py
       - scripts/capture-qemu-rust-kms-frames.py
@@ -243,6 +245,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_authenticated_resize_qemu_stage114.py' -v
           python3 -m unittest discover -s tests -p 'test_native_alt_tab_qemu_stage116.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_popup_qemu_stage118.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_popup_escape_qemu_stage125.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
           python3 -m py_compile scripts/capture-qemu-two-windows.py
           python3 -m py_compile scripts/capture-qemu-rust-kms-frames.py
