@@ -931,37 +931,51 @@ fn acked_native_popup_geometry(surface:&WlSurface)->Option<Rectangle<i32,Logical
 
 impl BridgeState {
     fn evict_native_popup(&mut self,surface:&WlSurface) {
-        // Close nested popups before the parent: otherwise children keep
-        // retained KMS pixels and stale scene slots after ancestor teardown.
-        let descendants=self.native_popup_roles.iter()
-            .filter(|(_,parent)|parent==surface)
-            .map(|(popup,_)|popup.clone()).collect::<Vec<_>>();
-        for child in descendants {
-            child.send_popup_done();
-            self.evict_native_popup(child.wl_surface());
-        }
-        self.native_popup_roles.retain(|(popup,_)|popup.wl_surface()!=surface);
-        if let Some(key)=self.known_window_surfaces.remove(surface) {
-            if self.dynamic_scene.remove(key) {
-                self.note_scene_change();
-                if self.continuous_kms_mode &&
-                   (self.persistent_kms_mode ||
-                    self.continuous_frame_count<self.continuous_frame_target) {
-                    if let Err(error)=self.submit_continuous_frame() {
-                        eprintln!("native popup removal KMS damage rejected: {error}");
-                    }
+        // Treat popup teardown as a single bounded transaction. In particular,
+        // a malformed parent cycle must not cause recursive stack overflow,
+        // and no intermediate frame/focus update may point at a descendant
+        // which is also about to be removed.
+        let edges=self.native_popup_roles.iter()
+            .map(|(popup,parent)|(parent.clone(),popup.wl_surface().clone()))
+            .collect::<Vec<_>>();
+        let removal=melania_native::native_popup_layout::popup_teardown_order(
+            surface,&edges);
+        let focused_removed=self.focused.as_ref().is_some_and(|focus|
+            removal.contains(focus));
+        let pressed_removed=self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|
+            removal.contains(pressed));
+
+        let mut scene_changed=false;
+        for candidate in &removal {
+            // The caller has already sent popup_done to the root, or the
+            // root role is already destroyed. Descendants receive it once.
+            if candidate!=surface {
+                if let Some((child,_))=self.native_popup_roles.iter()
+                    .find(|(role,_)|role.wl_surface()==candidate) {
+                    child.send_popup_done();
                 }
             }
-            self.window_interaction.cancel_for_key(key);
+            self.native_popup_roles.retain(|(role,_)|
+                role.wl_surface()!=candidate);
+            if let Some(key)=self.known_window_surfaces.remove(candidate) {
+                scene_changed|=self.dynamic_scene.remove(key);
+                self.window_interaction.cancel_for_key(key);
+            }
         }
-        // An XDG popup can be the keyboard and pointer focus at dismissal.
-        // Its old Wayland surface must never remain the input recipient after
-        // its retained image and scene slot have been removed. This also runs
-        // for nested descendants when an ancestor is destroyed.
-        if matches!(self.last_xdg_press.as_ref(),Some((pressed,_)) if pressed==surface) {
-            self.last_xdg_press=None;
+        // Request only one compositor-only GPU redraw for the entire
+        // subtree, after all old scene pixels have been evicted.
+        if scene_changed {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("native popup removal KMS damage rejected: {error}");
+                }
+            }
         }
-        if self.focused.as_ref()==Some(surface) {
+        if pressed_removed {self.last_xdg_press=None;}
+        if focused_removed {
             self.focused=None;
             let target=self.pointer_target(self.pointer_position);
             let replacement=target.as_ref().map(|(next,_)|next.clone());
