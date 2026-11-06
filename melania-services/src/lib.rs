@@ -25,12 +25,27 @@ impl fmt::Display for ServiceError {
 impl std::error::Error for ServiceError {}
 pub type Result<T> = std::result::Result<T, ServiceError>;
 
+/// GTK callers must never wait on a service process that can hang on a
+/// missing D-Bus daemon. The Linux coreutils timeout helper terminates the
+/// entire command after a bounded interval, including slow bluetoothctl calls.
+/// Workers invoke this off the GTK main thread (see melania-panel).
+const SERVICE_COMMAND_TIMEOUT: &str = "3s";
+
 fn command(program: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(program).args(args).output().map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            ServiceError::MissingCommand(program.to_owned())
-        } else { ServiceError::Failed(err.to_string()) }
-    })?;
+    let output = Command::new("timeout")
+        .args(["--signal=TERM", "--kill-after=1s", SERVICE_COMMAND_TIMEOUT, program])
+        .args(args)
+        .output()
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                ServiceError::MissingCommand("timeout (coreutils)".to_owned())
+            } else { ServiceError::Failed(err.to_string()) }
+        })?;
+    if matches!(output.status.code(), Some(124 | 137)) {
+        return Err(ServiceError::Failed(format!(
+            "{program}: servizio non risponde entro {SERVICE_COMMAND_TIMEOUT}"
+        )));
+    }
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(ServiceError::Failed(if message.is_empty() {
