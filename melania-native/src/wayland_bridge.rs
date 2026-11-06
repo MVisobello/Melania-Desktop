@@ -65,7 +65,7 @@ use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
 use melania_native::native_popup_layout::PopupPlacement;
-use melania_native::snap_layout::SnapZone;
+use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
 use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
 use smithay::utils::Rectangle;
 use melania_native::keyboard_window_cycle::{KeyboardWindowCycle,ShortcutResult};
@@ -2550,7 +2550,29 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                event.state()==ButtonState::Released {
                 let was_resize=matches!(state.window_interaction.active_kind(),
                     Some(InteractionKind::ResizeBottomRight | InteractionKind::Resize(_)));
+                // Only a physically moved, compositor-authenticated XDG
+                // toplevel.move grab can invoke edge Snap at button release.
+                // Never snap from click-only, resize, an inactive seat or IPC.
+                let edge=if state.managed_xdg_mode && state.dynamic_window_mode &&
+                    state.lifecycle.seat_active() &&
+                    !state.native_presentation_guard.permanently_revoked() &&
+                    state.window_interaction.dragged_far_enough(point.x,point.y) {
+                    edge_drop_target(point.x,point.y,
+                        WindowRect{x:0,y:0,width:1280,height:800},1280,800,24)
+                } else {None};
                 if let Some(id)=state.window_interaction.end() {
+                    if let Some(target)=edge {
+                        let top=state.known_window_surfaces.get(id).and_then(|surface|
+                            state.xdg_shell.toplevel_surfaces().iter()
+                                .find(|top|top.wl_surface()==surface).cloned());
+                        if let Some(top)=top {
+                            match target {
+                                EdgeDrop::Snap(zone)=>state.request_managed_snap(top,Some(zone)),
+                                EdgeDrop::Maximize=>state.request_managed_maximize(top,true),
+                            }
+                            println!("MELANIA_NATIVE_EDGE_DROP_REQUEST={id} {target:?}");
+                        }
+                    }
                     if was_resize && state.managed_xdg_mode {
                         if let Some(surface)=state.known_window_surfaces.get(id) {
                             if let Some(top)=state.xdg_shell.toplevel_surfaces().iter()

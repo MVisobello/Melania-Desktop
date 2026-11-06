@@ -43,6 +43,42 @@ pub fn snap_rect(
     rect.valid_for(output_width,output_height).then_some(rect)
 }
 
+/// Target for a completed, authenticated xdg_toplevel.move drag.
+/// This is only a policy decision, not an XDG configure or KMS success.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum EdgeDrop { Snap(SnapZone), Maximize }
+
+/// Detect a deliberate release at an output work-area boundary.
+/// Bottom edge by itself is not a snap; corners take precedence over sides.
+/// Reject invalid geometry, coordinates and unreasonably large hot zones.
+pub fn edge_drop_target(
+    x:f64,y:f64,work:WindowRect,output_w:i32,output_h:i32,tolerance:i32
+)->Option<EdgeDrop> {
+    if !x.is_finite() || !y.is_finite() ||
+       !(1..=64).contains(&tolerance) ||
+       !work.valid_for(output_w,output_h) ||
+       x<f64::from(work.x) || y<f64::from(work.y) ||
+       x>=f64::from(work.x+work.width) ||
+       y>=f64::from(work.y+work.height) {
+        return None;
+    }
+    let left=x<=f64::from(work.x+tolerance);
+    let right=x>=f64::from(work.x+work.width-1-tolerance);
+    let top=y<=f64::from(work.y+tolerance);
+    let bottom=y>=f64::from(work.y+work.height-1-tolerance);
+    let result=match (left,right,top,bottom) {
+        (true,_,true,_)=>EdgeDrop::Snap(SnapZone::TopLeft),
+        (_,true,true,_)=>EdgeDrop::Snap(SnapZone::TopRight),
+        (true,_,_,true)=>EdgeDrop::Snap(SnapZone::BottomLeft),
+        (_,true,_,true)=>EdgeDrop::Snap(SnapZone::BottomRight),
+        (true,_,_,_)=>EdgeDrop::Snap(SnapZone::LeftHalf),
+        (_,true,_,_)=>EdgeDrop::Snap(SnapZone::RightHalf),
+        (_,_,true,_)=>EdgeDrop::Maximize,
+        _=>return None,
+    };
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,4 +134,36 @@ mod tests {
         assert_eq!(snap_rect(SnapZone::RightHalf,
                   WindowRect{x:i32::MAX,y:0,width:640,height:800},1280,800),None);
     }
+    #[test]
+    fn drag_edges_prioritize_corners_and_leave_bottom_alone() {
+        let w=full(1280,800);
+        for (point,expected) in [
+            ((0.0,400.0),Some(EdgeDrop::Snap(SnapZone::LeftHalf))),
+            ((1279.0,400.0),Some(EdgeDrop::Snap(SnapZone::RightHalf))),
+            ((500.0,0.0),Some(EdgeDrop::Maximize)),
+            ((0.0,0.0),Some(EdgeDrop::Snap(SnapZone::TopLeft))),
+            ((1279.0,0.0),Some(EdgeDrop::Snap(SnapZone::TopRight))),
+            ((0.0,799.0),Some(EdgeDrop::Snap(SnapZone::BottomLeft))),
+            ((1279.0,799.0),Some(EdgeDrop::Snap(SnapZone::BottomRight))),
+            ((500.0,799.0),None),
+            ((500.0,500.0),None),
+        ] {
+            assert_eq!(edge_drop_target(point.0,point.1,w,1280,800,24),expected);
+        }
+    }
+    #[test]
+    fn edge_targets_obey_work_area_panel_insets_and_invalid_release() {
+        let w=WindowRect{x:80,y:40,width:1040,height:680};
+        assert_eq!(edge_drop_target(81.0,100.0,w,1280,800,24),
+                   Some(EdgeDrop::Snap(SnapZone::LeftHalf)));
+        assert_eq!(edge_drop_target(600.0,41.0,w,1280,800,24),
+                   Some(EdgeDrop::Maximize));
+        assert_eq!(edge_drop_target(600.0,20.0,w,1280,800,24),None);
+        assert_eq!(edge_drop_target(1279.0,100.0,w,1280,800,24),None);
+        assert_eq!(edge_drop_target(f64::NAN,41.0,w,1280,800,24),None);
+        assert_eq!(edge_drop_target(f64::INFINITY,41.0,w,1280,800,24),None);
+        assert_eq!(edge_drop_target(81.0,100.0,w,1280,800,0),None);
+        assert_eq!(edge_drop_target(81.0,100.0,w,1280,800,99),None);
+    }
+
 }
