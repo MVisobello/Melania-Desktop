@@ -16,21 +16,27 @@ class SuperSnapRealKms(unittest.TestCase):
                       'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=',
                       'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true',
                       'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true',
-                      'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS5_PASS=true'):
+                      'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS5_PASS=true',
+                      'MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true',
+                      'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=6',
+                      'MELANIA_NATIVE_SNAP_CLIENT_MINIMIZE_KEYBOARD_LEAVE=true'):
             self.assertIn(token,G)
         for token in ('role.ack_configure(serial)','shm.create_pool(','surface.commit()',
                       'state.callbacks<index','state.released',
                       'wl_keyboard::Event::Key',
                       'MELANIA_NATIVE_SNAP_CLIENT_XDG_RIGHT_THIRD_ACK=true',
                       'MELANIA_NATIVE_SNAP_CLIENT_XDG_THIRD_RESTORE_ACK=true',
-                      'MELANIA_NATIVE_SNAP_CLIENT_ALL_FIVE_REAL_FRAMES_PASS=true'):
+                      'MELANIA_NATIVE_SNAP_CLIENT_ALL_FIVE_REAL_FRAMES_PASS=true',
+                      'MELANIA_NATIVE_SNAP_CLIENT_ROLE_DESTROY_AFTER_MINIMIZE=true'):
             self.assertIn(token,C)
         for token in ('"execute":"input-send-event"','"execute":"screendump"',
                       '"meta_l"','"left"','"down"','"f8"',
                       'MELANIA_QEMU_SUPER_SNAP_HALF_CRTC_PIXELS=true',
                       'MELANIA_QEMU_SUPER_SNAP_RESTORE_CRTC_PIXELS=true',
                       'MELANIA_QEMU_SUPER_SNAP_RIGHT_THIRD_CRTC_PIXELS=true',
-                      'MELANIA_QEMU_SUPER_SNAP_THIRD_RESTORE_CRTC_PIXELS=true'):
+                      'MELANIA_QEMU_SUPER_SNAP_THIRD_RESTORE_CRTC_PIXELS=true',
+                      'MELANIA_QEMU_SUPER_SNAP_NORMAL_MINIMIZED_CRTC_PIXELS=true',
+                      'client destroyed before minimized CRTC capture'):
             self.assertIn(token,Q)
         for token in ('snap_inject_code','qmp-super-snap.log',
                       'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS5_PASS=true'):
@@ -38,7 +44,8 @@ class SuperSnapRealKms(unittest.TestCase):
         self.assertIn('test -x target/debug/qemu-super-snap-client',W)
         self.assertIn('NATIVE_SESSION_READY=false',G)
         for marker in ('super-snap-right-third-frame4.ppm',
-                       'super-snap-third-restored-frame5.ppm'):
+                       'super-snap-third-restored-frame5.ppm',
+                       'super-snap-minimized-frame6.ppm'):
             self.assertIn(marker,H)
             self.assertIn(marker,Q)
         self.assertIn('for frame in 1 2 3 4 5',G)

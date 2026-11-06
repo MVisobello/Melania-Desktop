@@ -12,7 +12,7 @@ const DOWN:u32=108;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum SnapKeyAction {
-    Forward, Consume, Snap(SnapZone), Maximize, Restore,
+    Forward, Consume, Snap(SnapZone), Maximize, Restore, RestoreOrMinimize,
 }
 
 #[derive(Default,Debug)]
@@ -92,7 +92,7 @@ impl SnapKeyHandler {
                     DOWN=>match self.horizontal.take() {
                         Some(SnapZone::LeftHalf)=>SnapKeyAction::Snap(SnapZone::BottomLeft),
                         Some(SnapZone::RightHalf)=>SnapKeyAction::Snap(SnapZone::BottomRight),
-                        _=>SnapKeyAction::Restore,
+                        _=>SnapKeyAction::RestoreOrMinimize,
                     },
                     _=>unreachable!(),
                 }
@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(s.event(Some(RIGHT),false),SnapKeyAction::Consume);
         assert_eq!(s.event(Some(UP),true),SnapKeyAction::Snap(SnapZone::TopRight));
         assert_eq!(s.event(Some(UP),false),SnapKeyAction::Consume);
-        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Restore);
+        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::RestoreOrMinimize);
         assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
         assert_eq!(s.event(Some(LEFT_META),false),SnapKeyAction::Forward);
     }
@@ -140,7 +140,7 @@ mod tests {
             assert_eq!(s.event(Some(horizontal),false),SnapKeyAction::Consume);
             assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Snap(lower));
             assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
-            assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Restore);
+            assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::RestoreOrMinimize);
             assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
             s.event(Some(LEFT_META),false);
         }
@@ -207,4 +207,19 @@ mod tests {
         s.reset();
         assert_eq!(s.event(Some(UP),false),SnapKeyAction::Forward);
     }
+    #[test]
+    fn plain_super_down_requests_state_aware_restore_or_minimize() {
+        let mut s=SnapKeyHandler::default();
+        s.event(Some(LEFT_META),true);
+        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::RestoreOrMinimize);
+        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Consume);
+        assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
+        s.event(Some(LEFT_SHIFT),true);
+        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Restore);
+        assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
+        s.event(Some(LEFT_META),false);
+        s.event(Some(LEFT_SHIFT),false);
+        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Forward);
+    }
+
 }
