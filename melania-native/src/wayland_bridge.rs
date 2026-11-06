@@ -1550,6 +1550,29 @@ impl CompositorHandler for BridgeState {
                         return;
                     }
                 }
+                // Real mapped XDG clients must receive keyboard focus
+                // before libinput Super+arrows can target them. Stage120's
+                // QEMU client submitted and KMS-presented frame 1, but the
+                // continuous commit path returned before the legacy focus
+                // fallback, leaving self.focused=None indefinitely.
+                //
+                // Grant initial focus ONLY after a validated client-owned
+                // wl_shm buffer has entered the scene/ledger. Reject
+                // unconfigured roles, layer shell and popups; never create
+                // synthetic keyboard input or imply native login readiness.
+                if self.managed_xdg_mode && self.dynamic_window_mode &&
+                   self.focused.is_none() && self.lifecycle.seat_active() &&
+                   self.xdg_shell.toplevel_surfaces().iter()
+                       .any(|top|top.wl_surface()==surface) {
+                    let keyboard=self.seat.get_keyboard().expect("keyboard");
+                    keyboard.set_focus(self,Some(surface.clone()),
+                        SERIAL_COUNTER.next_serial());
+                    self.focused=Some(surface.clone());
+                    if let Some(key)=self.known_window_surfaces.id_of(surface) {
+                        println!("MELANIA_NATIVE_FIRST_COMMITTED_XDG_FOCUSED={key}");
+                    }
+                    let _=std::io::stdout().flush();
+                }
                 self.note_scene_change();
                 if let Err(error)=self.submit_continuous_frame() {
                     eprintln!("continuous QEMU KMS scheduling failed: {error}");

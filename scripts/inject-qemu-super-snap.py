@@ -85,6 +85,9 @@ def main()->int:
     deadline=time.monotonic()+args.timeout
     args.out_dir.mkdir(parents=True,exist_ok=True)
     wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_FRAME1_ACK=true",deadline)
+    # Do not inject a shortcut into an unmapped/unfocused XDG surface:
+    # the real guest must have delivered wl_keyboard focus first.
+    wait(args.serial,"MELANIA_NATIVE_FIRST_COMMITTED_XDG_FOCUSED=1",deadline)
     wait(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=1",deadline)
     screenshot(args.qmp,args.out_dir/"super-snap-original-frame1.ppm",[
         ("original-client",200,200,(180,44,62)),
