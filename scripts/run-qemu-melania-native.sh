@@ -424,11 +424,13 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! grep -q '^MELANIA_QEMU_SUPER_SNAP_RESTORE_CRTC_PIXELS=true' "$report/qmp-super-snap.log" ||
     ! grep -q '^MELANIA_QEMU_SUPER_SNAP_RIGHT_THIRD_CRTC_PIXELS=true' "$report/qmp-super-snap.log" ||
     ! grep -q '^MELANIA_QEMU_SUPER_SNAP_THIRD_RESTORE_CRTC_PIXELS=true' "$report/qmp-super-snap.log" ||
+    ! grep -q '^MELANIA_QEMU_SUPER_SNAP_NORMAL_MINIMIZED_CRTC_PIXELS=true' "$report/qmp-super-snap.log" ||
     ! test -s "$report/super-snap-original-frame1.ppm" ||
     ! test -s "$report/super-snap-half-frame2.ppm" ||
     ! test -s "$report/super-snap-restored-frame3.ppm" ||
     ! test -s "$report/super-snap-right-third-frame4.ppm" ||
     ! test -s "$report/super-snap-third-restored-frame5.ppm" ||
+    ! test -s "$report/super-snap-minimized-frame6.ppm" ||
     ! grep -q '^MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS5_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_AUTH_RESIZE_CRTC_PIXELS=true' "$report/qmp-authenticated-resize.log" ||
     ! grep -q '^MELANIA_QEMU_AUTH_RESIZE_REAL_POINTER_RELEASE=true' "$report/qmp-authenticated-resize.log" ||
