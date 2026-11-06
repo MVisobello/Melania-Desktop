@@ -3,6 +3,8 @@
 use crate::snap_layout::SnapZone;
 const LEFT_META:u32=125;
 const RIGHT_META:u32=126;
+const LEFT_SHIFT:u32=42;
+const RIGHT_SHIFT:u32=54;
 const UP:u32=103;
 const LEFT:u32=105;
 const RIGHT:u32=106;
@@ -17,6 +19,8 @@ pub enum SnapKeyAction {
 pub struct SnapKeyHandler {
     left_meta:bool,
     right_meta:bool,
+    left_shift:bool,
+    right_shift:bool,
     arrows_held:u8,
     horizontal:Option<SnapZone>,
 }
@@ -33,6 +37,14 @@ impl SnapKeyHandler {
             Some(RIGHT_META)=>{
                 self.right_meta=pressed;
                 if !pressed && !self.left_meta {self.horizontal=None;}
+                SnapKeyAction::Forward
+            },
+            Some(LEFT_SHIFT)=>{
+                self.left_shift=pressed;
+                SnapKeyAction::Forward
+            },
+            Some(RIGHT_SHIFT)=>{
+                self.right_shift=pressed;
                 SnapKeyAction::Forward
             },
             Some(LEFT|RIGHT|UP|DOWN)=>{
@@ -56,6 +68,19 @@ impl SnapKeyHandler {
                     return SnapKeyAction::Consume;
                 }
                 self.arrows_held |= flag;
+                // Super+Shift offers deterministic three-column placement.
+                // It is deliberately separate from the existing Super+arrow
+                // half/quadrant sequence and preserves original restore size.
+                if self.left_shift || self.right_shift {
+                    self.horizontal=None;
+                    return match code {
+                        LEFT=>SnapKeyAction::Snap(SnapZone::LeftThird),
+                        UP=>SnapKeyAction::Snap(SnapZone::MiddleThird),
+                        RIGHT=>SnapKeyAction::Snap(SnapZone::RightThird),
+                        DOWN=>SnapKeyAction::Restore,
+                        _=>unreachable!(),
+                    };
+                }
                 match code {
                     LEFT=>{self.horizontal=Some(SnapZone::LeftHalf); SnapKeyAction::Snap(SnapZone::LeftHalf)},
                     RIGHT=>{self.horizontal=Some(SnapZone::RightHalf); SnapKeyAction::Snap(SnapZone::RightHalf)},
@@ -131,6 +156,40 @@ mod tests {
         assert_eq!(s.event(Some(UP),true),SnapKeyAction::Maximize);
         s.event(Some(UP),false);
         s.event(Some(LEFT_META),false);
+    }
+    #[test]
+    fn super_shift_places_all_three_columns_and_restores() {
+        let mut s=SnapKeyHandler::default();
+        assert_eq!(s.event(Some(LEFT_SHIFT),true),SnapKeyAction::Forward);
+        assert_eq!(s.event(Some(LEFT),true),SnapKeyAction::Forward);
+        s.event(Some(LEFT),false);
+        s.event(Some(LEFT_META),true);
+        for (key,zone) in [(LEFT,SnapZone::LeftThird),
+                           (UP,SnapZone::MiddleThird),
+                           (RIGHT,SnapZone::RightThird)] {
+            assert_eq!(s.event(Some(key),true),SnapKeyAction::Snap(zone));
+            assert_eq!(s.event(Some(key),true),SnapKeyAction::Consume);
+            assert_eq!(s.event(Some(key),false),SnapKeyAction::Consume);
+        }
+        assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Restore);
+        assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
+        s.event(Some(LEFT_SHIFT),false);
+        assert_eq!(s.event(Some(LEFT),true),SnapKeyAction::Snap(SnapZone::LeftHalf));
+        s.event(Some(LEFT),false);
+        assert_eq!(s.event(Some(UP),true),SnapKeyAction::Snap(SnapZone::TopLeft));
+    }
+    #[test]
+    fn shift_modifier_release_order_and_right_super_are_supported() {
+        let mut s=SnapKeyHandler::default();
+        s.event(Some(RIGHT_META),true);
+        s.event(Some(RIGHT_SHIFT),true);
+        assert_eq!(s.event(Some(RIGHT),true),SnapKeyAction::Snap(SnapZone::RightThird));
+        s.event(Some(RIGHT_META),false);
+        assert_eq!(s.event(Some(RIGHT),false),SnapKeyAction::Consume);
+        s.event(Some(RIGHT_SHIFT),false);
+        assert_eq!(s.event(Some(UP),true),SnapKeyAction::Forward);
+        s.reset();
+        assert_eq!(s.event(Some(LEFT),false),SnapKeyAction::Forward);
     }
     #[test]
     fn right_super_and_release_order_never_leak_or_repeat_arrows() {

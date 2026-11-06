@@ -71,6 +71,19 @@ use smithay::utils::Rectangle;
 use melania_native::keyboard_window_cycle::{KeyboardWindowCycle,ShortcutResult};
 use signal_hook::consts::signal::{SIGINT,SIGTERM};
 
+/// Publish a QEMU-only post-DRM-ACK receipt atomically. The Wayland test
+/// client polls for the final path: writing there directly lets it observe an
+/// empty or partially written file and incorrectly reject a verified flip.
+fn publish_verified_crtc_receipt(path:&Path)->std::io::Result<()> {
+    let pending=path.with_extension("pending");
+    let mut receipt=fs::OpenOptions::new()
+        .write(true).create_new(true).open(&pending)?;
+    receipt.write_all(b"verified CRTC route and framebuffer ACK\n")?;
+    receipt.sync_all()?;
+    drop(receipt);
+    fs::rename(&pending,path)
+}
+
 struct NativeControlSocket(PathBuf);
 impl Drop for NativeControlSocket {
     fn drop(&mut self){let _=fs::remove_file(&self.0);}
@@ -444,7 +457,10 @@ impl BridgeState {
             }
             let marker=format!("/run/melania-native-qemu/managed-minimize-frame{}-acked",
                 self.continuous_frame_count);
-            std::fs::write(marker,b"verified CRTC route and framebuffer ACK\n")?;
+            // Publish only a fully written, fsynced receipt after KMS ACK.
+            // A reader must never race File::create() and mistake an empty
+            // receipt for a failed DRM transition (seen in PR #274 QEMU).
+            publish_verified_crtc_receipt(Path::new(&marker))?;
             println!("MELANIA_NATIVE_MANAGED_MINIMIZE_KMS_ACK={} visible={}",
                      self.continuous_frame_count,visible);
             let _=std::io::stdout().flush();
@@ -3475,6 +3491,43 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_IN_PROCESS_KMS_ERROR_CLEANUP_ATTEMPTED=true");
     }
     run_result
+}
+
+#[cfg(test)]
+mod atomic_crtc_receipt_tests {
+    use super::publish_verified_crtc_receipt;
+    use std::{fs,path::PathBuf,time::{SystemTime,UNIX_EPOCH}};
+
+    fn temp_receipt()->(PathBuf,PathBuf) {
+        let nanos=SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!(
+            "melania-atomic-crtc-{}-{nanos}",std::process::id()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let marker=dir.join("managed-minimize-frame14-acked");
+        (dir,marker)
+    }
+
+    #[test]
+    fn completed_kernel_receipt_is_only_visible_after_atomic_rename() {
+        let (dir,marker)=temp_receipt();
+        publish_verified_crtc_receipt(&marker).unwrap();
+        assert_eq!(fs::read_to_string(&marker).unwrap(),
+                   "verified CRTC route and framebuffer ACK\n");
+        assert!(!marker.with_extension("pending").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn incomplete_staged_receipt_cannot_be_published_or_accepted() {
+        let (dir,marker)=temp_receipt();
+        fs::write(marker.with_extension("pending"),b"partial").unwrap();
+        assert!(publish_verified_crtc_receipt(&marker).is_err());
+        assert!(!marker.exists());
+        assert_eq!(fs::read(&marker.with_extension("pending")).unwrap(),b"partial");
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(test)]

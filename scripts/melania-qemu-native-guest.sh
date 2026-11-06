@@ -1536,7 +1536,7 @@ if ! MELANIA_QEMU_SUPER_SNAP_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$snap_socket" \
   kill -TERM "$snap_server_pid" 2>/dev/null || true
   fatal 'real_super_snap_client_failed'
 fi
-for frame in 1 2 3; do
+for frame in 1 2 3 4 5; do
   grep -q "^MELANIA_NATIVE_SNAP_CLIENT_FRAME$frame""_ACK=true$" "$snap_client_log" ||
     fatal "snap_client_frame_$frame""_missing"
   grep -q "^MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$frame$" "$snap_server_log" ||
@@ -1545,14 +1545,20 @@ done
 for receipt in \
   'MELANIA_NATIVE_SNAP_CLIENT_XDG_HALF_ACK=true' \
   'MELANIA_NATIVE_SNAP_CLIENT_XDG_RESTORE_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_XDG_RIGHT_THIRD_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_XDG_THIRD_RESTORE_ACK=true' \
   'MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true' \
-  'MELANIA_NATIVE_SNAP_CLIENT_ALL_THREE_REAL_FRAMES_PASS=true'; do
+  'MELANIA_NATIVE_SNAP_CLIENT_ALL_FIVE_REAL_FRAMES_PASS=true'; do
   grep -qx "$receipt" "$snap_client_log" || fatal "snap_client_missing_$receipt"
 done
 grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=Some(LeftHalf) 640x800 at 0,0$' "$snap_server_log" ||
   fatal 'Super_Left_missing_real_XDG_configure'
 grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=None 360x224 at 160,120$' "$snap_server_log" ||
   fatal 'Super_Down_missing_real_XDG_restore'
+grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=Some(RightThird) 427x800 at 853,0$' "$snap_server_log" ||
+  fatal 'Super_Shift_Right_missing_real_XDG_third'
+[[ $(grep -c '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=None 360x224 at 160,120$' "$snap_server_log") -ge 2 ]] ||
+  fatal 'Super_Shift_Down_missing_real_XDG_restore'
 kill -TERM "$snap_server_pid"
 if ! wait "$snap_server_pid"; then
   cat "$snap_server_log" "$snap_client_log"
@@ -1568,7 +1574,7 @@ for receipt in \
   grep -qx "$receipt" "$snap_server_log" || fatal "snap_rollback_missing_$receipt"
 done
 rm -f "$snap_server_log" "$snap_client_log"
-report 'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS3_PASS=true'
+report 'MELANIA_QEMU_SUPER_SNAP_USB_XDG_KMS5_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 # Stage121: actual QMP tablet left-button -> XDG move serial -> output edge
