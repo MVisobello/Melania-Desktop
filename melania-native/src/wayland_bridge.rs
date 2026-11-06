@@ -175,6 +175,11 @@ struct BridgeState {
     // Configured xdg_popup children; only ACKed client pixels enter KMS.
     // Parent identity is retained to follow real parent drags/destroy.
     native_popup_roles:Vec<(PopupSurface,WlSurface)>,
+    // XDG popup.grab is scoped to a real seat/button serial. The stack is
+    // limited by native_popup_roles (8) and never grants a DRM/login permit.
+    grabbed_popup_roles:Vec<WlSurface>,
+    last_popup_press:Option<(WlSurface,Serial)>,
+    suppressed_popup_button:Option<u32>,
     window_interaction:WindowInteraction,
     keyboard_window_cycle:KeyboardWindowCycle,
     snap_keys:SnapKeyHandler,
@@ -955,6 +960,10 @@ impl BridgeState {
             removal.contains(focus));
         let pressed_removed=self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|
             removal.contains(pressed));
+        let popup_pressed_removed=self.last_popup_press.as_ref().is_some_and(|(pressed,_)|
+            removal.contains(pressed));
+        // A dismissed popup must never retain ownership of a later click.
+        self.grabbed_popup_roles.retain(|role|!removal.contains(role));
 
         let mut scene_changed=false;
         for candidate in &removal {
@@ -986,6 +995,7 @@ impl BridgeState {
             }
         }
         if pressed_removed {self.last_xdg_press=None;}
+        if popup_pressed_removed {self.last_popup_press=None;}
         if focused_removed {
             self.focused=None;
             let target=self.pointer_target(self.pointer_position);
@@ -1005,6 +1015,36 @@ impl BridgeState {
     fn evict_native_popup(&mut self,surface:&WlSurface) {
         let _=self.evict_native_popup_tree(surface,false,false);
     }
+
+    /// Dismiss the actual grabbed popup subtree on a physical outside click.
+    /// If the click is inside an earlier grabbed popup, only nested submenus
+    /// are removed and the click may still reach that surviving parent.
+    /// A click outside the entire stack is consumed (along with its release)
+    /// to prevent accidental click-through to a different application.
+    fn dismiss_grabbed_popups_on_press(&mut self,point:Point<f64,Logical>)->bool {
+        if self.grabbed_popup_roles.is_empty() {return false;}
+        let clicked=self.pointer_target(point).map(|(surface,_)|surface);
+        let edges=self.native_popup_roles.iter()
+            .map(|(role,parent)|(parent.clone(),role.wl_surface().clone()))
+            .collect::<Vec<_>>();
+        let removals=melania_native::native_popup_layout::popup_click_dismissals(
+            &self.grabbed_popup_roles,clicked.as_ref(),&edges);
+        if removals.is_empty() {return false;}
+        for surface in removals {
+            if let Some(role)=self.native_popup_roles.iter()
+                .find(|(role,_)|role.wl_surface()==&surface)
+                .map(|(role,_)|role.clone()) {
+                role.send_popup_done();
+            }
+            self.evict_native_popup(&surface);
+        }
+        println!("MELANIA_NATIVE_XDG_POPUP_OUTSIDE_PRESS_DISMISSED=true");
+        let _=std::io::stdout().flush();
+        // If another grabbed popup still owns input, the click is within
+        // that surviving parent and may be forwarded to it.
+        self.grabbed_popup_roles.is_empty()
+    }
+
     /// Esc from the real active libinput seat dismisses only a mapped XDG
     /// popup belonging to the focused parent chain, never another app's menu.
     /// The client receives the standard popup_done; visible pixels leave the
@@ -2203,7 +2243,37 @@ impl XdgShellHandler for BridgeState {
             pointer.frame(self);
         }
     }
-    fn grab(&mut self,_:PopupSurface,_:wl_seat::WlSeat,_:Serial){}
+    fn grab(&mut self,popup:PopupSurface,seat:wl_seat::WlSeat,serial:Serial){
+        // A request alone is never an input grab. Require exactly the
+        // libinput button serial forwarded to the live parent Wayland role.
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.seat.owns(&seat) || !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {
+            popup.send_popup_done();
+            return;
+        }
+        let parent=self.native_popup_roles.iter()
+            .find(|(role,_)|role.wl_surface()==popup.wl_surface())
+            .map(|(_,parent)|parent.clone());
+        let Some(parent)=parent else {popup.send_popup_done();return;};
+        let serial_matches=self.last_popup_press.as_ref().is_some_and(|(pressed,issued)|
+            pressed==&parent && *issued==serial);
+        let nested_ok=self.grabbed_popup_roles.last().is_none_or(|previous|
+            previous==&parent);
+        if !serial_matches || !nested_ok || self.grabbed_popup_roles.len()>=8 {
+            popup.send_popup_done();
+            return;
+        }
+        self.last_popup_press=None;
+        // The same physical button cannot be reused to start a toplevel
+        // move/resize after it authorized an XDG popup grab.
+        if self.last_xdg_press.as_ref().is_some_and(|(_,issued)|*issued==serial) {
+            self.last_xdg_press=None;
+        }
+        self.grabbed_popup_roles.push(popup.wl_surface().clone());
+        println!("MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true");
+        let _=std::io::stdout().flush();
+    }
     fn reposition_request(&mut self,popup:PopupSurface,positioner:PositionerState,token:u32){
         if !self.managed_xdg_mode || !self.dynamic_window_mode {
             popup.send_repositioned(token);
@@ -2353,6 +2423,8 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceAdded {device} =>register(state,device),
         InputEvent::DeviceRemoved {device} => {
             state.last_xdg_press=None;
+            state.last_popup_press=None;
+            state.suppressed_popup_button=None;
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
@@ -2669,7 +2741,24 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
+            // The outside click which dismisses a grabbed popup may not
+            // activate the application beneath it. Suppress its paired
+            // release too; unrelated buttons remain independently routed.
+            if state.suppressed_popup_button==Some(event.button_code()) {
+                if event.state()==ButtonState::Released {
+                    state.suppressed_popup_button=None;
+                }
+                return;
+            }
             let point=state.pointer_position;
+            if event.state()==ButtonState::Pressed &&
+               state.managed_xdg_mode && state.dynamic_window_mode &&
+               state.dismiss_grabbed_popups_on_press(point) {
+                state.last_xdg_press=None;
+                state.last_popup_press=None;
+                state.suppressed_popup_button=Some(event.button_code());
+                return;
+            }
             if state.multi_window_mode {
                 let target_key=if state.dynamic_window_mode {
                     state.dynamic_scene.hit_test(point.x,point.y)
@@ -2760,6 +2849,14 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // must follow their actual Wayland event emission order.
             // The authorization token is the precise forwarded button serial.
             let button_serial=SERIAL_COUNTER.next_serial();
+            if state.managed_xdg_mode && state.dynamic_window_mode {
+                if event.state()==ButtonState::Pressed {
+                    state.last_popup_press=state.pointer_target(point)
+                        .map(|(surface,_)|(surface,button_serial));
+                } else if event.state()==ButtonState::Released {
+                    state.last_popup_press=None;
+                }
+            }
             if event.button_code()==0x110 {
                 if event.state()==ButtonState::Pressed &&
                    state.managed_xdg_mode && state.dynamic_window_mode {
@@ -2968,6 +3065,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_pending_sizes:Vec::new(),
         managed_pending_resize:Vec::new(),
         native_popup_roles:Vec::new(),
+        grabbed_popup_roles:Vec::new(),
+        last_popup_press:None,
+        suppressed_popup_button:None,
         window_interaction:WindowInteraction::default(),
         keyboard_window_cycle:KeyboardWindowCycle::default(),
         snap_keys:SnapKeyHandler::default(),
@@ -3012,6 +3112,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         match event {
             SessionEvent::PauseSession=>{
                 state.last_xdg_press=None;
+                state.last_popup_press=None;
+                state.suppressed_popup_button=None;
                 state.window_interaction.cancel();
                 state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
