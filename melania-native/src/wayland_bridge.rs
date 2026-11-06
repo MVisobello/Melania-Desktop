@@ -1661,6 +1661,15 @@ impl CompositorHandler for BridgeState {
                         return;
                     }
                     if self.managed_xdg_mode && popup_parent.is_none() {
+                        // A valid buffer committed AFTER minimize may replace
+                        // the retained image, but must never unhide the XDG
+                        // role. This also handles minimize-before-first-buffer
+                        // (new scene slots normally default to visible).
+                        let minimized=self.managed_windows.iter().any(|(role,window)|
+                            role==surface && window.state()==WindowDisplayState::Minimized);
+                        if minimized {
+                            let _=self.dynamic_scene.set_visible(key,false);
+                        }
                         // Change the remembered normal geometry only after
                         // the owned client pixels actually entered the scene.
                         if let Some((_,window))=self.managed_windows.iter_mut()
@@ -1720,6 +1729,10 @@ impl CompositorHandler for BridgeState {
                 // synthetic keyboard input or imply native login readiness.
                 if self.managed_xdg_mode && self.dynamic_window_mode &&
                    self.focused.is_none() && self.lifecycle.seat_active() &&
+                   // Never grant first keyboard focus to a minimized role
+                   // merely because it committed an accepted new wl_shm buffer.
+                   self.known_window_surfaces.id_of(surface).is_some_and(|key|
+                       self.dynamic_scene.is_visible(key)==Some(true)) &&
                    self.xdg_shell.toplevel_surfaces().iter()
                        .any(|top|top.wl_surface()==surface) {
                     let keyboard=self.seat.get_keyboard().expect("keyboard");
