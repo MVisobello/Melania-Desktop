@@ -18,6 +18,7 @@ pub struct SnapKeyHandler {
     left_meta:bool,
     right_meta:bool,
     arrows_held:u8,
+    horizontal:Option<SnapZone>,
 }
 
 impl SnapKeyHandler {
@@ -26,10 +27,12 @@ impl SnapKeyHandler {
         match code {
             Some(LEFT_META)=>{
                 self.left_meta=pressed;
+                if !pressed && !self.right_meta {self.horizontal=None;}
                 SnapKeyAction::Forward
             },
             Some(RIGHT_META)=>{
                 self.right_meta=pressed;
+                if !pressed && !self.left_meta {self.horizontal=None;}
                 SnapKeyAction::Forward
             },
             Some(LEFT|RIGHT|UP|DOWN)=>{
@@ -54,10 +57,18 @@ impl SnapKeyHandler {
                 }
                 self.arrows_held |= flag;
                 match code {
-                    LEFT=>SnapKeyAction::Snap(SnapZone::LeftHalf),
-                    RIGHT=>SnapKeyAction::Snap(SnapZone::RightHalf),
-                    UP=>SnapKeyAction::Maximize,
-                    DOWN=>SnapKeyAction::Restore,
+                    LEFT=>{self.horizontal=Some(SnapZone::LeftHalf); SnapKeyAction::Snap(SnapZone::LeftHalf)},
+                    RIGHT=>{self.horizontal=Some(SnapZone::RightHalf); SnapKeyAction::Snap(SnapZone::RightHalf)},
+                    UP=>match self.horizontal.take() {
+                        Some(SnapZone::LeftHalf)=>SnapKeyAction::Snap(SnapZone::TopLeft),
+                        Some(SnapZone::RightHalf)=>SnapKeyAction::Snap(SnapZone::TopRight),
+                        _=>SnapKeyAction::Maximize,
+                    },
+                    DOWN=>match self.horizontal.take() {
+                        Some(SnapZone::LeftHalf)=>SnapKeyAction::Snap(SnapZone::BottomLeft),
+                        Some(SnapZone::RightHalf)=>SnapKeyAction::Snap(SnapZone::BottomRight),
+                        _=>SnapKeyAction::Restore,
+                    },
                     _=>unreachable!(),
                 }
             },
@@ -80,11 +91,46 @@ mod tests {
         assert_eq!(s.event(Some(LEFT),false),SnapKeyAction::Consume);
         assert_eq!(s.event(Some(RIGHT),true),SnapKeyAction::Snap(SnapZone::RightHalf));
         assert_eq!(s.event(Some(RIGHT),false),SnapKeyAction::Consume);
-        assert_eq!(s.event(Some(UP),true),SnapKeyAction::Maximize);
+        assert_eq!(s.event(Some(UP),true),SnapKeyAction::Snap(SnapZone::TopRight));
         assert_eq!(s.event(Some(UP),false),SnapKeyAction::Consume);
         assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Restore);
         assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
         assert_eq!(s.event(Some(LEFT_META),false),SnapKeyAction::Forward);
+    }
+    #[test]
+    fn super_horizontal_then_vertical_snaps_to_quadrants() {
+        for (horizontal,upper,lower) in [
+            (LEFT,SnapZone::TopLeft,SnapZone::BottomLeft),
+            (RIGHT,SnapZone::TopRight,SnapZone::BottomRight),
+        ] {
+            let mut s=SnapKeyHandler::default();
+            s.event(Some(LEFT_META),true);
+            assert!(matches!(s.event(Some(horizontal),true),SnapKeyAction::Snap(_)));
+            assert_eq!(s.event(Some(horizontal),false),SnapKeyAction::Consume);
+            assert_eq!(s.event(Some(UP),true),SnapKeyAction::Snap(upper));
+            assert_eq!(s.event(Some(UP),false),SnapKeyAction::Consume);
+            assert_eq!(s.event(Some(UP),true),SnapKeyAction::Maximize);
+            assert_eq!(s.event(Some(UP),false),SnapKeyAction::Consume);
+            assert!(matches!(s.event(Some(horizontal),true),SnapKeyAction::Snap(_)));
+            assert_eq!(s.event(Some(horizontal),false),SnapKeyAction::Consume);
+            assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Snap(lower));
+            assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
+            assert_eq!(s.event(Some(DOWN),true),SnapKeyAction::Restore);
+            assert_eq!(s.event(Some(DOWN),false),SnapKeyAction::Consume);
+            s.event(Some(LEFT_META),false);
+        }
+    }
+    #[test]
+    fn releasing_last_super_key_discards_pending_quadrant() {
+        let mut s=SnapKeyHandler::default();
+        s.event(Some(LEFT_META),true);
+        s.event(Some(LEFT),true);
+        s.event(Some(LEFT),false);
+        s.event(Some(LEFT_META),false);
+        s.event(Some(LEFT_META),true);
+        assert_eq!(s.event(Some(UP),true),SnapKeyAction::Maximize);
+        s.event(Some(UP),false);
+        s.event(Some(LEFT_META),false);
     }
     #[test]
     fn right_super_and_release_order_never_leak_or_repeat_arrows() {
