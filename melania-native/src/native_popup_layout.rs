@@ -85,6 +85,17 @@ pub fn popup_teardown_order<T:Clone+PartialEq>(
     order
 }
 
+/// Remove only descendant popup roles, never their live parent toplevel.
+/// Used when a toplevel is minimized or destroyed; preserving the root role
+/// identity during minimize prevents an accidental client disconnect.
+pub fn popup_descendant_teardown_order<T:Clone+PartialEq>(
+    parent:&T,relationships:&[(T,T)]
+)->Vec<T> {
+    let mut order=popup_teardown_order(parent,relationships);
+    order.retain(|candidate|candidate!=parent);
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,7 +173,7 @@ pub fn escape_popup_target(
 
 #[cfg(test)]
 mod popup_escape_tests {
-    use super::{escape_popup_target,popup_teardown_order};
+    use super::{escape_popup_target,popup_teardown_order,popup_descendant_teardown_order};
 
     #[test]
     fn deepest_mapped_child_only_under_focused_parent() {
@@ -205,6 +216,14 @@ mod popup_escape_tests {
         assert!(!order.contains(&5));
         assert!(!order.contains(&6));
         assert_eq!(popup_teardown_order(&5,&malformed),vec![6,5]);
+    }
+    #[test]
+    fn parent_minimize_clears_all_nested_menus_but_preserves_toplevel() {
+        let tree=[(1,2),(2,3),(1,4),(8,9),(3,2)];
+        assert_eq!(popup_descendant_teardown_order(&1,&tree),vec![3,2,4]);
+        assert_eq!(popup_descendant_teardown_order(&8,&tree),vec![9]);
+        assert!(popup_descendant_teardown_order(&9,&tree).is_empty());
+        assert!(!popup_descendant_teardown_order(&1,&tree).contains(&1));
     }
     #[test]
     fn self_parent_and_diamond_teardown_visit_each_surface_once() {
