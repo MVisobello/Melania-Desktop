@@ -55,6 +55,47 @@ impl PopupPlacement {
     }
 }
 
+
+/// Deterministic descendant-before-parent teardown of the actual XDG popup
+/// graph. The bridge supplies only its registered Wayland surface identities.
+///
+/// No recursion: malformed parent cycles and duplicated relationships must
+/// neither overflow the compositor's stack nor evict an unrelated tree.
+/// Work and allocations are bounded by the finite registered role list.
+pub fn popup_teardown_order<T:Clone+PartialEq>(
+    root:&T, relationships:&[(T,T)]
+)->Vec<T> {
+    let mut seen=Vec::with_capacity(relationships.len().saturating_add(1));
+    let mut order=Vec::with_capacity(relationships.len().saturating_add(1));
+    let mut pending=vec![(root.clone(),false)];
+    while let Some((current,expanded))=pending.pop() {
+        if expanded {
+            order.push(current);
+            continue;
+        }
+        if seen.contains(&current) {continue;}
+        seen.push(current.clone());
+        pending.push((current.clone(),true));
+        for (parent,child) in relationships.iter().rev() {
+            if parent==&current && !seen.contains(child) {
+                pending.push((child.clone(),false));
+            }
+        }
+    }
+    order
+}
+
+/// Remove only descendant popup roles, never their live parent toplevel.
+/// Used when a toplevel is minimized or destroyed; preserving the root role
+/// identity during minimize prevents an accidental client disconnect.
+pub fn popup_descendant_teardown_order<T:Clone+PartialEq>(
+    parent:&T,relationships:&[(T,T)]
+)->Vec<T> {
+    let mut order=popup_teardown_order(parent,relationships);
+    order.retain(|candidate|candidate!=parent);
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,7 +173,7 @@ pub fn escape_popup_target(
 
 #[cfg(test)]
 mod popup_escape_tests {
-    use super::escape_popup_target;
+    use super::{escape_popup_target,popup_teardown_order,popup_descendant_teardown_order};
 
     #[test]
     fn deepest_mapped_child_only_under_focused_parent() {
@@ -157,4 +198,42 @@ mod popup_escape_tests {
         let roles=[(1,2,true),(2,3,true),(3,2,true)];
         assert_eq!(escape_popup_target(1,&roles),None);
     }
+
+    #[test]
+    fn postorder_evicts_nested_popups_before_ancestors() {
+        // Root 1 owns two menus; menu 2 also owns a submenu.
+        assert_eq!(popup_teardown_order(&1,&[(1,2),(2,3),(1,4)]),
+                   vec![3,2,4,1]);
+        assert_eq!(popup_teardown_order(&7,&[(1,2),(2,3),(1,4)]),
+                   vec![7]);
+    }
+    #[test]
+    fn cyclic_or_duplicate_roles_cannot_recurse_or_evict_other_apps() {
+        let malformed=[(1,2),(2,3),(3,1),(1,2),(5,6)];
+        let order=popup_teardown_order(&1,&malformed);
+        assert_eq!(order,vec![3,2,1]);
+        assert_eq!(order.iter().filter(|item|**item==2).count(),1);
+        assert!(!order.contains(&5));
+        assert!(!order.contains(&6));
+        assert_eq!(popup_teardown_order(&5,&malformed),vec![6,5]);
+    }
+    #[test]
+    fn parent_minimize_clears_all_nested_menus_but_preserves_toplevel() {
+        let tree=[(1,2),(2,3),(1,4),(8,9),(3,2)];
+        assert_eq!(popup_descendant_teardown_order(&1,&tree),vec![3,2,4]);
+        assert_eq!(popup_descendant_teardown_order(&8,&tree),vec![9]);
+        assert!(popup_descendant_teardown_order(&9,&tree).is_empty());
+        assert!(!popup_descendant_teardown_order(&1,&tree).contains(&1));
+    }
+    #[test]
+    fn self_parent_and_diamond_teardown_visit_each_surface_once() {
+        let edges=[(1,1),(1,2),(1,3),(2,4),(3,4)];
+        let order=popup_teardown_order(&1,&edges);
+        assert_eq!(order.len(),4);
+        assert_eq!(order.last(),Some(&1));
+        for role in 1..=4 {
+            assert_eq!(order.iter().filter(|item|**item==role).count(),1);
+        }
+    }
+
 }
