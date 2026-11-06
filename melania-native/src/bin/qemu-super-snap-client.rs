@@ -9,6 +9,7 @@ use wayland_protocols::xdg::shell::client::{xdg_wm_base,xdg_surface,xdg_toplevel
 type Result<T>=std::result::Result<T,Box<dyn Error>>;
 const ORIGINAL:(usize,usize)=(360,224);
 const HALF:(usize,usize)=(640,800);
+const RIGHT_THIRD:(usize,usize)=(427,800);
 const F8_EVDEV:u32=66;
 
 #[derive(Default)]
@@ -20,6 +21,8 @@ struct State {
     configured:bool,
     snapped:bool,
     restored:bool,
+    third_snapped:bool,
+    third_restored:bool,
     size:Option<(usize,usize)>,
     callbacks:u32,
     released:bool,
@@ -48,7 +51,7 @@ impl Dispatch<wl_keyboard::WlKeyboard,()> for State {
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
         if let wl_keyboard::Event::Key{key,state,..}=event {
             if key==F8_EVDEV && state==WEnum::Value(wl_keyboard::KeyState::Pressed) &&
-               s.callbacks==3 {
+               s.callbacks==5 {
                 s.finish_key=true;
                 println!("MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true");
                 let _=std::io::stdout().flush();
@@ -81,9 +84,15 @@ impl Dispatch<xdg_surface::XdgSurface,()> for State {
             if s.size==Some(HALF) {
                 s.snapped=true;
                 println!("MELANIA_NATIVE_SNAP_CLIENT_XDG_HALF_ACK=true");
-            } else if s.snapped && s.size==Some(ORIGINAL) {
+            } else if s.snapped && s.size==Some(ORIGINAL) && s.callbacks==2 {
                 s.restored=true;
                 println!("MELANIA_NATIVE_SNAP_CLIENT_XDG_RESTORE_ACK=true");
+            } else if s.restored && s.size==Some(RIGHT_THIRD) && s.callbacks==3 {
+                s.third_snapped=true;
+                println!("MELANIA_NATIVE_SNAP_CLIENT_XDG_RIGHT_THIRD_ACK=true");
+            } else if s.third_snapped && s.size==Some(ORIGINAL) && s.callbacks==4 {
+                s.third_restored=true;
+                println!("MELANIA_NATIVE_SNAP_CLIENT_XDG_THIRD_RESTORE_ACK=true");
             }
             let _=std::io::stdout().flush();
         }
@@ -130,6 +139,8 @@ fn paint(surface:&wl_surface::WlSurface,shm:&wl_shm::WlShm,
         1=>[62u8,44u8,180u8,0],
         2=>[219u8,175u8,46u8,0],
         3=>[94u8,201u8,34u8,0],
+        4=>[200u8,110u8,190u8,0],
+        5=>[170u8,240u8,70u8,0],
         _=>return Err("unbounded frame".into())
     };
     let mut pixels=vec![0u8;w*h*4];
@@ -204,12 +215,28 @@ fn main()->Result<()> {
     }
     if state.size!=Some(ORIGINAL) {return Err("restore XDG size invalid".into());}
     paint(&surface,&shm,&mut queue,&mut state,ORIGINAL,3)?;
+    // The actual QEMU USB Super+Shift+Right now has to produce a new
+    // XDG configure, client-owned wl_shm buffer and independent KMS ACK.
+    let deadline=Instant::now()+Duration::from_secs(40);
+    while !state.third_snapped {
+        if Instant::now()>=deadline {return Err("Super+Shift+Right xdg configure never ACKed".into());}
+        queue.roundtrip(&mut state)?;
+    }
+    if state.size!=Some(RIGHT_THIRD) {return Err("right third XDG size invalid".into());}
+    paint(&surface,&shm,&mut queue,&mut state,RIGHT_THIRD,4)?;
+    let deadline=Instant::now()+Duration::from_secs(40);
+    while !state.third_restored {
+        if Instant::now()>=deadline {return Err("Super+Shift+Down third restore never ACKed".into());}
+        queue.roundtrip(&mut state)?;
+    }
+    if state.size!=Some(ORIGINAL) {return Err("third restore XDG size invalid".into());}
+    paint(&surface,&shm,&mut queue,&mut state,ORIGINAL,5)?;
     let deadline=Instant::now()+Duration::from_secs(35);
     while !state.finish_key {
         if Instant::now()>=deadline {return Err("physical QMP screenshot release key missing".into());}
         queue.roundtrip(&mut state)?;
     }
-    println!("MELANIA_NATIVE_SNAP_CLIENT_ALL_THREE_REAL_FRAMES_PASS=true");
+    println!("MELANIA_NATIVE_SNAP_CLIENT_ALL_FIVE_REAL_FRAMES_PASS=true");
     std::io::stdout().flush()?;
     top.destroy();
     role.destroy();

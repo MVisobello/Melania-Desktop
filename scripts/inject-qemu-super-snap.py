@@ -55,6 +55,15 @@ def chord(path:Path,arrow:str)->None:
     key(path,arrow,False)
     key(path,"meta_l",False)
 
+def chord_shift(path:Path,arrow:str)->None:
+    # QEMU left Shift is qcode 'shift': this is an actual virtual USB event.
+    key(path,"meta_l",True)
+    key(path,"shift",True)
+    key(path,arrow,True)
+    key(path,arrow,False)
+    key(path,"shift",False)
+    key(path,"meta_l",False)
+
 def pixels(path:Path,samples:list[tuple[str,int,int,tuple[int,int,int]]])->None:
     data=path.read_bytes()
     m=re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s",data)
@@ -119,6 +128,29 @@ def main()->int:
         ("outside-restore-after-bottom",200,344,BG),
     ])
     print("MELANIA_QEMU_SUPER_SNAP_RESTORE_CRTC_PIXELS=true",flush=True)
+    chord_shift(args.qmp,"right")
+    wait(args.serial,"MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=Some(RightThird) 427x800 at 853,0",deadline)
+    wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_XDG_RIGHT_THIRD_ACK=true",deadline)
+    wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_FRAME4_ACK=true",deadline)
+    wait(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=4",deadline)
+    screenshot(args.qmp,args.out_dir/"super-snap-right-third-frame4.ppm",[
+        ("right-third-left-background",852,500,BG),
+        ("right-third-left-edge",853,500,(190,110,200)),
+        ("right-third-right-edge",1279,500,(190,110,200)),
+        ("right-third-top",900,10,(190,110,200)),
+    ])
+    print("MELANIA_QEMU_SUPER_SNAP_RIGHT_THIRD_CRTC_PIXELS=true",flush=True)
+    chord_shift(args.qmp,"down")
+    wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_XDG_THIRD_RESTORE_ACK=true",deadline)
+    wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_FRAME5_ACK=true",deadline)
+    wait(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=5",deadline)
+    screenshot(args.qmp,args.out_dir/"super-snap-third-restored-frame5.ppm",[
+        ("third-restored-left-background",853,500,BG),
+        ("third-restored-window",200,200,(70,240,170)),
+        ("third-restored-top-left",160,120,(70,240,170)),
+        ("third-restored-outside-window",520,200,BG),
+    ])
+    print("MELANIA_QEMU_SUPER_SNAP_THIRD_RESTORE_CRTC_PIXELS=true",flush=True)
     key(args.qmp,"f8",True)
     key(args.qmp,"f8",False)
     wait(args.serial,"MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true",deadline)
