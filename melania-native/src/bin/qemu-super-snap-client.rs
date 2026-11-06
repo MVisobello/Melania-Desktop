@@ -27,6 +27,7 @@ struct State {
     callbacks:u32,
     released:bool,
     finish_key:bool,
+    focus_left_after_finish:bool,
 }
 impl Dispatch<wl_registry::WlRegistry,()> for State {
     fn event(s:&mut Self,r:&wl_registry::WlRegistry,event:wl_registry::Event,
@@ -49,13 +50,23 @@ impl Dispatch<wl_seat::WlSeat,()> for State {
 impl Dispatch<wl_keyboard::WlKeyboard,()> for State {
     fn event(s:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
-        if let wl_keyboard::Event::Key{key,state,..}=event {
-            if key==F8_EVDEV && state==WEnum::Value(wl_keyboard::KeyState::Pressed) &&
-               s.callbacks==5 {
+        match event {
+            wl_keyboard::Event::Key{key,state,..} if
+                key==F8_EVDEV &&
+                state==WEnum::Value(wl_keyboard::KeyState::Pressed) &&
+                s.callbacks==5 => {
                 s.finish_key=true;
                 println!("MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true");
                 let _=std::io::stdout().flush();
-            }
+            },
+            // This real wl_keyboard.leave is delivered only after the
+            // compositor moves focus off our still-live minimized surface.
+            wl_keyboard::Event::Leave{..} if s.finish_key && s.callbacks==5 => {
+                s.focus_left_after_finish=true;
+                println!("MELANIA_NATIVE_SNAP_CLIENT_MINIMIZE_KEYBOARD_LEAVE=true");
+                let _=std::io::stdout().flush();
+            },
+            _=>{},
         }
     }
 }
@@ -236,8 +247,23 @@ fn main()->Result<()> {
         if Instant::now()>=deadline {return Err("physical QMP screenshot release key missing".into());}
         queue.roundtrip(&mut state)?;
     }
+    // Do not destroy the live client when F8 is pressed: the QMP host now
+    // injects *real* USB Super+Down and captures the cleared GPU scanout.
+    // If we destroyed first, empty CRTC pixels would be a false positive.
+    let deadline=Instant::now()+Duration::from_secs(40);
+    while !state.focus_left_after_finish {
+        if Instant::now()>=deadline {
+            return Err("Super+Down did not move keyboard focus off minimized client".into());
+        }
+        queue.roundtrip(&mut state)?;
+    }
+    // Keep the XDG role and client buffer mapped long enough for an actual
+    // host-side QMP screendump. No wl_surface.commit(null), no role destroy
+    // and no client exit until AFTER the verified virtual GPU capture.
+    std::thread::sleep(Duration::from_secs(25));
     println!("MELANIA_NATIVE_SNAP_CLIENT_ALL_FIVE_REAL_FRAMES_PASS=true");
     std::io::stdout().flush()?;
+    println!("MELANIA_NATIVE_SNAP_CLIENT_ROLE_DESTROY_AFTER_MINIMIZE=true");
     top.destroy();
     role.destroy();
     surface.destroy();

@@ -1548,6 +1548,8 @@ for receipt in \
   'MELANIA_NATIVE_SNAP_CLIENT_XDG_RIGHT_THIRD_ACK=true' \
   'MELANIA_NATIVE_SNAP_CLIENT_XDG_THIRD_RESTORE_ACK=true' \
   'MELANIA_NATIVE_SNAP_CLIENT_HOST_RELEASE_ACK=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_MINIMIZE_KEYBOARD_LEAVE=true' \
+  'MELANIA_NATIVE_SNAP_CLIENT_ROLE_DESTROY_AFTER_MINIMIZE=true' \
   'MELANIA_NATIVE_SNAP_CLIENT_ALL_FIVE_REAL_FRAMES_PASS=true'; do
   grep -qx "$receipt" "$snap_client_log" || fatal "snap_client_missing_$receipt"
 done
@@ -1559,6 +1561,10 @@ grep -q '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=Some(RightThird) 427x800 at 853,0
   fatal 'Super_Shift_Right_missing_real_XDG_third'
 [[ $(grep -c '^MELANIA_NATIVE_SUPER_SNAP_CONFIGURED=None 360x224 at 160,120$' "$snap_server_log") -ge 2 ]] ||
   fatal 'Super_Shift_Down_missing_real_XDG_restore'
+grep -qx 'MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true' "$snap_server_log" ||
+  fatal 'Super_Down_normal_did_not_minimize_live_XDG_role'
+grep -qx 'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=6' "$snap_server_log" ||
+  fatal 'Super_Down_minimize_did_not_clear_real_KMS_frame6'
 kill -TERM "$snap_server_pid"
 if ! wait "$snap_server_pid"; then
   cat "$snap_server_log" "$snap_client_log"
