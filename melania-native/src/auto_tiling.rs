@@ -37,6 +37,11 @@ pub enum TileError {
     CannotFit,
 }
 
+/// Physical direction in logical output coordinates. This policy never
+/// changes client geometry until the Wayland bridge issues XDG configure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileDirection { Left, Right, Up, Down }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TilePlacement {
     pub window_id: u64,
@@ -127,6 +132,40 @@ impl AutoTiling {
         self.members.swap(ia, ib);
         Ok(())
     }
+    /// COSMIC Super+X + direction: swap the focused *eligible* tile with
+    /// the nearest tile in the requested direction. Never swap a floating,
+    /// minimized or XDG-role-excluded window. If the direction has no
+    /// neighbor, the layout is untouched. All decisions use a complete,
+    /// validated current work-area plan (not stale cached rectangles).
+    /// The compositor remains responsible for configure, buffer ACK,
+    /// focus and KMS presentation; this is only an ordering transaction.
+    pub fn swap_direction(
+        &mut self, focused: u64, direction: TileDirection,
+        work: WindowRect, output_width: i32, output_height: i32,
+    ) -> Result<Option<u64>, TileError> {
+        if !self.members.iter().any(|member| member.id==focused) {
+            return Err(TileError::UnknownWindow);
+        }
+        let Some(plan)=self.plan(work,output_width,output_height)? else {
+            return Ok(None);
+        };
+        let Some(from)=plan.iter().find(|entry|entry.window_id==focused) else {
+            return Ok(None);
+        };
+        let mut best: Option<((u8,i64,i64,usize),u64)> = None;
+        for (index,entry) in plan.iter().enumerate() {
+            if entry.window_id==focused {continue;}
+            let Some((alignment,distance,offset))=
+                directional_score(from.rect,entry.rect,direction) else {continue;};
+            let score=(alignment,distance,offset,index);
+            if best.as_ref().is_none_or(|(old,_)|score<*old) {
+                best=Some((score,entry.window_id));
+            }
+        }
+        let Some((_,target))=best else{return Ok(None);};
+        self.swap(focused,target)?;
+        Ok(Some(target))
+    }
     pub fn member_count(&self) -> usize { self.members.len() }
 
     /// Return None when automatic tiling is off; never change stored floating
@@ -152,6 +191,37 @@ impl AutoTiling {
         }
         Ok(Some(result))
     }
+}
+
+/// Prefer neighbors whose orthogonal projections overlap (real row/column
+/// adjacency); among these, prefer the nearest center in the selected
+/// direction. Doubled integer centers preserve half-pixel positions exactly.
+fn directional_score(
+    from: WindowRect, to: WindowRect, direction: TileDirection,
+) -> Option<(u8,i64,i64)> {
+    let fx=i64::from(from.x)*2+i64::from(from.width);
+    let fy=i64::from(from.y)*2+i64::from(from.height);
+    let tx=i64::from(to.x)*2+i64::from(to.width);
+    let ty=i64::from(to.y)*2+i64::from(to.height);
+    let (forward,lateral,overlaps)=match direction {
+        TileDirection::Left=>(
+            fx-tx,(fy-ty).abs(),
+            from.y < to.y+to.height && to.y < from.y+from.height,
+        ),
+        TileDirection::Right=>(
+            tx-fx,(fy-ty).abs(),
+            from.y < to.y+to.height && to.y < from.y+from.height,
+        ),
+        TileDirection::Up=>(
+            fy-ty,(fx-tx).abs(),
+            from.x < to.x+to.width && to.x < from.x+from.width,
+        ),
+        TileDirection::Down=>(
+            ty-fy,(fx-tx).abs(),
+            from.x < to.x+to.width && to.x < from.x+from.width,
+        ),
+    };
+    (forward>0).then_some((u8::from(!overlaps),forward,lateral))
 }
 
 /// Recursive balanced partitions. Alternate axes to avoid a single strip,
@@ -283,6 +353,49 @@ mod tests {
         assert_eq!(ids, vec![2, 1]);
         assert_eq!(t.swap(1, 99), Err(TileError::UnknownWindow));
         assert_eq!(t.member_count(), 2);
+    }
+    #[test]
+    fn directional_swap_prefers_aligned_neighbors_not_diagonal() {
+        let mut t=tiler(4);
+        let before=t.plan(work(),1920,1080).unwrap().unwrap();
+        // Alternating split: upper-left 1, lower-left 2,
+        // upper-right 3, lower-right 4.
+        assert_eq!(before[0].window_id,1);
+        assert_eq!(t.swap_direction(1,TileDirection::Up,work(),1920,1080),
+                   Ok(None));
+        assert_eq!(t.swap_direction(1,TileDirection::Right,work(),1920,1080),
+                   Ok(Some(3)));
+        let after=t.plan(work(),1920,1080).unwrap().unwrap();
+        assert_eq!(after[0].window_id,3);
+        assert_eq!(after[2].window_id,1);
+        assert_eq!(t.swap_direction(1,TileDirection::Down,work(),1920,1080),
+                   Ok(Some(4)));
+    }
+    #[test]
+    fn directional_swap_ignores_excluded_tiles_and_invalid_actions() {
+        let mut t=tiler(4);
+        t.set_floating(3,true).unwrap();
+        t.set_minimized(4,true).unwrap();
+        assert_eq!(t.swap_direction(3,TileDirection::Right,work(),1920,1080),
+                   Ok(None));
+        assert_eq!(t.swap_direction(4,TileDirection::Left,work(),1920,1080),
+                   Ok(None));
+        assert_eq!(t.swap_direction(1,TileDirection::Right,work(),1920,1080),
+                   Ok(Some(2)));
+        assert_eq!(t.swap_direction(99,TileDirection::Right,work(),1920,1080),
+                   Err(TileError::UnknownWindow));
+        t.set_enabled(false);
+        assert_eq!(t.swap_direction(1,TileDirection::Left,work(),1920,1080),
+                   Ok(None));
+    }
+    #[test]
+    fn directional_swap_preserves_order_when_layout_cannot_fit() {
+        let mut t=tiler(8);
+        let before=t.members.iter().map(|m|m.id).collect::<Vec<_>>();
+        assert_eq!(t.swap_direction(1,TileDirection::Right,
+                   WindowRect{x:0,y:0,width:200,height:160},200,160),
+                   Err(TileError::CannotFit));
+        assert_eq!(t.members.iter().map(|m|m.id).collect::<Vec<_>>(),before);
     }
     #[test]
     fn too_many_windows_bad_ids_and_invalid_gaps_are_rejected() {
