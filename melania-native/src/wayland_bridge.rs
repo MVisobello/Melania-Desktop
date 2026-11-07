@@ -1203,8 +1203,10 @@ impl BridgeState {
         };
 
         // Commit geometry requests only after the complete layout is valid.
-        // The old retained image is not moved; the existing client commit
-        // path requires exact pending sizes and applies the new position.
+        // For changed sizes, wait for the client's matching wl_shm buffer.
+        // For position-only changes, already-accepted owned pixels can be
+        // moved by the compositor directly: xdg_toplevel has no (x,y)
+        // configure and clients need not commit a new same-sized buffer.
         let mut changes=Vec::new();
         for placement in placements {
             let Some(surface)=self.known_window_surfaces.get(placement.window_id).cloned()
@@ -1215,7 +1217,36 @@ impl BridgeState {
                 changes.push((surface,placement.rect));
             }
         }
+        let mut retained_scene_moved=false;
         for (surface,rect) in changes {
+            // NEVER relocate pixels with an outstanding XDG resize or an
+            // uncommitted size. This path is valid only for an existing,
+            // visible, already-owned shm image of the *same* dimensions.
+            let pending=self.managed_pending_sizes.iter().any(|(role,_)|role==&surface)
+                || self.managed_pending_resize.iter().any(|(role,_)|role==&surface);
+            if !pending && self.lifecycle.seat_active() &&
+               !self.native_presentation_guard.permanently_revoked() {
+                if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+                    if let Some((x,y,width,height))=self.dynamic_scene.geometry(key) {
+                        if width==rect.width as usize && height==rect.height as usize &&
+                           self.dynamic_scene.is_visible(key)==Some(true) {
+                            if (x,y)!=(rect.x,rect.y) {
+                                if self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
+                                    self.reposition_native_popups_for_parent(key);
+                                    retained_scene_moved=true;
+                                    println!("MELANIA_NATIVE_AUTO_TILE_RETAINED_MOVE={key} x={} y={}",
+                                        rect.x,rect.y);
+                                    continue;
+                                }
+                            } else {
+                                // Current client pixels and geometry already
+                                // match; no XDG configure or new KMS work.
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
             let top=self.xdg_shell.toplevel_surfaces().iter()
                 .find(|top|top.wl_surface()==&surface).cloned();
             let Some(top)=top else {continue;};
@@ -1232,6 +1263,16 @@ impl BridgeState {
             ));
             println!("MELANIA_NATIVE_AUTO_TILE_XDG_CONFIGURED={}x{} at {},{}",
                 rect.width,rect.height,rect.x,rect.y);
+        }
+        if retained_scene_moved {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("native tiled retained-frame swap rejected: {error}");
+                }
+            }
         }
     }
 
