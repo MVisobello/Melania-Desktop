@@ -83,7 +83,11 @@ impl NativeFlipLedger {
     /// in a production login compositor or on a host physical GPU.
     pub fn complete_vm_flip(&mut self, frame: u32) -> Result<(), FlipLedgerError> {
         if self.revoked { return Err(FlipLedgerError::Revoked); }
-        if !self.pending { return Err(FlipLedgerError::UnexpectedCompletion); }
+        if !self.pending {
+            // VM events must invalidate the epoch exactly like physical DRM.
+            self.revoke();
+            return Err(FlipLedgerError::UnexpectedCompletion);
+        }
         let counter_moved_forward = self.last_vblank.is_none_or(|last| {
             let distance=frame.wrapping_sub(last);
             distance!=0 && distance < (1u32 << 31)
