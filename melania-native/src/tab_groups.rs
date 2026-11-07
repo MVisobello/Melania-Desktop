@@ -269,6 +269,66 @@ mod tests {
         assert_eq!(t.window_count(),MAX_STACK_WINDOWS);
     }
     #[test]
+    fn owned_scene_pixels_and_pointer_follow_active_tab_only() {
+        use crate::dynamic_window_scene::{
+            DynamicWindowScene, WindowPixels, DynamicAlpha
+        };
+        let solid=|color:[u8;4]|{
+            let mut pixels=vec![0;32*24*4];
+            for part in pixels.chunks_exact_mut(4){part.copy_from_slice(&color);}
+            WindowPixels::new(32,24,DynamicAlpha::Opaque,pixels).unwrap()
+        };
+        let mut groups=groups(&[1,2]);
+        let mut scene=DynamicWindowScene::new(96,64,[1,2,3,0]).unwrap();
+        scene.upsert(1,4,4,solid([9,20,30,0])).unwrap();
+        scene.upsert(2,52,4,solid([70,80,90,0])).unwrap();
+        let budget=scene.used_bytes();
+        let before=scene.generation();
+        assert!(scene.confirm_presented_damage(before));
+        groups.toggle_stacking(1).unwrap();
+        groups.attach(2,1).unwrap();
+        scene.move_to(2,4,4).unwrap();
+        assert_eq!(groups.visible(1),Ok(false));
+        assert_eq!(scene.set_visible(1,false),Ok(true));
+        assert_eq!(scene.hit_test(10.0,10.0),Some(2));
+        assert_eq!(scene.hit_test(60.0,10.0),None);
+        let current=scene.composite().unwrap();
+        assert_eq!(&current[(10*96+10)*4..(10*96+10)*4+3], &[70,80,90]);
+        assert_eq!(groups.cycle(2,false),Ok(Some(1)));
+        assert!(scene.set_visible(2,false).unwrap());
+        assert!(scene.set_visible(1,true).unwrap());
+        assert_eq!(scene.hit_test(10.0,10.0),Some(1));
+        let first=scene.composite().unwrap();
+        assert_eq!(&first[(10*96+10)*4..(10*96+10)*4+3], &[9,20,30]);
+        assert_eq!(scene.used_bytes(),budget);
+        assert!(!scene.confirm_presented_damage(before));
+        assert!(scene.confirm_presented_damage(scene.generation()));
+    }
+    #[test]
+    fn active_tab_closure_keeps_surviving_real_window_visible() {
+        use crate::dynamic_window_scene::{
+            DynamicWindowScene, WindowPixels, DynamicAlpha
+        };
+        let make=||WindowPixels::new(12,12,DynamicAlpha::Opaque,
+            vec![50;12*12*4]).unwrap();
+        let mut groups=groups(&[1,2]);
+        let mut scene=DynamicWindowScene::new(60,40,[1,1,1,0]).unwrap();
+        scene.upsert(1,4,4,make()).unwrap();
+        scene.upsert(2,4,4,make()).unwrap();
+        groups.toggle_stacking(1).unwrap();
+        groups.attach(2,1).unwrap();
+        scene.set_visible(1,false).unwrap();
+        assert_eq!(scene.hit_test(6.0,6.0),Some(2));
+        assert!(groups.forget(2));
+        assert!(scene.remove(2));
+        assert_eq!(groups.visible(1),Ok(true));
+        assert!(scene.set_visible(1,true).unwrap());
+        assert_eq!(scene.hit_test(6.0,6.0),Some(1));
+        assert_eq!(scene.window_count(),1);
+        assert_eq!(scene.used_bytes(),12*12*4);
+    }
+
+    #[test]
     fn joining_from_active_stack_repairs_source_selection() {
         let mut t=groups(&[1,2,3,4]);
         t.toggle_stacking(1).unwrap();
