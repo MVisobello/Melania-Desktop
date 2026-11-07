@@ -90,6 +90,28 @@ fi
 rm -f "$input_log"
 report 'MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true'
 
+# Exercise real libseat/seatd DRM FD acquisition, close, and reopen in the
+# disposable VM. This intentionally DOES NOT simulate a VT switch, render,
+# claim KMS ownership, or touch the original framebuffer.
+readonly_reopen_log="$(mktemp -t melania-qemu-readonly-reopen-XXXXXX)"
+if ! MELANIA_NATIVE_READONLY_CYCLE=YES_QEMU_VM timeout --signal=TERM --kill-after=3s 20s \
+  "$binary" --experimental-vt-reacquire < /dev/tty1 | tee "$readonly_reopen_log"; then
+  cat "$readonly_reopen_log"
+  rm -f "$readonly_reopen_log"
+  fatal 'native_real_libseat_DRM_reopen_failed'
+fi
+if ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=1 crtcs=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=2 crtcs=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACQUISITIONS=2$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACTUAL_PAUSE_OBSERVED=false$' "$readonly_reopen_log"; then
+  cat "$readonly_reopen_log"
+  rm -f "$readonly_reopen_log"
+  fatal 'native_libseat_DRM_reopen_evidence_missing'
+fi
+rm -f "$readonly_reopen_log"
+report 'MELANIA_QEMU_REAL_LIBSEAT_DRM_REOPEN_PASS=true'
+
 # Try the genuine Rust/Smithay KMS preflight, not a C substitute or mock.
 # It is TEST_ONLY and never issues an atomic commit/page flip/scanout.
 set +e

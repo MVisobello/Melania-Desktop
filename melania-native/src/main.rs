@@ -1,7 +1,7 @@
 //! Experimental *seat/hotplug event-loop* test — NOT a native compositor.
 //! Must be invoked explicitly in a dedicated TTY or VM; never from a login
 //! manager and never as an automatic fallback from the nested compositor.
-use std::{env, error::Error, fs, os::unix::fs::FileTypeExt, path::Path, time::Duration};
+use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::FileTypeExt}, path::Path, time::Duration};
 use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
@@ -194,6 +194,118 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     let (keyboards,pointers,touch)=state.input_registry().counts();
     println!("MELANIA_NATIVE_INPUT_ENUMERATED keyboards={keyboards} pointers={pointers} touch={touch} forwarded=false");
     println!("MELANIA_NATIVE_INPUT_WAYLAND_READY=false");
+    println!("NATIVE_SESSION_READY=false");
+    Ok(())
+}
+
+/// Real libseat DRM descriptor acquisition/release/reopen exercise.
+/// This probe never calls set_crtc, page_flip or enables Wayland presentation.
+/// The QEMU-only forced cycle proves two real seatd opens, NOT a VT switch.
+/// A real pause/resume requires an external VT switch and physical validation.
+fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
+    assert_dedicated_console();
+    let forced_cycle=match env::var("MELANIA_NATIVE_READONLY_CYCLE").ok().as_deref() {
+        None=>false,
+        Some("YES_QEMU_VM")=>{
+            assert_qemu_test_guest();
+            true
+        }
+        Some(_)=>blocked("Invalid read-only libseat cycle opt-in"),
+    };
+    let (mut session,notifier)=LibSeatSession::new()?;
+    let seat=session.seat().to_string();
+    let udev=UdevBackend::new(&seat)?;
+    let initial=udev.device_list()
+        .map(|(id,path)|(id as u64,path.to_path_buf())).collect::<Vec<_>>();
+    let mut state=NativeLifecycle::default();
+    if session.is_active() {state.on_session(SessionEvent::ActivateSession);}
+    for (id,path) in initial {
+        state.on_device(melania_native::DeviceChange::Added{id,path});
+    }
+    let mut event_loop=calloop::EventLoop::<NativeLifecycle>::try_new()?;
+    event_loop.handle().insert_source(notifier,|event,_,state|{
+        state.on_session(event);
+    })?;
+    event_loop.handle().insert_source(udev,|event,_,state|{
+        state.on_udev(event);
+    })?;
+
+    // The owned FD stays inside this probe; never persist across libseat
+    // pause, GPU hotplug, or another acquisition epoch. No DMA-BUF is made.
+    let mut owned:Option<(melania_native::device_epoch::DeviceEpoch,OwnedFd)>=None;
+    let mut opened=0u32;
+    let mut observed_pause=false;
+    let mut cycled=false;
+    let cycles=if forced_cycle {40} else {300};
+    for _ in 0..cycles {
+        event_loop.dispatch(Some(Duration::from_millis(100)),&mut state)?;
+        let active=session.is_active() && state.seat_active();
+        if let Some((epoch,_))=owned.as_ref() {
+            if !active || epoch.verify(&state).is_err() {
+                let unexpected_change=active;
+                let (_,fd)=owned.take().expect("owned read-only descriptor");
+                // On any libseat pause, release our actual DRM descriptor.
+                // If seatd refuses the release, abort without new opens.
+                session.close(fd)?;
+                if unexpected_change {
+                    return Err("DRM GPU changed while seat remained active; refusing stale reopen".into());
+                }
+                observed_pause=true;
+                println!("MELANIA_NATIVE_VT_READONLY_PAUSED=true");
+            }
+        }
+        if active && owned.is_none() {
+            let watch=melania_native::native_gpu_watch::NativeGpuWatch::from_discovered(
+                state.devices().iter().map(|(id,path)|(*id,path.clone())),
+            );
+            let card_path=watch.single_primary_card()
+                .map_err(|err|format!("Read-only DRM GPU selection refused: {err:?}"))?
+                .to_path_buf();
+            let id=*state.devices().iter()
+                .find(|(_,path)|**path==card_path)
+                .map(|(id,_)|id)
+                .ok_or("Read-only DRM card no longer present on seat")?;
+            let epoch=melania_native::device_epoch::DeviceEpoch::capture(
+                &state,id,&card_path,
+            ).map_err(|err|format!("Read-only DRM epoch unavailable: {err:?}"))?;
+            // Actual libseat/seatd acquisition, NEVER a direct /dev/dri open.
+            let fd=session.open(&card_path,
+                OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK)?;
+            let crtcs={
+                // Duplicate only to make real DRM resource ioctls through
+                // drm-rs. Drop this clone BEFORE handing FD back to libseat.
+                let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
+                card.resource_handles()?.crtcs().len()
+            };
+            event_loop.dispatch(Some(Duration::ZERO),&mut state)?;
+            if !session.is_active() || epoch.verify(&state).is_err() {
+                session.close(fd)?;
+                return Err("Seat/GPU invalidated during real DRM reacquisition".into());
+            }
+            if crtcs==0 {
+                session.close(fd)?;
+                return Err("Libseat-owned DRM card has no CRTC resources".into());
+            }
+            opened=opened.checked_add(1).ok_or("DRM acquisition counter overflow")?;
+            println!("MELANIA_NATIVE_VT_READONLY_DRM_OPEN={} crtcs={crtcs}",opened);
+            owned=Some((epoch,fd));
+        }
+        if forced_cycle && !cycled && owned.is_some() {
+            // This tests a real FD close+new libseat open on VirtIO without
+            // faking a PauseSession event or claiming a VT acceptance test.
+            let (_,fd)=owned.take().expect("first DRM acquisition");
+            session.close(fd)?;
+            cycled=true;
+            println!("MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true");
+        }
+        if forced_cycle && cycled && opened==2 {break;}
+    }
+    if let Some((_,fd))=owned.take() {session.close(fd)?;}
+    if forced_cycle && (!cycled || opened!=2) {
+        return Err("QEMU real libseat DRM descriptor reopen not observed".into());
+    }
+    println!("MELANIA_NATIVE_VT_READONLY_ACQUISITIONS={opened}");
+    println!("MELANIA_NATIVE_VT_READONLY_ACTUAL_PAUSE_OBSERVED={observed_pause}");
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }
@@ -562,6 +674,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        [flag] if flag=="--experimental-vt-reacquire" =>{
+            if let Err(error)=experimental_vt_reacquire() {
+                eprintln!("Melania read-only libseat DRM reacquisition: {error}");
+                std::process::exit(1);
+            }
+        }
         [flag] if flag=="--experimental-drm" =>{
             if let Err(error)=experimental_drm(false,false){
                 eprintln!("Melania native stage2: {error}");
@@ -604,7 +722,7 @@ fn main() {
             }
         }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-gbm-kms-scanout | --experimental-kms-test");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-vt-reacquire | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-gbm-kms-scanout | --experimental-kms-test");
             std::process::exit(2);
         }
     }
