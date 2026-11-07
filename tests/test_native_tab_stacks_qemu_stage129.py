@@ -33,7 +33,7 @@ class NativeTabStackQemu(unittest.TestCase):
         for value in (
             '"execute": "input-send-event"',
             '"execute": "screendump"',
-            'key(args.qmp, "f8", True)',
+            'key(args.qmp,"f8",True)',
             'chord(args.qmp,"s",shift=True)',
             'chord(args.qmp,"pgup")',
             'chord(args.qmp,"pgdn")',
