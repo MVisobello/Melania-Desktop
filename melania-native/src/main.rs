@@ -306,7 +306,12 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                     return Err(error);
                 }
             };
-            event_loop.dispatch(Some(Duration::ZERO),&mut state)?;
+            // A notifier/udev polling error must also release the actual
+            // seatd-owned FD before aborting: never strand GPU ownership.
+            if let Err(error)=event_loop.dispatch(Some(Duration::ZERO),&mut state) {
+                session.close(fd)?;
+                return Err(error.into());
+            }
             if !session.is_active() || epoch.verify(&state).is_err() {
                 session.close(fd)?;
                 return Err("Seat/GPU invalidated during real DRM reacquisition".into());
