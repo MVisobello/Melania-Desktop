@@ -310,7 +310,7 @@ pub fn qemu_wayland_gpu_scene_stream(
              topology.active.len());
     let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
-        let mut prior_identity:Option<(u64,u64,u64)>=None;
+        let mut prior_identity:Option<crate::native_frame_order::FrameIdentity>=None;
         // Retain two fixed-size CPU staging buffers for the entire GPU
         // presenter lifetime. Neither a client commit nor a KMS flip may
         // allocate another 4 MiB scene Vec. The previous buffer is marked
@@ -340,9 +340,9 @@ pub fn qemu_wayland_gpu_scene_stream(
             if length!=W*H*4 || sequence==0 {
                 return Err("GPU Wayland scene has invalid frame buffer dimensions".into());
             }
-            if prior_identity.is_some_and(|(old_epoch,old_sequence,old_generation)|
-                epoch!=old_epoch || sequence<=old_sequence || generation<=old_generation
-            ) {
+            let identity=crate::native_frame_order::FrameIdentity::new(
+                epoch,sequence,generation);
+            if !identity.accepted_after(prior_identity,persistent) {
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
             stream.read_exact(&mut pixels)?;
@@ -425,7 +425,7 @@ pub fn qemu_wayland_gpu_scene_stream(
             println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("GPU Wayland compositor frame counter exhausted")?;
-            prior_identity=Some((epoch,sequence,generation));
+            prior_identity=Some(identity);
             std::mem::swap(&mut pixels,&mut prior_pixels);
             have_prior_pixels=true;
         }
