@@ -99,6 +99,9 @@ impl Restore<'_> {
         println!("MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE={attached}");
         println!("MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE={}",self.restored);
         if !self.restored {
+            // Unknown post-restore state is not proof of continued DRM
+            // ownership: Drop must not blindly repeat the modeset.
+            self.ownership_lost=true;
             return Err("QEMU GPU-generated framebuffer original CRTC restore failed".into());
         }
         Ok(())
@@ -106,7 +109,7 @@ impl Restore<'_> {
 }
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
-        if self.submitted && !self.restored {
+        if self.submitted && !self.restored && !self.ownership_lost {
             let _=self.restore();
         }
     }

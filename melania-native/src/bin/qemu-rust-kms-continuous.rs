@@ -156,13 +156,18 @@ impl Restore<'_> {
             && connector_attached;
         println!("MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED={connector_attached}");
         println!("MELANIA_RUST_KMS_RESTORE_VERIFIED={}",self.restored);
-        if !self.restored {return Err("Rust KMS CRTC restore mismatch".into());}
+        if !self.restored {
+            // A verified mismatch may mean another DRM owner took over
+            // after our modeset. Never let Drop attempt that modeset again.
+            self.ownership_lost=true;
+            return Err("Rust KMS CRTC restore mismatch".into());
+        }
         Ok(())
     }
 }
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
-        if self.submitted && !self.restored {
+        if self.submitted && !self.restored && !self.ownership_lost {
             // Best-effort safety recovery even on an intermediate error.
             let _=self.restore();
         }

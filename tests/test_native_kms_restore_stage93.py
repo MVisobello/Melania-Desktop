@@ -50,6 +50,16 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
                 )
             self.assertGreaterEqual(restore.count("self.ownership_lost=true;"), 3)
             self.assertNotIn(".get_encoder(encoder).ok()", restore)
+            # A readable but mismatching post-restore CRTC or connector
+            # is equally unsafe: no automatic retry on destruction.
+            self.assertRegex(
+                restore, r"if !self\.restored\s*\{\s*self\.ownership_lost=true;"
+            )
+            drop = source[source.index("impl Drop for Restore", end):]
+            self.assertIn(
+                "if self.submitted && !self.restored && !self.ownership_lost",
+                drop,
+            )
 
     def test_failed_modeset_still_enters_rollback_guard(self):
         block = RECEIVER[RECEIVER.index("if index==0 {"):]
