@@ -5,7 +5,7 @@ pub enum VtPhase {Detached,Active,Suspending,Suspended,Restoring}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct VtFramePermit {epoch:u64}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum VtTransitionError {InvalidTransition}
+pub enum VtTransitionError {InvalidTransition,EpochExhausted}
 
 #[derive(Debug)]
 pub struct VtHandoff {phase:VtPhase,epoch:u64}
@@ -16,8 +16,14 @@ impl VtHandoff {
     pub fn phase(&self)->VtPhase {self.phase}
     pub fn epoch(&self)->u64 {self.epoch}
     fn transition(&mut self,expected:VtPhase,next:VtPhase)->Result<(),VtTransitionError> {
+        if self.epoch==u64::MAX {return Err(VtTransitionError::EpochExhausted);}
         if self.phase!=expected {return Err(VtTransitionError::InvalidTransition);}
-        self.epoch=self.epoch.wrapping_add(1);
+        let Some(next_epoch)=self.epoch.checked_add(1) else {
+            // Never recycle an old permit after a device/session epoch wraps.
+            self.phase=VtPhase::Detached;
+            return Err(VtTransitionError::EpochExhausted);
+        };
+        self.epoch=next_epoch;
         self.phase=next;
         Ok(())
     }
@@ -37,7 +43,9 @@ impl VtHandoff {
         self.transition(VtPhase::Restoring,VtPhase::Active)
     }
     pub fn abort(&mut self) {
-        self.epoch=self.epoch.wrapping_add(1);
+        // Exhaustion permanently prevents a new Active permit. The phase
+        // remains detached even when abort is called repeatedly.
+        self.epoch=self.epoch.saturating_add(1);
         self.phase=VtPhase::Detached;
     }
     pub fn permit(&self)->Option<VtFramePermit> {
@@ -65,6 +73,19 @@ mod tests {
         v.confirm_resources_restored().unwrap();
         assert!(!v.valid(before));
         assert!(v.permit().is_some());
+    }
+    #[test]
+    fn exhausted_epoch_never_reissues_old_presentation_permit() {
+        let mut v=VtHandoff {phase:VtPhase::Active,epoch:u64::MAX-1};
+        let old=v.permit().unwrap();
+        v.begin_pause().unwrap();
+        assert_eq!(v.epoch(),u64::MAX);
+        assert!(!v.valid(old));
+        assert_eq!(v.confirm_paused(),Err(VtTransitionError::EpochExhausted));
+        v.abort();
+        assert_eq!(v.phase(),VtPhase::Detached);
+        assert_eq!(v.acquire(),Err(VtTransitionError::EpochExhausted));
+        assert!(v.permit().is_none());
     }
     #[test]
     fn out_of_order_resume_and_abort_fail_closed() {
