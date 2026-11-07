@@ -13,6 +13,8 @@ pub enum DownShortcutAction { Minimize, Restore, Ignore }
 #[derive(Debug)]
 pub struct ManagedWindow {
     normal:WindowRect,
+    // Active tiling overlays geometry without overwriting the floating restore rect.
+    tiled:Option<WindowRect>,
     state:WindowDisplayState,
     before_minimise:WindowDisplayState,
     output_width:i32,
@@ -24,13 +26,26 @@ impl ManagedWindow {
         if width<96 || height<72 || width>16384 || height>16384 ||
            !geometry.valid_for(width,height) {return None;}
         Some(Self {
-            normal:geometry,state:WindowDisplayState::Normal,
+            normal:geometry,tiled:None,state:WindowDisplayState::Normal,
             before_minimise:WindowDisplayState::Normal,
             output_width:width,output_height:height,
             work_area:WindowRect{x:0,y:0,width,height},
         })
     }
     pub fn state(&self)->WindowDisplayState {self.state}
+    pub fn is_tiled(&self)->bool {self.tiled.is_some()}
+    /// A tile is only a requested rectangle. The Wayland bridge waits for
+    /// matching XDG ACK/client pixels before display and KMS presentation.
+    pub fn set_tiled_geometry(&mut self,rect:WindowRect)->bool {
+        if self.state!=WindowDisplayState::Normal ||
+           !rect.valid_for(self.output_width,self.output_height) ||
+           self.tiled==Some(rect) {return false;}
+        self.tiled=Some(rect);
+        true
+    }
+    /// Disabling tiling restores the last client-originated floating rectangle.
+    pub fn clear_tiled_geometry(&mut self)->bool { self.tiled.take().is_some() }
+
     pub fn down_shortcut_action(&self)->DownShortcutAction {
         match self.state {
             WindowDisplayState::Normal=>DownShortcutAction::Minimize,
@@ -59,7 +74,7 @@ impl ManagedWindow {
     }
     pub fn geometry(&self)->Option<WindowRect> {
         match self.state {
-            WindowDisplayState::Normal=>Some(self.normal),
+            WindowDisplayState::Normal=>Some(self.tiled.unwrap_or(self.normal)),
             WindowDisplayState::Maximized=>Some(self.work_area),
             WindowDisplayState::Fullscreen=>
                 Some(WindowRect{x:0,y:0,width:self.output_width,height:self.output_height}),
@@ -71,7 +86,7 @@ impl ManagedWindow {
     /// Synchronize the remembered restore rectangle with a real, bounded
     /// client commit or compositor move. Never overwrite it while maximized.
     pub fn update_normal_geometry(&mut self,rect:WindowRect)->bool {
-        if self.state!=WindowDisplayState::Normal ||
+        if self.state!=WindowDisplayState::Normal || self.tiled.is_some() ||
            !rect.valid_for(self.output_width,self.output_height) || self.normal==rect {
             return false;
         }
@@ -86,15 +101,18 @@ impl ManagedWindow {
            snap_rect(zone,self.work_area,
                 self.output_width,self.output_height).is_none() ||
            self.state==WindowDisplayState::Snapped(zone) {return false;}
+        self.tiled=None;
         self.state=WindowDisplayState::Snapped(zone);
         true
     }
     pub fn maximize(&mut self)->bool {
         if self.state==WindowDisplayState::Maximized {return false;}
+        self.tiled=None;
         self.state=WindowDisplayState::Maximized;true
     }
     pub fn fullscreen(&mut self)->bool {
         if self.state==WindowDisplayState::Fullscreen{return false;}
+        self.tiled=None;
         self.state=WindowDisplayState::Fullscreen;true
     }
     pub fn minimize(&mut self)->bool {
@@ -119,6 +137,8 @@ impl ManagedWindow {
         // A changed connector mode invalidates old panel reservations.
         // A newly mapped layer-shell surface must explicitly reapply them.
         self.work_area=WindowRect{x:0,y:0,width,height};
+        // Layout is output-specific; stale monitor tiles are never reapplied.
+        self.tiled=None;
         self.normal.width=self.normal.width.min(width);
         self.normal.height=self.normal.height.min(height);
         self.normal.x=self.normal.x.clamp(0,width-self.normal.width);
@@ -138,6 +158,45 @@ impl ManagedWindow {
         true
     }
 }
+#[cfg(test)]
+mod tiling_tests {
+    use super::*;
+    #[test]
+    fn tile_does_not_destroy_floating_restore_geometry() {
+        let initial=WindowRect{x:100,y:90,width:420,height:300};
+        let tile=WindowRect{x:0,y:0,width:640,height:800};
+        let mut w=ManagedWindow::new(initial,1280,800).unwrap();
+        assert!(w.set_tiled_geometry(tile));
+        assert!(w.is_tiled());
+        assert_eq!(w.geometry(),Some(tile));
+        assert!(!w.update_normal_geometry(tile));
+        assert!(!w.set_tiled_geometry(tile));
+        assert!(w.clear_tiled_geometry());
+        assert_eq!(w.geometry(),Some(initial));
+        assert!(!w.clear_tiled_geometry());
+    }
+    #[test]
+    fn fullscreen_maximize_and_output_change_revoke_stale_tiles() {
+        let initial=WindowRect{x:120,y:100,width:420,height:300};
+        let tile=WindowRect{x:0,y:0,width:640,height:800};
+        let mut w=ManagedWindow::new(initial,1280,800).unwrap();
+        assert!(w.set_tiled_geometry(tile));
+        assert!(w.maximize());
+        assert!(!w.is_tiled());
+        assert!(w.restore());
+        assert_eq!(w.geometry(),Some(initial));
+        assert!(w.set_tiled_geometry(tile));
+        assert!(w.fullscreen());
+        assert!(!w.is_tiled());
+        assert!(w.restore());
+        assert_eq!(w.geometry(),Some(initial));
+        assert!(w.set_tiled_geometry(tile));
+        assert!(w.reconfigure_output(1024,768));
+        assert!(!w.is_tiled());
+        assert_eq!(w.geometry(),Some(initial));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

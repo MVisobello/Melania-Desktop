@@ -12,6 +12,8 @@ pub mod damage_regions;
 pub mod region_compositor;
 pub mod window_placement;
 pub mod snap_layout;
+pub mod auto_tiling;
+pub mod auto_tiling_shortcuts;
 pub mod snap_shortcuts;
 pub mod output_layout;
 pub mod gtk_layer_geometry;
