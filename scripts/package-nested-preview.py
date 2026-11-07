@@ -29,6 +29,8 @@ BINARIES = (
     "melania-notifyctl",
 )
 BUNDLE_NAME = "melania-nested-preview"
+FLUENT_V04_THEMES = ("Melania-Light", "Melania-Dark", "Melania-Light-darkPanel")
+FLUENT_V04_PATH = ROOT / "dist/melania-fluent-v04"
 
 # Original app SVGs are shipped rather than embedding icons via system theme:
 # the portable archive runs without the source repository.
@@ -158,6 +160,25 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
     (target / "bin").mkdir(parents=True)
     (target / "share").mkdir()
     stage_preview_icons(target / "share/icons/Melania-Preview", preview_apps)
+    # Include original SVGs and their aliases from a locally staged v0.4 pack.
+    # Melania's GTK processes find them through MELANIA_BUNDLE_DATA_DIR.
+    has_fluent_v04 = all(
+        (FLUENT_V04_PATH / name / "index.theme").is_file()
+        for name in FLUENT_V04_THEMES
+    )
+    if has_fluent_v04:
+        for theme_name in FLUENT_V04_THEMES:
+            shutil.copytree(
+                FLUENT_V04_PATH / theme_name,
+                target / "share/icons" / theme_name,
+                symlinks=True,
+            )
+        for alias, actual in {
+            "Melania-Fluent-Light": "Melania-Light",
+            "Melania-Fluent-Dark": "Melania-Dark",
+            "Melania-Fluent-Light-on-Dark-Panel": "Melania-Light-darkPanel",
+        }.items():
+            (target / "share/icons" / alias).symlink_to(actual, target_is_directory=True)
     if vendored is not None:
         (target / "lib").mkdir()
         destination = target / "lib/libgtk4-layer-shell.so.0"
@@ -181,7 +202,8 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
         "requires_existing_graphical_session": True,
         "requires_compatible_linux_runtime_libraries": True,
         "vendored_gtk4_layer_shell": vendored is not None,
-        "bundled_icon_theme": "Melania-Preview",
+        "bundled_icon_theme": "Melania-Light-darkPanel" if has_fluent_v04 else "Melania-Preview",
+        "bundled_fluent_v04": has_fluent_v04,
         "vendored_libraries": ["lib/libgtk4-layer-shell.so.0"] if vendored is not None else [],
         "files_sha256": {
             p.relative_to(target).as_posix(): sha256(p) for p in files
@@ -195,12 +217,17 @@ def stage(bin_dir: Path, output_dir: Path, commit: str, *,
     with tarfile.open(archive, mode="w:gz", format=tarfile.PAX_FORMAT) as tar:
         for path in sorted(target.rglob("*")):
             if path.is_symlink():
-                raise ValueError(f"Refusing symlink in package: {path}")
+                # Allow icon aliases only within the self-contained bundle.
+                resolved = path.resolve()
+                if not resolved.is_relative_to(target.resolve()) or not resolved.exists():
+                    raise ValueError(f"Unsafe icon alias: {path}")
             rel = Path(BUNDLE_NAME) / path.relative_to(target)
             info = tar.gettarinfo(str(path), arcname=rel.as_posix())
             info.uid = info.gid = 0
             info.uname = info.gname = ""
-            if path.is_file():
+            if path.is_symlink():
+                tar.addfile(info)
+            elif path.is_file():
                 with path.open("rb") as src:
                     tar.addfile(info, src)
             else:

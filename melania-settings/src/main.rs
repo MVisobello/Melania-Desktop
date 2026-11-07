@@ -275,8 +275,19 @@ fn build_ui(
         let mode = match picker.selected() { 0 => "light", 1 => "dark", 2 => "aero", _ => return };
         let p = match save_edit(&prefs_for_theme, |latest| {
             latest.set_appearance_theme(mode);
-            if latest.icon_theme.starts_with("Melania-Fluent-") {
-                latest.icon_theme = if mode == "dark" { "Melania-Fluent-Dark" } else { "Melania-Fluent-Light" }.into();
+            if matches!(latest.icon_theme.as_str(),
+                "Melania-Light" | "Melania-Dark" | "Melania-Light-darkPanel") {
+                // Fluent v0.3 follows Light/Dark/Aero without modifying host GTK.
+                latest.icon_theme = match mode {
+                    "dark" => "Melania-Dark",
+                    "aero" => "Melania-Light-darkPanel",
+                    _ => "Melania-Light",
+                }.into();
+            } else if latest.icon_theme.starts_with("Melania-Fluent-") {
+                // Keep pre-v0.3 users compatible with their installed themes.
+                latest.icon_theme = if mode == "dark" {
+                    "Melania-Fluent-Dark"
+                } else { "Melania-Fluent-Light" }.into();
             }
         }) {
             Ok(preferences) => preferences,
@@ -290,15 +301,18 @@ fn build_ui(
     appearance.append(&saved_option("Animazioni GTK", "Attiva le transizioni nelle finestre Melania, salvo la preferenza Riduci movimento.", prefs.borrow().animations, prefs.clone(), |p,v| p.animations = v, Some(apply_style.clone())));
     appearance.append(&section("Pacchetto di icone"));
     let icon_variants = gtk::DropDown::from_strings(&[
-        "Melania Fluent Light (predefinito)", "Melania Fluent Dark", "Melania Fluent Light on Dark Panel",
-        "Melania Aero Light", "Melania Aero Dark", "Melania Aero Light on Dark Panel"
+        "Melania Fluent v0.3 · Light", "Melania Fluent v0.3 · Dark",
+        "Melania Fluent v0.3 · Aero (predefinito)",
+        "Melania Fluent precedente · Light", "Melania Fluent precedente · Dark",
+        "Melania Fluent precedente · Light on Dark Panel",
+        "Melania Aero precedente · Light on Dark Panel"
     ]);
     icon_variants.add_css_class("settings-icon-choice");
     let selected = melania_config::ICON_THEMES.iter()
         .position(|&name|name==prefs.borrow().icon_theme).unwrap_or(0);
     icon_variants.set_selected(selected as u32);
     icon_variants.set_tooltip_text(Some(
-        "Scegli Melania Fluent (concept approvato) oppure i temi Aero precedenti. Le app applicano il tema al riavvio."
+        "Melania Fluent v0.3 è predefinito. Light, Dark e Aero cambiano automaticamente le icone; le app già aperte potrebbero richiedere un riavvio."
     ));
     let prefs_for_icons = prefs.clone();
     icon_variants.connect_selected_notify(move |dropdown| {
