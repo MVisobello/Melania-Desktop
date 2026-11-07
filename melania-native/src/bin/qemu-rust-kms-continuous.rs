@@ -87,14 +87,47 @@ struct Restore<'a> {
     connector:connector::Handle,
     submitted:bool,
     restored:bool,
+    ownership_lost:bool,
+    owned_fbs:[framebuffer::Handle;2],
 }
 impl Restore<'_> {
     fn restore(&mut self)->Result<(),Box<dyn Error>> {
+        if self.ownership_lost {
+            return Err("DRM ownership lost: refusing stale CRTC rollback".into());
+        }
         if !self.submitted {
             self.restored=true;
             return Ok(());
         }
         let old=self.original;
+        // Do not overwrite a foreign scanout acquired since the last ACK.
+        // An unreadable DRM resource is a lost ownership proof. Mark the
+        // rollback guard permanently unsafe, including its Drop retry.
+        let current=self.card.get_crtc(old.handle()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let output=self.card.get_connector(self.connector,false).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        if output.state()!=connector::State::Connected {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: connector disconnected".into());
+        }
+        let routed=match output.current_encoder() {
+            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
+                self.ownership_lost=true;
+                error
+            })?.crtc()==Some(old.handle()),
+            None=>false,
+        };
+        let known=current.framebuffer()==old.framebuffer() ||
+            current.framebuffer().is_some_and(|fb|self.owned_fbs.contains(&fb));
+        if !routed || current.mode()!=old.mode() || !known {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: live CRTC route/mode/FB changed".into());
+        }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
                            &[self.connector],old.mode())?;
         let observed=self.card.get_crtc(old.handle())?;
@@ -240,7 +273,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     let fb1=card.add_framebuffer(&db1,24,32)?;
     let fb2=card.add_framebuffer(&db2,24,32)?;
     let mut rollback=Restore{
-        card:&card,original,connector:connected[0],submitted:false,restored:false
+        card:&card,original,connector:connected[0],submitted:false,restored:false,ownership_lost:false,owned_fbs:[fb1,fb2]
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
@@ -320,6 +353,24 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             stream.read_exact(&mut pixels)?;
             if !persistent && previous.as_ref().is_some_and(|last|*last==pixels) {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
+            }
+            // Verify the previously ACKed kernel scanout is STILL ours.
+            // A VT pause, external modeset or hotplug must fail closed.
+            let previous_fb=if index==0 {route.original_fb}
+                else if index%2==0 {fb2} else {fb1};
+            let owned=melania_native::native_kms_scanout::verify_presenter_ownership(
+                &card,crtc_handle,connected[0],previous_fb,(W as u16,H as u16),
+            ).map_err(|error| {
+                // EIO/ENODEV during VT loss is not a harmless read failure.
+                // Never reuse the event router after this acquisition fails.
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("persistent CPU DRM scanout ownership changed before submission".into());
             }
             let framebuffer=if index%2==0 {fb1} else {fb2};
             let target=if index%2==0 {&mut db1} else {&mut db2};
