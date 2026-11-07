@@ -833,6 +833,35 @@ fn start_window(app:&Application)->ApplicationWindow {
     w.set_child(Some(&root));w
 }
 
+/// Work on D-Bus-based system services is never performed in a GTK
+/// callback. Only Send values cross threads; GTK widgets stay on the main
+/// context. Bounded service processes prevent abandoned worker accumulation.
+fn quick_service_async<T: Send + 'static>(
+    name: &'static str,
+    job: impl FnOnce() -> services::Result<T> + Send + 'static,
+    on_complete: impl FnOnce(services::Result<T>) + 'static,
+) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(job());
+    });
+    let mut on_complete = Some(on_complete);
+    glib::timeout_add_local(Duration::from_millis(75), move || {
+        match receiver.try_recv() {
+            Ok(result) => {
+                eprintln!("MELANIA_QUICK_SERVICE={name} success={}", result.is_ok());
+                if let Some(done) = on_complete.take() { done(result); }
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                eprintln!("MELANIA_QUICK_SERVICE={name} worker_disconnected");
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
 fn binary(parent:&GtkBox,title:&'static str,getter:fn()->services::Result<bool>,setter:fn(bool)->services::Result<()>,status:&Label){
     let b=Button::new();b.add_css_class("melania-action");
     let row=GtkBox::new(Orientation::Horizontal,8);
@@ -845,26 +874,104 @@ fn binary(parent:&GtkBox,title:&'static str,getter:fn()->services::Result<bool>,
     caption.set_xalign(0.0);
     row.append(&caption);
     b.set_child(Some(&row));
-    if let Ok(active)=getter(){caption.set_text(&format!("{title}  {}",if active{"● Attivo"}else{"○ Spento"}));}
-    else {b.set_sensitive(false);b.set_tooltip_text(Some("Servizio Linux non disponibile"));}
+    caption.set_text(&format!("{title}  Da verificare"));
+    // Mapping the quick panel must not block while nmcli/bluetoothctl contact
+    // the VM's system bus. Do not share GTK objects with the worker.
+    let mapped_caption=caption.clone();
+    b.connect_map(move |button| {
+        button.set_sensitive(false);
+        mapped_caption.set_text(&format!("{title}  Verifica…"));
+        let button=button.clone();
+        let caption=mapped_caption.clone();
+        quick_service_async(title, move || getter(), move |result| {
+            match result {
+                Ok(active)=>{
+                    caption.set_text(&format!("{title}  {}",if active{"● Attivo"}else{"○ Spento"}));
+                    button.set_tooltip_text(None);
+                    button.set_sensitive(true);
+                }
+                Err(error)=>{
+                    caption.set_text(&format!("{title}  Non disponibile"));
+                    button.set_tooltip_text(Some(&error.to_string()));
+                }
+            }
+        });
+    });
     let feedback=status.clone();
-    b.connect_clicked(move |_| {
-        match getter().and_then(|state|setter(!state)).and_then(|_|getter()) {
-            Ok(active)=>{caption.set_text(&format!("{title}  {}",if active{"● Attivo"}else{"○ Spento"}));feedback.set_text("Impostazione applicata");}
-            Err(e)=>feedback.set_text(&format!("{title}: {e}")),
-        }
-    });parent.append(&b);
+    b.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        feedback.set_text(&format!("{title}: applicazione in corso…"));
+        let button=button.clone();
+        let feedback=feedback.clone();
+        let caption=caption.clone();
+        quick_service_async(title, move || {
+            let current=getter()?;
+            setter(!current)?;
+            getter()
+        }, move |result| {
+            match result {
+                Ok(active)=>{
+                    caption.set_text(&format!("{title}  {}",if active{"● Attivo"}else{"○ Spento"}));
+                    feedback.set_text(&format!("{title}: impostazione applicata"));
+                }
+                Err(error)=>{
+                    feedback.set_text(&format!("{title}: {error}"));
+                }
+            }
+            // A failed toggle may be transient: allow an explicit retry.
+            button.set_sensitive(true);
+        });
+    });
+    parent.append(&b);
 }
 fn slider(parent:&GtkBox,title:&'static str,get:fn()->services::Result<u8>,set:fn(u8)->services::Result<()>,status:&Label){
     parent.append(&label(title,"melania-sub"));
     let row=GtkBox::new(Orientation::Horizontal,8);
-    let value=get().ok();
     let scale=gtk::Scale::with_range(Orientation::Horizontal,0.0,100.0,1.0);
-    scale.set_hexpand(true);scale.set_value(value.unwrap_or(50) as f64);scale.set_sensitive(value.is_some());
-    let apply=Button::with_label("Applica");apply.set_sensitive(value.is_some());
-    let s=scale.clone();let feedback=status.clone();
-    apply.connect_clicked(move |_|match set(s.value().round().clamp(0.0,100.0) as u8) {
-        Ok(())=>feedback.set_text(&format!("{title} aggiornato")),Err(e)=>feedback.set_text(&e.to_string())
+    scale.set_hexpand(true);
+    scale.set_value(50.0);
+    scale.set_sensitive(false);
+    let apply=Button::with_label("Applica");
+    apply.set_sensitive(false);
+    // Initial volume/backlight reads are also asynchronous. In VirtualBox,
+    // missing audio or backlight hardware must not freeze the entire panel.
+    let mapped_scale=scale.clone();
+    let mapped_apply=apply.clone();
+    scale.connect_map(move |_| {
+        mapped_scale.set_sensitive(false);
+        mapped_apply.set_sensitive(false);
+        let scale=mapped_scale.clone();
+        let apply=mapped_apply.clone();
+        quick_service_async(title, move || get(), move |result| {
+            if let Ok(value)=result {
+                scale.set_value(value as f64);
+                scale.set_sensitive(true);
+                apply.set_sensitive(true);
+            }
+        });
+    });
+    let s=scale.clone();
+    let feedback=status.clone();
+    apply.connect_clicked(move |button| {
+        button.set_sensitive(false);
+        feedback.set_text(&format!("{title}: applicazione in corso…"));
+        let value=s.value().round().clamp(0.0,100.0) as u8;
+        let button=button.clone();
+        let feedback=feedback.clone();
+        let scale=s.clone();
+        quick_service_async(title, move || {
+            set(value)?;
+            get()
+        }, move |result| {
+            match result {
+                Ok(value)=>{
+                    scale.set_value(value as f64);
+                    feedback.set_text(&format!("{title}: aggiornato"));
+                }
+                Err(error)=>feedback.set_text(&format!("{title}: {error}")),
+            }
+            button.set_sensitive(true);
+        });
     });
     row.append(&scale);row.append(&apply);parent.append(&row);
 }
@@ -1916,8 +2023,10 @@ fn build(app:&Application){
     // Measure actual GTK construction costs to guide further startup work.
     // Measurements refer to activation, not total compositor boot time.
     let startup = Instant::now();
+    eprintln!("MELANIA_PANEL_STAGE=theme_begin");
     setup_melania_icon_theme();
     let theme_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=theme_end ms={}",theme_ready.as_millis());
     if !gtk4_layer_shell::is_supported() {
         eprintln!("Melania Panel requires Wayland with zwlr_layer_shell_v1 (try the nested compositor)");
         return;
@@ -1930,23 +2039,34 @@ fn build(app:&Application){
     }
     let css=gtk::CssProvider::new();css.load_from_data(include_str!("../assets/panel.css"));
     if let Some(display)=gdk::Display::default(){gtk::style_context_add_provider_for_display(&display,&css,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);}
+    eprintln!("MELANIA_PANEL_STAGE=start_begin");
     let start=start_window(app);
     let start_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=start_end ms={}",start_ready.as_millis());
+    eprintln!("MELANIA_PANEL_STAGE=notifications_begin");
     let notifications=notifications_window(app);
     let notifications_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=notifications_end ms={}",notifications_ready.as_millis());
+    eprintln!("MELANIA_PANEL_STAGE=quick_begin");
     let quick=quick_window(app,&notifications);
     let quick_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=quick_end ms={}",quick_ready.as_millis());
+    eprintln!("MELANIA_PANEL_STAGE=calendar_begin");
     let calendar=calendar_window(app);
     let calendar_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=calendar_end ms={}",calendar_ready.as_millis());
     install_start_hotkey_listener(app,&start,&quick,&notifications,&calendar);
     // Do not present popup windows until the user clicks.
+    eprintln!("MELANIA_PANEL_STAGE=taskbar_begin");
     let bar=taskbar(app,&start,&quick,&notifications,&calendar);
     let taskbar_ready = startup.elapsed();
+    eprintln!("MELANIA_PANEL_STAGE=taskbar_end ms={}",taskbar_ready.as_millis());
     if let Some(content)=bar.child().and_then(|child|child.downcast::<GtkBox>().ok()) {
         panel_preferences::attach_live_preferences(
             &bar,&content,&start,&quick,&notifications,&calendar);
     }
     bar.present();
+    eprintln!("MELANIA_PANEL_STAGE=taskbar_presented ms={}",startup.elapsed().as_millis());
     // Disposable QEMU-only second real GTK frame: modify the already-real
     // bar's GTK CSS after the first surface was committed. This deliberately
     // uses GTK rendering/Wayland wl_shm again, never synthesizes a pixel buffer.
