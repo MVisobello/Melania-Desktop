@@ -92,8 +92,9 @@ report 'MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true'
 
 # Exercise real libseat/seatd DRM FD acquisition, close, and reopen in the
 # disposable VM. Every new descriptor must initialize an independent real
-# GBM/EGL/GLES context, allocate and synchronize TWO DMA-BUF GPU frames
-# before release. No VT switch is faked, and no KMS scanout is modified.
+# GBM/EGL/GLES context for EACH actual active CRTC mode, allocate and
+# synchronize TWO DMA-BUF GPU frames per output and verify the kernel DRM
+# topology unchanged. No VT switch is faked; no scanout is modified.
 readonly_reopen_log="$(mktemp -t melania-qemu-readonly-reopen-XXXXXX)"
 if ! MELANIA_NATIVE_READONLY_CYCLE=YES_QEMU_VM timeout --signal=TERM --kill-after=3s 40s \
   "$binary" --experimental-vt-reacquire < /dev/tty1 | tee "$readonly_reopen_log"; then
@@ -107,7 +108,10 @@ if ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=1 crtcs=[1-9][0-9]*$' "$read
    ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACQUISITIONS=2$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACTUAL_PAUSE_OBSERVED=false$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=1 frames=2$' "$readonly_reopen_log" ||
-   ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=2 frames=2$' "$readonly_reopen_log"; then
+   ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=2 frames=2$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=1 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=2 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   [[ "$(grep -Ec '^MELANIA_NATIVE_VT_REAL_OUTPUT_GBM crtc=.+ [0-9]+x[0-9]+ frames=2$' "$readonly_reopen_log")" -lt 2 ]]; then
   cat "$readonly_reopen_log"
   rm -f "$readonly_reopen_log"
   fatal 'native_libseat_DRM_reopen_evidence_missing'
