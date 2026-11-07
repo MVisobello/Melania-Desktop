@@ -5,6 +5,7 @@ which checks kernel state inside the disposable VM after the visible scanout.
 """
 from pathlib import Path
 import unittest
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 RECEIVER = (ROOT / "melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
@@ -17,14 +18,51 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
         end = RECEIVER.index("impl Drop for Restore", begin)
         block = RECEIVER[begin:end]
         self.assertIn("self.card.set_crtc(old.handle()", block)
-        self.assertIn("self.card.get_crtc(old.handle())?", block)
-        self.assertIn("self.card.get_connector(self.connector,false)?", block)
-        self.assertIn(".current_encoder()", block)
-        self.assertIn(".and_then(|encoder|self.card.get_encoder(encoder).ok())", block)
-        self.assertIn(".and_then(|encoder|encoder.crtc())==Some(old.handle())", block)
+        # Post-restore device read errors must revoke the rollback guard so
+        # Drop cannot issue a second modeset against an unknown DRM owner.
+        self.assertIn("self.card.get_crtc(old.handle()).map_err(|error|{", block)
+        self.assertIn("self.card.get_connector(self.connector,false).map_err(|error|{", block)
+        self.assertIn("Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{", block)
+        self.assertGreaterEqual(block.count("self.ownership_lost=true;"), 3)
+        self.assertIn("restored_output.current_encoder()", block)
+        self.assertIn("?.crtc()==Some(old.handle())", block)
+        self.assertNotIn("self.card.get_encoder(encoder).ok()", block)
         self.assertIn("&& connector_attached", block)
         self.assertIn("MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED={connector_attached}", block)
         self.assertIn("MELANIA_RUST_KMS_RESTORE_VERIFIED={}", block)
+
+    def test_cpu_and_gbm_restore_both_fail_closed_on_verification_io_errors(self):
+        gbm = (ROOT / "melania-native/src/native_gbm_scanout.rs").read_text()
+        for source in (RECEIVER, gbm):
+            begin = source.index("impl Restore<'_>")
+            end = source.index("impl Drop for Restore", begin)
+            restore = source[begin:end]
+            self.assertIn("self.card.set_crtc(old.handle()", restore)
+            for drm_call in (
+                "self.card.get_crtc(old.handle())",
+                "self.card.get_connector(self.connector,false)",
+                "self.card.get_encoder(encoder)",
+            ):
+                # Every resource read after the restoring modeset must poison
+                # rollback ownership on I/O failure.
+                self.assertRegex(
+                    restore, re.escape(drm_call) + r"\.map_err\(\|error\|\s*\{"
+                )
+            self.assertGreaterEqual(restore.count("self.ownership_lost=true;"), 3)
+            self.assertNotIn(".get_encoder(encoder).ok()", restore)
+            # A readable but mismatching post-restore CRTC or connector
+            # is equally unsafe: no automatic retry on destruction.
+            after_verify = restore[restore.index("if !self.restored {"):]
+            self.assertIn("self.ownership_lost=true;", after_verify)
+            self.assertLess(
+                after_verify.index("self.ownership_lost=true;"),
+                after_verify.index("return Err("),
+            )
+            drop = source[source.index("impl Drop for Restore", end):]
+            self.assertIn(
+                "if self.submitted && !self.restored && !self.ownership_lost",
+                drop,
+            )
 
     def test_failed_modeset_still_enters_rollback_guard(self):
         block = RECEIVER[RECEIVER.index("if index==0 {"):]

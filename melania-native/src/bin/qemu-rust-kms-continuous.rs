@@ -130,27 +130,44 @@ impl Restore<'_> {
         }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
                            &[self.connector],old.mode())?;
-        let observed=self.card.get_crtc(old.handle())?;
+        // Once a restore ioctl has been submitted, unreadable verification
+        // cannot authorize Drop to issue the same modeset again.
+        let observed=self.card.get_crtc(old.handle()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
         // A matching FB_ID alone does not prove that the original connector
         // is still attached to this CRTC. Verify the encoder -> CRTC route
         // after the restoring modeset, before destroying the guest buffers.
-        let connector_attached=self.card.get_connector(self.connector,false)?
-            .current_encoder()
-            .and_then(|encoder|self.card.get_encoder(encoder).ok())
-            .and_then(|encoder|encoder.crtc())==Some(old.handle());
+        let restored_output=self.card.get_connector(self.connector,false).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let connector_attached=match restored_output.current_encoder() {
+            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
+                self.ownership_lost=true;
+                error
+            })?.crtc()==Some(old.handle()),
+            None=>false,
+        };
         self.restored=observed.framebuffer()==old.framebuffer()
             && observed.position()==old.position()
             && observed.mode()==old.mode()
             && connector_attached;
         println!("MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED={connector_attached}");
         println!("MELANIA_RUST_KMS_RESTORE_VERIFIED={}",self.restored);
-        if !self.restored {return Err("Rust KMS CRTC restore mismatch".into());}
+        if !self.restored {
+            // A verified mismatch may mean another DRM owner took over
+            // after our modeset. Never let Drop attempt that modeset again.
+            self.ownership_lost=true;
+            return Err("Rust KMS CRTC restore mismatch".into());
+        }
         Ok(())
     }
 }
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
-        if self.submitted && !self.restored {
+        if self.submitted && !self.restored && !self.ownership_lost {
             // Best-effort safety recovery even on an intermediate error.
             let _=self.restore();
         }
