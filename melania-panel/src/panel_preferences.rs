@@ -59,7 +59,7 @@ fn install_opacity(provider:&gtk::CssProvider,prefs:&Preferences){
         // samples the scene behind this layer until the native blur pass lands.
         let top=(alpha+0.10).min(0.96);
         provider.load_from_data(&format!(
-            "window.melania-theme-aero .melania-bar {{ \
+            "window.melania-theme-aero:not(.melania-high-contrast) .melania-bar {{ \
              background: linear-gradient(to bottom, \
              rgba(84,151,215,{top:.3}) 0%, rgba(18,64,112,{alpha:.3}) 48%, \
              rgba(6,31,67,{alpha:.3}) 100%); \
@@ -92,6 +92,8 @@ fn apply_preferences(
             surface.remove_css_class(class);
         }
         surface.add_css_class(&format!("melania-theme-{}",prefs.appearance_theme()));
+        if prefs.high_contrast {surface.add_css_class("melania-high-contrast");}
+        else {surface.remove_css_class("melania-high-contrast");}
     }
     let top=prefs.panel_position=="top";
     // Geometry and exclusive zone must follow the same setting to keep the
