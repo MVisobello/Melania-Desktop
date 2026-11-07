@@ -27,6 +27,9 @@ pub struct DrmFlipEventRouter {
     // Flip ioctls that actually succeeded but have not yet been acknowledged.
     // Only an armed CRTC may generate an acceptable kernel completion.
     armed_crtcs: Vec<crtc::Handle>,
+    // Retain the last kernel vblank sequence for each owned CRTC within
+    // this device epoch; a replay must not complete a subsequent ioctl.
+    last_completed: Vec<(crtc::Handle, u32)>,
     poisoned: bool,
 }
 
@@ -63,6 +66,7 @@ impl DrmFlipEventRouter {
             return Err("DRM page-flip router cannot bind invalid or stale CRTC routes".into());
         }
         self.owned_crtcs=Some(crtcs.to_vec());
+        self.last_completed.clear();
         Ok(())
     }
 
@@ -96,6 +100,7 @@ impl DrmFlipEventRouter {
     pub fn revoke(&mut self) {
         self.events.clear();
         self.armed_crtcs.clear();
+        self.last_completed.clear();
         self.poisoned = true;
     }
 
@@ -113,6 +118,15 @@ impl DrmFlipEventRouter {
         if !self.armed_crtcs.contains(&crtc) {
             self.revoke();
             return Err("DRM unsolicited page-flip completion".into());
+        }
+        // The kernel's u32 vblank counter wraps. Only a strictly forward
+        // half-range delta is safe: zero is a replay, >= 2^31 ambiguous.
+        // This is scoped to one DRM FD / libseat epoch, never across VT.
+        if self.last_completed.iter().any(|(owned, previous)|
+            *owned == crtc && (frame.wrapping_sub(*previous) == 0 ||
+                frame.wrapping_sub(*previous) >= (1u32 << 31))) {
+            self.revoke();
+            return Err("DRM replayed or non-forward CRTC vblank event".into());
         }
         if self.events.len() >= MAX_PENDING_CRTC_EVENTS ||
            self.events.iter().any(|(pending, _)| *pending == crtc) {
@@ -140,7 +154,16 @@ impl DrmFlipEventRouter {
         // Consumption retires the specific CRTC's in-flight ioctl. Another
         // monitor's armed event remains available until separately consumed.
         self.armed_crtcs.retain(|crtc| *crtc != expected);
-        Ok(self.events.remove(index).map(|(_,frame)| frame))
+        let frame=self.events.remove(index).map(|(_,frame)| frame);
+        if let Some(sequence)=frame {
+            if let Some((_,previous))=self.last_completed.iter_mut()
+                .find(|(crtc,_)| *crtc == expected) {
+                *previous=sequence;
+            } else {
+                self.last_completed.push((expected,sequence));
+            }
+        }
+        Ok(frame)
     }
 }
 
@@ -389,6 +412,47 @@ mod tests {
         assert_eq!(fresh.take(a).unwrap(),Some(1));
         assert!(fresh.enqueue(a,1).is_err());
         assert!(fresh.poisoned());
+    }
+
+    #[test]
+    fn vblank_replay_and_backward_counter_revoke_epoch() {
+        let a=crtc(90);
+        let mut router=DrmFlipEventRouter::default();
+        router.bind_active_crtcs(&[a]).unwrap();
+        router.arm_flip(a).unwrap();
+        router.enqueue(a,42).unwrap();
+        assert_eq!(router.take(a).unwrap(),Some(42));
+        router.arm_flip(a).unwrap();
+        assert!(router.enqueue(a,42).is_err());
+        assert!(router.poisoned());
+
+        let mut backward=DrmFlipEventRouter::default();
+        backward.bind_active_crtcs(&[a]).unwrap();
+        backward.arm_flip(a).unwrap();
+        backward.enqueue(a,42).unwrap();
+        assert_eq!(backward.take(a).unwrap(),Some(42));
+        backward.arm_flip(a).unwrap();
+        assert!(backward.enqueue(a,41).is_err());
+        assert!(backward.poisoned());
+    }
+
+    #[test]
+    fn vblank_wrap_is_forward_and_other_crtc_is_independent() {
+        let a=crtc(91); let b=crtc(92);
+        let mut router=DrmFlipEventRouter::default();
+        router.bind_active_crtcs(&[a,b]).unwrap();
+        router.arm_flip(a).unwrap();
+        router.arm_flip(b).unwrap();
+        router.enqueue(a,u32::MAX).unwrap();
+        router.enqueue(b,2).unwrap();
+        assert_eq!(router.take(a).unwrap(),Some(u32::MAX));
+        assert_eq!(router.take(b).unwrap(),Some(2));
+        router.arm_flip(a).unwrap();
+        router.enqueue(a,0).unwrap();
+        assert_eq!(router.take(a).unwrap(),Some(0));
+        router.arm_flip(b).unwrap();
+        router.enqueue(b,3).unwrap();
+        assert_eq!(router.take(b).unwrap(),Some(3));
     }
 
     #[test]
