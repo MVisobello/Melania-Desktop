@@ -246,7 +246,12 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     let mut cycled=false;
     let cycles=if forced_cycle {40} else {300};
     for _ in 0..cycles {
-        event_loop.dispatch(Some(Duration::from_millis(100)),&mut state)?;
+        // Even while polling for real libseat pause/hotplug, release the
+        // descriptor explicitly if the event loop itself fails.
+        if let Err(error)=event_loop.dispatch(Some(Duration::from_millis(100)),&mut state) {
+            if let Some((_,fd))=owned.take() {session.close(fd)?;}
+            return Err(error.into());
+        }
         let active=session.is_active() && state.seat_active();
         if let Some((epoch,_))=owned.as_ref() {
             if !active || epoch.verify(&state).is_err() {
@@ -284,23 +289,40 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // DMA-BUF allocations and GPU fences are dropped completely
             // BEFORE libseat closes the original FD. On ANY error, close
             // the owned seat descriptor rather than escaping via '?'.
-            let acquired=(|| -> Result<usize,Box<dyn Error>> {
+            let acquired=(|| -> Result<(usize,Vec<melania_native::native_output_probe_plan::OutputBufferProbe>),Box<dyn Error>> {
                 let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
                 let crtcs=card.resource_handles()?.crtcs().len();
                 if crtcs==0 {
                     return Err("Libseat-owned DRM card has no CRTC resources".into());
                 }
-                if render_gbm_each_acquire {
-                    melania_native::renderer::smoke_render_gbm_output_buffers(
-                        card,640,480,2
-                    ).map_err(|error|
-                        format!("Fresh libseat DRM FD failed real GBM/EGL/DMA-BUF rebuild: {error}")
-                    )?;
-                }
-                Ok(crtcs)
+                let probes=if render_gbm_each_acquire {
+                    // Read the actual kernel connector->encoder->CRTC->FB
+                    // mapping, rather than rendering a guessed 640x480 surface.
+                    // Every independently active CRTC must be renderable;
+                    // one failed output rejects the entire reacquisition.
+                    let before=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
+                    let plan=melania_native::native_output_probe_plan::plan_active_output_probes(&before)?;
+                    for probe in &plan {
+                        melania_native::renderer::smoke_render_gbm_output_buffers(
+                            card.clone(),probe.width,probe.height,2
+                        ).map_err(|error|format!(
+                            "Fresh libseat DRM FD failed GBM/EGL/DMA-BUF output {:?} ({}x{}): {error}",
+                            probe.crtc,probe.width,probe.height
+                        ))?;
+                    }
+                    // Do not count allocations if an external modeset,
+                    // hotplug or replaced original FB happened while the
+                    // EGL/GBM resources were being rebuilt.
+                    let after=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
+                    if before!=after {
+                        return Err("Active DRM CRTC/connector/framebuffer changed during GPU reacquisition".into());
+                    }
+                    plan
+                } else { Vec::new() };
+                Ok((crtcs,probes))
             })();
-            let crtcs=match acquired {
-                Ok(crtcs)=>crtcs,
+            let (crtcs,probes)=match acquired {
+                Ok(value)=>value,
                 Err(error)=>{
                     session.close(fd)?;
                     return Err(error);
@@ -320,6 +342,11 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             println!("MELANIA_NATIVE_VT_READONLY_DRM_OPEN={} crtcs={crtcs}",opened);
             if render_gbm_each_acquire {
                 println!("MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT={opened} frames=2");
+                println!("MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT={opened} count={}",probes.len());
+                for probe in &probes {
+                    println!("MELANIA_NATIVE_VT_REAL_OUTPUT_GBM crtc={:?} {}x{} frames=2",
+                             probe.crtc,probe.width,probe.height);
+                }
             }
             owned=Some((epoch,fd));
         }
