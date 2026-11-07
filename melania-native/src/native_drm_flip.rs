@@ -427,13 +427,13 @@ mod tests {
         let mut router=DrmFlipEventRouter::default();
         let mut strict=NativeFlipLedger::default();
         router.bind_active_crtcs(&[output]).unwrap();
-        for frame in [100,100] {
+        for (index,frame) in [100,100].into_iter().enumerate() {
             strict.begin_flip().unwrap();
             router.arm_flip(output).unwrap();
             router.enqueue(output,frame).unwrap();
             let receipt=router.take(output).unwrap().unwrap();
             let result=strict.complete_flip(receipt);
-            if frame==100 && strict.completed_count()==1 {
+            if index==0 {
                 assert!(result.is_ok());
             } else {
                 assert_eq!(result,Err(FlipLedgerError::StaleOrDuplicateVblank));
