@@ -59,9 +59,11 @@ pub fn verify_kernel_scanout(
     // hotplug / VT-takeover snapshot.
     let latest_crtc = card.get_crtc(crtc)
         .map_err(|error| format!("DRM second get_crtc failed: {error}"))?;
+    // Resolution and rounded refresh are not a unique DRM mode identity:
+    // distinct pixel clocks / porch timings can share both. A modeset
+    // during the split kernel reads must invalidate this frame ACK.
     if latest_crtc.framebuffer() != Some(expected_fb) ||
-       latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh())) !=
-           Some((initial_size, initial_refresh)) {
+       latest_crtc.mode() != Some(initial_mode) {
         return Ok(false);
     }
     let latest_connector = card.get_connector(connector, false)

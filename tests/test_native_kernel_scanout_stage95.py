@@ -35,8 +35,8 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         self.assertIn("attached.state() != connector::State::Connected", block)
         self.assertIn("let Some(initial_mode) = current.mode() else", block)
         self.assertIn("let initial_refresh = initial_mode.vrefresh()", block)
-        self.assertIn("latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh()))", block)
-        self.assertIn("Some((initial_size, initial_refresh))", block)
+        self.assertIn("latest_crtc.mode() != Some(initial_mode)", block)
+        self.assertNotIn("latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh()))", block)
         self.assertIn("latest_connector.current_encoder() != Some(encoder)", block)
         self.assertIn("latest_encoder.crtc() == Some(crtc)", block)
         self.assertLess(block.index("latest_crtc.framebuffer()"),
