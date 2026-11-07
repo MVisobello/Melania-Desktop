@@ -22,12 +22,35 @@ const MAX_PENDING_CRTC_EVENTS: usize = 16;
 #[derive(Debug, Default)]
 pub struct DrmFlipEventRouter {
     events: VecDeque<(crtc::Handle, u32)>,
+    // Bound to the real active kernel CRTC topology for this libseat epoch.
+    owned_crtcs: Option<Vec<crtc::Handle>>,
     poisoned: bool,
 }
 
 impl DrmFlipEventRouter {
     pub fn queued(&self) -> usize { self.events.len() }
     pub fn poisoned(&self) -> bool { self.poisoned }
+
+    /// Bind this event router exactly once to the currently owned DRM CRTCs.
+    /// A duplicate, changed, missing or over-capacity route fails closed.
+    pub fn bind_active_crtcs(&mut self, crtcs: &[crtc::Handle]) -> Result<(), String> {
+        if self.poisoned || self.owned_crtcs.is_some() || !self.events.is_empty() ||
+           crtcs.is_empty() || crtcs.len()>crate::native_output_topology::MAX_ACTIVE_DRM_OUTPUTS ||
+           crtcs.iter().enumerate().any(|(i,crtc)|crtcs[..i].contains(crtc)) {
+            self.revoke();
+            return Err("DRM page-flip router cannot bind invalid or stale CRTC routes".into());
+        }
+        self.owned_crtcs=Some(crtcs.to_vec());
+        Ok(())
+    }
+
+    fn check_owned_crtc(&mut self, crtc: crtc::Handle) -> Result<(), String> {
+        if self.owned_crtcs.as_ref().is_some_and(|owned|!owned.contains(&crtc)) {
+            self.revoke();
+            return Err("DRM page-flip event targets an unowned CRTC".into());
+        }
+        Ok(())
+    }
 
     /// Permanently discard this device-epoch routing state. Reuse after VT
     /// pause, device replacement, or an ambiguous batch is forbidden.
@@ -44,6 +67,7 @@ impl DrmFlipEventRouter {
         if self.poisoned {
             return Err("DRM event router revoked".into());
         }
+        self.check_owned_crtc(crtc)?;
         if self.events.len() >= MAX_PENDING_CRTC_EVENTS ||
            self.events.iter().any(|(pending, _)| *pending == crtc) {
             self.revoke();
@@ -59,6 +83,7 @@ impl DrmFlipEventRouter {
         if self.poisoned {
             return Err("DRM event router revoked".into());
         }
+        self.check_owned_crtc(expected)?;
         let Some(index) = self.events.iter().position(|(crtc,_)| *crtc == expected) else {
             return Ok(None);
         };
@@ -175,6 +200,43 @@ mod tests {
         assert_eq!(events.queued(),0);
         assert!(events.take(monitor).is_err());
         assert!(events.enqueue(monitor,3).is_err());
+    }
+
+
+    #[test]
+    fn bound_router_preserves_two_owned_outputs_but_rejects_foreign_crtc() {
+        let a=crtc(21); let b=crtc(22); let foreign=crtc(23);
+        let mut routed=DrmFlipEventRouter::default();
+        routed.bind_active_crtcs(&[a,b]).unwrap();
+        routed.enqueue(b,101).unwrap();
+        routed.enqueue(a,102).unwrap();
+        assert_eq!(routed.take(a).unwrap(),Some(102));
+        assert_eq!(routed.take(b).unwrap(),Some(101));
+        routed.enqueue(a,103).unwrap();
+        // A foreign/old-session CRTC can never release a Wayland ACK.
+        assert!(routed.enqueue(foreign,104).is_err());
+        assert!(routed.poisoned());
+        assert_eq!(routed.queued(),0);
+        assert!(routed.take(a).is_err());
+    }
+
+    #[test]
+    fn bound_router_rejects_invalid_routes_and_foreign_waits() {
+        let a=crtc(30); let other=crtc(31);
+        let mut empty=DrmFlipEventRouter::default();
+        assert!(empty.bind_active_crtcs(&[]).is_err());
+        assert!(empty.poisoned());
+        let mut duplicate=DrmFlipEventRouter::default();
+        assert!(duplicate.bind_active_crtcs(&[a,a]).is_err());
+        assert!(duplicate.poisoned());
+        let mut bound=DrmFlipEventRouter::default();
+        bound.bind_active_crtcs(&[a]).unwrap();
+        assert!(bound.bind_active_crtcs(&[a]).is_err());
+        assert!(bound.poisoned());
+        let mut expected=DrmFlipEventRouter::default();
+        expected.bind_active_crtcs(&[a]).unwrap();
+        assert!(expected.take(other).is_err());
+        assert!(expected.poisoned());
     }
 
     #[test]

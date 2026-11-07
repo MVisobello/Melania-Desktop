@@ -152,6 +152,7 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
     let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
+    event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
         card:&card, original, connector, submitted:false, restored:false,
     };
@@ -302,6 +303,7 @@ pub fn qemu_wayland_gpu_scene_stream(
     }
     let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
+    event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
         card:&card,original,connector,submitted:false,restored:false,
     };
