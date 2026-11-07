@@ -123,6 +123,8 @@ mod tests {
     fn no_completion_without_an_outstanding_kernel_flip() {
         let mut ledger=NativeFlipLedger::default();
         assert_eq!(ledger.complete_flip(1),Err(FlipLedgerError::UnexpectedCompletion));
+        assert!(ledger.revoked());
+        let mut ledger=NativeFlipLedger::default();
         ledger.begin_flip().unwrap();
         assert_eq!(ledger.begin_flip(),Err(FlipLedgerError::AlreadyPending));
         ledger.complete_flip(17).unwrap();
@@ -188,6 +190,8 @@ mod tests {
     fn vm_counter_compatibility_never_invents_an_event_or_rearms_failure() {
         let mut ledger=NativeFlipLedger::default();
         assert_eq!(ledger.complete_vm_flip(1),Err(FlipLedgerError::UnexpectedCompletion));
+        assert!(ledger.revoked());
+        let mut ledger=NativeFlipLedger::default();
         ledger.begin_flip().unwrap();
         ledger.complete_vm_flip(0).unwrap();
         assert_eq!(ledger.complete_vm_flip(0),Err(FlipLedgerError::UnexpectedCompletion));
