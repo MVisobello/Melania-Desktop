@@ -325,9 +325,15 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
-            if !melania_native::native_kms_scanout::verify_presenter_ownership(
+            let owned=melania_native::native_kms_scanout::verify_presenter_ownership(
                 &card,crtc_handle,connected[0],previous_fb,(W as u16,H as u16),
-            )? {
+            ).map_err(|error| {
+                // EIO/ENODEV during VT loss is not a harmless read failure.
+                // Never reuse the event router after this acquisition fails.
+                event_router.revoke();
+                error
+            })?;
+            if !owned {
                 event_router.revoke();
                 return Err("persistent CPU DRM scanout ownership changed before submission".into());
             }
