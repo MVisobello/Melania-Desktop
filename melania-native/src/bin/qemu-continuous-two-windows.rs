@@ -469,6 +469,13 @@ fn main()->Result<(),Box<dyn Error>> {
         if dynamic || managed_role_pixels || state.alt_tab_probe {
             return Err("combined tab-tiling requires ordinary real XDG clients".into());
         }
+        // Earlier initial XDG configuration must not satisfy this proof.
+        // Reset all receipts *before* announcing readiness to the QMP
+        // injector, which then emits the genuine group-tiling keyboard chord.
+        state.resize_requested_a=None;
+        state.resize_requested_b=None;
+        state.resize_acked_a=false;
+        state.resize_acked_b=false;
         println!("MELANIA_QEMU_COMBINED_TAB_TWO_WAYLAND_SURFACES_READY=true");
         std::io::stdout().flush()?;
         let deadline=Instant::now()+Duration::from_secs(90);
