@@ -656,12 +656,12 @@ impl BridgeState {
             already_focused:self.focused.as_ref()==Some(&surface),
         });
         if !permitted {return;}
-        let id=self.known_window_surfaces.id_of(&surface);
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else {return;};
         self.keyboard_window_cycle.cancel_cycle();
         let keyboard=self.seat.get_keyboard().expect("keyboard");
         keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
         self.focused=Some(surface);
-        println!("MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER={id:?}");
+        println!("MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER={id}");
         let _=std::io::stdout().flush();
     }
 
