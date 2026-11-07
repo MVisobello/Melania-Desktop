@@ -63,7 +63,26 @@ pub fn verify_presenter_ownership(
     let Some(encoder)=output.current_encoder() else {return Ok(false);};
     let routing=card.get_encoder(encoder)
         .map_err(|error|format!("DRM owner get_encoder failed: {error}"))?;
-    Ok(routing.crtc()==Some(crtc))
+    if routing.crtc()!=Some(crtc) {return Ok(false);}
+
+    // Separate DRM ioctls are not an atomic snapshot. A hotplug or VT
+    // takeover can change the CRTC while its connector is being inspected.
+    // Re-read all three kernel objects before accepting the route.
+    let latest_crtc=card.get_crtc(crtc)
+        .map_err(|error|format!("DRM owner second get_crtc failed: {error}"))?;
+    if latest_crtc.framebuffer()!=Some(expected_fb) ||
+       latest_crtc.mode().map(|mode|mode.size())!=Some(expected_size) {
+        return Ok(false);
+    }
+    let latest_output=card.get_connector(connector,false)
+        .map_err(|error|format!("DRM owner second get_connector failed: {error}"))?;
+    if latest_output.state()!=connector::State::Connected ||
+       latest_output.current_encoder()!=Some(encoder) {
+        return Ok(false);
+    }
+    let latest_routing=card.get_encoder(encoder)
+        .map_err(|error|format!("DRM owner second get_encoder failed: {error}"))?;
+    Ok(latest_routing.crtc()==Some(crtc))
 }
 
 /// Pure snapshot predicate for regression tests and for consumers that
