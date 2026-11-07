@@ -29,6 +29,24 @@ pub struct DrmFlipEventRouter {
 
 impl DrmFlipEventRouter {
     pub fn queued(&self) -> usize { self.events.len() }
+    /// A malformed wait must not leave an outstanding completion usable in
+    /// this DRM acquisition epoch. Validate before consuming queued events.
+    fn wait_deadline(&mut self, timeout: Duration) -> Result<Instant, String> {
+        if self.poisoned {
+            return Err("DRM event router revoked".into());
+        }
+        if timeout.is_zero() {
+            self.revoke();
+            return Err("DRM page flip timeout must be positive".into());
+        }
+        match Instant::now().checked_add(timeout) {
+            Some(deadline) => Ok(deadline),
+            None => {
+                self.revoke();
+                Err("DRM page flip timeout overflow".into())
+            }
+        }
+    }
     pub fn poisoned(&self) -> bool { self.poisoned }
 
     /// Bind this event router exactly once to the currently owned DRM CRTCs.
@@ -101,14 +119,10 @@ pub fn wait_for_kms_page_flip_routed(
     timeout: Duration,
     router: &mut DrmFlipEventRouter,
 ) -> Result<u32, String> {
-    if timeout.is_zero() {
-        return Err("DRM page flip timeout must be positive".into());
-    }
+    let deadline=router.wait_deadline(timeout)?;
     if let Some(frame) = router.take(expected_crtc)? {
         return Ok(frame);
     }
-    let deadline=Instant::now().checked_add(timeout)
-        .ok_or("DRM page flip timeout overflow")?;
     loop {
         let remaining=deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -173,6 +187,30 @@ mod tests {
 
     fn crtc(id:u32)->crtc::Handle {
         control::from_u32(id).expect("nonzero typed DRM CRTC handle")
+    }
+
+    #[test]
+    fn invalid_wait_cannot_release_stale_crtc_completion() {
+        let monitor=crtc(77);
+        let mut router=DrmFlipEventRouter::default();
+        router.bind_active_crtcs(&[monitor]).unwrap();
+        router.enqueue(monitor,123).unwrap();
+        assert!(router.wait_deadline(Duration::ZERO).is_err());
+        assert!(router.poisoned());
+        assert_eq!(router.queued(),0);
+        assert!(router.take(monitor).is_err());
+        assert!(router.wait_deadline(Duration::from_millis(1)).is_err());
+    }
+
+    #[test]
+    fn valid_wait_does_not_discard_other_crtc_events() {
+        let a=crtc(78); let b=crtc(79);
+        let mut router=DrmFlipEventRouter::default();
+        router.bind_active_crtcs(&[a,b]).unwrap();
+        router.enqueue(b,5).unwrap();
+        assert!(router.wait_deadline(Duration::from_millis(50)).is_ok());
+        assert_eq!(router.take(a).unwrap(),None);
+        assert_eq!(router.take(b).unwrap(),Some(5));
     }
 
     #[test]
