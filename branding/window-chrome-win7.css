@@ -119,3 +119,31 @@ headerbar.melania-win7-header.melania-theme-dark button.win7-minimize:hover,
 headerbar.melania-win7-header.melania-theme-dark button.win7-maximize:hover {
   background: #5b7084;
 }
+
+
+/* Aero Glass CSD titlebar: translucent client-side frame with two reflected
+ * light bands. Under Wayland the compositor combines the alpha with actual
+ * desktop pixels; a blur of those pixels is NOT provided by GTK CSS.
+ * Light, Dark and High Contrast remain independent, opaque appearances. */
+headerbar.melania-win7-header.melania-theme-aero:not(.high-contrast) {
+  background: linear-gradient(to bottom,
+      rgba(225,247,255,0.85) 0%, rgba(170,223,255,0.81) 15%,
+      rgba(94,178,235,0.78) 49%, rgba(70,149,210,0.82) 50%,
+      rgba(160,217,250,0.85) 100%);
+  border-color: rgba(227,249,255,0.93);
+  border-bottom-color: rgba(42,119,189,0.82);
+  box-shadow: inset 0 1px rgba(255,255,255,0.91),
+              inset 0 10px 15px rgba(246,254,255,0.18),
+              inset 0 -1px rgba(255,255,255,0.28);
+}
+headerbar.melania-win7-header.melania-theme-aero:not(.high-contrast):backdrop {
+  background: linear-gradient(to bottom,
+      rgba(211,233,245,0.82),rgba(130,182,216,0.78));
+  border-bottom-color: rgba(85,133,173,0.73);
+  box-shadow: inset 0 1px rgba(255,255,255,0.55);
+}
+headerbar.melania-win7-header.melania-theme-aero.high-contrast {
+  background: #e4f3ff;
+  color: #132f48;
+  box-shadow: none;
+}
