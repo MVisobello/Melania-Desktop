@@ -63,6 +63,26 @@ class NativeCombinedTabTilingStage136(unittest.TestCase):
         self.assertNotIn("NATIVE_SESSION_READY=true",QMP)
         self.assertIn("python3 -m py_compile scripts/inject-qemu-combined-tab-tiling.py",CI)
         self.assertIn("test_native_combined_tab_tiling_stage136.py",CI)
+    def test_pending_output_wide_resize_blocks_conflicting_real_input_mutations(self):
+        # Super+Y toggles, Super+X swap, floating exception, orientation,
+        # and an arriving layer-shell reservation cannot bypass an in-flight
+        # two-client XDG ACK+shm group transaction.
+        for function in (
+            "fn toggle_auto_tiling(&mut self) {",
+            "fn swap_tiled_focused(&mut self,direction:TileDirection) {",
+            "fn toggle_floating_focused(&mut self) {",
+            "fn rotate_auto_tiling(&mut self) {",
+            "fn refresh_managed_work_areas(&mut self) {",
+        ):
+            start=BRIDGE.index(function)
+            guard=BRIDGE.index("if self.tab_resize_transaction.has_pending()",start)
+            end=BRIDGE.index("\n    fn ",start+5)
+            self.assertLess(guard,end,function)
+            self.assertLess(guard-start,470,function)
+        self.assertIn("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=",BRIDGE)
+        self.assertIn("MELANIA_NATIVE_COMBINED_TILING_TIMEOUT=",BRIDGE)
+        self.assertIn("state.tab_resize_transaction.revoke();",BRIDGE)
+
     def test_combined_is_explicit_guest_only(self):
         self.assertIn("fn arm_native_tab_tiling(&mut self,work:WindowRect)",BRIDGE)
         self.assertIn('MELANIA_NATIVE_COMBINED_TAB_TILING',BRIDGE)

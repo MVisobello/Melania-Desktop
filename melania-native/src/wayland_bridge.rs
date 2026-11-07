@@ -1697,6 +1697,13 @@ impl BridgeState {
     /// via configure, not by teleporting old retained pixels into a new KMS
     /// framebuffer. The client must commit a size-matching buffer.
     fn toggle_auto_tiling(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Tiling mode toggle");
+            return;
+        }
         if !self.managed_xdg_mode || !self.dynamic_window_mode ||
            !self.multi_window_mode || !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() ||
@@ -1742,6 +1749,13 @@ impl BridgeState {
     /// draw their new sizes. Keyboard focus remains with the originating
     /// surface; only post-commit wl_shm pixel buffers enter KMS.
     fn swap_tiled_focused(&mut self,direction:TileDirection) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Tile swap");
+            return;
+        }
         if !self.auto_tiling.enabled() || !self.managed_xdg_mode ||
            !self.dynamic_window_mode || !self.multi_window_mode ||
            !self.lifecycle.seat_active() ||
@@ -1772,6 +1786,13 @@ impl BridgeState {
     /// XDG bridge. A floating restore must ACK a new client buffer; it is
     /// not an immediate retained-frame relocation.
     fn toggle_floating_focused(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Floating exception");
+            return;
+        }
         if !self.auto_tiling.enabled() ||
            !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() ||
@@ -1815,6 +1836,13 @@ impl BridgeState {
     }
 
     fn rotate_auto_tiling(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Tiling orientation");
+            return;
+        }
         if !self.auto_tiling.enabled() ||
            !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() ||
@@ -1832,6 +1860,13 @@ impl BridgeState {
     /// maps, changes its exclusive zone, or disappears. Never synthesize a
     /// wl_shm buffer: wait for each client's real XDG configure/commit.
     fn refresh_managed_work_areas(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Layer reservation");
+            return;
+        }
         if !self.gtk_layer_mode || !self.managed_xdg_mode ||
            !self.dynamic_window_mode {return;}
         let Some(area)=self.mapped_normal_work_area() else {return;};

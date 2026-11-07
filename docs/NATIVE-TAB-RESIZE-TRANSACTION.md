@@ -91,3 +91,15 @@ This stage is not accepted until the exact final-head Linux/SFTP/QEMU
 workflow is **completed/success** and screenshots are inspected. Actual
 hardware, DRM/GBM continuous production, DMA-BUF, multi-output and login
 remain blocked. The normal Melania session still uses labwc as fallback.
+
+## Stage137 — no concurrent geometry mutations while a group is pending
+
+The real QEMU libinput path now refuses a second Super+Y tiling toggle,
+Super+X tile swap, Super+G floating transition, Super+O tiling-axis
+rotation, or layer-shell work-area reflow while any XDG tab resize batch
+is waiting for its last ACK/owned buffer. Before this safeguard, a
+conflicting input could change the tiler's layout underneath an in-flight
+group and then publish a stale batch after the new policy had changed.
+The old retained scene remains untouched until the entire group is ready
+or its timeout/VT-loss aborts. This is an explicit safety gate for the
+experimental combined mode, not full COSMIC usability acceptance.
