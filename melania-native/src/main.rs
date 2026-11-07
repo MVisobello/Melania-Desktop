@@ -220,6 +220,14 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             Some("1")=>true,
             Some(_)=>blocked("MELANIA_NATIVE_VT_GBM_ON_REACQUIRE must be 1"),
         };
+    let physical_vt_proof=match env::var("MELANIA_NATIVE_PHYSICAL_VT_PROOF").ok().as_deref() {
+        None=>false,
+        Some("1") if !forced_cycle=>true,
+        Some("1")=>blocked("Physical VT proof is incompatible with the forced QEMU descriptor cycle"),
+        Some(_)=>blocked("MELANIA_NATIVE_PHYSICAL_VT_PROOF must be 1"),
+    };
+    // A physical VT proof MUST rebuild real GBM/DMA-BUFs on the resumed FD.
+    let render_gbm_each_acquire=render_gbm_each_acquire || physical_vt_proof;
     let (mut session,notifier)=LibSeatSession::new()?;
     let seat=session.seat().to_string();
     let udev=UdevBackend::new(&seat)?;
@@ -244,7 +252,8 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     let mut opened=0u32;
     let mut observed_pause=false;
     let mut cycled=false;
-    let cycles=if forced_cycle {40} else {300};
+    let mut physical_resume_verified=false;
+    let cycles=if forced_cycle {40} else if physical_vt_proof {600} else {300};
     for _ in 0..cycles {
         // Even while polling for real libseat pause/hotplug, release the
         // descriptor explicitly if the event loop itself fails.
@@ -339,6 +348,13 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                 return Err("Seat/GPU invalidated during real DRM reacquisition".into());
             }
             opened=opened.checked_add(1).ok_or("DRM acquisition counter overflow")?;
+            // A physical proof can only complete after an actual libseat
+            // PauseSession was observed and a NEW seat-owned FD has passed
+            // every real output-sized GPU render/sync and epoch check.
+            if physical_vt_proof && observed_pause && opened>=2 {
+                physical_resume_verified=true;
+                println!("MELANIA_NATIVE_PHYSICAL_VT_RESUME_GBM_VERIFIED=true");
+            }
             println!("MELANIA_NATIVE_VT_READONLY_DRM_OPEN={} crtcs={crtcs}",opened);
             if render_gbm_each_acquire {
                 println!("MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT={opened} frames=2");
@@ -359,8 +375,12 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             println!("MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true");
         }
         if forced_cycle && cycled && opened==2 {break;}
+        if physical_resume_verified {break;}
     }
     if let Some((_,fd))=owned.take() {session.close(fd)?;}
+    if physical_vt_proof && !physical_resume_verified {
+        return Err("No genuine libseat VT pause and GPU-verified DRM resume within the physical test window".into());
+    }
     if forced_cycle && (!cycled || opened!=2) {
         return Err("QEMU real libseat DRM descriptor reopen not observed".into());
     }
