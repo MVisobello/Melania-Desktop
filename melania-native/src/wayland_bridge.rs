@@ -66,6 +66,8 @@ use melania_native::native_presentation_guard::{NativePresentationGuard,Presenta
 use melania_native::native_frame_budget;
 use melania_native::auto_tiling::{AutoTiling,TileAxis};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
+use melania_native::tab_groups::TabGroups;
+use melania_native::tab_stack_shortcuts::{TabKeyHandler,TabKeyAction};
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
 use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
@@ -174,6 +176,10 @@ struct BridgeState {
     // Explicit QEMU opt-in: one output/workspace until native multi-output exists.
     auto_tiling:AutoTiling,
     auto_tile_keys:AutoTileKeyHandler,
+    // Guest opt-in: real owned wl_shm tab visibility; no host login impact.
+    tab_stack_mode:bool,
+    tab_groups:TabGroups,
+    tab_keys:TabKeyHandler,
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
@@ -1893,8 +1899,15 @@ impl CompositorHandler for BridgeState {
                         // (new scene slots normally default to visible).
                         let minimized=self.managed_windows.iter().any(|(role,window)|
                             role==surface && window.state()==WindowDisplayState::Minimized);
-                        if minimized {
+                        // Hidden tabs retain owned pixels, but must never
+                        // regain keyboard/pointer targeting or CRTC scanout
+                        // when they independently commit a newer buffer.
+                        let tab_visible=!self.tab_stack_mode ||
+                            self.tab_groups.visible(key).unwrap_or(true);
+                        if minimized || !tab_visible {
                             let _=self.dynamic_scene.set_visible(key,false);
+                        } else if self.tab_stack_mode {
+                            let _=self.dynamic_scene.set_visible(key,true);
                         }
                         // Change the remembered normal geometry only after
                         // the owned client pixels actually entered the scene.
@@ -2202,6 +2215,9 @@ impl XdgShellHandler for BridgeState {
                         }
                         self.managed_windows.push((top.wl_surface().clone(),window));
                         let _=self.auto_tiling.register(key);
+                        if self.tab_stack_mode {
+                            let _=self.tab_groups.register(key);
+                        }
                     }
                 }
             }
@@ -2656,6 +2672,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.popup_escape_held=false;
             state.snap_keys.reset();
             state.auto_tile_keys.reset();
+            state.tab_keys.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
         InputEvent::Keyboard {event} => {
@@ -2695,6 +2712,34 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // The model sees real libinput codes (XKB = evdev + 8) even
             // when the experimental GTK Super handler consumes Meta first.
             let code:u32=event.key_code().into();
+            // Only a dedicated QEMU VT with owned client pixels may
+            // intercept these combinations. Super+S is stack/unstack;
+            // Super+Shift+S joins the focused window to a visible sibling;
+            // Super+PageUp/Down selects a previously accepted tab buffer.
+            if state.tab_stack_mode {
+                match state.tab_keys.event(
+                    code.checked_sub(8),event.state()==KeyState::Pressed
+                ) {
+                    TabKeyAction::Forward=>{},
+                    TabKeyAction::Consume=>return,
+                    TabKeyAction::ToggleStack=>{
+                        state.toggle_native_tab_stack();
+                        return;
+                    },
+                    TabKeyAction::Attach=>{
+                        state.attach_focused_native_tab();
+                        return;
+                    },
+                    TabKeyAction::Next=>{
+                        state.cycle_native_tab(false);
+                        return;
+                    },
+                    TabKeyAction::Previous=>{
+                        state.cycle_native_tab(true);
+                        return;
+                    },
+                }
+            }
             let snap_action=if state.managed_xdg_mode &&
                state.dynamic_window_mode && state.multi_window_mode {
                 state.snap_keys.event(code.checked_sub(8),
@@ -3317,6 +3362,20 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
         auto_tile_keys:AutoTileKeyHandler::default(),
+        tab_stack_mode:std::env::var("MELANIA_NATIVE_TAB_STACKS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_MANAGED_XDG")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_AUTO_TILING")
+            .as_deref()!=Ok("YES_QEMU_VM"),
+        tab_groups:TabGroups::default(),
+        tab_keys:TabKeyHandler::default(),
         auto_tiling:{
             let mut model=AutoTiling::default();
             // Explicit guest-only switch. This is not an automatic tiling
