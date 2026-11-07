@@ -25,7 +25,13 @@ pub fn verify_kernel_scanout(
 ) -> Result<bool, String> {
     let current = card.get_crtc(crtc)
         .map_err(|error| format!("DRM get_crtc failed: {error}"))?;
-    if current.framebuffer() != Some(expected_fb) {
+    // A framebuffer handle alone is insufficient: the CRTC can be
+    // deactivated or modeset while an old FB_ID remains attached.
+    let Some(initial_size) = current.mode().map(|mode| mode.size()) else {
+        return Ok(false);
+    };
+    if initial_size.0 == 0 || initial_size.1 == 0 ||
+       current.framebuffer() != Some(expected_fb) {
         return Ok(false);
     }
     let attached = card.get_connector(connector, false)
@@ -40,7 +46,9 @@ pub fn verify_kernel_scanout(
     };
     let routed = card.get_encoder(encoder)
         .map_err(|error| format!("DRM get_encoder failed: {error}"))?;
-    if routed.crtc() != Some(crtc) {
+    // Keep the proven route requirement explicit. The stable-route
+    // recheck below must not turn a detached encoder into a frame ACK.
+    if !(routed.crtc() == Some(crtc)) {
         return Ok(false);
     }
     // The first three ioctls are not an atomic DRM snapshot. Recheck
@@ -49,7 +57,8 @@ pub fn verify_kernel_scanout(
     // hotplug / VT-takeover snapshot.
     let latest_crtc = card.get_crtc(crtc)
         .map_err(|error| format!("DRM second get_crtc failed: {error}"))?;
-    if latest_crtc.framebuffer() != Some(expected_fb) {
+    if latest_crtc.framebuffer() != Some(expected_fb) ||
+       latest_crtc.mode().map(|mode| mode.size()) != Some(initial_size) {
         return Ok(false);
     }
     let latest_connector = card.get_connector(connector, false)
