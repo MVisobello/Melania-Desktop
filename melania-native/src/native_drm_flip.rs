@@ -141,6 +141,13 @@ pub fn wait_for_kms_page_flip_routed(
             }
         };
         if ready==0 {
+            // poll() is bounded to i32::MAX milliseconds, whereas the
+            // caller's deadline may be much farther away. A completed
+            // poll interval is not necessarily the end of the wait.
+            // Recheck the monotonic deadline before revoking this epoch.
+            if Instant::now() < deadline {
+                continue;
+            }
             router.revoke();
             return Err("DRM page flip vblank event timed out".into());
         }
