@@ -46,7 +46,7 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
                 # Every resource read after the restoring modeset must poison
                 # rollback ownership on I/O failure.
                 self.assertRegex(
-                    restore, re.escape(drm_call) + r"\\.map_err\\(\\|error\\|\\s*\\{"
+                    restore, re.escape(drm_call) + r"\.map_err\(\|error\|\s*\{"
                 )
             self.assertGreaterEqual(restore.count("self.ownership_lost=true;"), 3)
             self.assertNotIn(".get_encoder(encoder).ok()", restore)
