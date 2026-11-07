@@ -1842,6 +1842,83 @@ rm -f "$tab_server_log" "$tab_client_log"
 report 'MELANIA_QEMU_NATIVE_REAL_TAB_STACK_USB_KMS_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage130: real physical QMP USB tablet motion over two distinct retained
+# XDG toplevels, no click and no alt-tab. Verify wl_keyboard Enter B then A,
+# visible client-owned pixels on the already-ACKed KMS CRTC12, and VT/DRM
+# rollback. Sloppy focus remains guest-only and disabled by default.
+hover_server_log="$(mktemp -t melania-native-hover-server-XXXXXX)"
+hover_client_log="$(mktemp -t melania-native-hover-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$hover_server_log" 2>&1 &
+hover_server_pid=$!
+hover_socket=''
+for attempt in $(seq 1 100); do
+  hover_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$hover_server_log" | head -n 1)"
+  [[ -n "$hover_socket" ]] && break
+  kill -0 "$hover_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$hover_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$hover_server_log"; then
+  cat "$hover_server_log"
+  kill -TERM "$hover_server_pid" 2>/dev/null || true
+  fatal 'real_USB_hover_GPU_Wayland_server_not_started'
+fi
+tail -n +1 -f -s 0.05 "$hover_server_log" > /dev/ttyS0 &
+hover_server_tail_pid=$!
+tail -n +1 -f -s 0.05 "$hover_client_log" > /dev/ttyS0 &
+hover_client_tail_pid=$!
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
+      MELANIA_QEMU_HOVER_FOCUS_CLIENT=YES_QEMU_VM \
+      WAYLAND_DISPLAY="$hover_socket" \
+      timeout --signal=TERM --kill-after=3s 130s \
+      "$alt_client" > "$hover_client_log" 2>&1; then
+  cat "$hover_client_log" "$hover_server_log"
+  kill -TERM "$hover_server_pid" 2>/dev/null || true
+  fatal 'real_USB_hover_two_client_keyboard_focus_failed'
+fi
+grep -qx 'MELANIA_NATIVE_HOVER_FOCUS_TWO_REAL_KEYBOARD_ENTERS_PASS=true' "$hover_client_log" ||
+  fatal 'real_hover_Wayland_Enter_B_then_A_missing'
+grep -qx 'MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER=2' "$hover_server_log" ||
+  fatal 'USB_hover_B_not_focused_on_topmost_XDG'
+grep -qx 'MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER=1' "$hover_server_log" ||
+  fatal 'USB_hover_A_not_focused_on_topmost_XDG'
+grep -qx 'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=12' "$hover_server_log" ||
+  fatal 'real_hover_client_CRTC12_not_confirmed'
+kill -TERM "$hover_server_pid"
+if ! wait "$hover_server_pid"; then
+  cat "$hover_server_log" "$hover_client_log"
+  fatal 'hover_GPU_KMS_original_CRTC_restore_failed'
+fi
+kill "$hover_server_tail_pid" "$hover_client_tail_pid" 2>/dev/null || true
+wait "$hover_server_tail_pid" "$hover_client_tail_pid" 2>/dev/null || true
+for marker in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$marker" "$hover_server_log" ||
+    fatal "hover_virtual_GPU_rollback_missing_$marker"
+done
+rm -f "$hover_server_log" "$hover_client_log"
+report 'MELANIA_QEMU_HOVER_FOCUS_REAL_WAYLAND_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage136: REAL USB Super+S/Shift+S/Y -> XDG group-size serials ->
 # two independent Wayland wl_shm commits -> one atomic CRTC repaint.
 # Every selected tab is checked through actual QMP framebuffer pixels.

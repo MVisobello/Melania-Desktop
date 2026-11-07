@@ -21,6 +21,7 @@ struct Client {
     output:Option<wl_output::WlOutput>,
     seat:Option<wl_seat::WlSeat>,
     alt_tab_probe:bool,
+    hover_focus_probe:bool,
     tab_probe:bool,
     combined_probe:bool,
     tab_focus_b:bool,
@@ -64,7 +65,7 @@ impl Dispatch<wl_seat::WlSeat,()> for Client {
 impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
     fn event(s:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
-        if !(s.alt_tab_probe || s.tab_probe) || s.frame_done_count<12 {return;}
+        if !(s.alt_tab_probe || s.tab_probe || s.hover_focus_probe) || s.frame_done_count<12 {return;}
         match event {
             wl_keyboard::Event::Enter{surface,..}=>{
                 if s.tab_probe {
@@ -79,11 +80,19 @@ impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
                     }
                 } else if s.second_surface.as_ref()==Some(&surface) && !s.saw_focus_b {
                     s.saw_focus_b=true;
-                    println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=B");
+                    if s.hover_focus_probe {
+                        println!("MELANIA_QEMU_HOVER_REAL_WL_KEYBOARD_ENTER=B");
+                    } else {
+                        println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=B");
+                    }
                     let _=std::io::stdout().flush();
                 } else if s.first_surface.as_ref()==Some(&surface) && s.saw_focus_b {
                     s.saw_focus_a=true;
-                    println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A");
+                    if s.hover_focus_probe {
+                        println!("MELANIA_QEMU_HOVER_REAL_WL_KEYBOARD_ENTER=A");
+                    } else {
+                        println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A");
+                    }
                     let _=std::io::stdout().flush();
                 }
             },
@@ -234,12 +243,17 @@ fn main()->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     state.alt_tab_probe=std::env::var("MELANIA_QEMU_ALT_TAB_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
+    state.hover_focus_probe=std::env::var("MELANIA_QEMU_HOVER_FOCUS_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
     state.combined_probe=std::env::var("MELANIA_QEMU_COMBINED_TAB_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
     state.tab_probe=std::env::var("MELANIA_QEMU_TAB_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM") || state.combined_probe;
     if state.alt_tab_probe && state.tab_probe {
         return Err("two QEMU keyboard acceptance modes cannot overlap".into());
+    }
+    if state.hover_focus_probe && (state.alt_tab_probe || state.tab_probe) {
+        return Err("hover cannot share an input acceptance client".into());
     }
     state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM") || managed_role_pixels ||
@@ -249,7 +263,7 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.output_mode_received {
         return Err("two-window continuous client did not see VM 1280x800 output".into());
     }
-    let _keyboard=if state.alt_tab_probe || state.tab_probe {
+    let _keyboard=if state.alt_tab_probe || state.tab_probe || state.hover_focus_probe {
         Some(state.seat.as_ref().ok_or("real wl_seat required for Alt+Tab")?
             .get_keyboard(&qh,()))
     } else {None};
@@ -389,6 +403,8 @@ fn main()->Result<(),Box<dyn Error>> {
             format!("/run/melania-native-qemu/tab-stack-client-{index}.bgra")
         } else if state.alt_tab_probe {
             format!("/run/melania-native-qemu/alt-tab-client-{index}.bgra")
+        } else if state.hover_focus_probe {
+            format!("/run/melania-native-qemu/hover-focus-client-{index}.bgra")
         } else if managed_role_pixels {
             // Stage81B runs after Stage48 in the SAME QEMU guest: create_new
             // must not collide with earlier two-window fixture filenames.
@@ -572,6 +588,25 @@ fn main()->Result<(),Box<dyn Error>> {
             queue.roundtrip(&mut state)?;
         }
         println!("MELANIA_NATIVE_ALT_F4_REAL_XDG_CLOSE_PASS=true");
+        std::io::stdout().flush()?;
+    }
+    // Stage130: genuine USB tablet motion, without any button press or
+    // synthetic keyboard input, must deliver wl_keyboard::Enter(B) then (A).
+    // QMP independently captures owned client pixels on the live CRTC12.
+    if state.hover_focus_probe {
+        if managed_role_pixels || dynamic {
+            return Err("hover-focus proof requires two stable XDG client pixel owners".into());
+        }
+        println!("MELANIA_QEMU_HOVER_TWO_WAYLAND_SURFACES_READY=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(90);
+        while !state.saw_focus_a {
+            if Instant::now()>=deadline {
+                return Err("real QEMU tablet hover did not enter B then A via wl_keyboard".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        println!("MELANIA_NATIVE_HOVER_FOCUS_TWO_REAL_KEYBOARD_ENTERS_PASS=true");
         std::io::stdout().flush()?;
     }
     // Optional Stage99 end-to-end experiment: keep both real xdg roles

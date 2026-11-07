@@ -39,6 +39,8 @@ edge_client="$root/target/debug/qemu-edge-drop-client"
 [[ -x "$auth_resize_client" ]] || deny 'build real client xdg_toplevel.resize QEMU probe'
 [[ -f "$root/scripts/inject-qemu-alt-tab.py" ]] ||
   deny 'missing USB Alt+Tab focus/KMS QMP acceptance verifier'
+[[ -f "$root/scripts/inject-qemu-hover-focus.py" ]] ||
+  deny 'missing real QMP tablet hover keyboard-focus verifier'
 [[ -f "$root/scripts/inject-qemu-native-tab-stacks.py" ]] ||
   deny 'missing dedicated real USB Wayland tab-stack pixel verifier'
 [[ -f "$root/scripts/inject-qemu-combined-tab-tiling.py" ]] ||
@@ -273,6 +275,11 @@ python3 "$root/scripts/inject-qemu-alt-tab.py" \
   --output "$report/alt-tab-frame13.ppm" --timeout 1350 \
   > "$report/qmp-alt-tab.log" 2>&1 &
 alt_tab_input_pid=$!
+python3 "$root/scripts/inject-qemu-hover-focus.py" \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" \
+  --output "$report/hover-focus-frame12.ppm" --timeout 1350 \
+  > "$report/qmp-hover-focus.log" 2>&1 &
+hover_focus_input_pid=$!
 python3 "$root/scripts/inject-qemu-native-tab-stacks.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --out-dir "$report" --timeout 1680 \
@@ -390,6 +397,8 @@ wait "$edge_inject_pid"
 edge_inject_code=$?
 wait "$alt_tab_input_pid"
 alt_tab_input_code=$?
+wait "$hover_focus_input_pid"
+hover_focus_input_code=$?
 wait "$native_tabs_input_pid"
 native_tabs_input_code=$?
 wait "$combined_tabs_input_pid"
@@ -406,7 +415,7 @@ wait "$gtk_super_input_pid"
 gtk_super_input_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$combined_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$hover_focus_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$combined_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
     ! grep -q '^MELANIA_QEMU_GTK4_PANEL_PIXELS_FROM_KMS=true' "$report/qmp-real-gtk-panel.log" ||
     ! grep -q '^MELANIA_QEMU_GTK4_TWO_DISTINCT_REAL_FRAMES=true' "$report/qmp-real-gtk-two-frames.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_START_REAL_CRTC_PIXELS=true' "$report/qmp-real-gtk-start-overlay.log" ||
@@ -453,6 +462,10 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! grep -q '^MELANIA_QEMU_ALT_TAB_REAL_KERNEL_CRTC_FRAME13_PIXELS=true' "$report/qmp-alt-tab.log" ||
     ! test -s "$report/alt-tab-frame13.ppm" ||
     ! grep -q '^MELANIA_QEMU_REAL_USB_ALT_TAB_WAYLAND_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_HOVER_QMP_NO_CLICK_PASS=true' "$report/qmp-hover-focus.log" ||
+    ! grep -q '^MELANIA_QEMU_HOVER_CRTC12_REAL_CLIENT_PIXELS=true' "$report/qmp-hover-focus.log" ||
+    ! test -s "$report/hover-focus-frame12.ppm" ||
+    ! grep -q '^MELANIA_QEMU_HOVER_FOCUS_REAL_WAYLAND_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_EDGE_DROP_REAL_CRTC_HALF_PIXELS=true' "$report/qmp-edge-drop.log" ||
     ! test -s "$report/edge-drop-original-frame1.ppm" ||
     ! test -s "$report/edge-drop-half-frame2.ppm" ||
