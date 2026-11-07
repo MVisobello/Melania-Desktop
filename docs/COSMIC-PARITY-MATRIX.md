@@ -39,7 +39,7 @@ engineering acceptance matrix, not a release claim.
 | **Automatic tiling** independently per workspace | **M + opt-in native QEMU XDG configure/size gate; hardware U** | End-to-end native Wayland client/KMS pixels, per-workspace/output, recovery | P1 |
 | Tiling orientation, gap spacing, exempt floating apps | **M + opt-in QEMU XDG, Super+Y/G/O; hardware U** | Interaction and true client buffer tests, persistence, resize and hardware | P1 |
 | Tiling tab/stack groups and reordering/swapping tiles | **M basic swap only; — tab groups** | Real tabbed clients, focus/stack and drag-drop tile swap | P1 |
-| Tiling resize/keyboard navigation/tree selection | — | Interactive resize/configure and shortcuts equivalent to COSMIC | P1 |
+| Tiling resize/keyboard navigation/tree selection | **M directional swap and QEMU XDG wiring; U hardware** | Real input→swap→KMS pixels, interactive resize, selection and more shortcuts | P1 |
 | Workspace navigation, sending windows to workspace | N via melania-workspaces IPC; Q partial | Native workspace-scoped focus, drag and per-monitor association | P1 |
 | Dynamic and pinned workspaces | — | Creation/removal, persistence, pinned vs dynamic, shortcuts | P1 |
 | Workspace overview and switching gestures | N shell integration partial; native U | Full native view, keyboard/pointer/touch interaction | P1 |
@@ -132,6 +132,32 @@ full-size DMA-BUF client import, native physical login. This PR is a
    interactive split resizing, stack tabs and settings persistence.
 5. Exercise multiple physical outputs and VT/suspend/restart scenarios;
    continue the P0 checks in #24 before enabling native login.
+
+## Native directional tile swapping (2026-11-07)
+
+This follow-on change adds the COSMIC **Super+X, then arrow** workflow
+to the *real QEMU libseat keyboard path*, rather than offering a decorative
+UI setting. `melania-native/src/tile_swap_shortcuts.rs` tracks the actual
+physical modifier, X and arrow edges (including autorepeat and VT reset),
+and never consumes normal Windows-style Super+arrow snapping when unarmed.
+`auto_tiling.rs` chooses the nearest adjacent eligible tile from a
+fresh validated layout; floating, minimized and XDG-role-excluded windows
+cannot be swapped. The source window remains focused.
+
+In the guest-only XDG bridge, `swap_tiled_focused` updates the validated
+ordering, then reflows through the existing XDG role and buffer ownership
+checks. *Important fix*: if swapping two same-sized windows changes only
+their coordinates, the compositor repositions **already accepted and owned**
+retained shm pixels and schedules a real DRM KMS frame; Wayland clients
+are not required to commit a new same-size buffer for an x/y-only move.
+Changed window sizes still require a fresh XDG configure and matching
+client buffer before old pixels can move.
+
+**Still missing**: independent QEMU end-to-end test of Super+X input and
+verified KMS swapped pixels; dedicated physical hardware proof;
+per-output/per-workspace keyboard swap; graphical swap-preview overlay;
+tab stacks and interactive tiling-resize. The code is not a native login
+feature or proof of complete COSMIC parity.
 
 ## Evidence required for any green check mark
 
