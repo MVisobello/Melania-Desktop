@@ -354,7 +354,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 let flip_deadline=Instant::now()+Duration::from_secs(2);
                 loop {
                     match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::EVENT,None) {
-                        Ok(())=>break,
+                        Ok(())=>{
+                            event_router.arm_flip(crtc_handle)?;
+                            break;
+                        },
                         Err(error) if error.raw_os_error()==Some(11) &&
                             Instant::now()<flip_deadline => {
                             thread::sleep(Duration::from_millis(20));
