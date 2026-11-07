@@ -52,8 +52,11 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
             self.assertNotIn(".get_encoder(encoder).ok()", restore)
             # A readable but mismatching post-restore CRTC or connector
             # is equally unsafe: no automatic retry on destruction.
-            self.assertRegex(
-                restore, r"if !self\.restored\s*\{\s*self\.ownership_lost=true;"
+            after_verify = restore[restore.index("if !self.restored {"):]
+            self.assertIn("self.ownership_lost=true;", after_verify)
+            self.assertLess(
+                after_verify.index("self.ownership_lost=true;"),
+                after_verify.index("return Err("),
             )
             drop = source[source.index("impl Drop for Restore", end):]
             self.assertIn(
