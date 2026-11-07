@@ -14,6 +14,7 @@ pub mod window_placement;
 pub mod snap_layout;
 pub mod auto_tiling;
 pub mod tab_groups;
+pub mod tab_stack_shortcuts;
 pub mod auto_tiling_shortcuts;
 pub mod snap_shortcuts;
 pub mod output_layout;
