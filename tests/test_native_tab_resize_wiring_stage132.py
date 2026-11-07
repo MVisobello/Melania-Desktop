@@ -18,9 +18,15 @@ class NativeTabResizeWiringStage132(unittest.TestCase):
     def test_only_owned_imported_shm_commit_can_count(self):
         # If a future refactor moves this block, fail rather than silently
         # accepting a configure as client-owned pixels.
-        self.assertIn("self.tab_resize_transaction.owned_buffer_committed(",BRIDGE)
+        self.assertIn("self.tab_resize_transaction.can_accept_owned_buffer(",BRIDGE)
+        guard=BRIDGE.index("self.tab_resize_transaction.can_accept_owned_buffer(")
+        insert=BRIDGE.index("self.dynamic_scene.upsert(key,x,y,pixels)")
         marker=BRIDGE.index("self.tab_resize_transaction.owned_buffer_committed(")
-        self.assertGreater(marker,BRIDGE.index("self.dynamic_scene.upsert(key,x,y,pixels)"))
+        self.assertLess(guard,insert)
+        self.assertGreater(marker,insert)
+        self.assertIn("MELANIA_NATIVE_TAB_RESIZE_PREIMPORT_REJECTED=",BRIDGE)
+        self.assertIn("if let Err(error)=self.tab_resize_transaction.can_accept_owned_buffer(",BRIDGE)
+        self.assertIn("buffer.release();",BRIDGE[guard:insert])
         self.assertIn("MELANIA_NATIVE_TAB_RESIZE_BUFFER_REFUSED=",BRIDGE)
         self.assertIn("MELANIA_NATIVE_TAB_RESIZE_BUFFERS_READY=",BRIDGE)
     def test_closure_and_seat_device_loss_abort_all_uncommitted_groups(self):

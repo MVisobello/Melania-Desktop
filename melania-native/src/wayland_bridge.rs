@@ -2088,6 +2088,24 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     }
+                    // Refuse invalid tab resize buffers *before* upsert.
+                    // Otherwise the current active tab could briefly paint
+                    // client pixels from a rejected/un-ACKed size.
+                    if self.managed_xdg_mode && popup_parent.is_none() {
+                        if let Some(epoch)=self.tab_resize_transaction.epoch() {
+                            let Some(id)=self.known_window_surfaces.id_of(surface) else {
+                                buffer.release();
+                                return;
+                            };
+                            if let Err(error)=self.tab_resize_transaction.can_accept_owned_buffer(
+                                epoch,id,pixels.width(),pixels.height()
+                            ) {
+                                eprintln!("MELANIA_NATIVE_TAB_RESIZE_PREIMPORT_REJECTED={error:?}");
+                                buffer.release();
+                                return;
+                            }
+                        }
+                    }
                     // Refuse stale-size buffers during a managed role switch.
                     // A successful client ACK alone did not provide pixels.
                     if self.managed_xdg_mode && popup_parent.is_none() {

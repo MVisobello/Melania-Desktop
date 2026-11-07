@@ -120,6 +120,23 @@ impl TabResizeTransaction {
         client.acked=true;
         Ok(())
     }
+    /// Preview whether a validated client's next owned wl_shm buffer is
+    /// eligible to enter the compositor's retained scene. A wrong-size,
+    /// stale-serial or un-ACKed buffer must be released *before* upsert,
+    /// so it can never be painted even briefly.
+    pub fn can_accept_owned_buffer(
+        &self,epoch:u64,id:u64,width:usize,height:usize
+    )->Result<(),ResizeError> {
+        let batch=self.pending.as_ref().ok_or(ResizeError::WrongEpoch)?;
+        if batch.epoch!=epoch{return Err(ResizeError::WrongEpoch);}
+        let client=batch.clients.iter().find(|c|c.id==id)
+            .ok_or(ResizeError::UnknownWindow)?;
+        if !client.acked{return Err(ResizeError::BufferBeforeAck);}
+        if client.target!=(width,height) {
+            return Err(ResizeError::BufferSizeMismatch);
+        }
+        Ok(())
+    }
     /// Only a fresh *validated owned wl_shm* commit after the ACK counts.
     /// A stale-size buffer is rejected without marking progress.
     pub fn owned_buffer_committed(
@@ -202,12 +219,21 @@ mod tests {
         assert_eq!(m.sent_configure(epoch,1,0),Err(ResizeError::SerialMismatch));
         m.sent_configure(epoch,1,77).unwrap();
         assert_eq!(m.ack_configure(epoch,1,76),Err(ResizeError::SerialMismatch));
+        assert_eq!(m.can_accept_owned_buffer(epoch,1,400,600),
+                   Err(ResizeError::BufferBeforeAck));
         assert_eq!(m.owned_buffer_committed(epoch,1,400,600),
                    Err(ResizeError::BufferBeforeAck));
         m.ack_configure(epoch,1,77).unwrap();
+        assert_eq!(m.can_accept_owned_buffer(epoch,1,399,600),
+                   Err(ResizeError::BufferSizeMismatch));
         assert_eq!(m.owned_buffer_committed(epoch,1,399,600),
                    Err(ResizeError::BufferSizeMismatch));
+        assert_eq!(m.can_accept_owned_buffer(epoch,1,400,600),Ok(()));
         assert_eq!(m.sent_configure(epoch+1,1,99),Err(ResizeError::WrongEpoch));
+        assert_eq!(m.can_accept_owned_buffer(epoch+1,1,400,600),
+                   Err(ResizeError::WrongEpoch));
+        assert_eq!(m.can_accept_owned_buffer(epoch,999,400,600),
+                   Err(ResizeError::UnknownWindow));
         assert!(!m.is_ready(epoch));
     }
     #[test]
