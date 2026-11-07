@@ -1239,6 +1239,174 @@ impl BridgeState {
         }
     }
 
+    /// This action is confined to a dedicated VM-owned VT and existing KMS
+    /// stream. The normal desktop session and labwc never read these keys.
+    fn native_tab_actions_allowed(&self)->bool {
+        self.tab_stack_mode && self.managed_xdg_mode && self.dynamic_window_mode &&
+        self.multi_window_mode && self.continuous_kms_mode &&
+        self.persistent_kms_mode && !self.auto_tiling.enabled() &&
+        self.lifecycle.seat_active() &&
+        !self.native_presentation_guard.permanently_revoked() &&
+        self.window_interaction.active_key().is_none() &&
+        self.grabbed_popup_roles.is_empty()
+    }
+
+    /// The retained image is authoritative: hidden tabs retain client-owned
+    /// pixels, but must not paint, capture the pointer, or receive keyboard
+    /// focus on a future wl_surface.commit. Minimized roles stay hidden.
+    fn sync_native_tab_visibility(&mut self) {
+        if !self.tab_stack_mode {return;}
+        let desired=self.managed_windows.iter().filter_map(|(surface,window)|{
+            let id=self.known_window_surfaces.id_of(surface)?;
+            let visible=window.state()!=WindowDisplayState::Minimized &&
+                self.tab_groups.visible(id).unwrap_or(true);
+            Some((id,surface.clone(),visible))
+        }).collect::<Vec<_>>();
+        let mut damaged=false;
+        for (id,surface,visible) in desired {
+            if self.dynamic_scene.geometry(id).is_none(){continue;}
+            if let Ok(changed)=self.dynamic_scene.set_visible(id,visible) {
+                damaged|=changed;
+            }
+            if !visible {
+                // A hidden tab must never leave an interactive popup or
+                // stale captured popup frame on top of another active tab.
+                damaged|=self.evict_native_popup_tree(&surface,true,true);
+            }
+        }
+        if damaged {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("native tab visibility KMS refused: {error}");
+                }
+            }
+        }
+    }
+
+    fn activate_native_tab(&mut self,id:u64) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(surface)=self.known_window_surfaces.get(id).cloned() else {return;};
+        if !self.managed_windows.iter().any(|(role,model)|
+            role==&surface && model.state()==WindowDisplayState::Normal) {return;}
+        if self.tab_groups.activate(id).is_err(){return;}
+        self.sync_native_tab_visibility();
+        if self.dynamic_scene.is_visible(id)!=Some(true){return;}
+        let previous=self.focused.clone();
+        if previous.as_ref()!=Some(&surface){
+            if let Some(old)=previous.as_ref().and_then(|role|
+                self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==role).cloned()) {
+                old.with_pending_state(|pending|{
+                    pending.states.unset(xdg_toplevel::State::Activated);
+                });
+                old.send_pending_configure();
+            }
+            if let Some(new)=self.xdg_shell.toplevel_surfaces().iter()
+                .find(|top|top.wl_surface()==&surface).cloned() {
+                new.with_pending_state(|pending|{
+                    pending.states.set(xdg_toplevel::State::Activated);
+                });
+                new.send_pending_configure();
+            }
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+            self.focused=Some(surface);
+        }
+        let target=self.pointer_target(self.pointer_position);
+        let pointer=self.seat.get_pointer().expect("pointer");
+        pointer.motion(self,target,&MotionEvent{
+            location:self.pointer_position,
+            serial:SERIAL_COUNTER.next_serial(),time:0,
+        });
+        pointer.frame(self);
+        println!("MELANIA_NATIVE_TAB_ACTIVE={id}");
+    }
+
+    /// Attach the focused, already-buffered client to the most recently
+    /// stacked/visible sibling. For this first QEMU integration, only equal
+    /// buffer sizes are accepted: no speculative resize/ACK or blank tab.
+    /// The source's original floating geometry is preserved on its model.
+    fn attach_focused_native_tab(&mut self) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(surface)=self.focused.clone() else {return;};
+        let Some(source)=self.known_window_surfaces.id_of(&surface) else {return;};
+        if self.dynamic_scene.is_visible(source)!=Some(true) ||
+           self.tab_groups.group_tabs(source).map_or(true,|tabs|tabs.len()!=1) ||
+           !self.managed_windows.iter().any(|(role,model)|
+               role==&surface && model.state()==WindowDisplayState::Normal &&
+               !model.is_tiled()) {return;}
+        let Some((_,_,width,height))=self.dynamic_scene.geometry(source) else{return;};
+        if self.managed_pending_sizes.iter().any(|(role,_)|role==&surface){return;}
+        let target=self.dynamic_scene.focusable_normal_keys_top_first()
+            .into_iter().filter(|&id|id!=source).find(|&id|{
+                self.tab_groups.visible(id)==Ok(true) &&
+                self.dynamic_scene.geometry(id).is_some_and(|(_,_,w,h)|
+                    w==width && h==height) &&
+                self.known_window_surfaces.get(id).is_some_and(|role|
+                    self.managed_windows.iter().any(|(r,m)|
+                        r==role && m.state()==WindowDisplayState::Normal) &&
+                    !self.managed_pending_sizes.iter().any(|(r,_)|r==role)) &&
+                self.tab_groups.group_tabs(id).is_ok_and(|tabs|tabs.len()<8)
+            });
+        let Some(target)=target else {return;};
+        let Some((x,y,_,_))=self.dynamic_scene.geometry(target) else{return;};
+        let rect=WindowRect{x,y,width:width as i32,height:height as i32};
+        if !rect.valid_for(1280,800){return;}
+        if self.tab_groups.is_stacking(target)!=Ok(true) {
+            if self.tab_groups.toggle_stacking(target)!=Ok(true){return;}
+        }
+        if self.tab_groups.attach(source,target)!=Ok(true){return;}
+        if let Some((_,model))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface){
+            let _=model.set_tiled_geometry(rect);
+        }
+        if let Err(error)=self.dynamic_scene.move_to(source,x,y) {
+            eprintln!("native tab retained move refused: {error:?}");
+            return;
+        }
+        self.sync_native_tab_visibility();
+        self.activate_native_tab(source);
+        println!("MELANIA_NATIVE_TAB_ATTACHED={source}:{target}");
+    }
+
+    /// Super+S creates a stack or splits it. When splitting an existing
+    /// multi-tab stack, restore compositor-owned windows to their original
+    /// saved positions instead of accidentally leaving all tabs overlapped.
+    fn toggle_native_tab_stack(&mut self) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(id)=self.focused.as_ref().and_then(|role|
+            self.known_window_surfaces.id_of(role)) else{return;};
+        let Ok(tabs)=self.tab_groups.group_tabs(id) else{return;};
+        let former=tabs.to_vec();
+        let Ok(stacking)=self.tab_groups.toggle_stacking(id) else{return;};
+        if !stacking {
+            for key in former {
+                let Some(surface)=self.known_window_surfaces.get(key) else{continue;};
+                let rect=self.managed_windows.iter_mut()
+                    .find(|(role,_)|role==surface).and_then(|(_,model)|{
+                        model.clear_tiled_geometry().then(||model.geometry()).flatten()
+                    });
+                if let Some(rect)=rect {
+                    let _=self.dynamic_scene.move_to(key,rect.x,rect.y);
+                }
+            }
+            self.sync_native_tab_visibility();
+        }
+        println!("MELANIA_NATIVE_TAB_STACKING={stacking} id={id}");
+    }
+
+    fn cycle_native_tab(&mut self,backwards:bool) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(id)=self.focused.as_ref().and_then(|surface|
+            self.known_window_surfaces.id_of(surface)) else{return;};
+        if let Ok(Some(next))=self.tab_groups.cycle(id,backwards) {
+            self.activate_native_tab(next);
+        }
+    }
+
     /// Guest-only Ctrl+Super+T changes the actual XDG tiled geometry.
     /// Disabling tiling restores each client's preserved floating rectangle
     /// via configure, not by teleporting old retained pixels into a new KMS
