@@ -164,6 +164,30 @@ impl TabGroups {
         Ok(Some(group.active))
     }
 
+    /// Move the visible tab one slot within its existing stack, like a
+    /// tab-bar drag/drop reorder. Preserve the same active window, keyboard
+    /// focus, buffer ownership and all other groups. At either edge it is
+    /// a no-op (never wrap to the opposite edge).
+    pub fn reorder_active(&mut self,id:u64,backwards:bool)
+        ->Result<Option<usize>,TabError>
+    {
+        let group=self.groups.iter_mut().find(|g|g.contains(id))
+            .ok_or(TabError::UnknownWindow)?;
+        if !group.stacking || group.active!=id || group.tabs.len()<2 {
+            return Ok(None);
+        }
+        let index=group.tabs.iter().position(|&tab|tab==id)
+            .expect("active tab must belong to its group");
+        let adjacent=if backwards {
+            index.checked_sub(1)
+        } else {
+            (index+1<group.tabs.len()).then_some(index+1)
+        };
+        let Some(target)=adjacent else{return Ok(None);};
+        group.tabs.swap(index,target);
+        Ok(Some(target))
+    }
+
     pub fn forget(&mut self,id:u64)->bool {
         let Some(i)=self.groups.iter().position(|g|g.contains(id)) else{return false;};
         let group=&mut self.groups[i];
@@ -326,6 +350,45 @@ mod tests {
         assert_eq!(scene.hit_test(6.0,6.0),Some(1));
         assert_eq!(scene.window_count(),1);
         assert_eq!(scene.used_bytes(),12*12*4);
+    }
+
+    #[test]
+    fn reorder_visible_tab_changes_order_not_active_or_geometry() {
+        let mut t=groups(&[1,2,3,4]);
+        assert_eq!(t.toggle_stacking(1),Ok(true));
+        assert_eq!(t.attach(2,1),Ok(true));
+        assert_eq!(t.attach(3,1),Ok(true));
+        assert_eq!(t.group_tabs(2),Ok(&[1,2,3][..]));
+        assert_eq!(t.reorder_active(3,true),Ok(Some(1)));
+        assert_eq!(t.group_tabs(3),Ok(&[1,3,2][..]));
+        assert_eq!(t.active_tab(1),Ok(3));
+        assert_eq!(t.visible_ids(),vec![3,4]);
+        assert_eq!(t.reorder_active(3,true),Ok(Some(0)));
+        assert_eq!(t.group_tabs(1),Ok(&[3,1,2][..]));
+        assert_eq!(t.reorder_active(3,true),Ok(None));
+        assert_eq!(t.reorder_active(1,false),Ok(None)); // hidden tab
+        assert_eq!(t.reorder_active(3,false),Ok(Some(1)));
+        assert_eq!(t.group_tabs(2),Ok(&[1,3,2][..]));
+        assert_eq!(t.cycle(3,false),Ok(Some(2)));
+        assert_eq!(t.reorder_active(2,false),Ok(None));
+        assert_eq!(t.window_count(),4);
+        assert_eq!(t.reorder_active(404,false),Err(TabError::UnknownWindow));
+        assert_eq!(t.reorder_active(4,false),Ok(None)); // unstacked
+    }
+
+    #[test]
+    fn reorder_keeps_subsequent_detach_and_group_destruction_consistent() {
+        let mut t=groups(&[7,8,9]);
+        t.toggle_stacking(7).unwrap();
+        t.attach(8,7).unwrap();
+        t.attach(9,7).unwrap();
+        assert_eq!(t.reorder_active(9,true),Ok(Some(1)));
+        assert_eq!(t.group_tabs(8),Ok(&[7,9,8][..]));
+        assert_eq!(t.detach(9),Ok(true));
+        assert_eq!(t.visible_ids(),vec![7,9]);
+        assert!(t.forget(7));
+        assert_eq!(t.visible_ids(),vec![8,9]);
+        assert_eq!(t.window_count(),2);
     }
 
     #[test]

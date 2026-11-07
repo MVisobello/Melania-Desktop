@@ -1456,6 +1456,20 @@ impl BridgeState {
         println!("MELANIA_NATIVE_TAB_STACKING={stacking} id={id}");
     }
 
+    /// A real Super+Shift+PageUp/Down moves the active stack tab by one
+    /// adjacent slot. No client visibility/focus changes, and no fabricated
+    /// KMS frame is necessary until tab-bar decorations are implemented.
+    fn reorder_native_tab(&mut self,backwards:bool) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(id)=self.focused.as_ref().and_then(|role|
+            self.known_window_surfaces.id_of(role)) else{return;};
+        if self.dynamic_scene.is_visible(id)!=Some(true){return;}
+        if let Ok(Some(index))=self.tab_groups.reorder_active(id,backwards) {
+            println!("MELANIA_NATIVE_TAB_REORDERED={id} index={index}");
+            let _=std::io::stdout().flush();
+        }
+    }
+
     fn cycle_native_tab(&mut self,backwards:bool) {
         if !self.native_tab_actions_allowed(){return;}
         let Some(id)=self.focused.as_ref().and_then(|surface|
@@ -3008,7 +3022,8 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // Only a dedicated QEMU VT with owned client pixels may
             // intercept these combinations. Super+S is stack/unstack;
             // Super+Shift+S joins the focused window to a visible sibling;
-            // Super+PageUp/Down selects a previously accepted tab buffer.
+            // Super+PageUp/Down selects a previously accepted tab buffer;
+            // adding Shift reorders the current tab, preserving its focus. 
             if state.tab_stack_mode {
                 match state.tab_keys.event(
                     code.checked_sub(8),event.state()==KeyState::Pressed
@@ -3029,6 +3044,14 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     },
                     TabKeyAction::Previous=>{
                         state.cycle_native_tab(true);
+                        return;
+                    },
+                    TabKeyAction::MoveNext=>{
+                        state.reorder_native_tab(false);
+                        return;
+                    },
+                    TabKeyAction::MovePrevious=>{
+                        state.reorder_native_tab(true);
                         return;
                     },
                 }

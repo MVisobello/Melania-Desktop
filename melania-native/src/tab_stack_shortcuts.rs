@@ -16,7 +16,9 @@ const PAGE_UP:u32=104;
 const PAGE_DOWN:u32=109;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum TabKeyAction {Forward,Consume,ToggleStack,Attach,Next,Previous}
+pub enum TabKeyAction {
+    Forward,Consume,ToggleStack,Attach,Next,Previous,MoveNext,MovePrevious
+}
 
 #[derive(Default,Debug)]
 pub struct TabKeyHandler {
@@ -61,8 +63,7 @@ impl TabKeyHandler {
                 }
                 if self.held & mask!=0 {return TabKeyAction::Consume;}
                 if !(self.meta_l || self.meta_r) ||
-                   self.ctrl_l || self.ctrl_r || self.alt_l || self.alt_r ||
-                   (key!=S && (self.shift_l || self.shift_r)) {
+                   self.ctrl_l || self.ctrl_r || self.alt_l || self.alt_r {
                     return TabKeyAction::Forward;
                 }
                 self.held|=mask;
@@ -70,8 +71,12 @@ impl TabKeyHandler {
                     S=>if self.shift_l || self.shift_r {
                         TabKeyAction::Attach
                     } else {TabKeyAction::ToggleStack},
-                    PAGE_UP=>TabKeyAction::Previous,
-                    PAGE_DOWN=>TabKeyAction::Next,
+                    PAGE_UP=>if self.shift_l || self.shift_r {
+                        TabKeyAction::MovePrevious
+                    } else {TabKeyAction::Previous},
+                    PAGE_DOWN=>if self.shift_l || self.shift_r {
+                        TabKeyAction::MoveNext
+                    } else {TabKeyAction::Next},
                     _=>unreachable!(),
                 }
             },
@@ -111,10 +116,29 @@ mod tests{
         h.event(Some(S),false);
         h.event(Some(ALT_L),false);
         h.event(Some(LEFT_SHIFT),true);
-        assert_eq!(h.event(Some(PAGE_DOWN),true),TabKeyAction::Forward);
+        assert_eq!(h.event(Some(PAGE_DOWN),true),TabKeyAction::MoveNext);
         h.event(Some(PAGE_DOWN),false);
         assert_eq!(h.event(Some(S),true),TabKeyAction::Attach);
     }
+    #[test]
+    fn super_shift_page_reorders_only_on_real_chord_and_no_repeat(){
+        let mut h=TabKeyHandler::default();
+        h.event(Some(RIGHT_META),true);
+        h.event(Some(RIGHT_SHIFT),true);
+        assert_eq!(h.event(Some(PAGE_UP),true),TabKeyAction::MovePrevious);
+        assert_eq!(h.event(Some(PAGE_UP),true),TabKeyAction::Consume);
+        assert_eq!(h.event(Some(PAGE_UP),false),TabKeyAction::Consume);
+        assert_eq!(h.event(Some(PAGE_DOWN),true),TabKeyAction::MoveNext);
+        assert_eq!(h.event(Some(PAGE_DOWN),false),TabKeyAction::Consume);
+        h.event(Some(RIGHT_SHIFT),false);
+        assert_eq!(h.event(Some(PAGE_DOWN),true),TabKeyAction::Next);
+        assert_eq!(h.event(Some(PAGE_DOWN),false),TabKeyAction::Consume);
+        h.event(Some(CTRL_L),true);
+        assert_eq!(h.event(Some(PAGE_UP),true),TabKeyAction::Forward);
+        h.reset();
+        assert_eq!(h.event(Some(PAGE_UP),true),TabKeyAction::Forward);
+    }
+
     #[test]
     fn super_page_keys_cycle_without_sticky_auto_repeat(){
         let mut h=TabKeyHandler::default();
