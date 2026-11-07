@@ -3970,6 +3970,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // feature of production login and cannot affect the host DE.
             if std::env::var("MELANIA_NATIVE_AUTO_TILING")
                 .as_deref()==Ok("YES_QEMU_VM") &&
+               // For stacked groups start floating, then a REAL Super+Y
+               // opt-in arms the grouped XDG transaction after both roles
+               // have accepted their initial buffers.
+               std::env::var("MELANIA_NATIVE_COMBINED_TAB_TILING")
+                .as_deref()!=Ok("YES_QEMU_VM") &&
                std::env::var("MELANIA_NATIVE_MANAGED_XDG")
                 .as_deref()==Ok("YES_QEMU_VM") &&
                std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")

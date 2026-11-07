@@ -22,6 +22,7 @@ struct Client {
     seat:Option<wl_seat::WlSeat>,
     alt_tab_probe:bool,
     tab_probe:bool,
+    combined_probe:bool,
     tab_focus_b:bool,
     tab_focus_a:bool,
     tab_guest_release:bool,
@@ -233,13 +234,16 @@ fn main()->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     state.alt_tab_probe=std::env::var("MELANIA_QEMU_ALT_TAB_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
-    state.tab_probe=std::env::var("MELANIA_QEMU_TAB_CLIENT")
+    state.combined_probe=std::env::var("MELANIA_QEMU_COMBINED_TAB_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
+    state.tab_probe=std::env::var("MELANIA_QEMU_TAB_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM") || state.combined_probe;
     if state.alt_tab_probe && state.tab_probe {
         return Err("two QEMU keyboard acceptance modes cannot overlap".into());
     }
     state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
-        .as_deref()==Ok("YES_QEMU_VM") || managed_role_pixels;
+        .as_deref()==Ok("YES_QEMU_VM") || managed_role_pixels ||
+        state.combined_probe;
     queue.roundtrip(&mut state)?;
     queue.roundtrip(&mut state)?;
     if !state.output_mode_received {
@@ -379,7 +383,9 @@ fn main()->Result<(),Box<dyn Error>> {
         // The same disposable VM runs Stage48 before Stage49. Use a distinct
         // source filename in the reopen scenario: create_new must not
         // overwrite earlier client-owned wl_shm fixtures.
-        let path=if state.tab_probe {
+        let path=if state.combined_probe {
+            format!("/run/melania-native-qemu/combined-tab-client-{index}.bgra")
+        } else if state.tab_probe {
             format!("/run/melania-native-qemu/tab-stack-client-{index}.bgra")
         } else if state.alt_tab_probe {
             format!("/run/melania-native-qemu/alt-tab-client-{index}.bgra")
@@ -436,7 +442,7 @@ fn main()->Result<(),Box<dyn Error>> {
     // mapped after 12 kernel-confirmed frames. It terminates only when a
     // QMP-injected physical USB F8 arrives following real KMS screenshot
     // acceptance. No compositor IPC or synthetic Wayland input is involved.
-    if state.tab_probe {
+    if state.tab_probe && !state.combined_probe {
         if managed_role_pixels || dynamic || state.alt_tab_probe {
             return Err("tab QEMU test requires stable normal XDG client pixels".into());
         }
@@ -453,6 +459,81 @@ fn main()->Result<(),Box<dyn Error>> {
             return Err("real wl_keyboard focus B then A not delivered by native tab stacks".into());
         }
         println!("MELANIA_QEMU_TAB_TWO_WL_KEYBOARD_ENTERS_PASS=true");
+        std::io::stdout().flush()?;
+    }
+    // Stage136: two *genuine* XDG surfaces ACK their independent configure
+    // serials and submit owned, exact-size wl_shm buffers in one group.
+    // Never wait for A's frame callback before submitting B: atomic KMS
+    // presentation is legal only after BOTH are ready.
+    if state.combined_probe {
+        if dynamic || managed_role_pixels || state.alt_tab_probe {
+            return Err("combined tab-tiling requires ordinary real XDG clients".into());
+        }
+        println!("MELANIA_QEMU_COMBINED_TAB_TWO_WAYLAND_SURFACES_READY=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(90);
+        while !(state.resize_acked_a && state.resize_acked_b) {
+            if Instant::now()>=deadline {
+                return Err("combined tab-tiling both XDG ACKs timed out".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        let desired=(1280usize,800usize);
+        if state.resize_requested_a!=Some(desired) ||
+           state.resize_requested_b!=Some(desired) {
+            return Err(format!("combined tab configure sizes: {:?}, {:?}",
+                state.resize_requested_a,state.resize_requested_b).into());
+        }
+        println!("MELANIA_QEMU_COMBINED_TAB_TWO_REAL_XDG_ACKS=true");
+        std::io::stdout().flush()?;
+        let mut resources=Vec::new();
+        for (id,surface,rgba) in [
+            (1u8,&first,[78u8,191,217,0]),
+            (2u8,&second,[121u8,222,34,0]),
+        ] {
+            let mut pixels=vec![0u8;desired.0*desired.1*4];
+            for px in pixels.chunks_exact_mut(4) {px.copy_from_slice(&rgba);}
+            let path=format!("/run/melania-native-qemu/combined-tab-resize-{id}.bgra");
+            let mut file=OpenOptions::new().create_new(true)
+                .read(true).write(true).open(path)?;
+            file.write_all(&pixels)?;
+            file.sync_all()?;
+            let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,&qh,());
+            let buffer=pool.create_buffer(0,desired.0 as i32,desired.1 as i32,
+                (desired.0*4) as i32,wl_shm::Format::Xrgb8888,&qh,());
+            let _callback=surface.frame(&qh,());
+            surface.attach(Some(&buffer),0,0);
+            surface.damage_buffer(0,0,desired.0 as i32,desired.1 as i32);
+            surface.commit();
+            resources.push((pool,buffer));
+        }
+        connection.flush()?;
+        // The frame callbacks arrive after the single real DRM batch
+        // presentation, not after the first client's configure alone.
+        let deadline=Instant::now()+Duration::from_secs(55);
+        while state.frame_done_count<14 {
+            if Instant::now()>=deadline {
+                return Err("group XDG owned buffers did not share a real KMS ACK".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        println!("MELANIA_QEMU_COMBINED_TAB_TWO_OWNED_SHM_CALLBACKS=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(90);
+        while !state.tab_guest_release {
+            if Instant::now()>=deadline {
+                return Err("QMP combined tab screenshots/keyboard not completed".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        if !state.tab_focus_b || !state.tab_focus_a {
+            return Err("combined tab switching lacked real keyboard Enter B/A".into());
+        }
+        for (pool,buffer) in resources {
+            buffer.destroy();
+            pool.destroy();
+        }
+        println!("MELANIA_QEMU_COMBINED_TAB_TWO_REAL_KEYBOARD_ENTERS_PASS=true");
         std::io::stdout().flush()?;
     }
     // An independent Stage116 physical USB keyboard proves actual Smithay
