@@ -296,7 +296,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // Actual libseat/seatd acquisition, NEVER a direct /dev/dri open.
             let fd=session.open(&card_path,
                 OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK)?;
-            let kernel_node=match melania_native::native_drm_node_identity::verify_libseat_drm_node(
+            let kernel_node=match melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
                 &card_path,&fd,first_drm_node
             ) {
                 Ok(node)=>node,
@@ -362,7 +362,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // Detect a replaced device node EVEN when udev delivered no
             // notification during GPU initialization. Refuse stale handles
             // rather than treating a matching /dev/dri path as ownership.
-            if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_node(
+            if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
                 &card_path,&fd,Some(kernel_node)
             ) {
                 session.close(fd)?;
