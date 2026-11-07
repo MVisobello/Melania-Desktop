@@ -76,11 +76,23 @@ impl Restore<'_> {
         }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
             &[self.connector],old.mode())?;
-        let observed=self.card.get_crtc(old.handle())?;
-        let attached=self.card.get_connector(self.connector,false)?
-            .current_encoder()
-            .and_then(|enc|self.card.get_encoder(enc).ok())
-            .and_then(|enc|enc.crtc())==Some(old.handle());
+        // Once a restore ioctl has been submitted, unreadable verification
+        // cannot authorize Drop to issue the same modeset again.
+        let observed=self.card.get_crtc(old.handle()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let restored_output=self.card.get_connector(self.connector,false).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let attached=match restored_output.current_encoder() {
+            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
+                self.ownership_lost=true;
+                error
+            })?.crtc()==Some(old.handle()),
+            None=>false,
+        };
         self.restored=observed.framebuffer()==old.framebuffer()
             && observed.position()==old.position()
             && observed.mode()==old.mode() && attached;

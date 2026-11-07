@@ -130,14 +130,26 @@ impl Restore<'_> {
         }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
                            &[self.connector],old.mode())?;
-        let observed=self.card.get_crtc(old.handle())?;
+        // Once a restore ioctl has been submitted, unreadable verification
+        // cannot authorize Drop to issue the same modeset again.
+        let observed=self.card.get_crtc(old.handle()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
         // A matching FB_ID alone does not prove that the original connector
         // is still attached to this CRTC. Verify the encoder -> CRTC route
         // after the restoring modeset, before destroying the guest buffers.
-        let connector_attached=self.card.get_connector(self.connector,false)?
-            .current_encoder()
-            .and_then(|encoder|self.card.get_encoder(encoder).ok())
-            .and_then(|encoder|encoder.crtc())==Some(old.handle());
+        let restored_output=self.card.get_connector(self.connector,false).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let connector_attached=match restored_output.current_encoder() {
+            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
+                self.ownership_lost=true;
+                error
+            })?.crtc()==Some(old.handle()),
+            None=>false,
+        };
         self.restored=observed.framebuffer()==old.framebuffer()
             && observed.position()==old.position()
             && observed.mode()==old.mode()
