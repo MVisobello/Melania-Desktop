@@ -3567,8 +3567,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM") &&
             std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
             .as_deref()==Ok("YES_QEMU_VM") &&
-            std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+            std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
             .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+            .as_deref()==Ok("YES_DISPOSABLE_QEMU") &&
             std::env::var("MELANIA_NATIVE_AUTO_TILING")
             .as_deref()!=Ok("YES_QEMU_VM"),
         tab_groups:TabGroups::default(),
