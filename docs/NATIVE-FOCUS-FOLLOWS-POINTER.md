@@ -23,3 +23,19 @@ input-wiring regressions are present. Full independent QEMU USB mouse motion
 → two real Wayland toplevels → observed keyboard-enter transitions, and
 physical multi-monitor/VT testing remain to be done. Do not claim COSMIC
 parity or enable `NATIVE_SESSION_READY` from this feature alone. Preserve labwc.
+
+## Stage130 integrated QEMU acceptance (new, pending final CI)
+A dedicated same-guest test launches the native Smithay server and **two**
+genuine XDG clients with independent owned wl_shm images on the real VirtIO
+CRTC. A private host QMP script first captures and verifies physical CRTC
+pixels; then it sends **absolute USB tablet coordinates only** to hover B,
+then A, without sending any button or keyboard event. The Wayland client
+must receive real `wl_keyboard::Enter` for B then A, and the server must
+report matching focus ownership changes without an extra KMS redraw. After
+SIGTERM, the guest requires original CRTC/connector restoration and libseat
+DRM release. Test scripts and workflow contract are included in this PR.
+
+This is test *implementation*, **not a claim of successful execution**.
+Wait for full Linux/SFTP/QEMU success on the final SHA and inspect QMP images
+before marking the QEMU milestone accepted. Physical VT, GPU/monitor and
+production login remain open.
