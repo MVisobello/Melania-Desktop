@@ -33,6 +33,7 @@ struct Restore<'a> {
     submitted: bool,
     restored: bool,
     ownership_lost: bool,
+    owned_fbs:[framebuffer::Handle;2],
 }
 
 impl Restore<'_> {
@@ -45,6 +46,18 @@ impl Restore<'_> {
             return Ok(());
         }
         let old=self.original;
+        // Do not overwrite a foreign scanout acquired since the last ACK.
+        let current=self.card.get_crtc(old.handle())?;
+        let output=self.card.get_connector(self.connector,false)?;
+        let routed=output.current_encoder()
+            .and_then(|enc|self.card.get_encoder(enc).ok())
+            .and_then(|enc|enc.crtc())==Some(old.handle());
+        let known=current.framebuffer()==old.framebuffer() ||
+            current.framebuffer().is_some_and(|fb|self.owned_fbs.contains(&fb));
+        if !routed || current.mode()!=old.mode() || !known {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: live CRTC route/mode/FB changed".into());
+        }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
             &[self.connector],old.mode())?;
         let observed=self.card.get_crtc(old.handle())?;
@@ -158,7 +171,7 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
     event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
-        card:&card, original, connector, submitted:false, restored:false, ownership_lost:false,
+        card:&card, original, connector, submitted:false, restored:false, ownership_lost:false,owned_fbs:handles,
     };
     let work=(||->Result<(),Box<dyn Error>> {
         for index in 0..total_frames {
@@ -328,7 +341,7 @@ pub fn qemu_wayland_gpu_scene_stream(
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
     event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
-        card:&card,original,connector,submitted:false,restored:false,ownership_lost:false,
+        card:&card,original,connector,submitted:false,restored:false,ownership_lost:false,owned_fbs:handles,
     };
     println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_READY=true");
     println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",

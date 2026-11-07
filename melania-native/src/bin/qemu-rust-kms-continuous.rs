@@ -88,6 +88,7 @@ struct Restore<'a> {
     submitted:bool,
     restored:bool,
     ownership_lost:bool,
+    owned_fbs:[framebuffer::Handle;2],
 }
 impl Restore<'_> {
     fn restore(&mut self)->Result<(),Box<dyn Error>> {
@@ -99,6 +100,18 @@ impl Restore<'_> {
             return Ok(());
         }
         let old=self.original;
+        // Do not overwrite a foreign scanout acquired since the last ACK.
+        let current=self.card.get_crtc(old.handle())?;
+        let output=self.card.get_connector(self.connector,false)?;
+        let routed=output.current_encoder()
+            .and_then(|enc|self.card.get_encoder(enc).ok())
+            .and_then(|enc|enc.crtc())==Some(old.handle());
+        let known=current.framebuffer()==old.framebuffer() ||
+            current.framebuffer().is_some_and(|fb|self.owned_fbs.contains(&fb));
+        if !routed || current.mode()!=old.mode() || !known {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: live CRTC route/mode/FB changed".into());
+        }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
                            &[self.connector],old.mode())?;
         let observed=self.card.get_crtc(old.handle())?;
@@ -244,7 +257,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     let fb1=card.add_framebuffer(&db1,24,32)?;
     let fb2=card.add_framebuffer(&db2,24,32)?;
     let mut rollback=Restore{
-        card:&card,original,connector:connected[0],submitted:false,restored:false,ownership_lost:false
+        card:&card,original,connector:connected[0],submitted:false,restored:false,ownership_lost:false,owned_fbs:[fb1,fb2]
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
