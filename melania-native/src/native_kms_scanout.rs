@@ -25,17 +25,54 @@ pub fn verify_kernel_scanout(
 ) -> Result<bool, String> {
     let current = card.get_crtc(crtc)
         .map_err(|error| format!("DRM get_crtc failed: {error}"))?;
-    if current.framebuffer() != Some(expected_fb) {
+    // A framebuffer handle alone is insufficient: the CRTC can be
+    // deactivated or modeset while an old FB_ID remains attached.
+    let Some(initial_mode) = current.mode() else {
+        return Ok(false);
+    };
+    let initial_size = initial_mode.size();
+    let initial_refresh = initial_mode.vrefresh();
+    if initial_size.0 == 0 || initial_size.1 == 0 || initial_refresh == 0 ||
+       current.framebuffer() != Some(expected_fb) {
         return Ok(false);
     }
     let attached = card.get_connector(connector, false)
         .map_err(|error| format!("DRM get_connector failed: {error}"))?;
+    // An encoder handle can remain attached while a monitor is disconnected.
+    // Do not ACK a frame that is no longer visible on a connected output.
+    if attached.state() != connector::State::Connected {
+        return Ok(false);
+    }
     let Some(encoder) = attached.current_encoder() else {
         return Ok(false);
     };
     let routed = card.get_encoder(encoder)
         .map_err(|error| format!("DRM get_encoder failed: {error}"))?;
-    Ok(routed.crtc() == Some(crtc))
+    // Keep the proven route requirement explicit. The stable-route
+    // recheck below must not turn a detached encoder into a frame ACK.
+    if !(routed.crtc() == Some(crtc)) {
+        return Ok(false);
+    }
+    // The first three ioctls are not an atomic DRM snapshot. Recheck
+    // the *actual* FB_ID and route after reading the encoder, including
+    // the same connector and encoder identity. Never ACK on a mixed
+    // hotplug / VT-takeover snapshot.
+    let latest_crtc = card.get_crtc(crtc)
+        .map_err(|error| format!("DRM second get_crtc failed: {error}"))?;
+    if latest_crtc.framebuffer() != Some(expected_fb) ||
+       latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh())) !=
+           Some((initial_size, initial_refresh)) {
+        return Ok(false);
+    }
+    let latest_connector = card.get_connector(connector, false)
+        .map_err(|error| format!("DRM second get_connector failed: {error}"))?;
+    if latest_connector.state() != connector::State::Connected ||
+       latest_connector.current_encoder() != Some(encoder) {
+        return Ok(false);
+    }
+    let latest_encoder = card.get_encoder(encoder)
+        .map_err(|error| format!("DRM second get_encoder failed: {error}"))?;
+    Ok(latest_encoder.crtc() == Some(crtc))
 }
 
 /// Validate the scanout owner *before* overwriting its next buffer or issuing
