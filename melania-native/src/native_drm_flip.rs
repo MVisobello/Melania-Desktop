@@ -45,7 +45,7 @@ impl DrmFlipEventRouter {
     }
 
     fn check_owned_crtc(&mut self, crtc: crtc::Handle) -> Result<(), String> {
-        if self.owned_crtcs.as_ref().is_some_and(|owned|!owned.contains(&crtc)) {
+        if !self.owned_crtcs.as_ref().is_some_and(|owned|owned.contains(&crtc)) {
             self.revoke();
             return Err("DRM page-flip event targets an unowned CRTC".into());
         }
@@ -163,6 +163,7 @@ pub fn wait_for_kms_page_flip(
     timeout: Duration,
 ) -> Result<u32, String> {
     let mut router=DrmFlipEventRouter::default();
+    router.bind_active_crtcs(&[expected_crtc])?;
     wait_for_kms_page_flip_routed(card, expected_crtc, timeout, &mut router)
 }
 
@@ -175,11 +176,22 @@ mod tests {
     }
 
     #[test]
+    fn unbound_router_revokes_on_kernel_event_or_wait() {
+        let mut incoming=DrmFlipEventRouter::default();
+        assert!(incoming.enqueue(crtc(17), 1).is_err());
+        assert!(incoming.poisoned());
+        let mut waiting=DrmFlipEventRouter::default();
+        assert!(waiting.take(crtc(17)).is_err());
+        assert!(waiting.poisoned());
+    }
+
+    #[test]
     fn preserves_interleaved_kernel_events_from_other_monitors() {
         let mut events=DrmFlipEventRouter::default();
         let first=crtc(41);
         let second=crtc(42);
         let third=crtc(43);
+        events.bind_active_crtcs(&[first,second,third]).unwrap();
         events.enqueue(second,100).unwrap();
         events.enqueue(first,101).unwrap();
         events.enqueue(third,102).unwrap();
@@ -194,6 +206,7 @@ mod tests {
     fn duplicate_same_crtc_event_revokes_device_epoch() {
         let mut events=DrmFlipEventRouter::default();
         let monitor=crtc(51);
+        events.bind_active_crtcs(&[monitor]).unwrap();
         events.enqueue(monitor,1).unwrap();
         assert!(events.enqueue(monitor,2).is_err());
         assert!(events.poisoned());
@@ -242,13 +255,16 @@ mod tests {
     #[test]
     fn bounded_pending_outputs_and_independent_new_epoch() {
         let mut events=DrmFlipEventRouter::default();
-        for id in 1..=MAX_PENDING_CRTC_EVENTS as u32 {
-            events.enqueue(crtc(id),id).unwrap();
+        let active: Vec<_>=(1..=crate::native_output_topology::MAX_ACTIVE_DRM_OUTPUTS as u32).map(crtc).collect();
+        events.bind_active_crtcs(&active).unwrap();
+        for (index, output) in active.iter().enumerate() {
+            events.enqueue(*output,index as u32 + 1).unwrap();
         }
-        assert_eq!(events.queued(),MAX_PENDING_CRTC_EVENTS);
-        assert!(events.enqueue(crtc(99),99).is_err());
+        assert_eq!(events.queued(),active.len());
+        assert!(events.enqueue(active[0],99).is_err());
         assert!(events.poisoned());
         let mut replacement=DrmFlipEventRouter::default();
+        replacement.bind_active_crtcs(&[crtc(99)]).unwrap();
         replacement.enqueue(crtc(99),1).unwrap();
         assert_eq!(replacement.take(crtc(99)).unwrap(),Some(1));
     }
