@@ -16,22 +16,26 @@ class NativeTabResizeWiringStage132(unittest.TestCase):
         self.assertIn("self.tab_resize_transaction.ack_configure(epoch,id,serial)",BRIDGE)
         self.assertNotIn("self.tab_resize_transaction.sent_configure(",BRIDGE)
     def test_only_owned_imported_shm_commit_can_count(self):
-        # If a future refactor moves this block, fail rather than silently
-        # accepting a configure as client-owned pixels.
-        self.assertIn("self.tab_resize_transaction.can_accept_owned_buffer(",BRIDGE)
         guard=BRIDGE.index("self.tab_resize_transaction.can_accept_owned_buffer(")
         insert=BRIDGE.index("self.dynamic_scene.upsert(key,x,y,pixels)")
-        marker=BRIDGE.index("self.tab_resize_transaction.owned_buffer_committed(")
         self.assertLess(guard,insert)
-        self.assertGreater(marker,insert)
         self.assertIn("MELANIA_NATIVE_TAB_RESIZE_PREIMPORT_REJECTED=",BRIDGE)
-        self.assertIn("if let Err(error)=self.tab_resize_transaction.can_accept_owned_buffer(",BRIDGE)
         self.assertIn("buffer.release();",BRIDGE[guard:insert])
-        self.assertIn("MELANIA_NATIVE_TAB_RESIZE_BUFFER_REFUSED=",BRIDGE)
-        self.assertIn("MELANIA_NATIVE_TAB_RESIZE_BUFFERS_READY=",BRIDGE)
+        # During a transaction the compositor must stage the owned client
+        # images, not upsert/paint intermediate buffers or fabricate ACKs.
+        self.assertIn("fn stage_native_tab_resize_image",BRIDGE)
+        self.assertIn("self.tab_resize_transaction.owned_buffer_committed(",BRIDGE)
+        self.assertIn("self.dynamic_scene.upsert_batch(updates)",BRIDGE)
+        self.assertIn("tab_resize_deferred=!self.stage_native_tab_resize_image(key,pixels)",BRIDGE)
+        self.assertIn("if tab_resize_deferred {return;}",BRIDGE)
+        self.assertIn("let group_resize=self.managed_xdg_mode",BRIDGE)
+        self.assertIn("MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_READY=",BRIDGE)
+
     def test_closure_and_seat_device_loss_abort_all_uncommitted_groups(self):
         self.assertIn("self.tab_resize_transaction.abort_if_member_destroyed(id)",BRIDGE)
         self.assertGreaterEqual(BRIDGE.count("state.tab_resize_transaction.revoke();"),2)
+        self.assertGreaterEqual(BRIDGE.count("state.tab_resize_images.clear();"),2)
+        self.assertIn("self.tab_resize_images.clear();",BRIDGE)
         for member in ("ClientReceipt","MissingConfigure","WrongEpoch",
                        "BufferBeforeAck","BufferSizeMismatch","AlreadyPending"):
             self.assertIn(member,LEDGER)

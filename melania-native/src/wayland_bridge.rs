@@ -53,7 +53,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels,WindowBatchUpdate},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -183,6 +183,9 @@ struct BridgeState {
     tab_stack_mode:bool,
     tab_groups:TabGroups,
     tab_resize_transaction:TabResizeTransaction,
+    // Owned group images are staged until all XDG roles have ACKed and
+    // committed their new correctly sized client-owned buffers.
+    tab_resize_images:Vec<WindowBatchUpdate>,
     tab_keys:TabKeyHandler,
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
@@ -1290,6 +1293,92 @@ impl BridgeState {
         }
     }
 
+    /// Stage a bounded, independently owned Wayland wl_shm image without
+    /// touching the visible scene. Only the final client commit may publish
+    /// the complete output-wide transaction with ONE damage generation.
+    /// The real Smithay ack_configure callback is the only ACK source.
+    fn stage_native_tab_resize_image(&mut self,id:u64,pixels:WindowPixels)->bool {
+        let Some(epoch)=self.tab_resize_transaction.epoch() else{return false;};
+        let width=pixels.width();
+        let height=pixels.height();
+        let ready=match self.tab_resize_transaction.owned_buffer_committed(
+            epoch,id,width,height
+        ) {
+            Ok(ready)=>ready,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_RECEIPT_REFUSED={error:?}");
+                self.tab_resize_transaction.abort(epoch);
+                self.tab_resize_images.clear();
+                return false;
+            }
+        };
+        self.tab_resize_images.retain(|image|image.key!=id);
+        self.tab_resize_images.push(WindowBatchUpdate{
+            key:id,x:0,y:0,layer:SceneLayer::Normal,
+            visible:false,image:pixels
+        });
+        if !ready {
+            println!("MELANIA_NATIVE_TAB_RESIZE_IMAGE_STAGED={id} epoch={epoch}");
+            return false;
+        }
+        // All events are dispatched on the Smithay seat thread; no other
+        // client can interleave with this final owned-buffer callback.
+        let slots=match self.tab_resize_transaction.finish(epoch) {
+            Ok(slots)=>slots,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_FINISH_REFUSED={error:?}");
+                self.tab_resize_images.clear();
+                return false;
+            }
+        };
+        let mut updates=std::mem::take(&mut self.tab_resize_images);
+        let count=slots.iter().map(|slot|slot.members.len()).sum::<usize>();
+        if updates.len()!=count {
+            eprintln!("MELANIA_NATIVE_TAB_RESIZE_BATCH_INCOMPLETE=true");
+            return false;
+        }
+        for update in &mut updates {
+            let Some(slot)=slots.iter().find(|slot|slot.members.contains(&update.key))
+                else {
+                    eprintln!("MELANIA_NATIVE_TAB_RESIZE_MISSING_SLOT=true");
+                    return false;
+                };
+            if (update.image.width(),update.image.height())!=
+               (slot.rect.width as usize,slot.rect.height as usize) {
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_STALE_SIZE=true");
+                return false;
+            }
+            update.x=slot.rect.x;
+            update.y=slot.rect.y;
+            let minimized=self.known_window_surfaces.get(update.key)
+                .is_some_and(|role|self.managed_windows.iter().any(|(r,model)|
+                    r==role && model.state()==WindowDisplayState::Minimized));
+            update.visible=slot.active==update.key && !minimized;
+        }
+        // Fully validated atomic batch: neither a failed memory preflight
+        // nor a missing client can partially mutate the retained scene.
+        if let Err(error)=self.dynamic_scene.upsert_batch(updates) {
+            eprintln!("MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_REFUSED={error:?}");
+            return false;
+        }
+        for slot in &slots {
+            for &key in &slot.members {
+                let Some(surface)=self.known_window_surfaces.get(key).cloned()
+                    else{continue;};
+                if let Some((_,window))=self.managed_windows.iter_mut()
+                    .find(|(role,_)|role==&surface) {
+                    let _=window.set_tiled_geometry(slot.rect);
+                }
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+            }
+            self.reposition_native_popups_for_parent(slot.active);
+        }
+        println!("MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_READY={epoch} clients={count}");
+        let _=std::io::stdout().flush();
+        true
+    }
+
     /// Until multi-tab configure/ACK can resize all group members as a
     /// single transaction, reject individual move/snap/maximize/resize.
     /// This avoids leaving other visible tabs at stale client dimensions.
@@ -2053,6 +2142,7 @@ impl CompositorHandler for BridgeState {
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
             if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
+                let mut tab_resize_deferred=false;
                 // The importer owns the snapshot before the Smithay pool
                 // access callback returns. Fixed QEMU uses its original
                 // 360x224 checks; the separate dynamic VM path uses Stage51.
@@ -2184,7 +2274,13 @@ impl CompositorHandler for BridgeState {
                     };
                     let width=pixels.width() as i32;
                     let height=pixels.height() as i32;
-                    if (if popup_parent.is_some() {
+                    let group_resize=self.managed_xdg_mode &&
+                        popup_parent.is_none() &&
+                        self.tab_resize_transaction.has_pending();
+                    if group_resize {
+                        // No per-client upsert or pixel publication.
+                        tab_resize_deferred=!self.stage_native_tab_resize_image(key,pixels);
+                    } else if (if popup_parent.is_some() {
                         self.dynamic_scene.upsert_in_layer(key,x,y,SceneLayer::Top,pixels)
                     } else {
                         self.dynamic_scene.upsert(key,x,y,pixels)
@@ -2193,7 +2289,7 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     }
-                    if self.managed_xdg_mode && popup_parent.is_none() {
+                    if self.managed_xdg_mode && popup_parent.is_none() && !group_resize {
                         // A valid buffer committed AFTER minimize may replace
                         // the retained image, but must never unhide the XDG
                         // role. This also handles minimize-before-first-buffer
@@ -2216,22 +2312,8 @@ impl CompositorHandler for BridgeState {
                             .find(|(role,_)|role==surface) {
                             window.update_normal_geometry(WindowRect{x,y,width,height});
                         }
-                        // This hook receives only already-imported, owned,
-                        // bounded wl_shm client pixels. With no active batch,
-                        // the default compositor behavior is unchanged.
-                        // A future group resize dispatcher must arm real
-                        // configure serials and keep incomplete members hidden.
-                        if let Some(epoch)=self.tab_resize_transaction.epoch() {
-                            match self.tab_resize_transaction.owned_buffer_committed(
-                                epoch,key,width as usize,height as usize
-                            ) {
-                                Ok(true)=>println!("MELANIA_NATIVE_TAB_RESIZE_BUFFERS_READY={epoch}"),
-                                Ok(false)=>{},
-                                Err(error)=>eprintln!(
-                                    "MELANIA_NATIVE_TAB_RESIZE_BUFFER_REFUSED={error:?}"
-                                ),
-                            }
-                        }
+                        // Group batches instead stage each image and only
+                        // update these models after atomic scene publication.
                         self.managed_pending_sizes.retain(|(role,_)|role!=surface);
                         self.managed_pending_resize.retain(|(role,_)|role!=surface);
                         println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
@@ -2273,6 +2355,9 @@ impl CompositorHandler for BridgeState {
                         return;
                     }
                 }
+                // Never submit an incomplete group to the KMS worker:
+                // retain its client's owned image until all tabs are ready.
+                if tab_resize_deferred {return;}
                 // Real mapped XDG clients must receive keyboard focus
                 // before libinput Super+arrows can target them. Stage120's
                 // QEMU client submitted and KMS-presented frame 1, but the
@@ -2747,6 +2832,7 @@ impl XdgShellHandler for BridgeState {
         let surface=top.wl_surface().clone();
         if let Some(id)=self.known_window_surfaces.id_of(&surface) {
             if self.tab_resize_transaction.abort_if_member_destroyed(id) {
+                self.tab_resize_images.clear();
                 eprintln!("MELANIA_NATIVE_TAB_RESIZE_ABORTED_CLIENT_GONE={id}");
             }
         }
@@ -3778,6 +3864,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()!=Ok("YES_QEMU_VM"),
         tab_groups:TabGroups::default(),
         tab_resize_transaction:TabResizeTransaction::default(),
+        tab_resize_images:Vec::new(),
         tab_keys:TabKeyHandler::default(),
         auto_tiling:{
             let mut model=AutoTiling::default();
@@ -3845,6 +3932,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         match event {
             SessionEvent::PauseSession=>{
                 state.tab_resize_transaction.revoke();
+                state.tab_resize_images.clear();
                 set_data_device_focus(&state.display_handle,&state.seat,None);
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
@@ -3922,6 +4010,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
             state.tab_resize_transaction.revoke();
+            state.tab_resize_images.clear();
             set_data_device_focus(&state.display_handle,&state.seat,None);
             state.continuous_worker.take();
             state.continuous_inflight.take();

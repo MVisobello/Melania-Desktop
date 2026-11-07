@@ -54,3 +54,17 @@ this batch API, stage every owned client image while the group is pending,
 then publish only after the whole transaction is ready. Until that is
 completed, the live QEMU bridge still refuses simultaneous tab stacks and
 auto tiling.
+
+## Stage134 — staged real images, single atomic scene publish
+
+During an active group resize, each genuinely acknowledged, valid owned
+wl_shm image is staged outside the visible `DynamicWindowScene`. The
+compositor does not perform a per-tab upsert or submit a DRM/KMS frame for
+these intermediate commits. Once all group members have committed matching
+images, the bridge validates every member and applies one atomic scene batch
+with exactly the group's active tabs visible. Retained geometry and pending
+resize state are updated only after the batch is accepted.
+
+A destroyed client or VT/GPU revocation clears all staged images without
+touching the previous confirmed scene. QEMU group+auto-tiling remains gated
+off until live per-member XDG configure dispatch is implemented and tested.
