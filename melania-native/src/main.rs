@@ -212,6 +212,14 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
         }
         Some(_)=>blocked("Invalid read-only libseat cycle opt-in"),
     };
+    // Optional physical dedicated-VT exercise; the forced QEMU descriptor
+    // cycle must always exercise real GBM/EGL/DMA-BUF reconstruction.
+    let render_gbm_each_acquire=forced_cycle ||
+        match env::var("MELANIA_NATIVE_VT_GBM_ON_REACQUIRE").ok().as_deref() {
+            None=>false,
+            Some("1")=>true,
+            Some(_)=>blocked("MELANIA_NATIVE_VT_GBM_ON_REACQUIRE must be 1"),
+        };
     let (mut session,notifier)=LibSeatSession::new()?;
     let seat=session.seat().to_string();
     let udev=UdevBackend::new(&seat)?;
@@ -271,23 +279,43 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // Actual libseat/seatd acquisition, NEVER a direct /dev/dri open.
             let fd=session.open(&card_path,
                 OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK)?;
-            let crtcs={
-                // Duplicate only to make real DRM resource ioctls through
-                // drm-rs. Drop this clone BEFORE handing FD back to libseat.
+            // Keep a single libseat-issued DRM FD alive while rebuilding
+            // the renderer on a fresh cloned descriptor. GBM/EGL, its real
+            // DMA-BUF allocations and GPU fences are dropped completely
+            // BEFORE libseat closes the original FD. On ANY error, close
+            // the owned seat descriptor rather than escaping via '?'.
+            let acquired=(|| -> Result<usize,Box<dyn Error>> {
                 let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
-                card.resource_handles()?.crtcs().len()
+                let crtcs=card.resource_handles()?.crtcs().len();
+                if crtcs==0 {
+                    return Err("Libseat-owned DRM card has no CRTC resources".into());
+                }
+                if render_gbm_each_acquire {
+                    melania_native::renderer::smoke_render_gbm_output_buffers(
+                        card,640,480,2
+                    ).map_err(|error|
+                        format!("Fresh libseat DRM FD failed real GBM/EGL/DMA-BUF rebuild: {error}")
+                    )?;
+                }
+                Ok(crtcs)
+            })();
+            let crtcs=match acquired {
+                Ok(crtcs)=>crtcs,
+                Err(error)=>{
+                    session.close(fd)?;
+                    return Err(error);
+                }
             };
             event_loop.dispatch(Some(Duration::ZERO),&mut state)?;
             if !session.is_active() || epoch.verify(&state).is_err() {
                 session.close(fd)?;
                 return Err("Seat/GPU invalidated during real DRM reacquisition".into());
             }
-            if crtcs==0 {
-                session.close(fd)?;
-                return Err("Libseat-owned DRM card has no CRTC resources".into());
-            }
             opened=opened.checked_add(1).ok_or("DRM acquisition counter overflow")?;
             println!("MELANIA_NATIVE_VT_READONLY_DRM_OPEN={} crtcs={crtcs}",opened);
+            if render_gbm_each_acquire {
+                println!("MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT={opened} frames=2");
+            }
             owned=Some((epoch,fd));
         }
         if forced_cycle && !cycled && owned.is_some() {
