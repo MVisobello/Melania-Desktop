@@ -64,7 +64,7 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
-use melania_native::auto_tiling::AutoTiling;
+use melania_native::auto_tiling::{AutoTiling,TileAxis};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
@@ -1187,7 +1187,7 @@ impl BridgeState {
             let state=model.state();
             let _=self.auto_tiling.set_minimized(id,
                 state==WindowDisplayState::Minimized);
-            let _=self.auto_tiling.set_floating(id,
+            let _=self.auto_tiling.set_role_excluded(id,
                 state!=WindowDisplayState::Normal &&
                 state!=WindowDisplayState::Minimized);
         }
@@ -1276,6 +1276,66 @@ impl BridgeState {
             }
         }
         println!("MELANIA_NATIVE_AUTO_TILING_ENABLED={enabled}");
+    }
+
+    /// COSMIC-style floating exception, gated to the disposable QEMU native
+    /// XDG bridge. A floating restore must ACK a new client buffer; it is
+    /// not an immediate retained-frame relocation.
+    fn toggle_floating_focused(&mut self) {
+        if !self.auto_tiling.enabled() ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let Some(surface)=self.focused.as_ref().cloned() else {return;};
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else {return;};
+        if !self.managed_windows.iter().any(|(role,window)|
+            role==&surface && window.state()==WindowDisplayState::Normal) {
+            return;
+        }
+        let Ok(was_floating)=self.auto_tiling.is_floating(id) else {return;};
+        let floating=!was_floating;
+        if self.auto_tiling.set_floating(id,floating).is_err() {return;}
+        if floating {
+            let rect=self.managed_windows.iter_mut()
+                .find(|(role,_)|role==&surface)
+                .and_then(|(_,window)|{
+                    window.clear_tiled_geometry().then(||window.geometry()).flatten()
+                });
+            if let Some(rect)=rect {
+                let top=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned();
+                if let Some(top)=top {
+                    self.cancel_surface_grab(&surface);
+                    top.with_pending_state(|state|{
+                        state.states.unset(xdg_toplevel::State::Resizing);
+                        state.size=Some((rect.width,rect.height).into());
+                    });
+                    top.send_pending_configure();
+                    self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+                    self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                    self.managed_pending_sizes.push((
+                        surface.clone(),(rect.width as usize,rect.height as usize)
+                    ));
+                }
+            }
+        }
+        self.reflow_auto_tiling();
+        println!("MELANIA_NATIVE_AUTO_TILE_FLOATING={floating} id={id}");
+    }
+
+    fn rotate_auto_tiling(&mut self) {
+        if !self.auto_tiling.enabled() ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() {return;}
+        let axis=match self.auto_tiling.axis() {
+            TileAxis::Horizontal=>TileAxis::Vertical,
+            TileAxis::Vertical=>TileAxis::Horizontal,
+        };
+        self.auto_tiling.set_axis(axis);
+        self.reflow_auto_tiling();
+        println!("MELANIA_NATIVE_AUTO_TILE_AXIS={axis:?}");
     }
 
     /// Reflow existing snapped/maximized windows when a real GTK4 panel
@@ -2656,6 +2716,14 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                         state.toggle_auto_tiling();
                         return;
                     },
+                    AutoTileKeyAction::ToggleFloating=>{
+                        state.toggle_floating_focused();
+                        return;
+                    },
+                    AutoTileKeyAction::RotateLayout=>{
+                        state.rotate_auto_tiling();
+                        return;
+                    },
                 }
             }
             // Stage87: ACTUAL USB-keyboard -> libinput -> private GTK Start IPC.
@@ -3324,6 +3392,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
             state.snap_keys.reset();
+            state.auto_tile_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
@@ -3365,6 +3434,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
             state.snap_keys.reset();
+            state.auto_tile_keys.reset();
         }
     })?;
     events.handle().insert_source(udev,|event,_,state|{
@@ -3407,6 +3477,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.grabbed_popup_roles.clear();
             state.popup_escape_held=false;
             state.snap_keys.reset();
+            state.auto_tile_keys.reset();
             state.keyboard_window_cycle.reset();
             eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
