@@ -178,6 +178,20 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
             frame.finish()?.wait()?;
             drop(framebuffer);
 
+            let prior_fb=if index==0 {route.original_fb}
+                else {handles[(index-1) as usize%2]};
+            // Even a failed DRM ioctl read is loss of trusted ownership.
+            // Revoke the pending event epoch before propagating the error.
+            let owned=crate::native_kms_scanout::verify_presenter_ownership(
+                &card,crtc,connector,prior_fb,(w,h),
+            ).map_err(|error| {
+                event_router.revoke();
+                error
+            })?;
+            if !owned {
+                event_router.revoke();
+                return Err("GPU stress scanout owner changed before KMS submission".into());
+            }
             if index==0 {
                 // Even a failed initial modeset requires restoration.
                 rollback.submitted=true;
@@ -382,6 +396,20 @@ pub fn qemu_wayland_gpu_scene_stream(
             frame.finish()?.wait()?;
             drop(bound);
 
+            // A previously confirmed scanout may have been taken over
+            // between frames. Never render/submit into a lost DRM route.
+            let previous_fb=if index==0 {route.original_fb}
+                else {handles[(index-1) as usize%2]};
+            let owned=crate::native_kms_scanout::verify_presenter_ownership(
+                &card,crtc,connector,previous_fb,(W as u16,H as u16),
+            ).map_err(|error| {
+                event_router.revoke();
+                error
+            })?;
+            if !owned {
+                event_router.revoke();
+                return Err("GPU Wayland lost DRM connector/CRTC/mode/FB ownership before submission".into());
+            }
             let framebuffer=handles[index as usize%2];
             if index==0 {
                 rollback.submitted=true;
