@@ -1,0 +1,27 @@
+name: Verify exact Flat Remix Yellow icon inventory
+
+on:
+  pull_request:
+    paths:
+      - 'tools/build_melania_exact_flat_remix.py'
+      - 'tests/test_exact_flat_remix_inventory.py'
+      - '.github/workflows/melania-exact-icons.yml'
+  push:
+    paths:
+      - 'tools/build_melania_exact_flat_remix.py'
+      - 'tests/test_exact_flat_remix_inventory.py'
+      - '.github/workflows/melania-exact-icons.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-inventory:
+    name: Test structure, links and original generated SVG artwork
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run exact-inventory fixture without upstream graphics
+        run: python3 tests/test_exact_flat_remix_inventory.py
