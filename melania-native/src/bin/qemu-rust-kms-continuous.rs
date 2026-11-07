@@ -101,11 +101,27 @@ impl Restore<'_> {
         }
         let old=self.original;
         // Do not overwrite a foreign scanout acquired since the last ACK.
-        let current=self.card.get_crtc(old.handle())?;
-        let output=self.card.get_connector(self.connector,false)?;
-        let routed=output.current_encoder()
-            .and_then(|enc|self.card.get_encoder(enc).ok())
-            .and_then(|enc|enc.crtc())==Some(old.handle());
+        // An unreadable DRM resource is a lost ownership proof. Mark the
+        // rollback guard permanently unsafe, including its Drop retry.
+        let current=self.card.get_crtc(old.handle()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let output=self.card.get_connector(self.connector,false).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        if output.state()!=connector::State::Connected {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: connector disconnected".into());
+        }
+        let routed=match output.current_encoder() {
+            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
+                self.ownership_lost=true;
+                error
+            })?.crtc()==Some(old.handle()),
+            None=>false,
+        };
         let known=current.framebuffer()==old.framebuffer() ||
             current.framebuffer().is_some_and(|fb|self.owned_fbs.contains(&fb));
         if !routed || current.mode()!=old.mode() || !known {
