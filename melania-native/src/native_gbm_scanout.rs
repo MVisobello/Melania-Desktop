@@ -76,17 +76,32 @@ impl Restore<'_> {
         }
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
             &[self.connector],old.mode())?;
-        let observed=self.card.get_crtc(old.handle())?;
-        let attached=self.card.get_connector(self.connector,false)?
-            .current_encoder()
-            .and_then(|enc|self.card.get_encoder(enc).ok())
-            .and_then(|enc|enc.crtc())==Some(old.handle());
+        // Once a restore ioctl has been submitted, unreadable verification
+        // cannot authorize Drop to issue the same modeset again.
+        let observed=self.card.get_crtc(old.handle()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let restored_output=self.card.get_connector(self.connector,false).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        let attached=match restored_output.current_encoder() {
+            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
+                self.ownership_lost=true;
+                error
+            })?.crtc()==Some(old.handle()),
+            None=>false,
+        };
         self.restored=observed.framebuffer()==old.framebuffer()
             && observed.position()==old.position()
             && observed.mode()==old.mode() && attached;
         println!("MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE={attached}");
         println!("MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE={}",self.restored);
         if !self.restored {
+            // Unknown post-restore state is not proof of continued DRM
+            // ownership: Drop must not blindly repeat the modeset.
+            self.ownership_lost=true;
             return Err("QEMU GPU-generated framebuffer original CRTC restore failed".into());
         }
         Ok(())
@@ -94,7 +109,7 @@ impl Restore<'_> {
 }
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
-        if self.submitted && !self.restored {
+        if self.submitted && !self.restored && !self.ownership_lost {
             let _=self.restore();
         }
     }
