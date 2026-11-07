@@ -48,6 +48,8 @@ struct Member {
     id: u64,
     floating: bool,
     minimized: bool,
+    // Role exclusion must not erase an application's user floating choice.
+    role_excluded: bool,
 }
 
 /// State belongs to *one* workspace. Instances must not be shared across
@@ -92,7 +94,7 @@ impl AutoTiling {
         if self.members.len() >= MAX_TILE_WINDOWS {
             return Err(TileError::TooManyWindows);
         }
-        self.members.push(Member { id, floating: false, minimized: false });
+        self.members.push(Member { id, floating: false, minimized: false, role_excluded: false });
         Ok(())
     }
     pub fn forget(&mut self, id: u64) -> bool {
@@ -103,6 +105,15 @@ impl AutoTiling {
     pub fn set_floating(&mut self, id: u64, floating: bool) -> Result<(), TileError> {
         let w = self.members.iter_mut().find(|w| w.id == id).ok_or(TileError::UnknownWindow)?;
         w.floating = floating;
+        Ok(())
+    }
+    pub fn is_floating(&self, id: u64) -> Result<bool, TileError> {
+        self.members.iter().find(|w| w.id == id)
+            .map(|w| w.floating).ok_or(TileError::UnknownWindow)
+    }
+    pub fn set_role_excluded(&mut self, id: u64, excluded: bool) -> Result<(), TileError> {
+        let w = self.members.iter_mut().find(|w| w.id == id).ok_or(TileError::UnknownWindow)?;
+        w.role_excluded = excluded;
         Ok(())
     }
     pub fn set_minimized(&mut self, id: u64, minimized: bool) -> Result<(), TileError> {
@@ -133,7 +144,7 @@ impl AutoTiling {
             return Err(TileError::InvalidWorkArea);
         }
         let ids: Vec<u64> = self.members.iter()
-            .filter(|w| !w.floating && !w.minimized)
+            .filter(|w| !w.floating && !w.minimized && !w.role_excluded)
             .map(|w| w.id).collect();
         let mut result = Vec::with_capacity(ids.len());
         if !layout(&ids, work, self.axis, self.gap, &mut result) {
@@ -247,6 +258,21 @@ mod tests {
         assert_eq!(t.member_count(), 4);
         t.set_minimized(3, false).unwrap();
         assert_eq!(t.plan(work(), 1920, 1080).unwrap().unwrap().len(), 3);
+    }
+    #[test]
+    fn role_exclusion_preserves_user_floating_across_fullscreen_and_restore() {
+        let mut t=tiler(3);
+        t.set_floating(1,true).unwrap();
+        t.set_role_excluded(1,true).unwrap();
+        t.set_role_excluded(2,true).unwrap();
+        assert_eq!(t.plan(work(),1920,1080).unwrap().unwrap().len(),1);
+        t.set_role_excluded(1,false).unwrap();
+        t.set_role_excluded(2,false).unwrap();
+        assert!(t.is_floating(1).unwrap());
+        assert!(!t.is_floating(2).unwrap());
+        let ids=t.plan(work(),1920,1080).unwrap().unwrap()
+            .iter().map(|p|p.window_id).collect::<Vec<_>>();
+        assert_eq!(ids,vec![2,3]);
     }
     #[test]
     fn swap_changes_order_without_duplicating_windows() {
