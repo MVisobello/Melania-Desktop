@@ -64,6 +64,7 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+use melania_native::auto_tiling::AutoTiling;
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
 use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
@@ -169,6 +170,8 @@ struct BridgeState {
     // Opt-in VM-only bridge of real xdg_toplevel requests to Stage77.
     managed_xdg_mode:bool,
     managed_windows:Vec<(WlSurface,ManagedWindow)>,
+    // Explicit QEMU opt-in: one output/workspace until native multi-output exists.
+    auto_tiling:AutoTiling,
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
@@ -1161,6 +1164,73 @@ impl BridgeState {
         rect.valid_for(1280,800).then_some(rect)
     }
 
+    /// Native XDG auto-tiling: a plan is purely geometry until every affected
+    /// client ACKs XDG configure and commits a matching wl_shm image.
+    /// One actual output, one workspace in the disposable QEMU bridge. No
+    /// scene pixel mutation or speculative DRM frame ACK happens here.
+    fn reflow_auto_tiling(&mut self) {
+        if !self.auto_tiling.enabled() || !self.managed_xdg_mode ||
+           !self.dynamic_window_mode || !self.multi_window_mode {return;}
+        let work=if self.gtk_layer_mode {
+            self.mapped_normal_work_area()
+        } else {
+            Some(WindowRect{x:0,y:0,width:1280,height:800})
+        };
+        let Some(work)=work else {return;};
+
+        // Tiled windows with normal XDG state participate in the layout;
+        // minimized and user-maximized/fullscreen/snapped roles do not.
+        for (surface,model) in &self.managed_windows {
+            let Some(id)=self.known_window_surfaces.id_of(surface) else {continue;};
+            let state=model.state();
+            let _=self.auto_tiling.set_minimized(id,
+                state==WindowDisplayState::Minimized);
+            let _=self.auto_tiling.set_floating(id,
+                state!=WindowDisplayState::Normal &&
+                state!=WindowDisplayState::Minimized);
+        }
+        let placements=match self.auto_tiling.plan(work,1280,800) {
+            Ok(Some(placements))=>placements,
+            Ok(None)=>return,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_AUTO_TILING_REFUSED={error:?}");
+                return;
+            },
+        };
+
+        // Commit geometry requests only after the complete layout is valid.
+        // The old retained image is not moved; the existing client commit
+        // path requires exact pending sizes and applies the new position.
+        let mut changes=Vec::new();
+        for placement in placements {
+            let Some(surface)=self.known_window_surfaces.get(placement.window_id).cloned()
+                else {continue;};
+            let Some((_,window))=self.managed_windows.iter_mut()
+                .find(|(role,_)|role==&surface) else {continue;};
+            if window.set_tiled_geometry(placement.rect) {
+                changes.push((surface,placement.rect));
+            }
+        }
+        for (surface,rect) in changes {
+            let top=self.xdg_shell.toplevel_surfaces().iter()
+                .find(|top|top.wl_surface()==&surface).cloned();
+            let Some(top)=top else {continue;};
+            self.cancel_surface_grab(&surface);
+            top.with_pending_state(|state|{
+                state.states.unset(xdg_toplevel::State::Resizing);
+                state.size=Some((rect.width,rect.height).into());
+            });
+            top.send_pending_configure();
+            self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+            self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+            self.managed_pending_sizes.push((
+                surface.clone(),(rect.width as usize,rect.height as usize)
+            ));
+            println!("MELANIA_NATIVE_AUTO_TILE_XDG_CONFIGURED={}x{} at {},{}",
+                rect.width,rect.height,rect.x,rect.y);
+        }
+    }
+
     /// Reflow existing snapped/maximized windows when a real GTK4 panel
     /// maps, changes its exclusive zone, or disappears. Never synthesize a
     /// wl_shm buffer: wait for each client's real XDG configure/commit.
@@ -1173,7 +1243,7 @@ impl BridgeState {
             let previous=window.geometry();
             if !window.set_work_area(area) {continue;}
             let next=window.geometry();
-            if previous!=next {
+            if previous!=next && !window.is_tiled() {
                 if let Some(rect)=next {changes.push((surface.clone(),rect));}
             }
         }
@@ -1195,6 +1265,7 @@ impl BridgeState {
             println!("MELANIA_NATIVE_XDG_WORK_AREA_REFLOW={}x{} at {},{}",
                 rect.width,rect.height,rect.x,rect.y);
         }
+        self.reflow_auto_tiling();
     }
 
     /// Apply actual xdg_toplevel requests to the QEMU compositor state and
@@ -1243,6 +1314,7 @@ impl BridgeState {
                 ));
             }
         }
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED={enabled}");
     }
 
@@ -1282,6 +1354,7 @@ impl BridgeState {
         self.managed_pending_sizes.push((
             surface.clone(),(rect.width as usize,rect.height as usize)
         ));
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_SUPER_SNAP_CONFIGURED={:?} {}x{} at {},{}",
                  zone,rect.width,rect.height,rect.x,rect.y);
     }
@@ -1332,6 +1405,7 @@ impl BridgeState {
                 ));
             }
         }
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN={enabled}");
     }
 }
@@ -2019,6 +2093,9 @@ impl XdgShellHandler for BridgeState {
                             window.set_work_area(work);
                         }
                         self.managed_windows.push((top.wl_surface().clone(),window));
+                        if self.auto_tiling.enabled() {
+                            let _=self.auto_tiling.register(key);
+                        }
                     }
                 }
             }
@@ -2029,6 +2106,7 @@ impl XdgShellHandler for BridgeState {
             self.dynamic_toplevels.push(top.clone());
         }
         top.send_configure();
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_XDG_TOPLEVEL_CONFIGURE_SENT=true");
     }
     fn new_popup(&mut self,popup:PopupSurface,positioner:PositionerState) {
@@ -2198,6 +2276,7 @@ impl XdgShellHandler for BridgeState {
             });
             pointer.frame(self);
         }
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true");
     }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
@@ -2217,6 +2296,10 @@ impl XdgShellHandler for BridgeState {
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         let parent_key=self.known_window_surfaces.remove(&surface);
+        if let Some(id)=parent_key {
+            self.auto_tiling.forget(id);
+            self.reflow_auto_tiling();
+        }
         // A parent can be destroyed before it ever committed an accepted
         // wl_shm buffer. Its child roles may still have retained pixels: do
         // not skip the scene damage just because the parent's slot is absent.
@@ -3099,6 +3182,22 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_xdg_mode:std::env::var("MELANIA_NATIVE_MANAGED_XDG")
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
+        auto_tiling:{
+            let mut model=AutoTiling::default();
+            // Explicit guest-only switch. This is not an automatic tiling
+            // feature of production login and cannot affect the host DE.
+            if std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+               std::env::var("MELANIA_NATIVE_MANAGED_XDG")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+               std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+               std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
+                .as_deref()==Ok("YES_QEMU_VM") {
+                model.set_enabled(true);
+            }
+            model
+        },
         managed_pending_sizes:Vec::new(),
         managed_pending_resize:Vec::new(),
         native_popup_roles:Vec::new(),
