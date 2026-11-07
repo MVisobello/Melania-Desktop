@@ -42,6 +42,14 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         self.assertLess(block.index("latest_crtc.framebuffer()"),
                         block.index("latest_encoder.crtc()"))
 
+    def test_presenter_owner_rejects_same_resolution_mode_timing_switch(self):
+        block = PROBE[PROBE.index("pub fn verify_presenter_ownership("):
+                      PROBE.index("pub fn owner_snapshot_matches(")]
+        self.assertIn("let Some(initial_mode)=current.mode() else", block)
+        self.assertIn("initial_mode.size()!=expected_size", block)
+        self.assertIn("latest_crtc.mode()!=Some(initial_mode)", block)
+        self.assertNotIn("latest_crtc.mode().map(|mode|mode.size())", block)
+
     def test_stale_ack_never_probes_or_cancels_new_frame(self):
         block = SOURCE[SOURCE.index("pub fn verify_and_present("):SOURCE.index("fn presented(")]
         self.assertIn("self.inflight != Some(submission)", block)

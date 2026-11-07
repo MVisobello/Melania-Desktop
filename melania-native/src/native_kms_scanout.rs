@@ -90,8 +90,12 @@ pub fn verify_presenter_ownership(
 ) -> Result<bool,String> {
     let current=card.get_crtc(crtc)
         .map_err(|error|format!("DRM owner get_crtc failed: {error}"))?;
+    // An identical size is not an identical DRM mode: a different pixel
+    // clock or sync timing can appear after a concurrent modeset. Capture
+    // the complete first kernel mode and require the same mode on re-read.
+    let Some(initial_mode)=current.mode() else {return Ok(false);};
     if current.framebuffer()!=Some(expected_fb) ||
-       current.mode().map(|mode|mode.size())!=Some(expected_size) {
+       initial_mode.size()!=expected_size {
         return Ok(false);
     }
     let output=card.get_connector(connector,false)
@@ -110,7 +114,7 @@ pub fn verify_presenter_ownership(
     let latest_crtc=card.get_crtc(crtc)
         .map_err(|error|format!("DRM owner second get_crtc failed: {error}"))?;
     if latest_crtc.framebuffer()!=Some(expected_fb) ||
-       latest_crtc.mode().map(|mode|mode.size())!=Some(expected_size) {
+       latest_crtc.mode()!=Some(initial_mode) {
         return Ok(false);
     }
     let latest_output=card.get_connector(connector,false)
