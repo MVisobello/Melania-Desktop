@@ -74,8 +74,14 @@ impl Restore<'_> {
             self.ownership_lost=true;
             return Err("DRM rollback refused: live CRTC route/mode/FB changed".into());
         }
+        // A failed restoring modeset can have partially affected kernel state.
+        // Never let Drop issue the same ioctl again without fresh ownership
+        // acquisition: the original route may have been taken over.
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
-            &[self.connector],old.mode())?;
+            &[self.connector],old.mode()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
         // Once a restore ioctl has been submitted, unreadable verification
         // cannot authorize Drop to issue the same modeset again.
         let observed=self.card.get_crtc(old.handle()).map_err(|error|{
