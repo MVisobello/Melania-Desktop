@@ -68,3 +68,26 @@ resize state are updated only after the batch is accepted.
 A destroyed client or VT/GPU revocation clears all staged images without
 touching the previous confirmed scene. QEMU group+auto-tiling remains gated
 off until live per-member XDG configure dispatch is implemented and tested.
+
+## Stage136 — independent QEMU end-to-end acceptance harness
+
+Added a *separate* guest instance with opt-in combined tab stacks and
+tiling. The compositor starts floating despite the configured tiling flag,
+then QMP injects genuine **Super+S, Super+Shift+S, Super+Y** key events to
+form the group and request tiled XDG geometry. Two real Wayland clients
+independently ACK their **actual** configure serials and attach owned
+1280×800 wl_shm buffers *without waiting on an intermediate per-client KMS
+ACK*. The compositor must produce a single grouped scene publication.
+
+QMP captures and validates the actual VirtIO GPU CRTC image: full-screen
+client A after atomic publish, full-screen B after real Super+Left keyboard
+focus, and A after Super+Right. The test fails on wrong colors, missing
+real wl_keyboard Enter, lack of real frame callbacks, transaction timeout,
+GPU framebuffer/frame count mismatch, missing original CRTC/connector
+restore or missing libseat release. The host CI checks returned status
+and all four screenshot files, not just console markers.
+
+This stage is not accepted until the exact final-head Linux/SFTP/QEMU
+workflow is **completed/success** and screenshots are inspected. Actual
+hardware, DRM/GBM continuous production, DMA-BUF, multi-output and login
+remain blocked. The normal Melania session still uses labwc as fallback.

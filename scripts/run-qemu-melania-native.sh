@@ -41,6 +41,8 @@ edge_client="$root/target/debug/qemu-edge-drop-client"
   deny 'missing USB Alt+Tab focus/KMS QMP acceptance verifier'
 [[ -f "$root/scripts/inject-qemu-native-tab-stacks.py" ]] ||
   deny 'missing dedicated real USB Wayland tab-stack pixel verifier'
+[[ -f "$root/scripts/inject-qemu-combined-tab-tiling.py" ]] ||
+  deny 'missing dedicated real QMP grouped XDG tiling verifier'
 [[ -f "$root/scripts/inject-qemu-edge-drop.py" ]] ||
   deny 'real tablet edge drop verifier missing'
 [[ -f "$root/scripts/inject-qemu-super-snap.py" ]] ||
@@ -276,6 +278,8 @@ python3 "$root/scripts/inject-qemu-native-tab-stacks.py" \
   --out-dir "$report" --timeout 1680 \
   > "$report/qmp-native-tab-stacks.log" 2>&1 &
 native_tabs_input_pid=$!
+python3 "$root/scripts/inject-qemu-combined-tab-tiling.py"   --serial "$serial" --qmp "$work/melania-qmp.sock"   --out-dir "$report" --timeout 1900   > "$report/qmp-combined-tab-tiling.log" 2>&1 &
+combined_tabs_input_pid=$!
 python3 "$root/scripts/inject-qemu-authenticated-resize.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --output "$report/authenticated-resize-frame2.ppm" --timeout 1350 \
@@ -388,6 +392,8 @@ wait "$alt_tab_input_pid"
 alt_tab_input_code=$?
 wait "$native_tabs_input_pid"
 native_tabs_input_code=$?
+wait "$combined_tabs_input_pid"
+combined_tabs_input_code=$?
 wait "$layer_capture_pid"
 layer_capture_code=$?
 wait "$gtk_capture_pid"
@@ -400,7 +406,7 @@ wait "$gtk_super_input_pid"
 gtk_super_input_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
+if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$combined_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
     ! grep -q '^MELANIA_QEMU_GTK4_PANEL_PIXELS_FROM_KMS=true' "$report/qmp-real-gtk-panel.log" ||
     ! grep -q '^MELANIA_QEMU_GTK4_TWO_DISTINCT_REAL_FRAMES=true' "$report/qmp-real-gtk-two-frames.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_START_REAL_CRTC_PIXELS=true' "$report/qmp-real-gtk-start-overlay.log" ||
@@ -433,6 +439,15 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
     ! test -s "$report/tab-stack-A-restored.ppm" ||
     ! test -s "$report/tab-stack-dissolved.ppm" ||
     ! grep -q '^MELANIA_QEMU_NATIVE_REAL_TAB_STACK_USB_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_COMBINED_TAB_REAL_XDG_SHM_KMS_PASS=true' "$report/qmp-combined-tab-tiling.log" ||
+    ! grep -q '^MELANIA_QEMU_COMBINED_TAB_ATOMIC_CRTC_A=true' "$report/qmp-combined-tab-tiling.log" ||
+    ! grep -q '^MELANIA_QEMU_COMBINED_TAB_REAL_CRTC_B=true' "$report/qmp-combined-tab-tiling.log" ||
+    ! grep -q '^MELANIA_QEMU_COMBINED_TAB_REAL_CRTC_A_RESTORED=true' "$report/qmp-combined-tab-tiling.log" ||
+    ! grep -q '^MELANIA_QEMU_NATIVE_COMBINED_TAB_TILING_REAL_CRTC_PASS=true' "$serial" ||
+    ! test -s "$report/combined-tabs-before.ppm" ||
+    ! test -s "$report/combined-tabs-active-A.ppm" ||
+    ! test -s "$report/combined-tabs-active-B.ppm" ||
+    ! test -s "$report/combined-tabs-active-A-return.ppm" ||
     ! grep -q '^MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER_A_B=true' "$report/qmp-alt-tab.log" ||
     ! grep -q '^MELANIA_QEMU_ALT_F4_REAL_WAYLAND_CLOSE=true' "$report/qmp-alt-tab.log" ||
     ! grep -q '^MELANIA_QEMU_ALT_TAB_REAL_KERNEL_CRTC_FRAME13_PIXELS=true' "$report/qmp-alt-tab.log" ||

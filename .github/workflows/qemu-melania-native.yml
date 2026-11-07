@@ -33,7 +33,9 @@ on:
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
       - scripts/inject-qemu-native-tab-stacks.py
+      - scripts/inject-qemu-combined-tab-tiling.py
       - tests/test_native_tab_stacks_qemu_stage129.py
+      - tests/test_native_combined_tab_tiling_stage136.py
       - tests/test_native_tab_resize_wiring_stage132.py
       - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
@@ -117,7 +119,9 @@ on:
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
       - scripts/inject-qemu-native-tab-stacks.py
+      - scripts/inject-qemu-combined-tab-tiling.py
       - tests/test_native_tab_stacks_qemu_stage129.py
+      - tests/test_native_combined_tab_tiling_stage136.py
       - tests/test_native_tab_resize_wiring_stage132.py
       - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
@@ -218,6 +222,8 @@ jobs:
           python3 -m py_compile scripts/inject-qemu-authenticated-resize.py
           python3 -m py_compile scripts/inject-qemu-alt-tab.py
           python3 -m py_compile scripts/inject-qemu-native-tab-stacks.py
+          python3 -m py_compile scripts/inject-qemu-combined-tab-tiling.py
+          python3 -m unittest discover -s tests -p 'test_native_combined_tab_tiling_stage136.py' -v
           python3 -m py_compile scripts/capture-qemu-real-xdg-popup.py
           python3 -m py_compile scripts/inject-qemu-edge-drop.py
           python3 -m unittest discover -s tests -p 'test_native_edge_drop_qemu_stage121.py' -v
