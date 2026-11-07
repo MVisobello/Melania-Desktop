@@ -191,7 +191,10 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 let until=Instant::now()+Duration::from_secs(3);
                 loop {
                     match card.page_flip(crtc,handles[index as usize%2],PageFlipFlags::EVENT,None) {
-                        Ok(())=>break,
+                        Ok(())=>{
+                            event_router.arm_flip(crtc)?;
+                            break;
+                        },
                         Err(error) if error.raw_os_error()==Some(11) && Instant::now()<until =>
                             thread::sleep(Duration::from_millis(20)),
                         Err(error)=>return Err(error.into()),
@@ -390,7 +393,10 @@ pub fn qemu_wayland_gpu_scene_stream(
                 let deadline=Instant::now()+Duration::from_secs(3);
                 loop {
                     match card.page_flip(crtc,framebuffer,PageFlipFlags::EVENT,None) {
-                        Ok(())=>break,
+                        Ok(())=>{
+                            event_router.arm_flip(crtc)?;
+                            break;
+                        },
                         Err(err) if err.raw_os_error()==Some(11) &&
                             Instant::now()<deadline => {
                             thread::sleep(Duration::from_millis(20));

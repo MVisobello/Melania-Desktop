@@ -24,6 +24,9 @@ pub struct DrmFlipEventRouter {
     events: VecDeque<(crtc::Handle, u32)>,
     // Bound to the real active kernel CRTC topology for this libseat epoch.
     owned_crtcs: Option<Vec<crtc::Handle>>,
+    // Flip ioctls that actually succeeded but have not yet been acknowledged.
+    // Only an armed CRTC may generate an acceptable kernel completion.
+    armed_crtcs: Vec<crtc::Handle>,
     poisoned: bool,
 }
 
@@ -53,6 +56,7 @@ impl DrmFlipEventRouter {
     /// A duplicate, changed, missing or over-capacity route fails closed.
     pub fn bind_active_crtcs(&mut self, crtcs: &[crtc::Handle]) -> Result<(), String> {
         if self.poisoned || self.owned_crtcs.is_some() || !self.events.is_empty() ||
+           !self.armed_crtcs.is_empty() ||
            crtcs.is_empty() || crtcs.len()>crate::native_output_topology::MAX_ACTIVE_DRM_OUTPUTS ||
            crtcs.iter().enumerate().any(|(i,crtc)|crtcs[..i].contains(crtc)) {
             self.revoke();
@@ -70,10 +74,28 @@ impl DrmFlipEventRouter {
         Ok(())
     }
 
+    /// Mark a successful page_flip(EVENT) ioctl on this owned CRTC. Call this
+    /// immediately after the ioctl succeeds and BEFORE reading any DRM events.
+    /// A second submission before consuming the first event is unsafe.
+    pub fn arm_flip(&mut self, crtc: crtc::Handle) -> Result<(), String> {
+        if self.poisoned {
+            return Err("DRM event router revoked".into());
+        }
+        self.check_owned_crtc(crtc)?;
+        if self.armed_crtcs.contains(&crtc) ||
+           self.events.iter().any(|(pending, _)| *pending == crtc) {
+            self.revoke();
+            return Err("DRM CRTC already has an unacknowledged page flip".into());
+        }
+        self.armed_crtcs.push(crtc);
+        Ok(())
+    }
+
     /// Permanently discard this device-epoch routing state. Reuse after VT
     /// pause, device replacement, or an ambiguous batch is forbidden.
     pub fn revoke(&mut self) {
         self.events.clear();
+        self.armed_crtcs.clear();
         self.poisoned = true;
     }
 
@@ -86,6 +108,12 @@ impl DrmFlipEventRouter {
             return Err("DRM event router revoked".into());
         }
         self.check_owned_crtc(crtc)?;
+        // A page flip event without a successful request in this acquisition
+        // epoch is stale or foreign: it must never satisfy the next frame.
+        if !self.armed_crtcs.contains(&crtc) {
+            self.revoke();
+            return Err("DRM unsolicited page-flip completion".into());
+        }
         if self.events.len() >= MAX_PENDING_CRTC_EVENTS ||
            self.events.iter().any(|(pending, _)| *pending == crtc) {
             self.revoke();
@@ -102,9 +130,16 @@ impl DrmFlipEventRouter {
             return Err("DRM event router revoked".into());
         }
         self.check_owned_crtc(expected)?;
+        if !self.armed_crtcs.contains(&expected) {
+            self.revoke();
+            return Err("DRM page-flip wait without a submitted request".into());
+        }
         let Some(index) = self.events.iter().position(|(crtc,_)| *crtc == expected) else {
             return Ok(None);
         };
+        // Consumption retires the specific CRTC's in-flight ioctl. Another
+        // monitor's armed event remains available until separately consumed.
+        self.armed_crtcs.retain(|crtc| *crtc != expected);
         Ok(self.events.remove(index).map(|(_,frame)| frame))
     }
 }
@@ -191,6 +226,8 @@ pub fn wait_for_kms_page_flip(
 ) -> Result<u32, String> {
     let mut router=DrmFlipEventRouter::default();
     router.bind_active_crtcs(&[expected_crtc])?;
+    // Legacy caller already submitted its single EVENT ioctl.
+    router.arm_flip(expected_crtc)?;
     wait_for_kms_page_flip_routed(card, expected_crtc, timeout, &mut router)
 }
 
@@ -217,6 +254,7 @@ mod tests {
         let monitor=crtc(77);
         let mut router=DrmFlipEventRouter::default();
         router.bind_active_crtcs(&[monitor]).unwrap();
+        router.arm_flip(monitor).unwrap();
         router.enqueue(monitor,123).unwrap();
         assert!(router.wait_deadline(Duration::ZERO).is_err());
         assert!(router.poisoned());
@@ -230,6 +268,8 @@ mod tests {
         let a=crtc(78); let b=crtc(79);
         let mut router=DrmFlipEventRouter::default();
         router.bind_active_crtcs(&[a,b]).unwrap();
+        router.arm_flip(a).unwrap();
+        router.arm_flip(b).unwrap();
         router.enqueue(b,5).unwrap();
         assert!(router.wait_deadline(Duration::from_millis(50)).is_ok());
         assert_eq!(router.take(a).unwrap(),None);
@@ -253,6 +293,7 @@ mod tests {
         let second=crtc(42);
         let third=crtc(43);
         events.bind_active_crtcs(&[first,second,third]).unwrap();
+        for crtc in [first,second,third] { events.arm_flip(crtc).unwrap(); }
         events.enqueue(second,100).unwrap();
         events.enqueue(first,101).unwrap();
         events.enqueue(third,102).unwrap();
@@ -260,7 +301,9 @@ mod tests {
         assert_eq!(events.take(first).unwrap(),Some(101));
         assert_eq!(events.take(second).unwrap(),Some(100));
         assert_eq!(events.take(third).unwrap(),Some(102));
-        assert_eq!(events.take(first).unwrap(),None);
+        // A retired request cannot accept a replay or release a second ACK.
+        assert!(events.take(first).is_err());
+        assert!(events.poisoned());
     }
 
     #[test]
@@ -268,6 +311,7 @@ mod tests {
         let mut events=DrmFlipEventRouter::default();
         let monitor=crtc(51);
         events.bind_active_crtcs(&[monitor]).unwrap();
+        events.arm_flip(monitor).unwrap();
         events.enqueue(monitor,1).unwrap();
         assert!(events.enqueue(monitor,2).is_err());
         assert!(events.poisoned());
@@ -282,10 +326,13 @@ mod tests {
         let a=crtc(21); let b=crtc(22); let foreign=crtc(23);
         let mut routed=DrmFlipEventRouter::default();
         routed.bind_active_crtcs(&[a,b]).unwrap();
+        routed.arm_flip(a).unwrap();
+        routed.arm_flip(b).unwrap();
         routed.enqueue(b,101).unwrap();
         routed.enqueue(a,102).unwrap();
         assert_eq!(routed.take(a).unwrap(),Some(102));
         assert_eq!(routed.take(b).unwrap(),Some(101));
+        routed.arm_flip(a).unwrap();
         routed.enqueue(a,103).unwrap();
         // A foreign/old-session CRTC can never release a Wayland ACK.
         assert!(routed.enqueue(foreign,104).is_err());
@@ -314,11 +361,43 @@ mod tests {
     }
 
     #[test]
+    fn unsolicited_completion_revokes_all_armed_outputs() {
+        let a=crtc(70); let b=crtc(71);
+        let mut router=DrmFlipEventRouter::default();
+        router.bind_active_crtcs(&[a,b]).unwrap();
+        router.arm_flip(a).unwrap();
+        // B has no successful page_flip ioctl in this device epoch.
+        assert!(router.enqueue(b,200).is_err());
+        assert!(router.poisoned());
+        assert_eq!(router.queued(),0);
+        assert!(router.take(a).is_err());
+    }
+
+    #[test]
+    fn duplicate_submission_and_replayed_completion_cannot_ack_new_frame() {
+        let a=crtc(80);
+        let mut router=DrmFlipEventRouter::default();
+        router.bind_active_crtcs(&[a]).unwrap();
+        router.arm_flip(a).unwrap();
+        assert!(router.arm_flip(a).is_err());
+        assert!(router.poisoned());
+
+        let mut fresh=DrmFlipEventRouter::default();
+        fresh.bind_active_crtcs(&[a]).unwrap();
+        fresh.arm_flip(a).unwrap();
+        fresh.enqueue(a,1).unwrap();
+        assert_eq!(fresh.take(a).unwrap(),Some(1));
+        assert!(fresh.enqueue(a,1).is_err());
+        assert!(fresh.poisoned());
+    }
+
+    #[test]
     fn bounded_pending_outputs_and_independent_new_epoch() {
         let mut events=DrmFlipEventRouter::default();
         let active: Vec<_>=(1..=crate::native_output_topology::MAX_ACTIVE_DRM_OUTPUTS as u32).map(crtc).collect();
         events.bind_active_crtcs(&active).unwrap();
         for (index, output) in active.iter().enumerate() {
+            events.arm_flip(*output).unwrap();
             events.enqueue(*output,index as u32 + 1).unwrap();
         }
         assert_eq!(events.queued(),active.len());
@@ -326,6 +405,7 @@ mod tests {
         assert!(events.poisoned());
         let mut replacement=DrmFlipEventRouter::default();
         replacement.bind_active_crtcs(&[crtc(99)]).unwrap();
+        replacement.arm_flip(crtc(99)).unwrap();
         replacement.enqueue(crtc(99),1).unwrap();
         assert_eq!(replacement.take(crtc(99)).unwrap(),Some(1));
     }

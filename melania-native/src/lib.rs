@@ -16,6 +16,7 @@ pub mod auto_tiling;
 pub mod tab_groups;
 pub mod tab_stack_shortcuts;
 pub mod auto_tiling_shortcuts;
+pub mod tile_swap_shortcuts;
 pub mod snap_shortcuts;
 pub mod output_layout;
 pub mod gtk_layer_geometry;

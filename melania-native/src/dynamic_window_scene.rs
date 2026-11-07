@@ -393,6 +393,35 @@ mod tests {
 
 
     #[test]
+    fn swap_two_acknowledged_same_size_windows_reuses_owned_pixels_and_damages_scene() {
+        // Super+X swaps the two physical tile positions, but XDG clients
+        // only know their size. New client buffers must not be invented or
+        // awaited for a pure x/y-only relocation of already accepted pixels.
+        let mut scene=DynamicWindowScene::new(128,64,[7,8,9,0]).unwrap();
+        scene.upsert(11,0,0,solid(64,64,[10,20,30,0],DynamicAlpha::Opaque)).unwrap();
+        scene.upsert(22,64,0,solid(64,64,[40,50,60,0],DynamicAlpha::Opaque)).unwrap();
+        let initial=scene.generation();
+        let total=scene.used_bytes();
+        assert!(scene.confirm_presented_damage(initial));
+        assert_eq!(px(&scene.composite().unwrap(),128,10,20),[10,20,30]);
+        assert_eq!(px(&scene.composite().unwrap(),128,110,20),[40,50,60]);
+        scene.move_to(11,64,0).unwrap();
+        scene.move_to(22,0,0).unwrap();
+        assert_eq!(scene.window_count(),2);
+        assert_eq!(scene.used_bytes(),total);
+        assert_eq!(scene.geometry(11),Some((64,0,64,64)));
+        assert_eq!(scene.geometry(22),Some((0,0,64,64)));
+        assert_eq!(scene.hit_test(10.0,20.0),Some(22));
+        assert_eq!(scene.hit_test(110.0,20.0),Some(11));
+        let swapped=scene.composite().unwrap();
+        assert_eq!(px(&swapped,128,10,20),[40,50,60]);
+        assert_eq!(px(&swapped,128,110,20),[10,20,30]);
+        assert!(scene.generation()>initial);
+        assert!(!scene.confirm_presented_damage(initial));
+        assert!(scene.confirm_presented_damage(scene.generation()));
+    }
+
+    #[test]
     fn minimized_layered_window_retains_pixels_but_never_captures_pointer() {
         let mut scene=DynamicWindowScene::new(120,80,[1,2,3,0]).unwrap();
         scene.upsert_in_layer(1,10,10,Layer::Normal,

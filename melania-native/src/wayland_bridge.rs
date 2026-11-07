@@ -64,7 +64,8 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
-use melania_native::auto_tiling::{AutoTiling,TileAxis};
+use melania_native::auto_tiling::{AutoTiling,TileAxis,TileDirection};
+use melania_native::tile_swap_shortcuts::{TileSwapKeyHandler,SwapKeyAction};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
 use melania_native::tab_groups::TabGroups;
 use melania_native::tab_stack_shortcuts::{TabKeyHandler,TabKeyAction};
@@ -176,6 +177,7 @@ struct BridgeState {
     // Explicit QEMU opt-in: one output/workspace until native multi-output exists.
     auto_tiling:AutoTiling,
     auto_tile_keys:AutoTileKeyHandler,
+    tile_swap_keys:TileSwapKeyHandler,
     // Guest opt-in: real owned wl_shm tab visibility; no host login impact.
     tab_stack_mode:bool,
     tab_groups:TabGroups,
@@ -1213,8 +1215,10 @@ impl BridgeState {
         };
 
         // Commit geometry requests only after the complete layout is valid.
-        // The old retained image is not moved; the existing client commit
-        // path requires exact pending sizes and applies the new position.
+        // For changed sizes, wait for the client's matching wl_shm buffer.
+        // For position-only changes, already-accepted owned pixels can be
+        // moved by the compositor directly: xdg_toplevel has no (x,y)
+        // configure and clients need not commit a new same-sized buffer.
         let mut changes=Vec::new();
         for placement in placements {
             let Some(surface)=self.known_window_surfaces.get(placement.window_id).cloned()
@@ -1225,7 +1229,36 @@ impl BridgeState {
                 changes.push((surface,placement.rect));
             }
         }
+        let mut retained_scene_moved=false;
         for (surface,rect) in changes {
+            // NEVER relocate pixels with an outstanding XDG resize or an
+            // uncommitted size. This path is valid only for an existing,
+            // visible, already-owned shm image of the *same* dimensions.
+            let pending=self.managed_pending_sizes.iter().any(|(role,_)|role==&surface)
+                || self.managed_pending_resize.iter().any(|(role,_)|role==&surface);
+            if !pending && self.lifecycle.seat_active() &&
+               !self.native_presentation_guard.permanently_revoked() {
+                if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+                    if let Some((x,y,width,height))=self.dynamic_scene.geometry(key) {
+                        if width==rect.width as usize && height==rect.height as usize &&
+                           self.dynamic_scene.is_visible(key)==Some(true) {
+                            if (x,y)!=(rect.x,rect.y) {
+                                if self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
+                                    self.reposition_native_popups_for_parent(key);
+                                    retained_scene_moved=true;
+                                    println!("MELANIA_NATIVE_AUTO_TILE_RETAINED_MOVE={key} x={} y={}",
+                                        rect.x,rect.y);
+                                    continue;
+                                }
+                            } else {
+                                // Current client pixels and geometry already
+                                // match; no XDG configure or new KMS work.
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
             let top=self.xdg_shell.toplevel_surfaces().iter()
                 .find(|top|top.wl_surface()==&surface).cloned();
             let Some(top)=top else {continue;};
@@ -1242,6 +1275,16 @@ impl BridgeState {
             ));
             println!("MELANIA_NATIVE_AUTO_TILE_XDG_CONFIGURED={}x{} at {},{}",
                 rect.width,rect.height,rect.x,rect.y);
+        }
+        if retained_scene_moved {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("native tiled retained-frame swap rejected: {error}");
+                }
+            }
         }
     }
 
@@ -1465,6 +1508,37 @@ impl BridgeState {
             }
         }
         println!("MELANIA_NATIVE_AUTO_TILING_ENABLED={enabled}");
+    }
+
+    /// COSMIC Super+X followed by a real arrow: swap adjacent active tiles
+    /// in the validated work-area layout, then ask real XDG clients to
+    /// draw their new sizes. Keyboard focus remains with the originating
+    /// surface; only post-commit wl_shm pixel buffers enter KMS.
+    fn swap_tiled_focused(&mut self,direction:TileDirection) {
+        if !self.auto_tiling.enabled() || !self.managed_xdg_mode ||
+           !self.dynamic_window_mode || !self.multi_window_mode ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let Some(focused)=self.focused.as_ref() else {return;};
+        let Some(id)=self.known_window_surfaces.id_of(focused) else{return;};
+        let work=if self.gtk_layer_mode {
+            self.mapped_normal_work_area()
+        } else {
+            Some(WindowRect{x:0,y:0,width:1280,height:800})
+        };
+        let Some(work)=work else{return;};
+        match self.auto_tiling.swap_direction(id,direction,work,1280,800) {
+            Ok(Some(target))=>{
+                // reflow sends per-client configure; it neither fabricates
+                // KMS page flips nor bypasses stale-buffer rejection.
+                self.reflow_auto_tiling();
+                println!("MELANIA_NATIVE_AUTO_TILE_SWAP={id}:{target} direction={direction:?}");
+            },
+            Ok(None)=>{},
+            Err(error)=>eprintln!("MELANIA_NATIVE_AUTO_TILE_SWAP_REFUSED={error:?}"),
+        }
     }
 
     /// COSMIC-style floating exception, gated to the disposable QEMU native
@@ -2890,6 +2964,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.popup_escape_held=false;
             state.snap_keys.reset();
             state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
             state.tab_keys.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
@@ -2958,6 +3033,25 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     },
                 }
             }
+            if state.auto_tiling.enabled() && state.managed_xdg_mode &&
+               state.dynamic_window_mode && state.multi_window_mode &&
+               std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                   .as_deref()==Ok("YES_QEMU_VM") {
+                match state.tile_swap_keys.event(
+                    code.checked_sub(8),event.state()==KeyState::Pressed
+                ) {
+                    SwapKeyAction::Forward=>{},
+                    SwapKeyAction::Consume=>return,
+                    SwapKeyAction::Arm=>{
+                        println!("MELANIA_NATIVE_AUTO_TILE_SWAP_ARMED=true");
+                        return;
+                    },
+                    SwapKeyAction::Swap(direction)=>{
+                        state.swap_tiled_focused(direction);
+                        return;
+                    },
+                }
+            }
             let snap_action=if state.managed_xdg_mode &&
                state.dynamic_window_mode && state.multi_window_mode {
                 state.snap_keys.event(code.checked_sub(8),
@@ -2977,6 +3071,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     AutoTileKeyAction::Consume=>return,
                     AutoTileKeyAction::Toggle=>{
                         state.toggle_auto_tiling();
+                        state.tile_swap_keys.reset();
                         return;
                     },
                     AutoTileKeyAction::ToggleFloating=>{
@@ -3580,6 +3675,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
         auto_tile_keys:AutoTileKeyHandler::default(),
+        tile_swap_keys:TileSwapKeyHandler::default(),
         tab_stack_mode:std::env::var("MELANIA_NATIVE_TAB_STACKS")
             .as_deref()==Ok("YES_QEMU_VM") &&
             std::env::var("MELANIA_NATIVE_MANAGED_XDG")
@@ -3674,6 +3770,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.popup_escape_held=false;
             state.snap_keys.reset();
             state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
@@ -3716,6 +3813,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.popup_escape_held=false;
             state.snap_keys.reset();
             state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
         }
     })?;
     events.handle().insert_source(udev,|event,_,state|{
@@ -3759,6 +3857,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.popup_escape_held=false;
             state.snap_keys.reset();
             state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
             state.keyboard_window_cycle.reset();
             eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
