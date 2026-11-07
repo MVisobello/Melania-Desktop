@@ -50,7 +50,12 @@ impl NativeFlipLedger {
     /// allowed (idle displays need not emit an event for every vblank).
     pub fn complete_flip(&mut self, frame: u32) -> Result<(), FlipLedgerError> {
         if self.revoked { return Err(FlipLedgerError::Revoked); }
-        if !self.pending { return Err(FlipLedgerError::UnexpectedCompletion); }
+        if !self.pending {
+            // An unsolicited kernel completion makes this device epoch
+            // ambiguous: never let a later flip consume a stale receipt.
+            self.revoke();
+            return Err(FlipLedgerError::UnexpectedCompletion);
+        }
         if self.last_vblank.is_some_and(|last| {
             let distance=frame.wrapping_sub(last);
             distance==0 || distance >= (1u32 << 31)
@@ -124,6 +129,8 @@ mod tests {
         assert_eq!(ledger.completed_count(),1);
         assert!(!ledger.has_pending());
         assert_eq!(ledger.complete_flip(18),Err(FlipLedgerError::UnexpectedCompletion));
+        assert!(ledger.revoked());
+        assert_eq!(ledger.begin_flip(),Err(FlipLedgerError::Revoked));
     }
 
     #[test]
@@ -184,6 +191,7 @@ mod tests {
         ledger.begin_flip().unwrap();
         ledger.complete_vm_flip(0).unwrap();
         assert_eq!(ledger.complete_vm_flip(0),Err(FlipLedgerError::UnexpectedCompletion));
+        assert!(ledger.revoked());
         ledger.revoke();
         assert_eq!(ledger.begin_flip(),Err(FlipLedgerError::Revoked));
         assert_eq!(ledger.complete_vm_flip(2),Err(FlipLedgerError::Revoked));
