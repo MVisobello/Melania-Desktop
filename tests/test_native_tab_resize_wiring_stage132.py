@@ -14,7 +14,13 @@ class NativeTabResizeWiringStage132(unittest.TestCase):
         self.assertIn("Configure::Toplevel(configure)",BRIDGE)
         self.assertIn("let serial:u32=configure.serial.into();",BRIDGE)
         self.assertIn("self.tab_resize_transaction.ack_configure(epoch,id,serial)",BRIDGE)
-        self.assertNotIn("self.tab_resize_transaction.sent_configure(",BRIDGE)
+        # Only a real Smithay send_configure may arm the ledger; ACKs still
+        # originate solely from XdgShellHandler::ack_configure.
+        self.assertIn("let serial:u32=top.send_configure().into();",BRIDGE)
+        self.assertIn("self.tab_resize_transaction.sent_configure(epoch,id,serial)",BRIDGE)
+        dispatch=BRIDGE[BRIDGE.index("fn arm_native_tab_tiling"):
+                        BRIDGE.index("fn stage_native_tab_resize_image")]
+        self.assertNotIn("self.tab_resize_transaction.ack_configure(",dispatch)
     def test_only_owned_imported_shm_commit_can_count(self):
         guard=BRIDGE.index("self.tab_resize_transaction.can_accept_owned_buffer(")
         insert=BRIDGE.index("self.dynamic_scene.upsert(key,x,y,pixels)")
@@ -39,6 +45,23 @@ class NativeTabResizeWiringStage132(unittest.TestCase):
         for member in ("ClientReceipt","MissingConfigure","WrongEpoch",
                        "BufferBeforeAck","BufferSizeMismatch","AlreadyPending"):
             self.assertIn(member,LEDGER)
+    def test_guest_only_combined_tiling_checks_every_role_and_times_out(self):
+        for token in ('MELANIA_NATIVE_COMBINED_TAB_TILING',
+                      'fn arm_native_tab_tiling(&mut self,work:WindowRect)',
+                      'plan_tab_stacks(',
+                      'self.tab_resize_transaction.begin(&slots,1280,800)',
+                      'MELANIA_NATIVE_COMBINED_TILING_XDG_SENT=',
+                      'MELANIA_NATIVE_COMBINED_TILING_TIMEOUT=',
+                      'start.elapsed()>=Duration::from_secs(12)',
+                      'self.tab_resize_transaction.has_pending()'):
+            self.assertIn(token,BRIDGE)
+        dispatch=BRIDGE[BRIDGE.index("fn arm_native_tab_tiling"):
+                        BRIDGE.index("fn stage_native_tab_resize_image")]
+        self.assertLess(dispatch.index("self.tab_resize_transaction.begin("),
+                        dispatch.index("top.send_configure()"))
+        self.assertNotIn("self.submit_continuous_frame(",dispatch)
+        self.assertNotIn("self.dynamic_scene.move_to(",dispatch)
+
     def test_never_enable_tiling_with_stacks_before_atomic_apply(self):
         self.assertIn('std::env::var("MELANIA_NATIVE_AUTO_TILING")',BRIDGE)
         self.assertIn('.as_deref()!=Ok("YES_QEMU_VM")',BRIDGE)

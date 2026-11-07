@@ -69,6 +69,7 @@ use melania_native::tile_swap_shortcuts::{TileSwapKeyHandler,SwapKeyAction};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
 use melania_native::tab_groups::TabGroups;
 use melania_native::tab_resize_transaction::TabResizeTransaction;
+use melania_native::tab_tiling_plan::plan_tab_stacks;
 use melania_native::tab_stack_shortcuts::{TabKeyHandler,TabKeyAction};
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
@@ -183,6 +184,8 @@ struct BridgeState {
     tab_stack_mode:bool,
     tab_groups:TabGroups,
     tab_resize_transaction:TabResizeTransaction,
+    combined_tab_tiling_mode:bool,
+    tab_resize_started_at:Option<Instant>,
     // Owned group images are staged until all XDG roles have ACKed and
     // committed their new correctly sized client-owned buffers.
     tab_resize_images:Vec<WindowBatchUpdate>,
@@ -1210,6 +1213,12 @@ impl BridgeState {
                 state!=WindowDisplayState::Normal &&
                 state!=WindowDisplayState::Minimized);
         }
+        if self.combined_tab_tiling_mode && self.tab_stack_mode &&
+           self.tab_groups.visible_ids().iter().any(|id|
+               self.tab_groups.group_tabs(*id).is_ok_and(|tabs|tabs.len()>1)) {
+            self.arm_native_tab_tiling(work);
+            return;
+        }
         let placements=match self.auto_tiling.plan(work,1280,800) {
             Ok(Some(placements))=>placements,
             Ok(None)=>return,
@@ -1293,6 +1302,77 @@ impl BridgeState {
         }
     }
 
+    /// Real XDG configure dispatch for an opt-in disposable QEMU VT.
+    /// Validate every registered role and retained client image before
+    /// sending any configure; no production login can enable this path.
+    fn arm_native_tab_tiling(&mut self,work:WindowRect) {
+        if !self.combined_tab_tiling_mode || !self.tab_stack_mode ||
+           !self.auto_tiling.enabled() || self.tab_resize_transaction.has_pending() ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let slots=match plan_tab_stacks(
+            &self.auto_tiling,&self.tab_groups,work,1280,800
+        ) {
+            Ok(Some(slots)) if !slots.is_empty()=>slots,
+            Ok(_)=>return,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_COMBINED_TILING_PLAN_REFUSED={error:?}");
+                return;
+            }
+        };
+        let mut roles=Vec::new();
+        for slot in &slots {
+            for &id in &slot.members {
+                // Don't arm for unmapped clients or incomplete earlier
+                // single-client resizes: old scene must remain intact.
+                if self.dynamic_scene.geometry(id).is_none(){return;}
+                let Some(surface)=self.known_window_surfaces.get(id).cloned()
+                    else{return;};
+                if !self.managed_windows.iter().any(|(r,m)|
+                    r==&surface && m.state()==WindowDisplayState::Normal) ||
+                   self.managed_pending_sizes.iter().any(|(r,_)|r==&surface) {
+                    return;
+                }
+                let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned()
+                    else{return;};
+                roles.push((id,top,slot.rect));
+            }
+        }
+        let epoch=match self.tab_resize_transaction.begin(&slots,1280,800) {
+            Ok(epoch)=>epoch,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_COMBINED_TILING_BEGIN_REFUSED={error:?}");
+                return;
+            }
+        };
+        self.tab_resize_images.clear();
+        self.tab_resize_started_at=Some(Instant::now());
+        for (id,top,rect) in roles {
+            self.cancel_surface_grab(top.wl_surface());
+            top.with_pending_state(|pending|{
+                pending.states.unset(xdg_toplevel::State::Resizing);
+                pending.size=Some((rect.width,rect.height).into());
+            });
+            // Smithay 0.7 sends this serial to the real Wayland client.
+            let serial:u32=top.send_configure().into();
+            if let Err(error)=self.tab_resize_transaction.sent_configure(epoch,id,serial) {
+                eprintln!("MELANIA_NATIVE_COMBINED_TILING_CONFIGURE_REFUSED={error:?}");
+                self.tab_resize_transaction.abort(epoch);
+                self.tab_resize_images.clear();
+                self.tab_resize_started_at=None;
+                return;
+            }
+            println!("MELANIA_NATIVE_COMBINED_TILING_XDG_SENT={id} serial={serial} size={}x{}",
+                     rect.width,rect.height);
+        }
+        println!("MELANIA_NATIVE_COMBINED_TILING_ARMED={epoch} clients={}",
+                 slots.iter().map(|slot|slot.members.len()).sum::<usize>());
+        let _=std::io::stdout().flush();
+    }
+
     /// Stage a bounded, independently owned Wayland wl_shm image without
     /// touching the visible scene. Only the final client commit may publish
     /// the complete output-wide transaction with ONE damage generation.
@@ -1309,6 +1389,7 @@ impl BridgeState {
                 eprintln!("MELANIA_NATIVE_TAB_RESIZE_RECEIPT_REFUSED={error:?}");
                 self.tab_resize_transaction.abort(epoch);
                 self.tab_resize_images.clear();
+                self.tab_resize_started_at=None;
                 return false;
             }
         };
@@ -1374,6 +1455,7 @@ impl BridgeState {
             }
             self.reposition_native_popups_for_parent(slot.active);
         }
+        self.tab_resize_started_at=None;
         println!("MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_READY={epoch} clients={count}");
         let _=std::io::stdout().flush();
         true
@@ -1393,7 +1475,9 @@ impl BridgeState {
     fn native_tab_actions_allowed(&self)->bool {
         self.tab_stack_mode && self.managed_xdg_mode && self.dynamic_window_mode &&
         self.multi_window_mode && self.continuous_kms_mode &&
-        self.persistent_kms_mode && !self.auto_tiling.enabled() &&
+        self.persistent_kms_mode &&
+        (!self.auto_tiling.enabled() || self.combined_tab_tiling_mode) &&
+        !self.tab_resize_transaction.has_pending() &&
         self.lifecycle.seat_active() &&
         !self.native_presentation_guard.permanently_revoked() &&
         self.window_interaction.active_key().is_none() &&
@@ -1486,7 +1570,7 @@ impl BridgeState {
            self.tab_groups.group_tabs(source).map_or(true,|tabs|tabs.len()!=1) ||
            !self.managed_windows.iter().any(|(role,model)|
                role==&surface && model.state()==WindowDisplayState::Normal &&
-               !model.is_tiled()) {return;}
+               (!model.is_tiled() || self.combined_tab_tiling_mode)) {return;}
         let Some((_,_,width,height))=self.dynamic_scene.geometry(source) else{return;};
         if self.managed_pending_sizes.iter().any(|(role,_)|role==&surface){return;}
         let target=self.dynamic_scene.focusable_normal_keys_top_first()
@@ -1518,6 +1602,7 @@ impl BridgeState {
         }
         self.sync_native_tab_visibility();
         self.activate_native_tab(source);
+        if self.combined_tab_tiling_mode {self.reflow_auto_tiling();}
         println!("MELANIA_NATIVE_TAB_ATTACHED={source}:{target}");
     }
 
@@ -2833,6 +2918,7 @@ impl XdgShellHandler for BridgeState {
         if let Some(id)=self.known_window_surfaces.id_of(&surface) {
             if self.tab_resize_transaction.abort_if_member_destroyed(id) {
                 self.tab_resize_images.clear();
+                self.tab_resize_started_at=None;
                 eprintln!("MELANIA_NATIVE_TAB_RESIZE_ABORTED_CLIENT_GONE={id}");
             }
         }
@@ -3860,10 +3946,22 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             .as_deref()==Ok("YES_QEMU_VM") &&
             std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
             .as_deref()==Ok("YES_DISPOSABLE_QEMU") &&
-            std::env::var("MELANIA_NATIVE_AUTO_TILING")
-            .as_deref()!=Ok("YES_QEMU_VM"),
+            (std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                .as_deref()!=Ok("YES_QEMU_VM") ||
+             std::env::var("MELANIA_NATIVE_COMBINED_TAB_TILING")
+                .as_deref()==Ok("YES_QEMU_VM")),
         tab_groups:TabGroups::default(),
         tab_resize_transaction:TabResizeTransaction::default(),
+        combined_tab_tiling_mode:std::env::var("MELANIA_NATIVE_COMBINED_TAB_TILING")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TAB_STACKS").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_AUTO_TILING").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_MANAGED_XDG").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").as_deref()==Ok("YES_DISPOSABLE_QEMU"),
+        tab_resize_started_at:None,
         tab_resize_images:Vec::new(),
         tab_keys:TabKeyHandler::default(),
         auto_tiling:{
@@ -3933,6 +4031,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             SessionEvent::PauseSession=>{
                 state.tab_resize_transaction.revoke();
                 state.tab_resize_images.clear();
+                state.tab_resize_started_at=None;
                 set_data_device_focus(&state.display_handle,&state.seat,None);
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
@@ -4011,6 +4110,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.native_presentation_guard.revoke();
             state.tab_resize_transaction.revoke();
             state.tab_resize_images.clear();
+            state.tab_resize_started_at=None;
             set_data_device_focus(&state.display_handle,&state.seat,None);
             state.continuous_worker.take();
             state.continuous_inflight.take();
@@ -4319,6 +4419,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
+        // Fail closed if any grouped client withholds XDG ACK or pixels.
+        // The previously confirmed retained scene is not repositioned.
+        if state.tab_resize_started_at.is_some_and(|start|
+            start.elapsed()>=Duration::from_secs(12)) {
+            let pending=state.tab_resize_transaction.epoch();
+            state.tab_resize_transaction.revoke();
+            state.tab_resize_images.clear();
+            state.tab_resize_started_at=None;
+            eprintln!("MELANIA_NATIVE_COMBINED_TILING_TIMEOUT={pending:?}");
+        }
         // The QEMU native IPC socket cannot stall the Wayland/libinput
         // thread while a peer waits to send EOF or read a large LIST reply.
         if let Some((listener,_cleanup))=&control_listener {
