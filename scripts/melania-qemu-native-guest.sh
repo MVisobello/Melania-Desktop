@@ -107,6 +107,8 @@ if ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=1 crtcs=[1-9][0-9]*$' "$read
    ! grep -q '^MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACQUISITIONS=2$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACTUAL_PAUSE_OBSERVED=false$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=1 rdev=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=2 rdev=[1-9][0-9]*$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=1 frames=2$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=2 frames=2$' "$readonly_reopen_log" ||
    ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=1 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
@@ -116,7 +118,17 @@ if ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=1 crtcs=[1-9][0-9]*$' "$read
   rm -f "$readonly_reopen_log"
   fatal 'native_libseat_DRM_reopen_evidence_missing'
 fi
+# Both independent seatd acquisitions MUST correspond to the same real
+# kernel character-device number. The Rust backend additionally checks
+# the inode and filesystem device on every opened libseat FD.
+if [[ "$(grep -Ec '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=[12] rdev=[1-9][0-9]*$' "$readonly_reopen_log")" != 2 ]] ||
+   [[ "$(grep -E '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=[12] rdev=[1-9][0-9]*$' "$readonly_reopen_log" | awk '{print $2}' | sort -u | wc -l)" != 1 ]]; then
+  cat "$readonly_reopen_log"
+  rm -f "$readonly_reopen_log"
+  fatal 'libseat_DRM_node_identity_changed_across_reopen'
+fi
 rm -f "$readonly_reopen_log"
+report 'MELANIA_QEMU_REAL_LIBSEAT_DRM_NODE_IDENTITY_PASS=true'
 report 'MELANIA_QEMU_REAL_LIBSEAT_DRM_REOPEN_PASS=true'
 
 # Try the genuine Rust/Smithay KMS preflight, not a C substitute or mock.
