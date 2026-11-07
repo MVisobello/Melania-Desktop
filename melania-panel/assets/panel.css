@@ -1293,3 +1293,41 @@ window.melania-theme-light .melania-bar.melania-bar-top { border-bottom-color: #
 .melania-bar .melania-color-app-icon {
   opacity: 1;
 }
+
+
+/* Live Aero Glass surface styling (GTK4 / real Wayland layer-shell alpha).
+ * A translucent buffer exposes the desktop behind Start and popovers.
+ * This does NOT blur the backdrop; a separate GPU composition pass is required.
+ * The taskbar's intensity/opacity is supplied by panel_preferences.rs.
+ * Preserve opaque Light/Dark and high-contrast modes. */
+window.melania-theme-aero:not(.melania-high-contrast) .melania-start-panel,
+window.melania-theme-aero:not(.melania-high-contrast) .melania-panel {
+  background: linear-gradient(to bottom,
+    rgba(92,159,219,0.84) 0%,
+    rgba(20,72,122,0.87) 30%,
+    rgba(8,37,76,0.88) 100%);
+  border: 1px solid rgba(216,244,255,0.69);
+  box-shadow: inset 0 1px rgba(255,255,255,0.72),
+              inset 0 10px 21px rgba(215,241,255,0.14),
+              0 14px 30px rgba(2,16,37,0.32);
+}
+window.melania-theme-aero:not(.melania-high-contrast) .melania-start-panel .melania-start-shortcuts {
+  /* Without GPU backdrop sampling, keep the shortcut text readable over busy windows. */
+  background: linear-gradient(to bottom,rgba(67,107,150,0.94),rgba(31,66,105,0.97));
+  border-left-color: rgba(203,235,255,0.49);
+}
+window.melania-theme-aero:not(.melania-high-contrast) .melania-start-panel .melania-start-footer {
+  background: rgba(17,51,92,0.30);
+  border-top-color: rgba(205,234,255,0.37);
+}
+window.melania-theme-aero:not(.melania-high-contrast) .melania-bar .melania-pin:hover,
+window.melania-theme-aero:not(.melania-high-contrast) .melania-bar .melania-window:hover {
+  background: linear-gradient(to bottom,rgba(206,239,255,0.27),rgba(36,128,214,0.28));
+  box-shadow: inset 0 1px rgba(243,252,255,0.40);
+}
+window.melania-theme-aero.melania-high-contrast .melania-bar,
+window.melania-theme-aero.melania-high-contrast .melania-panel,
+window.melania-theme-aero.melania-high-contrast .melania-start-panel {
+  background: #112d4c;
+  box-shadow: none;
+}

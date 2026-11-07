@@ -316,3 +316,51 @@ headerbar.settings-titlebar.settings-dark .title { color: #f2f7ff; }
   background: #30353d;
   border-color: #434a55;
 }
+
+
+/* Aero: actual Wayland transparency over the host compositor, not GPU blur.
+ * GTK paints premultiplied-alpha client surfaces. Preserve legible controls,
+ * and never expose translucent surfaces in high-contrast mode. */
+window.melania-settings-window.melania-theme-aero:not(.high-contrast) {
+  background: transparent;
+}
+.settings-root.melania-theme-aero:not(.high-contrast) {
+  background: linear-gradient(to bottom,
+    rgba(199,233,253,0.91) 0%, rgba(232,246,255,0.88) 18%,
+    rgba(243,249,255,0.87) 100%);
+  color: #213a54;
+  box-shadow: inset 0 1px rgba(255,255,255,0.86);
+}
+.settings-root.melania-theme-aero.glass-low:not(.high-contrast) {
+  background: rgba(237,248,255,0.96);
+}
+.settings-root.melania-theme-aero.glass-medium:not(.high-contrast) {
+  background: rgba(222,242,255,0.89);
+}
+.settings-root.melania-theme-aero.glass-high:not(.high-contrast) {
+  background: rgba(213,237,253,0.81);
+}
+.settings-root.melania-theme-aero.glass-max:not(.high-contrast) {
+  background: rgba(204,233,252,0.73);
+}
+.settings-root.melania-theme-aero:not(.high-contrast) .settings-sidebar {
+  background: linear-gradient(to right,
+    rgba(212,236,255,0.94),rgba(226,243,255,0.76));
+  border-right: 1px solid rgba(123,174,219,0.62);
+}
+.settings-root.melania-theme-aero:not(.high-contrast) .settings-main,
+.settings-root.melania-theme-aero:not(.high-contrast) .settings-scroll,
+.settings-root.melania-theme-aero:not(.high-contrast) .settings-scroll > viewport {
+  background: rgba(246,251,255,0.72);
+}
+.settings-root.melania-theme-aero:not(.high-contrast) .settings-card {
+  background: rgba(254,255,255,0.91);
+  border-color: rgba(149,191,226,0.79);
+  box-shadow: inset 0 1px rgba(255,255,255,0.90),
+              0 2px 8px rgba(33,80,126,0.12);
+}
+.settings-root.melania-theme-aero:not(.high-contrast) button.settings-nav-item.active-section {
+  background: rgba(173,216,249,0.82);
+  border-color: rgba(94,160,221,0.71);
+  color: #174c7d;
+}

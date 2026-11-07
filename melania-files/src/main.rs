@@ -3238,6 +3238,10 @@ fn create_files_window(app: &Application, explicitly_requested: Option<String>) 
     let aero_header = gtk::HeaderBar::new();
     aero_header.add_css_class("files-aero-header");
     aero_header.add_css_class(&format!("melania-theme-{}", appearance.appearance_theme()));
+    if appearance.high_contrast {
+        window.add_css_class("high-contrast");
+        aero_header.add_css_class("high-contrast");
+    }
     window_controls::install(&window, &aero_header);
     // Override GTK HeaderBar's automatic centered window-title widget:
     // the tabs ARE the titlebar, never add a duplicate app title.

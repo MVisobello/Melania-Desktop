@@ -641,3 +641,36 @@ window.melania-theme-aero .files-top-tab.files-tab-active {
   padding:3px 7px; color:#34536f;
 }
 window.melania-theme-dark .files-tab-rail .files-network-tab { color:#dbe5ef; }
+
+
+/* Real Aero client-side translucency for the Files chrome. The folder tiles
+ * remain readable: no unsupported CSS backdrop-filter and no claim of actual
+ * GPU background blur. Light/Dark/high-contrast keep their existing surfaces.
+ * The shared Win7 titlebar glass is defined at higher CSS priority. */
+window.melania-files-window.melania-theme-aero:not(.high-contrast) {
+  background: transparent;
+}
+window.melania-files-window.melania-theme-aero:not(.high-contrast) .files-toolbar {
+  background: linear-gradient(to bottom,rgba(246,253,255,0.89),rgba(202,231,251,0.81));
+  border-bottom-color: rgba(108,165,214,0.67);
+  box-shadow: inset 0 1px rgba(255,255,255,0.85);
+}
+window.melania-files-window.melania-theme-aero:not(.high-contrast) .files-top-tab {
+  background: rgba(210,234,252,0.23);
+  border-color: rgba(183,218,246,0.34);
+}
+window.melania-files-window.melania-theme-aero:not(.high-contrast) .files-top-tab.files-tab-active {
+  background: rgba(251,254,255,0.84);
+  border-color: rgba(102,171,226,0.71);
+  box-shadow: inset 0 2px rgba(235,250,255,0.91);
+  color: #163e64;
+}
+window.melania-files-window.melania-theme-aero:not(.high-contrast) .files-sidebar {
+  background: linear-gradient(to right,rgba(220,241,255,0.95),rgba(229,245,255,0.85));
+}
+window.melania-files-window.melania-theme-aero:not(.high-contrast) .files-actions {
+  background: rgba(234,246,255,0.88);
+}
+window.melania-files-window.melania-theme-aero:not(.high-contrast) .files-preview {
+  background: rgba(245,251,255,0.93);
+}
