@@ -32,6 +32,7 @@ on:
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
+      - scripts/inject-qemu-hover-focus.py
       - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
@@ -68,6 +69,7 @@ on:
       - tests/test_native_xdg_qmp_role_pixels.py
       - tests/test_native_authenticated_resize_qemu_stage114.py
       - tests/test_native_alt_tab_qemu_stage116.py
+      - tests/test_native_focus_follows_pointer_qemu_stage130.py
       - tests/test_native_xdg_popup_qemu_stage118.py
       - tests/test_native_popup_escape_qemu_stage125.py
       - scripts/capture-qemu-two-windows.py
@@ -113,6 +115,7 @@ on:
       - scripts/inject-qemu-dynamic-pointer.py
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
+      - scripts/inject-qemu-hover-focus.py
       - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
@@ -149,6 +152,7 @@ on:
       - tests/test_native_xdg_qmp_role_pixels.py
       - tests/test_native_authenticated_resize_qemu_stage114.py
       - tests/test_native_alt_tab_qemu_stage116.py
+      - tests/test_native_focus_follows_pointer_qemu_stage130.py
       - tests/test_native_xdg_popup_qemu_stage118.py
       - tests/test_native_popup_escape_qemu_stage125.py
       - scripts/capture-qemu-two-windows.py
@@ -211,6 +215,8 @@ jobs:
           python3 -m py_compile scripts/inject-qemu-dynamic-pointer.py
           python3 -m py_compile scripts/inject-qemu-authenticated-resize.py
           python3 -m py_compile scripts/inject-qemu-alt-tab.py
+          python3 -m py_compile scripts/inject-qemu-hover-focus.py
+          python3 -m unittest discover -s tests -p 'test_native_focus_follows_pointer_qemu_stage130.py' -v
           python3 -m py_compile scripts/capture-qemu-real-xdg-popup.py
           python3 -m py_compile scripts/inject-qemu-edge-drop.py
           python3 -m unittest discover -s tests -p 'test_native_edge_drop_qemu_stage121.py' -v

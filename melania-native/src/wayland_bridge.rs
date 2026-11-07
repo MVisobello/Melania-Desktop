@@ -8,6 +8,7 @@
 //! roundtrips without claiming these clients are displayed.
 use std::{
     error::Error,
+    collections::BTreeSet,
     fs,
     io::{Read,Write},
     os::unix::{fs::PermissionsExt,net::{UnixDatagram,UnixListener,UnixStream}},
@@ -72,6 +73,7 @@ use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
 use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
 use smithay::utils::Rectangle;
 use melania_native::keyboard_window_cycle::{KeyboardWindowCycle,ShortcutResult};
+use melania_native::focus_follows_pointer::{HoverFocusGate,should_focus_on_motion};
 use signal_hook::consts::signal::{SIGINT,SIGTERM};
 
 /// Publish a QEMU-only post-DRM-ACK receipt atomically. The Wayland test
@@ -196,6 +198,10 @@ struct BridgeState {
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
     last_xdg_press:Option<(WlSurface,Serial)>,
+    // Focus follows pointer is opt-in only inside an isolated QEMU VM.
+    // Never steal focus from active button grabs, popup menus or host sessions.
+    focus_follows_pointer_mode:bool,
+    pointer_buttons_held:BTreeSet<u32>,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
@@ -624,6 +630,39 @@ impl BridgeState {
             self.multi_scene.position(key)?
         };
         Some((surface,(f64::from(x),f64::from(y)).into()))
+    }
+
+    /// Optional COSMIC-style sloppy focus for the actual QEMU libinput seat.
+    /// Hover never raises/reorders a window and never submits a KMS frame.
+    /// Only a mapped, hit-tested XDG toplevel with owned visible client
+    /// pixels can receive a real wl_keyboard focus transition.
+    fn maybe_focus_hovered_toplevel(&mut self,point:Point<f64,Logical>) {
+        if !self.focus_follows_pointer_mode ||
+           !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.multi_window_mode {
+            return;
+        }
+        let Some((surface,_))=self.pointer_target(point) else {return;};
+        let is_toplevel=self.xdg_shell.toplevel_surfaces()
+            .iter().any(|top|top.wl_surface()==&surface);
+        let permitted=should_focus_on_motion(HoverFocusGate {
+            enabled:self.focus_follows_pointer_mode,
+            seat_active:self.lifecycle.seat_active(),
+            revoked:self.native_presentation_guard.permanently_revoked(),
+            button_held:!self.pointer_buttons_held.is_empty(),
+            interactive_grab:self.window_interaction.active_key().is_some(),
+            popup_grab:!self.grabbed_popup_roles.is_empty(),
+            visible_toplevel:is_toplevel,
+            already_focused:self.focused.as_ref()==Some(&surface),
+        });
+        if !permitted {return;}
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else {return;};
+        self.keyboard_window_cycle.cancel_cycle();
+        let keyboard=self.seat.get_keyboard().expect("keyboard");
+        keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+        self.focused=Some(surface);
+        println!("MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER={id}");
+        let _=std::io::stdout().flush();
     }
 
     /// Changes to model geometry are bounded and require an active real
@@ -2720,6 +2759,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     match event {
         InputEvent::DeviceAdded {device} =>register(state,device),
         InputEvent::DeviceRemoved {device} => {
+            state.pointer_buttons_held.clear();
             state.last_xdg_press=None;
             state.last_popup_press=None;
             state.suppressed_popup_button=None;
@@ -3019,6 +3059,9 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
+            // Actual libinput motion changes keyboard focus only in the
+            // explicit guest-only policy; it never raises the client.
+            state.maybe_focus_hovered_toplevel(point);
             state.delivered_motions+=1;
         }
         InputEvent::PointerMotionAbsolute {event} => {
@@ -3044,6 +3087,9 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
+            // Actual libinput motion changes keyboard focus only in the
+            // explicit guest-only policy; it never raises the client.
+            state.maybe_focus_hovered_toplevel(point);
             state.delivered_motions+=1;
         }
         InputEvent::PointerAxis {event} => {
@@ -3090,6 +3136,12 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             if (state.focused.is_none() && !state.multi_window_mode) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
+            }
+            // Keep real button holds so a drag cannot cause hover-focus
+            // to cross clients, including a popup's suppressed click.
+            match event.state() {
+                ButtonState::Pressed => {state.pointer_buttons_held.insert(event.button_code());},
+                ButtonState::Released => {state.pointer_buttons_held.remove(&event.button_code());},
             }
             // The outside click which dismisses a grabbed popup may not
             // activate the application beneath it. Suppress its paired
@@ -3442,6 +3494,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         snap_keys:SnapKeyHandler::default(),
         popup_escape_held:false,
         last_xdg_press:None,
+        focus_follows_pointer_mode:std::env::var("MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_MANAGED_XDG").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM"),
+        pointer_buttons_held:BTreeSet::new(),
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
                 WindowSlots::with_capacity(16).expect("bounded QEMU window registry")
@@ -3481,6 +3539,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         match event {
             SessionEvent::PauseSession=>{
                 set_data_device_focus(&state.display_handle,&state.seat,None);
+                state.pointer_buttons_held.clear();
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
                 state.suppressed_popup_button=None;
@@ -3571,6 +3630,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // discard every input capability minted by the old GPU/VT epoch,
             // including popup serials and the click-through suppression flag.
             // Reacquiring a DRM route must never resurrect those grabs.
+            state.pointer_buttons_held.clear();
             state.last_xdg_press=None;
             state.last_popup_press=None;
             state.suppressed_popup_button=None;
