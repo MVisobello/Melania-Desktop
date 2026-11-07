@@ -114,6 +114,11 @@ impl DrmFlipEventRouter {
             self.revoke();
             return Err("DRM unsolicited page-flip completion".into());
         }
+        // DRM PageFlip events do not promise an incrementing vblank counter:
+        // VirtIO and some virtual devices reuse sequence numbers. The router
+        // validates the actual armed ioctl, CRTC and bounded event batch.
+        // The per-output NativeFlipLedger performs strict monotonic validation
+        // on physical DRM, with a separately QEMU-gated compatibility path.
         if self.events.len() >= MAX_PENDING_CRTC_EVENTS ||
            self.events.iter().any(|(pending, _)| *pending == crtc) {
             self.revoke();
@@ -389,6 +394,76 @@ mod tests {
         assert_eq!(fresh.take(a).unwrap(),Some(1));
         assert!(fresh.enqueue(a,1).is_err());
         assert!(fresh.poisoned());
+    }
+
+    #[test]
+    fn qemu_unreliable_vblank_counter_does_not_poison_real_event_routing() {
+        use crate::native_flip_ledger::NativeFlipLedger;
+        let output=crtc(90);
+        let mut router=DrmFlipEventRouter::default();
+        let mut vm_ledger=NativeFlipLedger::default();
+        router.bind_active_crtcs(&[output]).unwrap();
+        // Two distinct successful kernel flip ioctls may report the SAME
+        // vblank frame under QEMU VirtIO. Each must have its own real event.
+        for frame in [42,42,41,41] {
+            vm_ledger.begin_flip().unwrap();
+            router.arm_flip(output).unwrap();
+            router.enqueue(output,frame).unwrap();
+            let receipt=router.take(output).unwrap().unwrap();
+            vm_ledger.complete_vm_flip(receipt).unwrap();
+        }
+        assert_eq!(vm_ledger.completed_count(),4);
+        assert!(vm_ledger.unreliable_vm_counter());
+        assert!(!router.poisoned());
+        // An unsolicited extra event remains fatal, even on virtual GPU.
+        assert!(router.enqueue(output,41).is_err());
+        assert!(router.poisoned());
+    }
+
+    #[test]
+    fn physical_kernel_vblank_replay_remains_rejected_by_strict_ledger() {
+        use crate::native_flip_ledger::{FlipLedgerError,NativeFlipLedger};
+        let output=crtc(91);
+        let mut router=DrmFlipEventRouter::default();
+        let mut strict=NativeFlipLedger::default();
+        router.bind_active_crtcs(&[output]).unwrap();
+        for (index,frame) in [100,100].into_iter().enumerate() {
+            strict.begin_flip().unwrap();
+            router.arm_flip(output).unwrap();
+            router.enqueue(output,frame).unwrap();
+            let receipt=router.take(output).unwrap().unwrap();
+            let result=strict.complete_flip(receipt);
+            if index==0 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result,Err(FlipLedgerError::StaleOrDuplicateVblank));
+            }
+        }
+        assert!(strict.revoked());
+    }
+
+    #[test]
+    fn independent_crtcs_handle_vm_wrapping_without_losing_events() {
+        use crate::native_flip_ledger::NativeFlipLedger;
+        let a=crtc(92); let b=crtc(93);
+        let mut router=DrmFlipEventRouter::default();
+        let mut ledgers=[NativeFlipLedger::default(),NativeFlipLedger::default()];
+        router.bind_active_crtcs(&[a,b]).unwrap();
+        for frame in [u32::MAX,0,0] {
+            for (index,output) in [a,b].into_iter().enumerate() {
+                ledgers[index].begin_flip().unwrap();
+                router.arm_flip(output).unwrap();
+            }
+            router.enqueue(b,frame).unwrap();
+            router.enqueue(a,frame).unwrap();
+            for (index,output) in [a,b].into_iter().enumerate() {
+                let receipt=router.take(output).unwrap().unwrap();
+                ledgers[index].complete_vm_flip(receipt).unwrap();
+            }
+        }
+        assert_eq!(ledgers[0].completed_count(),3);
+        assert_eq!(ledgers[1].completed_count(),3);
+        assert!(!router.poisoned());
     }
 
     #[test]
