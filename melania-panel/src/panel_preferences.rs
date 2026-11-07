@@ -34,18 +34,50 @@ fn set_revealed(window:&ApplicationWindow,prefs:&Preferences,revealed:bool) {
     window.set_exclusive_zone(if prefs.panel_auto_hide {0} else {i32::from(prefs.panel_height)});
 }
 
+// GTK layer-shell alpha really exposes the background surface to the host
+// compositor. This is glass translucency, NOT a sampled backdrop blur pass.
+// Keep the user's panel opacity as a ceiling and honor High Contrast.
+fn glass_opacity(prefs:&Preferences)->f64 {
+    let requested=f64::from(prefs.panel_opacity)/100.0;
+    if prefs.appearance_theme()=="aero" && !prefs.high_contrast {
+        let glass=(0.92-f64::from(prefs.blur_strength)*0.0024).clamp(0.68,0.92);
+        requested.min(glass)
+    } else {
+        requested
+    }
+}
+
 fn install_opacity(provider:&gtk::CssProvider,prefs:&Preferences){
-    if prefs.panel_opacity==94 || prefs.high_contrast {
-        // Unmodified defaults retain all existing Aero/Light/Dark CSS.
+    if prefs.high_contrast {
         provider.load_from_data("");
         return;
     }
-    let alpha=f64::from(prefs.panel_opacity)/100.0;
-    provider.load_from_data(&format!(
-        ".melania-bar {{background: rgba(7,23,45,{alpha:.3});}}\
-         window.melania-theme-light .melania-bar {{background: rgba(238,240,244,{alpha:.3});}}\
-         window.melania-theme-dark .melania-bar {{background: rgba(36,39,45,{alpha:.3});}}"
-    ));
+    let alpha=glass_opacity(prefs);
+    if prefs.appearance_theme()=="aero" {
+        // Actual translucent client-owned Wayland pixels. The higher
+        // reflectance at the top is the Win7 glass highlight, but no shader
+        // samples the scene behind this layer until the native blur pass lands.
+        let top=(alpha+0.10).min(0.96);
+        provider.load_from_data(&format!(
+            "window.melania-theme-aero .melania-bar {{ \
+             background: linear-gradient(to bottom, \
+             rgba(84,151,215,{top:.3}) 0%, rgba(18,64,112,{alpha:.3}) 48%, \
+             rgba(6,31,67,{alpha:.3}) 100%); \
+             border-top: 1px solid rgba(245,252,255,0.79); \
+             box-shadow: inset 0 1px rgba(255,255,255,0.75), \
+             inset 0 8px 18px rgba(221,244,255,0.19), \
+             0 -6px 22px rgba(1,12,33,0.30); }} "
+        ));
+    } else if prefs.panel_opacity==94 {
+        // Keep the existing opaque Light/Dark defaults exactly as before.
+        provider.load_from_data("");
+    } else {
+        provider.load_from_data(&format!(
+            ".melania-bar {{background: rgba(7,23,45,{alpha:.3});}} \
+             window.melania-theme-light .melania-bar {{background: rgba(238,240,244,{alpha:.3});}} \
+             window.melania-theme-dark .melania-bar {{background: rgba(36,39,45,{alpha:.3});}}"
+        ));
+    }
 }
 fn apply_preferences(
     panel:&ApplicationWindow,bar:&GtkBox,
@@ -53,6 +85,14 @@ fn apply_preferences(
     notifications:&ApplicationWindow,calendar:&ApplicationWindow,
     prefs:&Preferences,opacity_provider:&gtk::CssProvider,revealed:bool
 ) {
+    // Settings writes are watched live. Update ALL layer-shell windows, not
+    // just the bar, so Aero/Light/Dark switches do not require restarting.
+    for surface in [panel,start,quick,notifications,calendar] {
+        for class in ["melania-theme-aero","melania-theme-light","melania-theme-dark"] {
+            surface.remove_css_class(class);
+        }
+        surface.add_css_class(&format!("melania-theme-{}",prefs.appearance_theme()));
+    }
     let top=prefs.panel_position=="top";
     // Geometry and exclusive zone must follow the same setting to keep the
     // compositor's usable area consistent with the visible taskbar.
@@ -167,4 +207,36 @@ pub fn attach_live_preferences(
         }
         glib::ControlFlow::Continue
     });
+}
+
+
+#[cfg(test)]
+mod aero_tests {
+    use super::*;
+    #[test]
+    fn glass_is_translucent_by_default_and_obeys_explicit_panel_opacity() {
+        let mut p=Preferences::default();
+        assert_eq!(p.appearance_theme(),"aero");
+        assert!(glass_opacity(&p)<0.80);
+        p.panel_opacity=60;
+        assert!((glass_opacity(&p)-0.60).abs()<0.0001);
+    }
+    #[test]
+    fn glass_strength_controls_alpha_but_does_not_change_light_dark() {
+        let mut p=Preferences::default();
+        p.blur_strength=0;
+        let clear=glass_opacity(&p);
+        p.blur_strength=100;
+        assert!(glass_opacity(&p)<clear);
+        p.set_appearance_theme("light");
+        assert!((glass_opacity(&p)-0.94).abs()<0.0001);
+        p.set_appearance_theme("dark");
+        assert!((glass_opacity(&p)-0.94).abs()<0.0001);
+    }
+    #[test]
+    fn high_contrast_disables_translucent_aero_policy() {
+        let mut p=Preferences::default();
+        p.high_contrast=true;
+        assert!((glass_opacity(&p)-0.94).abs()<0.0001);
+    }
 }
