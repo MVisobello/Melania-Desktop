@@ -7,6 +7,10 @@ const LEFT_META:u32=125;
 const RIGHT_META:u32=126;
 const LEFT_SHIFT:u32=42;
 const RIGHT_SHIFT:u32=54;
+const CTRL_L:u32=29;
+const CTRL_R:u32=97;
+const ALT_L:u32=56;
+const ALT_R:u32=100;
 const S:u32=31;
 const PAGE_UP:u32=104;
 const PAGE_DOWN:u32=109;
@@ -18,6 +22,7 @@ pub enum TabKeyAction {Forward,Consume,ToggleStack,Attach,Next,Previous}
 pub struct TabKeyHandler {
     meta_l:bool,meta_r:bool,
     shift_l:bool,shift_r:bool,
+    ctrl_l:bool,ctrl_r:bool,alt_l:bool,alt_r:bool,
     held:u8,
 }
 impl TabKeyHandler {
@@ -40,6 +45,10 @@ impl TabKeyHandler {
                 self.shift_r=pressed;
                 return TabKeyAction::Forward;
             },
+            Some(CTRL_L)=>{self.ctrl_l=pressed;return TabKeyAction::Forward;},
+            Some(CTRL_R)=>{self.ctrl_r=pressed;return TabKeyAction::Forward;},
+            Some(ALT_L)=>{self.alt_l=pressed;return TabKeyAction::Forward;},
+            Some(ALT_R)=>{self.alt_r=pressed;return TabKeyAction::Forward;},
             Some(S|PAGE_UP|PAGE_DOWN)=>{
                 let key=code.expect("matched Some");
                 let mask=match key {S=>1,PAGE_UP=>2,PAGE_DOWN=>4,_=>unreachable!()};
@@ -51,7 +60,11 @@ impl TabKeyHandler {
                     return TabKeyAction::Forward;
                 }
                 if self.held & mask!=0 {return TabKeyAction::Consume;}
-                if !(self.meta_l || self.meta_r) {return TabKeyAction::Forward;}
+                if !(self.meta_l || self.meta_r) ||
+                   self.ctrl_l || self.ctrl_r || self.alt_l || self.alt_r ||
+                   (key!=S && (self.shift_l || self.shift_r)) {
+                    return TabKeyAction::Forward;
+                }
                 self.held|=mask;
                 match key {
                     S=>if self.shift_l || self.shift_r {
@@ -84,6 +97,23 @@ mod tests{
         h.event(Some(LEFT_SHIFT),false);
         h.event(Some(LEFT_META),false);
         assert_eq!(h.event(Some(S),true),TabKeyAction::Forward);
+    }
+    #[test]
+    fn client_modifiers_do_not_get_stolen_by_tab_shortcuts(){
+        let mut h=TabKeyHandler::default();
+        h.event(Some(LEFT_META),true);
+        h.event(Some(CTRL_R),true);
+        assert_eq!(h.event(Some(S),true),TabKeyAction::Forward);
+        h.event(Some(S),false);
+        h.event(Some(CTRL_R),false);
+        h.event(Some(ALT_L),true);
+        assert_eq!(h.event(Some(S),true),TabKeyAction::Forward);
+        h.event(Some(S),false);
+        h.event(Some(ALT_L),false);
+        h.event(Some(LEFT_SHIFT),true);
+        assert_eq!(h.event(Some(PAGE_DOWN),true),TabKeyAction::Forward);
+        h.event(Some(PAGE_DOWN),false);
+        assert_eq!(h.event(Some(S),true),TabKeyAction::Attach);
     }
     #[test]
     fn super_page_keys_cycle_without_sticky_auto_repeat(){
