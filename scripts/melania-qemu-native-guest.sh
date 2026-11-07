@@ -1754,6 +1754,94 @@ rm -f "$alt_server_log" "$alt_client_log"
 report 'MELANIA_QEMU_REAL_USB_ALT_TAB_WAYLAND_KMS_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
+# Stage129: genuine QEMU USB Super+S/Shift+S/PageUp/PageDown reaches
+# native libinput -> Smithay XDG tabs -> owned wl_shm scene -> KMS flip.
+# A separate host QMP watcher checks the ACTUAL virtual CRTC pixels after
+# the two client windows were really mapped and each frame was acknowledged.
+# Do not run this scenario on the normal login session or use fake Wayland keys.
+tab_client=/mnt/melania-native/melania-two-continuous-client
+tab_server_log="$(mktemp -t melania-native-tabs-server-XXXXXX)"
+tab_client_log="$(mktemp -t melania-native-tabs-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_NATIVE_TAB_STACKS=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$tab_server_log" 2>&1 &
+tab_server_pid=$!
+tab_socket=''
+for attempt in $(seq 1 100); do
+  tab_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$tab_server_log" | head -n 1)"
+  [[ -n "$tab_socket" ]] && break
+  kill -0 "$tab_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$tab_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$tab_server_log"; then
+  cat "$tab_server_log"
+  kill -TERM "$tab_server_pid" 2>/dev/null || true
+  fatal 'real_tab_stack_Wayland_KMS_guest_start_failed'
+fi
+tail -n +1 -f -s 0.05 "$tab_server_log" > /dev/ttyS0 &
+tab_tail_server_pid=$!
+tail -n +1 -f -s 0.05 "$tab_client_log" > /dev/ttyS0 &
+tab_tail_client_pid=$!
+report 'MELANIA_QEMU_REAL_TAB_STACK_STAGE_STARTED=true'
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
+      MELANIA_QEMU_TAB_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$tab_socket" \
+      timeout --signal=TERM --kill-after=3s 150s \
+      "$tab_client" > "$tab_client_log" 2>&1; then
+  cat "$tab_client_log" "$tab_server_log"
+  kill -TERM "$tab_server_pid" 2>/dev/null || true
+  fatal 'real_Wayland_USB_tab_client_failed'
+fi
+grep -q '^MELANIA_QEMU_TAB_REAL_USB_RELEASE=F8$' "$tab_client_log" ||
+  fatal 'tab_stack_real_keyboard_release_missing'
+grep -q '^MELANIA_QEMU_TAB_TWO_WL_KEYBOARD_ENTERS_PASS=true$' "$tab_client_log" ||
+  fatal 'tab_stack_focus_B_then_A_not_received_by_real_clients'
+for receipt in \
+  'MELANIA_NATIVE_TAB_STACKING=true id=1' \
+  'MELANIA_NATIVE_TAB_ATTACHED=1:2' \
+  'MELANIA_NATIVE_TAB_ACTIVE=2' \
+  'MELANIA_NATIVE_TAB_ACTIVE=1' \
+  'MELANIA_NATIVE_TAB_STACKING=false id=1' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=13' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=14' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=15' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=16'; do
+  grep -qx "$receipt" "$tab_server_log" ||
+    fatal "tab_stack_actual_XDG_KMS_missing_$receipt"
+done
+kill -TERM "$tab_server_pid"
+if ! wait "$tab_server_pid"; then
+  cat "$tab_server_log" "$tab_client_log"
+  fatal 'tab_stack_original_KMS_CRTC_restore_failed'
+fi
+kill "$tab_tail_server_pid" "$tab_tail_client_pid" 2>/dev/null || true
+wait "$tab_tail_server_pid" "$tab_tail_client_pid" 2>/dev/null || true
+for receipt in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$receipt" "$tab_server_log" ||
+    fatal "tab_stack_kernel_resource_rollback_missing_$receipt"
+done
+rm -f "$tab_server_log" "$tab_client_log"
+report 'MELANIA_QEMU_NATIVE_REAL_TAB_STACK_USB_KMS_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 # Stage130: real physical QMP USB tablet motion over two distinct retained
 # XDG toplevels, no click and no alt-tab. Verify wl_keyboard Enter B then A,
 # visible client-owned pixels on the already-ACKed KMS CRTC12, and VT/DRM
@@ -1829,6 +1917,100 @@ for marker in \
 done
 rm -f "$hover_server_log" "$hover_client_log"
 report 'MELANIA_QEMU_HOVER_FOCUS_REAL_WAYLAND_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
+# Stage136: REAL USB Super+S/Shift+S/Y -> XDG group-size serials ->
+# two independent Wayland wl_shm commits -> one atomic CRTC repaint.
+# Every selected tab is checked through actual QMP framebuffer pixels.
+# The combined mode is opt-in only in this isolated disposable QEMU VT.
+combined_server_log="$(mktemp -t melania-combined-server-XXXXXX)"
+combined_client_log="$(mktemp -t melania-combined-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
+MELANIA_NATIVE_DYNAMIC_SCENE=YES_QEMU_VM \
+MELANIA_NATIVE_MANAGED_XDG=YES_QEMU_VM \
+MELANIA_NATIVE_TAB_STACKS=YES_QEMU_VM \
+MELANIA_NATIVE_AUTO_TILING=YES_QEMU_VM \
+MELANIA_NATIVE_COMBINED_TAB_TILING=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$combined_server_log" 2>&1 &
+combined_server_pid=$!
+combined_socket=''
+for attempt in $(seq 1 100); do
+  combined_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$combined_server_log" | head -n 1)"
+  [[ -n "$combined_socket" ]] && break
+  kill -0 "$combined_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$combined_socket" ]] ||
+   ! grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true' "$combined_server_log"; then
+  cat "$combined_server_log"
+  kill -TERM "$combined_server_pid" 2>/dev/null || true
+  fatal 'combined_tab_real_KMS_guest_start_failed'
+fi
+tail -n +1 -f -s 0.05 "$combined_server_log" > /dev/ttyS0 &
+combined_server_tail_pid=$!
+tail -n +1 -f -s 0.05 "$combined_client_log" > /dev/ttyS0 &
+combined_client_tail_pid=$!
+report 'MELANIA_QEMU_COMBINED_TAB_STAGE_STARTED=true'
+if ! MELANIA_QEMU_CONTINUOUS_TWO_CLIENTS=YES_QEMU_VM \
+      MELANIA_QEMU_COMBINED_TAB_CLIENT=YES_QEMU_VM \
+      WAYLAND_DISPLAY="$combined_socket" \
+      timeout --signal=TERM --kill-after=3s 175s \
+      "$tab_client" > "$combined_client_log" 2>&1; then
+  cat "$combined_client_log" "$combined_server_log"
+  kill -TERM "$combined_server_pid" 2>/dev/null || true
+  fatal 'combined_tab_real_Wayland_client_failed'
+fi
+for marker in \
+  'MELANIA_QEMU_COMBINED_TAB_TWO_REAL_XDG_ACKS=true' \
+  'MELANIA_QEMU_COMBINED_TAB_TWO_OWNED_SHM_CALLBACKS=true' \
+  'MELANIA_QEMU_COMBINED_TAB_TWO_REAL_KEYBOARD_ENTERS_PASS=true'; do
+  grep -qx "$marker" "$combined_client_log" ||
+    fatal "combined_tab_real_client_missing_$marker"
+done
+for marker in \
+  'MELANIA_NATIVE_TAB_STACKING=true id=1' \
+  'MELANIA_NATIVE_TAB_ATTACHED=1:2' \
+  'MELANIA_NATIVE_AUTO_TILING_ENABLED=true' \
+  'MELANIA_NATIVE_COMBINED_TILING_ARMED=1 clients=2' \
+  'MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_READY=1 clients=2' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=14' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=15' \
+  'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=16'; do
+  grep -qx "$marker" "$combined_server_log" ||
+    fatal "combined_tab_real_server_missing_$marker"
+done
+if grep -q '^MELANIA_NATIVE_COMBINED_TILING_TIMEOUT=' "$combined_server_log"; then
+  fatal 'combined_tab_xdg_or_pixel_transaction_timed_out'
+fi
+kill -TERM "$combined_server_pid"
+if ! wait "$combined_server_pid"; then
+  cat "$combined_server_log" "$combined_client_log"
+  fatal 'combined_tab_real_GPU_CRTC_restore_failed'
+fi
+kill "$combined_server_tail_pid" "$combined_client_tail_pid" 2>/dev/null || true
+wait "$combined_server_tail_pid" "$combined_client_tail_pid" 2>/dev/null || true
+for marker in \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -qx "$marker" "$combined_server_log" ||
+    fatal "combined_tab_kernel_rollback_missing_$marker"
+done
+rm -f "$combined_server_log" "$combined_client_log"
+report 'MELANIA_QEMU_NATIVE_COMBINED_TAB_TILING_REAL_CRTC_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 # Stage118: real XDG parent + child popup mapped on the disposable

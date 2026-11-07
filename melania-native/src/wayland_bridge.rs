@@ -45,7 +45,7 @@ use smithay::{
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
             ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus}},
         output::{OutputHandler,OutputManagerState},
-        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData},
+        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData,Configure},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer,
                            Anchor as WlrAnchor,LayerSurfaceCachedState}},
@@ -54,7 +54,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels,WindowBatchUpdate},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -68,6 +68,10 @@ use melania_native::native_frame_budget;
 use melania_native::auto_tiling::{AutoTiling,TileAxis,TileDirection};
 use melania_native::tile_swap_shortcuts::{TileSwapKeyHandler,SwapKeyAction};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
+use melania_native::tab_groups::TabGroups;
+use melania_native::tab_resize_transaction::TabResizeTransaction;
+use melania_native::tab_tiling_plan::plan_tab_stacks;
+use melania_native::tab_stack_shortcuts::{TabKeyHandler,TabKeyAction};
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
 use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
@@ -178,6 +182,16 @@ struct BridgeState {
     auto_tiling:AutoTiling,
     auto_tile_keys:AutoTileKeyHandler,
     tile_swap_keys:TileSwapKeyHandler,
+    // Guest opt-in: real owned wl_shm tab visibility; no host login impact.
+    tab_stack_mode:bool,
+    tab_groups:TabGroups,
+    tab_resize_transaction:TabResizeTransaction,
+    combined_tab_tiling_mode:bool,
+    tab_resize_started_at:Option<Instant>,
+    // Owned group images are staged until all XDG roles have ACKed and
+    // committed their new correctly sized client-owned buffers.
+    tab_resize_images:Vec<WindowBatchUpdate>,
+    tab_keys:TabKeyHandler,
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
@@ -198,8 +212,6 @@ struct BridgeState {
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
     last_xdg_press:Option<(WlSurface,Serial)>,
-    // Focus follows pointer is opt-in only inside an isolated QEMU VM.
-    // Never steal focus from active button grabs, popup menus or host sessions.
     focus_follows_pointer_mode:bool,
     pointer_buttons_held:BTreeSet<u32>,
     known_window_surfaces:WindowSlots<WlSurface>,
@@ -670,6 +682,12 @@ impl BridgeState {
     /// current KMS stream still presents only on subsequent client commits.
     fn apply_window_motion(&mut self,point:Point<f64,Logical>) {
         if !self.multi_window_mode {return;}
+        if self.window_interaction.active_key().is_some_and(|key|
+            self.known_window_surfaces.get(key)
+                .is_some_and(|surface|self.native_multi_tab_locked(surface))) {
+            self.window_interaction.cancel();
+            return;
+        }
         let Some((key,rect))=self.window_interaction.motion(point.x,point.y) else {
             return;
         };
@@ -1232,6 +1250,12 @@ impl BridgeState {
                 state!=WindowDisplayState::Normal &&
                 state!=WindowDisplayState::Minimized);
         }
+        if self.combined_tab_tiling_mode && self.tab_stack_mode &&
+           self.tab_groups.visible_ids().iter().any(|id|
+               self.tab_groups.group_tabs(*id).is_ok_and(|tabs|tabs.len()>1)) {
+            self.arm_native_tab_tiling(work);
+            return;
+        }
         let placements=match self.auto_tiling.plan(work,1280,800) {
             Ok(Some(placements))=>placements,
             Ok(None)=>return,
@@ -1315,11 +1339,371 @@ impl BridgeState {
         }
     }
 
+    /// Real XDG configure dispatch for an opt-in disposable QEMU VT.
+    /// Validate every registered role and retained client image before
+    /// sending any configure; no production login can enable this path.
+    fn arm_native_tab_tiling(&mut self,work:WindowRect) {
+        if !self.combined_tab_tiling_mode || !self.tab_stack_mode ||
+           !self.auto_tiling.enabled() || self.tab_resize_transaction.has_pending() ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let slots=match plan_tab_stacks(
+            &self.auto_tiling,&self.tab_groups,work,1280,800
+        ) {
+            Ok(Some(slots)) if !slots.is_empty()=>slots,
+            Ok(_)=>return,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_COMBINED_TILING_PLAN_REFUSED={error:?}");
+                return;
+            }
+        };
+        let mut roles=Vec::new();
+        for slot in &slots {
+            for &id in &slot.members {
+                // Don't arm for unmapped clients or incomplete earlier
+                // single-client resizes: old scene must remain intact.
+                if self.dynamic_scene.geometry(id).is_none(){return;}
+                let Some(surface)=self.known_window_surfaces.get(id).cloned()
+                    else{return;};
+                if !self.managed_windows.iter().any(|(r,m)|
+                    r==&surface && m.state()==WindowDisplayState::Normal) ||
+                   self.managed_pending_sizes.iter().any(|(r,_)|r==&surface) {
+                    return;
+                }
+                let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned()
+                    else{return;};
+                roles.push((id,top,slot.rect));
+            }
+        }
+        let epoch=match self.tab_resize_transaction.begin(&slots,1280,800) {
+            Ok(epoch)=>epoch,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_COMBINED_TILING_BEGIN_REFUSED={error:?}");
+                return;
+            }
+        };
+        self.tab_resize_images.clear();
+        self.tab_resize_started_at=Some(Instant::now());
+        for (id,top,rect) in roles {
+            self.cancel_surface_grab(top.wl_surface());
+            top.with_pending_state(|pending|{
+                pending.states.unset(xdg_toplevel::State::Resizing);
+                pending.size=Some((rect.width,rect.height).into());
+            });
+            // Smithay 0.7 sends this serial to the real Wayland client.
+            let serial:u32=top.send_configure().into();
+            if let Err(error)=self.tab_resize_transaction.sent_configure(epoch,id,serial) {
+                eprintln!("MELANIA_NATIVE_COMBINED_TILING_CONFIGURE_REFUSED={error:?}");
+                self.tab_resize_transaction.abort(epoch);
+                self.tab_resize_images.clear();
+                self.tab_resize_started_at=None;
+                return;
+            }
+            println!("MELANIA_NATIVE_COMBINED_TILING_XDG_SENT={id} serial={serial} size={}x{}",
+                     rect.width,rect.height);
+        }
+        println!("MELANIA_NATIVE_COMBINED_TILING_ARMED={epoch} clients={}",
+                 slots.iter().map(|slot|slot.members.len()).sum::<usize>());
+        let _=std::io::stdout().flush();
+    }
+
+    /// Stage a bounded, independently owned Wayland wl_shm image without
+    /// touching the visible scene. Only the final client commit may publish
+    /// the complete output-wide transaction with ONE damage generation.
+    /// The real Smithay ack_configure callback is the only ACK source.
+    fn stage_native_tab_resize_image(&mut self,id:u64,pixels:WindowPixels)->bool {
+        let Some(epoch)=self.tab_resize_transaction.epoch() else{return false;};
+        let width=pixels.width();
+        let height=pixels.height();
+        let ready=match self.tab_resize_transaction.owned_buffer_committed(
+            epoch,id,width,height
+        ) {
+            Ok(ready)=>ready,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_RECEIPT_REFUSED={error:?}");
+                self.tab_resize_transaction.abort(epoch);
+                self.tab_resize_images.clear();
+                self.tab_resize_started_at=None;
+                return false;
+            }
+        };
+        self.tab_resize_images.retain(|image|image.key!=id);
+        self.tab_resize_images.push(WindowBatchUpdate{
+            key:id,x:0,y:0,layer:SceneLayer::Normal,
+            visible:false,image:pixels
+        });
+        if !ready {
+            println!("MELANIA_NATIVE_TAB_RESIZE_IMAGE_STAGED={id} epoch={epoch}");
+            return false;
+        }
+        // All events are dispatched on the Smithay seat thread; no other
+        // client can interleave with this final owned-buffer callback.
+        let slots=match self.tab_resize_transaction.finish(epoch) {
+            Ok(slots)=>slots,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_FINISH_REFUSED={error:?}");
+                self.tab_resize_images.clear();
+                return false;
+            }
+        };
+        let mut updates=std::mem::take(&mut self.tab_resize_images);
+        let count=slots.iter().map(|slot|slot.members.len()).sum::<usize>();
+        if updates.len()!=count {
+            eprintln!("MELANIA_NATIVE_TAB_RESIZE_BATCH_INCOMPLETE=true");
+            return false;
+        }
+        for update in &mut updates {
+            let Some(slot)=slots.iter().find(|slot|slot.members.contains(&update.key))
+                else {
+                    eprintln!("MELANIA_NATIVE_TAB_RESIZE_MISSING_SLOT=true");
+                    return false;
+                };
+            if (update.image.width(),update.image.height())!=
+               (slot.rect.width as usize,slot.rect.height as usize) {
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_STALE_SIZE=true");
+                return false;
+            }
+            update.x=slot.rect.x;
+            update.y=slot.rect.y;
+            let minimized=self.known_window_surfaces.get(update.key)
+                .is_some_and(|role|self.managed_windows.iter().any(|(r,model)|
+                    r==role && model.state()==WindowDisplayState::Minimized));
+            update.visible=slot.active==update.key && !minimized;
+        }
+        // Fully validated atomic batch: neither a failed memory preflight
+        // nor a missing client can partially mutate the retained scene.
+        if let Err(error)=self.dynamic_scene.upsert_batch(updates) {
+            eprintln!("MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_REFUSED={error:?}");
+            return false;
+        }
+        for slot in &slots {
+            for &key in &slot.members {
+                let Some(surface)=self.known_window_surfaces.get(key).cloned()
+                    else{continue;};
+                if let Some((_,window))=self.managed_windows.iter_mut()
+                    .find(|(role,_)|role==&surface) {
+                    let _=window.set_tiled_geometry(slot.rect);
+                }
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+            }
+            self.reposition_native_popups_for_parent(slot.active);
+        }
+        self.tab_resize_started_at=None;
+        println!("MELANIA_NATIVE_TAB_RESIZE_ATOMIC_SCENE_READY={epoch} clients={count}");
+        let _=std::io::stdout().flush();
+        true
+    }
+
+    /// Until multi-tab configure/ACK can resize all group members as a
+    /// single transaction, reject individual move/snap/maximize/resize.
+    /// This avoids leaving other visible tabs at stale client dimensions.
+    fn native_multi_tab_locked(&self,surface:&WlSurface)->bool {
+        self.tab_stack_mode &&
+        self.known_window_surfaces.id_of(surface).is_some_and(|id|
+            self.tab_groups.group_tabs(id).is_ok_and(|tabs|tabs.len()>1))
+    }
+
+    /// This action is confined to a dedicated VM-owned VT and existing KMS
+    /// stream. The normal desktop session and labwc never read these keys.
+    fn native_tab_actions_allowed(&self)->bool {
+        self.tab_stack_mode && self.managed_xdg_mode && self.dynamic_window_mode &&
+        self.multi_window_mode && self.continuous_kms_mode &&
+        self.persistent_kms_mode &&
+        (!self.auto_tiling.enabled() || self.combined_tab_tiling_mode) &&
+        !self.tab_resize_transaction.has_pending() &&
+        self.lifecycle.seat_active() &&
+        !self.native_presentation_guard.permanently_revoked() &&
+        self.window_interaction.active_key().is_none() &&
+        self.grabbed_popup_roles.is_empty()
+    }
+
+    /// The retained image is authoritative: hidden tabs retain client-owned
+    /// pixels, but must not paint, capture the pointer, or receive keyboard
+    /// focus on a future wl_surface.commit. Minimized roles stay hidden.
+    fn sync_native_tab_visibility(&mut self) {
+        if !self.tab_stack_mode {return;}
+        let desired=self.managed_windows.iter().filter_map(|(surface,window)|{
+            let id=self.known_window_surfaces.id_of(surface)?;
+            let visible=window.state()!=WindowDisplayState::Minimized &&
+                self.tab_groups.visible(id).unwrap_or(true);
+            Some((id,surface.clone(),visible))
+        }).collect::<Vec<_>>();
+        let mut damaged=false;
+        for (id,surface,visible) in desired {
+            if self.dynamic_scene.geometry(id).is_none(){continue;}
+            if let Ok(changed)=self.dynamic_scene.set_visible(id,visible) {
+                damaged|=changed;
+            }
+            if !visible {
+                // A hidden tab must never leave an interactive popup or
+                // stale captured popup frame on top of another active tab.
+                damaged|=self.evict_native_popup_tree(&surface,true,true);
+            }
+        }
+        if damaged {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("native tab visibility KMS refused: {error}");
+                }
+            }
+        }
+    }
+
+    fn activate_native_tab(&mut self,id:u64) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(surface)=self.known_window_surfaces.get(id).cloned() else {return;};
+        if !self.managed_windows.iter().any(|(role,model)|
+            role==&surface && model.state()==WindowDisplayState::Normal) {return;}
+        if self.tab_groups.activate(id).is_err(){return;}
+        self.sync_native_tab_visibility();
+        if self.dynamic_scene.is_visible(id)!=Some(true){return;}
+        let previous=self.focused.clone();
+        if previous.as_ref()!=Some(&surface){
+            if let Some(old)=previous.as_ref().and_then(|role|
+                self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==role).cloned()) {
+                old.with_pending_state(|pending|{
+                    pending.states.unset(xdg_toplevel::State::Activated);
+                });
+                old.send_pending_configure();
+            }
+            if let Some(new)=self.xdg_shell.toplevel_surfaces().iter()
+                .find(|top|top.wl_surface()==&surface).cloned() {
+                new.with_pending_state(|pending|{
+                    pending.states.set(xdg_toplevel::State::Activated);
+                });
+                new.send_pending_configure();
+            }
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+            self.focused=Some(surface);
+        }
+        let target=self.pointer_target(self.pointer_position);
+        let pointer=self.seat.get_pointer().expect("pointer");
+        pointer.motion(self,target,&MotionEvent{
+            location:self.pointer_position,
+            serial:SERIAL_COUNTER.next_serial(),time:0,
+        });
+        pointer.frame(self);
+        println!("MELANIA_NATIVE_TAB_ACTIVE={id}");
+    }
+
+    /// Attach the focused, already-buffered client to the most recently
+    /// stacked/visible sibling. For this first QEMU integration, only equal
+    /// buffer sizes are accepted: no speculative resize/ACK or blank tab.
+    /// The source's original floating geometry is preserved on its model.
+    fn attach_focused_native_tab(&mut self) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(surface)=self.focused.clone() else {return;};
+        let Some(source)=self.known_window_surfaces.id_of(&surface) else {return;};
+        if self.dynamic_scene.is_visible(source)!=Some(true) ||
+           self.tab_groups.group_tabs(source).map_or(true,|tabs|tabs.len()!=1) ||
+           !self.managed_windows.iter().any(|(role,model)|
+               role==&surface && model.state()==WindowDisplayState::Normal &&
+               (!model.is_tiled() || self.combined_tab_tiling_mode)) {return;}
+        let Some((_,_,width,height))=self.dynamic_scene.geometry(source) else{return;};
+        if self.managed_pending_sizes.iter().any(|(role,_)|role==&surface){return;}
+        let target=self.dynamic_scene.focusable_normal_keys_top_first()
+            .into_iter().filter(|&id|id!=source).find(|&id|{
+                self.tab_groups.visible(id)==Ok(true) &&
+                self.dynamic_scene.geometry(id).is_some_and(|(_,_,w,h)|
+                    w==width && h==height) &&
+                self.known_window_surfaces.get(id).is_some_and(|role|
+                    self.managed_windows.iter().any(|(r,m)|
+                        r==role && m.state()==WindowDisplayState::Normal) &&
+                    !self.managed_pending_sizes.iter().any(|(r,_)|r==role)) &&
+                self.tab_groups.group_tabs(id).is_ok_and(|tabs|tabs.len()<8)
+            });
+        let Some(target)=target else {return;};
+        let Some((x,y,_,_))=self.dynamic_scene.geometry(target) else{return;};
+        let rect=WindowRect{x,y,width:width as i32,height:height as i32};
+        if !rect.valid_for(1280,800){return;}
+        if self.tab_groups.is_stacking(target)!=Ok(true) {
+            if self.tab_groups.toggle_stacking(target)!=Ok(true){return;}
+        }
+        if self.tab_groups.attach(source,target)!=Ok(true){return;}
+        if let Some((_,model))=self.managed_windows.iter_mut()
+            .find(|(role,_)|role==&surface){
+            let _=model.set_tiled_geometry(rect);
+        }
+        if let Err(error)=self.dynamic_scene.move_to(source,x,y) {
+            eprintln!("native tab retained move refused: {error:?}");
+            return;
+        }
+        self.sync_native_tab_visibility();
+        self.activate_native_tab(source);
+        if self.combined_tab_tiling_mode {self.reflow_auto_tiling();}
+        println!("MELANIA_NATIVE_TAB_ATTACHED={source}:{target}");
+    }
+
+    /// Super+S creates a stack or splits it. When splitting an existing
+    /// multi-tab stack, restore compositor-owned windows to their original
+    /// saved positions instead of accidentally leaving all tabs overlapped.
+    fn toggle_native_tab_stack(&mut self) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(id)=self.focused.as_ref().and_then(|role|
+            self.known_window_surfaces.id_of(role)) else{return;};
+        let Ok(tabs)=self.tab_groups.group_tabs(id) else{return;};
+        let former=tabs.to_vec();
+        let Ok(stacking)=self.tab_groups.toggle_stacking(id) else{return;};
+        if !stacking {
+            for key in former {
+                let Some(surface)=self.known_window_surfaces.get(key) else{continue;};
+                let rect=self.managed_windows.iter_mut()
+                    .find(|(role,_)|role==surface).and_then(|(_,model)|{
+                        model.clear_tiled_geometry().then(||model.geometry()).flatten()
+                    });
+                if let Some(rect)=rect {
+                    let _=self.dynamic_scene.move_to(key,rect.x,rect.y);
+                }
+            }
+            self.sync_native_tab_visibility();
+        }
+        println!("MELANIA_NATIVE_TAB_STACKING={stacking} id={id}");
+    }
+
+    /// A real Super+Shift+PageUp/Down moves the active stack tab by one
+    /// adjacent slot. No client visibility/focus changes, and no fabricated
+    /// KMS frame is necessary until tab-bar decorations are implemented.
+    fn reorder_native_tab(&mut self,backwards:bool) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(id)=self.focused.as_ref().and_then(|role|
+            self.known_window_surfaces.id_of(role)) else{return;};
+        if self.dynamic_scene.is_visible(id)!=Some(true){return;}
+        if let Ok(Some(index))=self.tab_groups.reorder_active(id,backwards) {
+            println!("MELANIA_NATIVE_TAB_REORDERED={id} index={index}");
+            let _=std::io::stdout().flush();
+        }
+    }
+
+    fn cycle_native_tab(&mut self,backwards:bool) {
+        if !self.native_tab_actions_allowed(){return;}
+        let Some(id)=self.focused.as_ref().and_then(|surface|
+            self.known_window_surfaces.id_of(surface)) else{return;};
+        if let Ok(Some(next))=self.tab_groups.cycle(id,backwards) {
+            self.activate_native_tab(next);
+        }
+    }
+
     /// Guest-only Ctrl+Super+T changes the actual XDG tiled geometry.
     /// Disabling tiling restores each client's preserved floating rectangle
     /// via configure, not by teleporting old retained pixels into a new KMS
     /// framebuffer. The client must commit a size-matching buffer.
     fn toggle_auto_tiling(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Tiling mode toggle");
+            return;
+        }
         if !self.managed_xdg_mode || !self.dynamic_window_mode ||
            !self.multi_window_mode || !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() ||
@@ -1365,6 +1749,13 @@ impl BridgeState {
     /// draw their new sizes. Keyboard focus remains with the originating
     /// surface; only post-commit wl_shm pixel buffers enter KMS.
     fn swap_tiled_focused(&mut self,direction:TileDirection) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Tile swap");
+            return;
+        }
         if !self.auto_tiling.enabled() || !self.managed_xdg_mode ||
            !self.dynamic_window_mode || !self.multi_window_mode ||
            !self.lifecycle.seat_active() ||
@@ -1395,6 +1786,13 @@ impl BridgeState {
     /// XDG bridge. A floating restore must ACK a new client buffer; it is
     /// not an immediate retained-frame relocation.
     fn toggle_floating_focused(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Floating exception");
+            return;
+        }
         if !self.auto_tiling.enabled() ||
            !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() ||
@@ -1438,6 +1836,13 @@ impl BridgeState {
     }
 
     fn rotate_auto_tiling(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Tiling orientation");
+            return;
+        }
         if !self.auto_tiling.enabled() ||
            !self.lifecycle.seat_active() ||
            self.native_presentation_guard.permanently_revoked() ||
@@ -1455,6 +1860,13 @@ impl BridgeState {
     /// maps, changes its exclusive zone, or disappears. Never synthesize a
     /// wl_shm buffer: wait for each client's real XDG configure/commit.
     fn refresh_managed_work_areas(&mut self) {
+        // An output-wide grouped XDG transaction owns the current geometry.
+        // Never mutate the tiler or issue independent configure while any
+        // member's real ACK/owned pixels are still missing.
+        if self.tab_resize_transaction.has_pending() {
+            eprintln!("MELANIA_NATIVE_TAB_TILING_MUTATION_DEFERRED=Layer reservation");
+            return;
+        }
         if !self.gtk_layer_mode || !self.managed_xdg_mode ||
            !self.dynamic_window_mode {return;}
         let Some(area)=self.mapped_normal_work_area() else {return;};
@@ -1497,6 +1909,7 @@ impl BridgeState {
             return;
         }
         let surface=top.wl_surface().clone();
+        if self.native_multi_tab_locked(&surface) {return;}
         let Some((_,window))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {
             top.send_configure();
@@ -1548,6 +1961,7 @@ impl BridgeState {
             return;
         }
         let surface=top.wl_surface().clone();
+        if self.native_multi_tab_locked(&surface) {return;}
         let Some((_,window))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {return;};
         let changed=match zone {
@@ -1588,6 +2002,7 @@ impl BridgeState {
             return;
         }
         let surface=top.wl_surface().clone();
+        if self.native_multi_tab_locked(&surface) {return;}
         let Some((_,window))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {
             top.send_configure();
@@ -1671,6 +2086,13 @@ impl BridgeState {
                 let minimized=model.state()==WindowDisplayState::Minimized;
                 if minimized {model.restore();}
                 let rect=model.geometry();
+                if self.tab_stack_mode {
+                    if self.dynamic_scene.geometry(id).is_none() {
+                        return respond_error("Finestra senza buffer Wayland valido");
+                    }
+                    let _=self.tab_groups.activate(id);
+                    self.sync_native_tab_visibility();
+                }
                 let mut changed=false;
                 if self.dynamic_scene.geometry(id).is_some(){
                     if minimized {
@@ -1877,6 +2299,7 @@ impl CompositorHandler for BridgeState {
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
             if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
+                let mut tab_resize_deferred=false;
                 // The importer owns the snapshot before the Smithay pool
                 // access callback returns. Fixed QEMU uses its original
                 // 360x224 checks; the separate dynamic VM path uses Stage51.
@@ -1911,6 +2334,24 @@ impl CompositorHandler for BridgeState {
                         eprintln!("MELANIA_NATIVE_XDG_POPUP_PARENT_REJECTED=true");
                         buffer.release();
                         return;
+                    }
+                    // Refuse invalid tab resize buffers *before* upsert.
+                    // Otherwise the current active tab could briefly paint
+                    // client pixels from a rejected/un-ACKed size.
+                    if self.managed_xdg_mode && popup_parent.is_none() {
+                        if let Some(epoch)=self.tab_resize_transaction.epoch() {
+                            let Some(id)=self.known_window_surfaces.id_of(surface) else {
+                                buffer.release();
+                                return;
+                            };
+                            if let Err(error)=self.tab_resize_transaction.can_accept_owned_buffer(
+                                epoch,id,pixels.width(),pixels.height()
+                            ) {
+                                eprintln!("MELANIA_NATIVE_TAB_RESIZE_PREIMPORT_REJECTED={error:?}");
+                                buffer.release();
+                                return;
+                            }
+                        }
                     }
                     // Refuse stale-size buffers during a managed role switch.
                     // A successful client ACK alone did not provide pixels.
@@ -1990,7 +2431,13 @@ impl CompositorHandler for BridgeState {
                     };
                     let width=pixels.width() as i32;
                     let height=pixels.height() as i32;
-                    if (if popup_parent.is_some() {
+                    let group_resize=self.managed_xdg_mode &&
+                        popup_parent.is_none() &&
+                        self.tab_resize_transaction.has_pending();
+                    if group_resize {
+                        // No per-client upsert or pixel publication.
+                        tab_resize_deferred=!self.stage_native_tab_resize_image(key,pixels);
+                    } else if (if popup_parent.is_some() {
                         self.dynamic_scene.upsert_in_layer(key,x,y,SceneLayer::Top,pixels)
                     } else {
                         self.dynamic_scene.upsert(key,x,y,pixels)
@@ -1999,15 +2446,22 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     }
-                    if self.managed_xdg_mode && popup_parent.is_none() {
+                    if self.managed_xdg_mode && popup_parent.is_none() && !group_resize {
                         // A valid buffer committed AFTER minimize may replace
                         // the retained image, but must never unhide the XDG
                         // role. This also handles minimize-before-first-buffer
                         // (new scene slots normally default to visible).
                         let minimized=self.managed_windows.iter().any(|(role,window)|
                             role==surface && window.state()==WindowDisplayState::Minimized);
-                        if minimized {
+                        // Hidden tabs retain owned pixels, but must never
+                        // regain keyboard/pointer targeting or CRTC scanout
+                        // when they independently commit a newer buffer.
+                        let tab_visible=!self.tab_stack_mode ||
+                            self.tab_groups.visible(key).unwrap_or(true);
+                        if minimized || !tab_visible {
                             let _=self.dynamic_scene.set_visible(key,false);
+                        } else if self.tab_stack_mode {
+                            let _=self.dynamic_scene.set_visible(key,true);
                         }
                         // Change the remembered normal geometry only after
                         // the owned client pixels actually entered the scene.
@@ -2015,6 +2469,8 @@ impl CompositorHandler for BridgeState {
                             .find(|(role,_)|role==surface) {
                             window.update_normal_geometry(WindowRect{x,y,width,height});
                         }
+                        // Group batches instead stage each image and only
+                        // update these models after atomic scene publication.
                         self.managed_pending_sizes.retain(|(role,_)|role!=surface);
                         self.managed_pending_resize.retain(|(role,_)|role!=surface);
                         println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
@@ -2056,6 +2512,9 @@ impl CompositorHandler for BridgeState {
                         return;
                     }
                 }
+                // Never submit an incomplete group to the KMS worker:
+                // retain its client's owned image until all tabs are ready.
+                if tab_resize_deferred {return;}
                 // Real mapped XDG clients must receive keyboard focus
                 // before libinput Super+arrows can target them. Stage120's
                 // QEMU client submitted and KMS-presented frame 1, but the
@@ -2315,6 +2774,9 @@ impl XdgShellHandler for BridgeState {
                         }
                         self.managed_windows.push((top.wl_surface().clone(),window));
                         let _=self.auto_tiling.register(key);
+                        if self.tab_stack_mode {
+                            let _=self.tab_groups.register(key);
+                        }
                     }
                 }
             }
@@ -2396,6 +2858,7 @@ impl XdgShellHandler for BridgeState {
             !window.is_tiled()) {
             return;
         }
+        if self.native_multi_tab_locked(surface){return;}
         let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
         let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
         let rect=WindowRect{x,y,width:width as i32,height:height as i32};
@@ -2421,9 +2884,11 @@ impl XdgShellHandler for BridgeState {
             return;
         }
         if !self.managed_windows.iter().any(|(role,window)|
-            role==surface && window.state()==WindowDisplayState::Normal) {
+            role==surface && window.state()==WindowDisplayState::Normal &&
+            !window.is_tiled()) {
             return;
         }
+        if self.native_multi_tab_locked(surface){return;}
         let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
         let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
         let rect=WindowRect{x,y,width:width as i32,height:height as i32};
@@ -2471,6 +2936,14 @@ impl XdgShellHandler for BridgeState {
                 self.dynamic_scene.set_visible(key,false)==Ok(true);
         }
         scene_changed|=self.evict_native_popup_tree(&surface,true,true);
+        if self.tab_stack_mode {
+            if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+                // Minimized tabs leave their stack without closing; the
+                // remaining active tab is again eligible for scene input.
+                let _=self.tab_groups.detach(key);
+            }
+            self.sync_native_tab_visibility();
+        }
         if scene_changed {
             self.note_scene_change();
             if self.continuous_kms_mode &&
@@ -2499,8 +2972,28 @@ impl XdgShellHandler for BridgeState {
         self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true");
     }
+    /// Smithay 0.7 reports the *real* XDG ack serial. The resize ledger
+    /// does not synthesize acknowledgements or treat a geometry request as
+    /// pixel evidence. Until the transactional layout arming path is added,
+    /// this callback is a no-op for ordinary native Wayland sessions.
+    fn ack_configure(&mut self,surface:WlSurface,configure:Configure) {
+        let Some(epoch)=self.tab_resize_transaction.epoch() else{return;};
+        let Configure::Toplevel(configure)=configure else{return;};
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else{return;};
+        let serial:u32=configure.serial.into();
+        if let Err(error)=self.tab_resize_transaction.ack_configure(epoch,id,serial) {
+            eprintln!("MELANIA_NATIVE_TAB_RESIZE_XDG_ACK_REFUSED={error:?}");
+        }
+    }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
+        if let Some(id)=self.known_window_surfaces.id_of(&surface) {
+            if self.tab_resize_transaction.abort_if_member_destroyed(id) {
+                self.tab_resize_images.clear();
+                self.tab_resize_started_at=None;
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_ABORTED_CLIENT_GONE={id}");
+            }
+        }
         if self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|pressed==&surface) {
             self.last_xdg_press=None;
         }
@@ -2516,8 +3009,13 @@ impl XdgShellHandler for BridgeState {
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         let parent_key=self.known_window_surfaces.remove(&surface);
+        let successor=if self.tab_stack_mode {
+            parent_key.and_then(|id|self.tab_groups.group_tabs(id).ok())
+                .and_then(|tabs|tabs.iter().copied().find(|id|Some(*id)!=parent_key))
+        } else {None};
         if let Some(id)=parent_key {
             self.auto_tiling.forget(id);
+            if self.tab_stack_mode {self.tab_groups.forget(id);}
             self.reflow_auto_tiling();
         }
         // A parent can be destroyed before it ever committed an accepted
@@ -2578,6 +3076,15 @@ impl XdgShellHandler for BridgeState {
                 serial:SERIAL_COUNTER.next_serial(),time:0,
             });
             pointer.frame(self);
+        }
+        if self.tab_stack_mode {
+            // Only after removing the destroyed client's retained pixels,
+            // restore the previously hidden surviving tab; never focus a
+            // resource owned by the destroyed wl_surface.
+            self.sync_native_tab_visibility();
+            if self.focused.is_none() {
+                if let Some(id)=successor {self.activate_native_tab(id);}
+            }
         }
     }
     fn grab(&mut self,popup:PopupSurface,seat:wl_seat::WlSeat,serial:Serial){
@@ -2771,6 +3278,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.snap_keys.reset();
             state.auto_tile_keys.reset();
             state.tile_swap_keys.reset();
+            state.tab_keys.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
         InputEvent::Keyboard {event} => {
@@ -2810,6 +3318,50 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // The model sees real libinput codes (XKB = evdev + 8) even
             // when the experimental GTK Super handler consumes Meta first.
             let code:u32=event.key_code().into();
+            // Only a dedicated QEMU VT with owned client pixels may
+            // intercept these combinations. Super+S is stack/unstack;
+            // Super+Shift+S joins the focused window to a visible sibling;
+            // Super+PageUp/Down selects a previously accepted tab buffer;
+            // adding Shift reorders the current tab, preserving its focus.
+            // COSMIC Super+Left/Right cycles a multi-tab group, but a
+            // singleton or unstacked window keeps the regular Snap binding.
+            let evdev=code.checked_sub(8);
+            let is_arrow=matches!(evdev,Some(105 | 106));
+            let focused_multitab=state.focused.as_ref().and_then(|role|
+                state.known_window_surfaces.id_of(role)).is_some_and(|id|
+                state.tab_groups.group_tabs(id).is_ok_and(|tabs|tabs.len()>1));
+            if state.tab_stack_mode && (!is_arrow || focused_multitab) {
+                match state.tab_keys.event(
+                    evdev,event.state()==KeyState::Pressed
+                ) {
+                    TabKeyAction::Forward=>{},
+                    TabKeyAction::Consume=>return,
+                    TabKeyAction::ToggleStack=>{
+                        state.toggle_native_tab_stack();
+                        return;
+                    },
+                    TabKeyAction::Attach=>{
+                        state.attach_focused_native_tab();
+                        return;
+                    },
+                    TabKeyAction::Next=>{
+                        state.cycle_native_tab(false);
+                        return;
+                    },
+                    TabKeyAction::Previous=>{
+                        state.cycle_native_tab(true);
+                        return;
+                    },
+                    TabKeyAction::MoveNext=>{
+                        state.reorder_native_tab(false);
+                        return;
+                    },
+                    TabKeyAction::MovePrevious=>{
+                        state.reorder_native_tab(true);
+                        return;
+                    },
+                }
+            }
             if state.auto_tiling.enabled() && state.managed_xdg_mode &&
                state.dynamic_window_mode && state.multi_window_mode &&
                std::env::var("MELANIA_NATIVE_AUTO_TILING")
@@ -2848,8 +3400,6 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                     AutoTileKeyAction::Consume=>return,
                     AutoTileKeyAction::Toggle=>{
                         state.toggle_auto_tiling();
-                        // Never reuse a pending swap request across a layout
-                        // enable/disable transition or libseat epoch.
                         state.tile_swap_keys.reset();
                         return;
                     },
@@ -3059,8 +3609,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
-            // Actual libinput motion changes keyboard focus only in the
-            // explicit guest-only policy; it never raises the client.
+            // Real libinput hover focus never submits an artificial KMS frame.
             state.maybe_focus_hovered_toplevel(point);
             state.delivered_motions+=1;
         }
@@ -3087,8 +3636,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
-            // Actual libinput motion changes keyboard focus only in the
-            // explicit guest-only policy; it never raises the client.
+            // Real libinput hover focus never submits an artificial KMS frame.
             state.maybe_focus_hovered_toplevel(point);
             state.delivered_motions+=1;
         }
@@ -3137,8 +3685,6 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
-            // Keep real button holds so a drag cannot cause hover-focus
-            // to cross clients, including a popup's suppressed click.
             match event.state() {
                 ButtonState::Pressed => {state.pointer_buttons_held.insert(event.button_code());},
                 ButtonState::Released => {state.pointer_buttons_held.remove(&event.button_code());},
@@ -3467,12 +4013,49 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_windows:Vec::new(),
         auto_tile_keys:AutoTileKeyHandler::default(),
         tile_swap_keys:TileSwapKeyHandler::default(),
+        tab_stack_mode:std::env::var("MELANIA_NATIVE_TAB_STACKS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_MANAGED_XDG")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_CONTINUOUS_KMS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_PERSISTENT_KMS")
+            .as_deref()==Ok("YES_DISPOSABLE_QEMU") &&
+            (std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                .as_deref()!=Ok("YES_QEMU_VM") ||
+             std::env::var("MELANIA_NATIVE_COMBINED_TAB_TILING")
+                .as_deref()==Ok("YES_QEMU_VM")),
+        tab_groups:TabGroups::default(),
+        tab_resize_transaction:TabResizeTransaction::default(),
+        combined_tab_tiling_mode:std::env::var("MELANIA_NATIVE_COMBINED_TAB_TILING")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TAB_STACKS").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_AUTO_TILING").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_MANAGED_XDG").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").as_deref()==Ok("YES_DISPOSABLE_QEMU"),
+        tab_resize_started_at:None,
+        tab_resize_images:Vec::new(),
+        tab_keys:TabKeyHandler::default(),
         auto_tiling:{
             let mut model=AutoTiling::default();
             // Explicit guest-only switch. This is not an automatic tiling
             // feature of production login and cannot affect the host DE.
             if std::env::var("MELANIA_NATIVE_AUTO_TILING")
                 .as_deref()==Ok("YES_QEMU_VM") &&
+               // For stacked groups start floating, then a REAL Super+Y
+               // opt-in arms the grouped XDG transaction after both roles
+               // have accepted their initial buffers.
+               std::env::var("MELANIA_NATIVE_COMBINED_TAB_TILING")
+                .as_deref()!=Ok("YES_QEMU_VM") &&
                std::env::var("MELANIA_NATIVE_MANAGED_XDG")
                 .as_deref()==Ok("YES_QEMU_VM") &&
                std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
@@ -3538,6 +4121,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                state.tab_resize_transaction.revoke();
+                state.tab_resize_images.clear();
+                state.tab_resize_started_at=None;
                 set_data_device_focus(&state.display_handle,&state.seat,None);
                 state.pointer_buttons_held.clear();
                 state.last_xdg_press=None;
@@ -3615,7 +4201,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
+            state.tab_resize_transaction.revoke();
+            state.tab_resize_images.clear();
+            state.tab_resize_started_at=None;
             set_data_device_focus(&state.display_handle,&state.seat,None);
+            state.pointer_buttons_held.clear();
             state.continuous_worker.take();
             state.continuous_inflight.take();
             state.continuous_presentation_token.take();
@@ -3630,7 +4220,6 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // discard every input capability minted by the old GPU/VT epoch,
             // including popup serials and the click-through suppression flag.
             // Reacquiring a DRM route must never resurrect those grabs.
-            state.pointer_buttons_held.clear();
             state.last_xdg_press=None;
             state.last_popup_press=None;
             state.suppressed_popup_button=None;
@@ -3924,6 +4513,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
+        // Fail closed if any grouped client withholds XDG ACK or pixels.
+        // The previously confirmed retained scene is not repositioned.
+        if state.tab_resize_started_at.is_some_and(|start|
+            start.elapsed()>=Duration::from_secs(12)) {
+            let pending=state.tab_resize_transaction.epoch();
+            state.tab_resize_transaction.revoke();
+            state.tab_resize_images.clear();
+            state.tab_resize_started_at=None;
+            eprintln!("MELANIA_NATIVE_COMBINED_TILING_TIMEOUT={pending:?}");
+        }
         // The QEMU native IPC socket cannot stall the Wayland/libinput
         // thread while a peer waits to send EOF or read a large LIST reply.
         if let Some((listener,_cleanup))=&control_listener {
