@@ -27,10 +27,12 @@ pub fn verify_kernel_scanout(
         .map_err(|error| format!("DRM get_crtc failed: {error}"))?;
     // A framebuffer handle alone is insufficient: the CRTC can be
     // deactivated or modeset while an old FB_ID remains attached.
-    let Some(initial_size) = current.mode().map(|mode| mode.size()) else {
+    let Some(initial_mode) = current.mode() else {
         return Ok(false);
     };
-    if initial_size.0 == 0 || initial_size.1 == 0 ||
+    let initial_size = initial_mode.size();
+    let initial_refresh = initial_mode.vrefresh();
+    if initial_size.0 == 0 || initial_size.1 == 0 || initial_refresh == 0 ||
        current.framebuffer() != Some(expected_fb) {
         return Ok(false);
     }
@@ -58,7 +60,8 @@ pub fn verify_kernel_scanout(
     let latest_crtc = card.get_crtc(crtc)
         .map_err(|error| format!("DRM second get_crtc failed: {error}"))?;
     if latest_crtc.framebuffer() != Some(expected_fb) ||
-       latest_crtc.mode().map(|mode| mode.size()) != Some(initial_size) {
+       latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh())) !=
+           Some((initial_size, initial_refresh)) {
         return Ok(false);
     }
     let latest_connector = card.get_connector(connector, false)
