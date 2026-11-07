@@ -36,3 +36,21 @@ An independent structural QEMU CI test enforces these boundaries.
 **Still blocked:** creation/arming of a multi-client resize batch,
 concealment of all unready images, and atomic commit/presentation of all
 resized group members. No production or combined-mode activation is enabled.
+
+## Stage133 retained-scene atomic batch
+
+`DynamicWindowScene::upsert_batch` now validates every owned image and
+client ID, scene membership count and the **aggregate** memory budget
+before any mutation. After validation it updates all positions, visibility
+and client pixels in one scene transaction with **one** generation bump and
+both old and new damage rectangles invalidated.
+
+Unit tests prove that inactive tabs never become temporarily visible,
+rejected duplicates/IDs cannot partially mutate the scene, and existing
+z-order is stable. **No KMS receipt is fabricated.**
+
+Next gate: connect the already-implemented XDG ACK/buffer transaction to
+this batch API, stage every owned client image while the group is pending,
+then publish only after the whole transaction is ready. Until that is
+completed, the live QEMU bridge still refuses simultaneous tab stacks and
+auto tiling.
