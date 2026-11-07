@@ -635,6 +635,12 @@ impl BridgeState {
     /// current KMS stream still presents only on subsequent client commits.
     fn apply_window_motion(&mut self,point:Point<f64,Logical>) {
         if !self.multi_window_mode {return;}
+        if self.window_interaction.active_key().is_some_and(|key|
+            self.known_window_surfaces.get(key)
+                .is_some_and(|surface|self.native_multi_tab_locked(surface))) {
+            self.window_interaction.cancel();
+            return;
+        }
         let Some((key,rect))=self.window_interaction.motion(point.x,point.y) else {
             return;
         };
@@ -1239,6 +1245,15 @@ impl BridgeState {
         }
     }
 
+    /// Until multi-tab configure/ACK can resize all group members as a
+    /// single transaction, reject individual move/snap/maximize/resize.
+    /// This avoids leaving other visible tabs at stale client dimensions.
+    fn native_multi_tab_locked(&self,surface:&WlSurface)->bool {
+        self.tab_stack_mode &&
+        self.known_window_surfaces.id_of(surface).is_some_and(|id|
+            self.tab_groups.group_tabs(id).is_ok_and(|tabs|tabs.len()>1))
+    }
+
     /// This action is confined to a dedicated VM-owned VT and existing KMS
     /// stream. The normal desktop session and labwc never read these keys.
     fn native_tab_actions_allowed(&self)->bool {
@@ -1558,6 +1573,7 @@ impl BridgeState {
             return;
         }
         let surface=top.wl_surface().clone();
+        if self.native_multi_tab_locked(&surface) {return;}
         let Some((_,window))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {
             top.send_configure();
@@ -2474,6 +2490,7 @@ impl XdgShellHandler for BridgeState {
             !window.is_tiled()) {
             return;
         }
+        if self.native_multi_tab_locked(surface){return;}
         let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
         let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
         let rect=WindowRect{x,y,width:width as i32,height:height as i32};
