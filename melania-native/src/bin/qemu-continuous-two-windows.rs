@@ -21,6 +21,10 @@ struct Client {
     output:Option<wl_output::WlOutput>,
     seat:Option<wl_seat::WlSeat>,
     alt_tab_probe:bool,
+    tab_probe:bool,
+    tab_focus_b:bool,
+    tab_focus_a:bool,
+    tab_guest_release:bool,
     first_surface:Option<wl_surface::WlSurface>,
     second_surface:Option<wl_surface::WlSurface>,
     saw_focus_b:bool,
@@ -59,17 +63,39 @@ impl Dispatch<wl_seat::WlSeat,()> for Client {
 impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
     fn event(s:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
-        if !s.alt_tab_probe || s.frame_done_count<12 {return;}
-        if let wl_keyboard::Event::Enter{surface,..}=event {
-            if s.second_surface.as_ref()==Some(&surface) && !s.saw_focus_b {
-                s.saw_focus_b=true;
-                println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=B");
+        if !(s.alt_tab_probe || s.tab_probe) || s.frame_done_count<12 {return;}
+        match event {
+            wl_keyboard::Event::Enter{surface,..}=>{
+                if s.tab_probe {
+                    if s.second_surface.as_ref()==Some(&surface) && !s.tab_focus_b {
+                        s.tab_focus_b=true;
+                        println!("MELANIA_QEMU_TAB_REAL_WL_KEYBOARD_ENTER=B");
+                        let _=std::io::stdout().flush();
+                    } else if s.first_surface.as_ref()==Some(&surface) && s.tab_focus_b {
+                        s.tab_focus_a=true;
+                        println!("MELANIA_QEMU_TAB_REAL_WL_KEYBOARD_ENTER=A");
+                        let _=std::io::stdout().flush();
+                    }
+                } else if s.second_surface.as_ref()==Some(&surface) && !s.saw_focus_b {
+                    s.saw_focus_b=true;
+                    println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=B");
+                    let _=std::io::stdout().flush();
+                } else if s.first_surface.as_ref()==Some(&surface) && s.saw_focus_b {
+                    s.saw_focus_a=true;
+                    println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A");
+                    let _=std::io::stdout().flush();
+                }
+            },
+            wl_keyboard::Event::Key{key,state,..}
+                if s.tab_probe && key==66 &&
+                   state==wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed) =>{
+                // Real physical USB F8 is the shutdown gate *after* QMP
+                // verified all four retained CRTC tab transitions.
+                s.tab_guest_release=true;
+                println!("MELANIA_QEMU_TAB_REAL_USB_RELEASE=F8");
                 let _=std::io::stdout().flush();
-            } else if s.first_surface.as_ref()==Some(&surface) && s.saw_focus_b {
-                s.saw_focus_a=true;
-                println!("MELANIA_QEMU_ALT_TAB_REAL_WL_KEYBOARD_ENTER=A");
-                let _=std::io::stdout().flush();
-            }
+            },
+            _=>{},
         }
     }
 }
@@ -207,6 +233,11 @@ fn main()->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM");
     state.alt_tab_probe=std::env::var("MELANIA_QEMU_ALT_TAB_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM");
+    state.tab_probe=std::env::var("MELANIA_QEMU_TAB_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if state.alt_tab_probe && state.tab_probe {
+        return Err("two QEMU keyboard acceptance modes cannot overlap".into());
+    }
     state.dynamic_xdg_resize=std::env::var("MELANIA_QEMU_XDG_RESIZE_CLIENT")
         .as_deref()==Ok("YES_QEMU_VM") || managed_role_pixels;
     queue.roundtrip(&mut state)?;
@@ -214,7 +245,7 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.output_mode_received {
         return Err("two-window continuous client did not see VM 1280x800 output".into());
     }
-    let _keyboard=if state.alt_tab_probe {
+    let _keyboard=if state.alt_tab_probe || state.tab_probe {
         Some(state.seat.as_ref().ok_or("real wl_seat required for Alt+Tab")?
             .get_keyboard(&qh,()))
     } else {None};
@@ -348,7 +379,9 @@ fn main()->Result<(),Box<dyn Error>> {
         // The same disposable VM runs Stage48 before Stage49. Use a distinct
         // source filename in the reopen scenario: create_new must not
         // overwrite earlier client-owned wl_shm fixtures.
-        let path=if state.alt_tab_probe {
+        let path=if state.tab_probe {
+            format!("/run/melania-native-qemu/tab-stack-client-{index}.bgra")
+        } else if state.alt_tab_probe {
             format!("/run/melania-native-qemu/alt-tab-client-{index}.bgra")
         } else if managed_role_pixels {
             // Stage81B runs after Stage48 in the SAME QEMU guest: create_new
@@ -398,6 +431,29 @@ fn main()->Result<(),Box<dyn Error>> {
         std::io::stdout().flush()?;
         buffer.destroy();
         pool.destroy();
+    }
+    // Dedicated tab-stack QEMU scenario keeps both *real* XDG clients
+    // mapped after 12 kernel-confirmed frames. It terminates only when a
+    // QMP-injected physical USB F8 arrives following real KMS screenshot
+    // acceptance. No compositor IPC or synthetic Wayland input is involved.
+    if state.tab_probe {
+        if managed_role_pixels || dynamic || state.alt_tab_probe {
+            return Err("tab QEMU test requires stable normal XDG client pixels".into());
+        }
+        println!("MELANIA_QEMU_TAB_TWO_WAYLAND_SURFACES_READY=true");
+        std::io::stdout().flush()?;
+        let deadline=Instant::now()+Duration::from_secs(90);
+        while !state.tab_guest_release {
+            if Instant::now()>=deadline {
+                return Err("QEMU USB tab input/screenshots/release timed out".into());
+            }
+            queue.roundtrip(&mut state)?;
+        }
+        if !state.tab_focus_b || !state.tab_focus_a {
+            return Err("real wl_keyboard focus B then A not delivered by native tab stacks".into());
+        }
+        println!("MELANIA_QEMU_TAB_TWO_WL_KEYBOARD_ENTERS_PASS=true");
+        std::io::stdout().flush()?;
     }
     // An independent Stage116 physical USB keyboard proves actual Smithay
     // wl_keyboard enter on B then A. The event itself comes only from QMP's
