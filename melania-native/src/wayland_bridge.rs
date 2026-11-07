@@ -1625,6 +1625,7 @@ impl BridgeState {
             return;
         }
         let surface=top.wl_surface().clone();
+        if self.native_multi_tab_locked(&surface) {return;}
         let Some((_,window))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {return;};
         let changed=match zone {
@@ -1665,6 +1666,7 @@ impl BridgeState {
             return;
         }
         let surface=top.wl_surface().clone();
+        if self.native_multi_tab_locked(&surface) {return;}
         let Some((_,window))=self.managed_windows.iter_mut()
             .find(|(role,_)|role==&surface) else {
             top.send_configure();
@@ -2516,9 +2518,11 @@ impl XdgShellHandler for BridgeState {
             return;
         }
         if !self.managed_windows.iter().any(|(role,window)|
-            role==surface && window.state()==WindowDisplayState::Normal) {
+            role==surface && window.state()==WindowDisplayState::Normal &&
+            !window.is_tiled()) {
             return;
         }
+        if self.native_multi_tab_locked(surface){return;}
         let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
         let Some((x,y,width,height))=self.dynamic_scene.geometry(key) else{return;};
         let rect=WindowRect{x,y,width:width as i32,height:height as i32};
