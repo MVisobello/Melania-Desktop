@@ -15,6 +15,7 @@ pub mod snap_layout;
 pub mod auto_tiling;
 pub mod tab_groups;
 pub mod tab_tiling_plan;
+pub mod tab_resize_transaction;
 pub mod tab_stack_shortcuts;
 pub mod auto_tiling_shortcuts;
 pub mod tile_swap_shortcuts;
