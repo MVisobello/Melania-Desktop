@@ -44,7 +44,7 @@ use smithay::{
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
             ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus}},
         output::{OutputHandler,OutputManagerState},
-        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData},
+        shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData,Configure},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer,
                            Anchor as WlrAnchor,LayerSurfaceCachedState}},
@@ -68,6 +68,7 @@ use melania_native::auto_tiling::{AutoTiling,TileAxis,TileDirection};
 use melania_native::tile_swap_shortcuts::{TileSwapKeyHandler,SwapKeyAction};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
 use melania_native::tab_groups::TabGroups;
+use melania_native::tab_resize_transaction::TabResizeTransaction;
 use melania_native::tab_stack_shortcuts::{TabKeyHandler,TabKeyAction};
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
@@ -181,6 +182,7 @@ struct BridgeState {
     // Guest opt-in: real owned wl_shm tab visibility; no host login impact.
     tab_stack_mode:bool,
     tab_groups:TabGroups,
+    tab_resize_transaction:TabResizeTransaction,
     tab_keys:TabKeyHandler,
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
@@ -2196,6 +2198,22 @@ impl CompositorHandler for BridgeState {
                             .find(|(role,_)|role==surface) {
                             window.update_normal_geometry(WindowRect{x,y,width,height});
                         }
+                        // This hook receives only already-imported, owned,
+                        // bounded wl_shm client pixels. With no active batch,
+                        // the default compositor behavior is unchanged.
+                        // A future group resize dispatcher must arm real
+                        // configure serials and keep incomplete members hidden.
+                        if let Some(epoch)=self.tab_resize_transaction.epoch() {
+                            match self.tab_resize_transaction.owned_buffer_committed(
+                                epoch,key,width as usize,height as usize
+                            ) {
+                                Ok(true)=>println!("MELANIA_NATIVE_TAB_RESIZE_BUFFERS_READY={epoch}"),
+                                Ok(false)=>{},
+                                Err(error)=>eprintln!(
+                                    "MELANIA_NATIVE_TAB_RESIZE_BUFFER_REFUSED={error:?}"
+                                ),
+                            }
+                        }
                         self.managed_pending_sizes.retain(|(role,_)|role!=surface);
                         self.managed_pending_resize.retain(|(role,_)|role!=surface);
                         println!("MELANIA_NATIVE_MANAGED_XDG_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
@@ -2694,8 +2712,26 @@ impl XdgShellHandler for BridgeState {
         self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true");
     }
+    /// Smithay 0.7 reports the *real* XDG ack serial. The resize ledger
+    /// does not synthesize acknowledgements or treat a geometry request as
+    /// pixel evidence. Until the transactional layout arming path is added,
+    /// this callback is a no-op for ordinary native Wayland sessions.
+    fn ack_configure(&mut self,surface:WlSurface,configure:Configure) {
+        let Some(epoch)=self.tab_resize_transaction.epoch() else{return;};
+        let Configure::Toplevel(configure)=configure else{return;};
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else{return;};
+        let serial:u32=configure.serial.into();
+        if let Err(error)=self.tab_resize_transaction.ack_configure(epoch,id,serial) {
+            eprintln!("MELANIA_NATIVE_TAB_RESIZE_XDG_ACK_REFUSED={error:?}");
+        }
+    }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
+        if let Some(id)=self.known_window_surfaces.id_of(&surface) {
+            if self.tab_resize_transaction.abort_if_member_destroyed(id) {
+                eprintln!("MELANIA_NATIVE_TAB_RESIZE_ABORTED_CLIENT_GONE={id}");
+            }
+        }
         if self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|pressed==&surface) {
             self.last_xdg_press=None;
         }
@@ -3723,6 +3759,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             std::env::var("MELANIA_NATIVE_AUTO_TILING")
             .as_deref()!=Ok("YES_QEMU_VM"),
         tab_groups:TabGroups::default(),
+        tab_resize_transaction:TabResizeTransaction::default(),
         tab_keys:TabKeyHandler::default(),
         auto_tiling:{
             let mut model=AutoTiling::default();
@@ -3789,6 +3826,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                state.tab_resize_transaction.revoke();
                 set_data_device_focus(&state.display_handle,&state.seat,None);
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
@@ -3865,6 +3903,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
+            state.tab_resize_transaction.revoke();
             set_data_device_focus(&state.display_handle,&state.seat,None);
             state.continuous_worker.take();
             state.continuous_inflight.take();

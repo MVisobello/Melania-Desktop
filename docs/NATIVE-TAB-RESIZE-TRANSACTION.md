@@ -22,3 +22,17 @@ with physical CRTC pixels. These tests are not a substitute for physical
 multi-monitor/VT acceptance.
 
 Keep `NATIVE_SESSION_READY=false`; preserve labwc fallback.
+
+## Smithay 0.7 event-wiring follow-up
+
+The QEMU Wayland bridge now owns a default-inactive transaction ledger.
+Smithay's real `XdgShellHandler::ack_configure` callback forwards the
+acknowledged `ToplevelConfigure.serial` (never a synthetic receipt).
+Only after an accepted bounded wl_shm image enters the scene can its size
+be forwarded as a commit receipt. Destroying any participating toplevel,
+VT/libseat pause or GPU/udev ownership revocation aborts the pending ledger.
+An independent structural QEMU CI test enforces these boundaries.
+
+**Still blocked:** creation/arming of a multi-client resize batch,
+concealment of all unready images, and atomic commit/presentation of all
+resized group members. No production or combined-mode activation is enabled.
