@@ -36,8 +36,8 @@ engineering acceptance matrix, not a release claim.
 | Floating window move/resize, maximize, minimize, focus | N; Q partial | Real XDG configuration and client ACK, unfocused protections | P0 |
 | Fullscreen and preservation across workspace/output moves | N partial; U | Multi-fullscreen, video/games and focus recovery | P1 |
 | Manual snapping to edges/corners | N; M native snap_layout.rs; Q partial | Drag/release on real native XDG scene and every output | P1 |
-| **Automatic tiling** independently per workspace | **M in auto_tiling.rs (this change); U** | Register real XDG windows; apply XDG configure; opt-in shortcut, resize, recovery | P1 |
-| Tiling orientation, gap spacing, exempt floating apps | **M in auto_tiling.rs; U** | Actual workspace settings + client minimum-size negotiated behavior | P1 |
+| **Automatic tiling** independently per workspace | **M + opt-in native QEMU XDG configure/size gate; hardware U** | End-to-end native Wayland client/KMS pixels, per-workspace/output, recovery | P1 |
+| Tiling orientation, gap spacing, exempt floating apps | **M + opt-in QEMU XDG, Super+Y/G/O; hardware U** | Interaction and true client buffer tests, persistence, resize and hardware | P1 |
 | Tiling tab/stack groups and reordering/swapping tiles | **M basic swap only; — tab groups** | Real tabbed clients, focus/stack and drag-drop tile swap | P1 |
 | Tiling resize/keyboard navigation/tree selection | — | Interactive resize/configure and shortcuts equivalent to COSMIC | P1 |
 | Workspace navigation, sending windows to workspace | N via melania-workspaces IPC; Q partial | Native workspace-scoped focus, drag and per-monitor association | P1 |
@@ -85,10 +85,12 @@ desktop animations** as planned work. Track these after verifying a shipped
 implementation; do not falsely mark planned work as already released COSMIC
 functionality.
 
-## First concrete implementation: bounded auto-tiling planner
+## Current implementation: Rust policy plus opt-in QEMU XDG integration
 
 The new melania-native/src/auto_tiling.rs introduces a **pure Rust, hardware-safe**
-automatic tiling model for **one workspace per instance**:
+automatic tiling model for **one workspace per instance**. The QEMU Wayland
+bridge additionally wires it to *real* XDG configure requests, pending
+size validation and client wl_shm commit ownership:
 
 - explicit enable/disable; horizontal/vertical starting orientation;
   configurable 0–32 logical-pixel gap;
@@ -97,22 +99,35 @@ automatic tiling model for **one workspace per instance**:
 - stable window order, swap, floating exclusion, minimize exclusion,
   teardown; all-or-nothing rejection when a layout cannot fit;
 - unit tests for 3-window odd dimensions, 5-window separation, exclusion,
-  swap, limits, invalid output bounds and atomic failure.
+  swap, limits, invalid output bounds and atomic failure;
+- retained floating geometry in ManagedWindow, restored via XDG configure;
+- reflow of managed windows after toplevel creation, minimize, maximize,
+  fullscreen, snap, destroy and GTK layer-shell work-area changes;
+- physical-keyboard policy (normalized libinput evdev codes) for COSMIC
+  **Super+Y** tiling on/off, **Super+G** floating exception,
+  **Super+O** layout orientation; legacy Ctrl+Super+T also toggles.
+  All are guarded by a guest-only opt-in and require valid libseat epoch.
 
-**Not done in this PR:** bind the planner to the live wayland_bridge and
-send real xdg_toplevel configuration; add interactive tree resize, stacked
-tabs, per-output workspace configuration or a tiling UI. This PR is one
-implementable step toward COSMIC-style auto-tiling, **not the completed feature**.
+**QEMU-only activation:** set MELANIA_NATIVE_AUTO_TILING=YES_QEMU_VM
+alongside the existing managed-XDG, dynamic-scene and two-windows guest
+switches (see melania-native/src/wayland_bridge.rs). All settings are ignored
+by normal host sessions. The geometry must still be validated against a
+**real client** via an isolated guest integration test, not only compilation.
+
+**Not done in this PR:** production multi-output or per-workspace instances,
+interactive tiling-tree split resize, stacked tabs, persistent UI settings,
+full-size DMA-BUF client import, native physical login. This PR is a
+**partial feature implementation**, not completed COSMIC parity.
 
 ### Acceptance sequence
 
 1. Prove the new Rust tests and all existing Linux/SFTP/QEMU CI on the
    **exact final PR head**; never merge red or queued CI.
-2. Bind a per-workspace layout model to **native** managed XDG windows
-   and update it on create, move, minimize, restore, destroy, hotplug and
-   panel exclusive-zone changes. Compute plans before applying changes.
-3. Apply placement through XDG configure and await matching ACK/buffer
-   commit; do not acknowledge GPU/KMS presentation speculatively.
+2. Expand the QEMU-only XDG bridge from one output/workspace to genuine
+   independent per-output/workspace state; honor mode/scale/hotplug.
+3. Add an isolated, **physical input → Wayland XDG configure → client ACK →
+   matching wl_shm pixels → verified KMS frame** test for tiling toggle,
+   floating restore and orientation. Reject unexpected/stale buffer sizes.
 4. Implement on/off shortcut, floating toggle, layout orientation, swap,
    interactive split resizing, stack tabs and settings persistence.
 5. Exercise multiple physical outputs and VT/suspend/restart scenarios;
