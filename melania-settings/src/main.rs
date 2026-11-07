@@ -94,7 +94,7 @@ fn page(title: &str) -> GtkBox {
 
 fn section(title: &str) -> Label { text(title, "settings-section-heading") }
 
-fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
+fn refresh_theme(window: &ApplicationWindow, root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
     // GTK process only: do not modify the user's host desktop globally.
     if let Some(settings) = gtk::Settings::default() {
         settings.set_property("gtk-enable-animations", prefs.animations && !prefs.reduce_motion);
@@ -102,16 +102,20 @@ fn refresh_theme(root: &GtkBox, header: &HeaderBar, prefs: &Preferences) {
         settings.set_property("gtk-icon-theme-name", melania_config::resolved_icon_theme(prefs));
     }
     for name in ["melania-theme-light", "melania-theme-dark", "melania-theme-aero"] {
+        window.remove_css_class(name);
         root.remove_css_class(name);
         header.remove_css_class(name);
     }
     let theme_class = format!("melania-theme-{}", prefs.appearance_theme());
+    window.add_css_class(&theme_class);
     root.add_css_class(&theme_class);
     header.add_css_class(&theme_class);
     if prefs.high_contrast {
+        window.add_css_class("high-contrast");
         root.add_css_class("high-contrast");
         header.add_css_class("high-contrast");
     } else {
+        window.remove_css_class("high-contrast");
         root.remove_css_class("high-contrast");
         header.remove_css_class("high-contrast");
     }
@@ -246,11 +250,12 @@ fn build_ui(
     stack.set_hexpand(true);
     stack.set_vexpand(true);
     let prefs = Rc::new(RefCell::new(melania_config::load().unwrap_or_default()));
-    refresh_theme(&root, &titlebar, &prefs.borrow());
+    refresh_theme(&window, &root, &titlebar, &prefs.borrow());
+    let themed_window = window.clone();
     let themed_root = root.clone();
     let themed_header = titlebar.clone();
     let apply_style: Rc<dyn Fn(&Preferences)> = Rc::new(move |p| {
-        refresh_theme(&themed_root, &themed_header, p);
+        refresh_theme(&themed_window, &themed_root, &themed_header, p);
     });
     let appearance = page("Aspetto");
     let appearance_row = GtkBox::new(Orientation::Horizontal, 14);
@@ -258,7 +263,7 @@ fn build_ui(
     let appearance_summary = GtkBox::new(Orientation::Vertical, 3);
     appearance_summary.set_hexpand(true);
     appearance_summary.append(&text("Stile di Melania", "settings-row-title"));
-    appearance_summary.append(&text("Light: chiaro e sobrio. Dark: scuro ispirato a GNOME. Aero: classico con riflessi.", "settings-row-description"));
+    appearance_summary.append(&text("Light: chiaro e sobrio. Dark: scuro ispirato a GNOME. Aero: vetro traslucido e riflessi (sfocatura GPU nativa in sviluppo).", "settings-row-description"));
     appearance_row.append(&appearance_summary);
     let appearance_picker = gtk::DropDown::from_strings(&["Light · Chiaro", "Dark · Scuro", "Aero · Classico"]);
     appearance_picker.add_css_class("settings-appearance-choice");
@@ -334,7 +339,7 @@ fn build_ui(
     icon_row.append(&icon_variants);
     appearance.append(&icon_row);
     appearance.append(&section("Effetti visivi"));
-    appearance.append(&text("Intensità effetto vetro", "settings-row-title"));
+    appearance.append(&text("Intensità vetro (trasparenza)", "settings-row-title"));
     let blur = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     blur.set_value(prefs.borrow().blur_strength as f64);
     blur.add_css_class("settings-intensity");
