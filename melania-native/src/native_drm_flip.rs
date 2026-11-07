@@ -109,6 +109,12 @@ impl DrmFlipEventRouter {
     }
 }
 
+/// A bounded poll interval is not the full deadline for a long wait.
+/// This helper also keeps the decision deterministic in regression tests.
+fn deadline_expired(now: Instant, deadline: Instant) -> bool {
+    now >= deadline
+}
+
 /// Wait on an owned DRM FD, routing *all* events in each read batch so a
 /// future multi-CRTC caller does not discard another display's vblank event.
 /// The router must be owned alongside the same DRM device+libseat epoch and
@@ -145,7 +151,7 @@ pub fn wait_for_kms_page_flip_routed(
             // caller's deadline may be much farther away. A completed
             // poll interval is not necessarily the end of the wait.
             // Recheck the monotonic deadline before revoking this epoch.
-            if Instant::now() < deadline {
+            if !deadline_expired(Instant::now(), deadline) {
                 continue;
             }
             router.revoke();
@@ -194,6 +200,16 @@ mod tests {
 
     fn crtc(id:u32)->crtc::Handle {
         control::from_u32(id).expect("nonzero typed DRM CRTC handle")
+    }
+
+    #[test]
+    fn bounded_poll_interval_does_not_end_longer_deadline() {
+        let start=Instant::now();
+        let deadline=start.checked_add(Duration::from_secs(60 * 60 * 24 * 30)).unwrap();
+        let first_interval=start.checked_add(Duration::from_millis(i32::MAX as u64)).unwrap();
+        assert!(!deadline_expired(first_interval, deadline));
+        assert!(deadline_expired(deadline, deadline));
+        assert!(deadline_expired(deadline + Duration::from_millis(1), deadline));
     }
 
     #[test]
