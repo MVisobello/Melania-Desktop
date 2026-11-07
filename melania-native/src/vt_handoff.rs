@@ -16,7 +16,11 @@ impl VtHandoff {
     pub fn phase(&self)->VtPhase {self.phase}
     pub fn epoch(&self)->u64 {self.epoch}
     fn transition(&mut self,expected:VtPhase,next:VtPhase)->Result<(),VtTransitionError> {
-        if self.epoch==u64::MAX {return Err(VtTransitionError::EpochExhausted);}
+        if self.epoch==u64::MAX {
+            // Even an already-active exhausted session must revoke permits.
+            self.phase=VtPhase::Detached;
+            return Err(VtTransitionError::EpochExhausted);
+        }
         if self.phase!=expected {return Err(VtTransitionError::InvalidTransition);}
         let Some(next_epoch)=self.epoch.checked_add(1) else {
             // Never recycle an old permit after a device/session epoch wraps.
@@ -86,6 +90,16 @@ mod tests {
         assert_eq!(v.phase(),VtPhase::Detached);
         assert_eq!(v.acquire(),Err(VtTransitionError::EpochExhausted));
         assert!(v.permit().is_none());
+    }
+    #[test]
+    fn exhausted_active_epoch_revokes_existing_permit_on_transition() {
+        let mut v=VtHandoff {phase:VtPhase::Active,epoch:u64::MAX};
+        let stale=v.permit().unwrap();
+        assert_eq!(v.begin_pause(),Err(VtTransitionError::EpochExhausted));
+        assert_eq!(v.phase(),VtPhase::Detached);
+        assert!(!v.valid(stale));
+        assert!(v.permit().is_none());
+        assert_eq!(v.acquire(),Err(VtTransitionError::EpochExhausted));
     }
     #[test]
     fn out_of_order_resume_and_abort_fail_closed() {
