@@ -87,9 +87,13 @@ struct Restore<'a> {
     connector:connector::Handle,
     submitted:bool,
     restored:bool,
+    ownership_lost:bool,
 }
 impl Restore<'_> {
     fn restore(&mut self)->Result<(),Box<dyn Error>> {
+        if self.ownership_lost {
+            return Err("DRM ownership lost: refusing stale CRTC rollback".into());
+        }
         if !self.submitted {
             self.restored=true;
             return Ok(());
@@ -240,7 +244,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     let fb1=card.add_framebuffer(&db1,24,32)?;
     let fb2=card.add_framebuffer(&db2,24,32)?;
     let mut rollback=Restore{
-        card:&card,original,connector:connected[0],submitted:false,restored:false
+        card:&card,original,connector:connected[0],submitted:false,restored:false,ownership_lost:false
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
@@ -331,10 +335,12 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 // EIO/ENODEV during VT loss is not a harmless read failure.
                 // Never reuse the event router after this acquisition fails.
                 event_router.revoke();
+                rollback.ownership_lost=true;
                 error
             })?;
             if !owned {
                 event_router.revoke();
+                rollback.ownership_lost=true;
                 return Err("persistent CPU DRM scanout ownership changed before submission".into());
             }
             let framebuffer=if index%2==0 {fb1} else {fb2};

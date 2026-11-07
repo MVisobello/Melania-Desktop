@@ -32,10 +32,14 @@ struct Restore<'a> {
     connector: connector::Handle,
     submitted: bool,
     restored: bool,
+    ownership_lost: bool,
 }
 
 impl Restore<'_> {
     fn restore(&mut self) -> Result<(),Box<dyn Error>> {
+        if self.ownership_lost {
+            return Err("DRM ownership lost: refusing stale CRTC rollback".into());
+        }
         if !self.submitted {
             self.restored=true;
             return Ok(());
@@ -154,7 +158,7 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
     event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
-        card:&card, original, connector, submitted:false, restored:false,
+        card:&card, original, connector, submitted:false, restored:false, ownership_lost:false,
     };
     let work=(||->Result<(),Box<dyn Error>> {
         for index in 0..total_frames {
@@ -186,10 +190,12 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 &card,crtc,connector,prior_fb,(w,h),
             ).map_err(|error| {
                 event_router.revoke();
+                rollback.ownership_lost=true;
                 error
             })?;
             if !owned {
                 event_router.revoke();
+                rollback.ownership_lost=true;
                 return Err("GPU stress scanout owner changed before KMS submission".into());
             }
             if index==0 {
@@ -322,7 +328,7 @@ pub fn qemu_wayland_gpu_scene_stream(
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
     event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
-        card:&card,original,connector,submitted:false,restored:false,
+        card:&card,original,connector,submitted:false,restored:false,ownership_lost:false,
     };
     println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_READY=true");
     println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",
@@ -404,10 +410,12 @@ pub fn qemu_wayland_gpu_scene_stream(
                 &card,crtc,connector,previous_fb,(W as u16,H as u16),
             ).map_err(|error| {
                 event_router.revoke();
+                rollback.ownership_lost=true;
                 error
             })?;
             if !owned {
                 event_router.revoke();
+                rollback.ownership_lost=true;
                 return Err("GPU Wayland lost DRM connector/CRTC/mode/FB ownership before submission".into());
             }
             let framebuffer=handles[index as usize%2];
