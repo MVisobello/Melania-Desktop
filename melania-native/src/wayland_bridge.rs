@@ -1732,6 +1732,13 @@ impl BridgeState {
                 let minimized=model.state()==WindowDisplayState::Minimized;
                 if minimized {model.restore();}
                 let rect=model.geometry();
+                if self.tab_stack_mode {
+                    if self.dynamic_scene.geometry(id).is_none() {
+                        return respond_error("Finestra senza buffer Wayland valido");
+                    }
+                    let _=self.tab_groups.activate(id);
+                    self.sync_native_tab_visibility();
+                }
                 let mut changed=false;
                 if self.dynamic_scene.geometry(id).is_some(){
                     if minimized {
@@ -2542,6 +2549,14 @@ impl XdgShellHandler for BridgeState {
                 self.dynamic_scene.set_visible(key,false)==Ok(true);
         }
         scene_changed|=self.evict_native_popup_tree(&surface,true,true);
+        if self.tab_stack_mode {
+            if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+                // Minimized tabs leave their stack without closing; the
+                // remaining active tab is again eligible for scene input.
+                let _=self.tab_groups.detach(key);
+            }
+            self.sync_native_tab_visibility();
+        }
         if scene_changed {
             self.note_scene_change();
             if self.continuous_kms_mode &&
@@ -2587,8 +2602,13 @@ impl XdgShellHandler for BridgeState {
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         let parent_key=self.known_window_surfaces.remove(&surface);
+        let successor=if self.tab_stack_mode {
+            parent_key.and_then(|id|self.tab_groups.group_tabs(id).ok())
+                .and_then(|tabs|tabs.iter().copied().find(|id|Some(*id)!=parent_key))
+        } else {None};
         if let Some(id)=parent_key {
             self.auto_tiling.forget(id);
+            if self.tab_stack_mode {self.tab_groups.forget(id);}
             self.reflow_auto_tiling();
         }
         // A parent can be destroyed before it ever committed an accepted
@@ -2649,6 +2669,15 @@ impl XdgShellHandler for BridgeState {
                 serial:SERIAL_COUNTER.next_serial(),time:0,
             });
             pointer.frame(self);
+        }
+        if self.tab_stack_mode {
+            // Only after removing the destroyed client's retained pixels,
+            // restore the previously hidden surviving tab; never focus a
+            // resource owned by the destroyed wl_surface.
+            self.sync_native_tab_visibility();
+            if self.focused.is_none() {
+                if let Some(id)=successor {self.activate_native_tab(id);}
+            }
         }
     }
     fn grab(&mut self,popup:PopupSurface,seat:wl_seat::WlSeat,serial:Serial){
