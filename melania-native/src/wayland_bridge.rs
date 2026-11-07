@@ -3023,10 +3023,17 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // intercept these combinations. Super+S is stack/unstack;
             // Super+Shift+S joins the focused window to a visible sibling;
             // Super+PageUp/Down selects a previously accepted tab buffer;
-            // adding Shift reorders the current tab, preserving its focus. 
-            if state.tab_stack_mode {
+            // adding Shift reorders the current tab, preserving its focus.
+            // COSMIC Super+Left/Right cycles a multi-tab group, but a
+            // singleton or unstacked window keeps the regular Snap binding.
+            let evdev=code.checked_sub(8);
+            let is_arrow=matches!(evdev,Some(105 | 106));
+            let focused_multitab=state.focused.as_ref().and_then(|role|
+                state.known_window_surfaces.id_of(role)).is_some_and(|id|
+                state.tab_groups.group_tabs(id).is_ok_and(|tabs|tabs.len()>1));
+            if state.tab_stack_mode && (!is_arrow || focused_multitab) {
                 match state.tab_keys.event(
-                    code.checked_sub(8),event.state()==KeyState::Pressed
+                    evdev,event.state()==KeyState::Pressed
                 ) {
                     TabKeyAction::Forward=>{},
                     TabKeyAction::Consume=>return,

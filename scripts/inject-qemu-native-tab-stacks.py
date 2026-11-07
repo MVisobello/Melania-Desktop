@@ -135,7 +135,7 @@ def main() -> int:
     chord(args.qmp,"pgup",shift=True)
     wait(args.serial,"MELANIA_NATIVE_TAB_REORDERED=1 index=0",deadline)
     print("MELANIA_QEMU_TAB_REAL_REORDER_LEFT=true",flush=True)
-    chord(args.qmp,"pgup")
+    chord(args.qmp,"left")
     wait(args.serial,"MELANIA_NATIVE_TAB_ACTIVE=2",deadline)
     wait(args.serial,"MELANIA_QEMU_TAB_REAL_WL_KEYBOARD_ENTER=B",deadline)
     wait(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=14",deadline)
@@ -144,7 +144,7 @@ def main() -> int:
         ("A original still hidden",200,200,BG),
     ))
     print("MELANIA_QEMU_TAB_REAL_CRTC_SELECTED_B=true",flush=True)
-    chord(args.qmp,"pgdn")
+    chord(args.qmp,"right")
     wait(args.serial,"MELANIA_NATIVE_TAB_ACTIVE=1",deadline)
     wait(args.serial,"MELANIA_QEMU_TAB_REAL_WL_KEYBOARD_ENTER=A",deadline)
     wait(args.serial,"MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=15",deadline)

@@ -14,6 +14,8 @@ const ALT_R:u32=100;
 const S:u32=31;
 const PAGE_UP:u32=104;
 const PAGE_DOWN:u32=109;
+const LEFT:u32=105;
+const RIGHT:u32=106;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum TabKeyAction {
@@ -25,7 +27,7 @@ pub struct TabKeyHandler {
     meta_l:bool,meta_r:bool,
     shift_l:bool,shift_r:bool,
     ctrl_l:bool,ctrl_r:bool,alt_l:bool,alt_r:bool,
-    held:u8,
+    held:u8, // S, PageUp, PageDown, Left, Right
 }
 impl TabKeyHandler {
     pub fn reset(&mut self){*self=Self::default();}
@@ -51,9 +53,12 @@ impl TabKeyHandler {
             Some(CTRL_R)=>{self.ctrl_r=pressed;return TabKeyAction::Forward;},
             Some(ALT_L)=>{self.alt_l=pressed;return TabKeyAction::Forward;},
             Some(ALT_R)=>{self.alt_r=pressed;return TabKeyAction::Forward;},
-            Some(S|PAGE_UP|PAGE_DOWN)=>{
+            Some(S|PAGE_UP|PAGE_DOWN|LEFT|RIGHT)=>{
                 let key=code.expect("matched Some");
-                let mask=match key {S=>1,PAGE_UP=>2,PAGE_DOWN=>4,_=>unreachable!()};
+                let mask=match key {
+                    S=>1,PAGE_UP=>2,PAGE_DOWN=>4,LEFT=>8,RIGHT=>16,
+                    _=>unreachable!()
+                };
                 if !pressed {
                     if self.held & mask!=0 {
                         self.held &= !mask;
@@ -63,7 +68,9 @@ impl TabKeyHandler {
                 }
                 if self.held & mask!=0 {return TabKeyAction::Consume;}
                 if !(self.meta_l || self.meta_r) ||
-                   self.ctrl_l || self.ctrl_r || self.alt_l || self.alt_r {
+                   self.ctrl_l || self.ctrl_r || self.alt_l || self.alt_r ||
+                   ((key==LEFT || key==RIGHT) &&
+                    (self.shift_l || self.shift_r)) {
                     return TabKeyAction::Forward;
                 }
                 self.held|=mask;
@@ -77,6 +84,8 @@ impl TabKeyHandler {
                     PAGE_DOWN=>if self.shift_l || self.shift_r {
                         TabKeyAction::MoveNext
                     } else {TabKeyAction::Next},
+                    LEFT=>TabKeyAction::Previous,
+                    RIGHT=>TabKeyAction::Next,
                     _=>unreachable!(),
                 }
             },
@@ -120,6 +129,27 @@ mod tests{
         h.event(Some(PAGE_DOWN),false);
         assert_eq!(h.event(Some(S),true),TabKeyAction::Attach);
     }
+    #[test]
+    fn cosmic_super_arrow_switches_tabs_only_without_other_modifiers(){
+        let mut h=TabKeyHandler::default();
+        assert_eq!(h.event(Some(LEFT),true),TabKeyAction::Forward);
+        h.event(Some(LEFT),false);
+        h.event(Some(LEFT_META),true);
+        assert_eq!(h.event(Some(LEFT),true),TabKeyAction::Previous);
+        assert_eq!(h.event(Some(LEFT),true),TabKeyAction::Consume);
+        assert_eq!(h.event(Some(LEFT),false),TabKeyAction::Consume);
+        assert_eq!(h.event(Some(RIGHT),true),TabKeyAction::Next);
+        assert_eq!(h.event(Some(RIGHT),false),TabKeyAction::Consume);
+        h.event(Some(LEFT_SHIFT),true);
+        assert_eq!(h.event(Some(LEFT),true),TabKeyAction::Forward);
+        h.event(Some(LEFT),false);
+        h.event(Some(LEFT_SHIFT),false);
+        h.event(Some(ALT_L),true);
+        assert_eq!(h.event(Some(RIGHT),true),TabKeyAction::Forward);
+        h.reset();
+        assert_eq!(h.event(Some(RIGHT),true),TabKeyAction::Forward);
+    }
+
     #[test]
     fn super_shift_page_reorders_only_on_real_chord_and_no_repeat(){
         let mut h=TabKeyHandler::default();
