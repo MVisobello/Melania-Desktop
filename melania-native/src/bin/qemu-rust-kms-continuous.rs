@@ -277,7 +277,18 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     let mut rollback=Restore{
         card:&card,original,connector:connected[0],original_encoder,submitted:false,restored:false,ownership_lost:false,owned_fbs:[fb1,fb2]
     };
-    let mut previous:Option<Vec<u8>>=None;
+    // Retain two complete CPU scene buffers for the entire KMS presenter
+    // lifetime, including persistent Wayland sessions. The transport reads
+    // into the inactive staging Vec; after a fully confirmed KMS frame and
+    // successful MLA1 ACK, swap the two allocations without copying them.
+    // Avoid a new 1280*800*4-byte heap allocation for every client commit.
+    let mut pixels=vec![0u8;W*H*4];
+    let mut previous_pixels=vec![0u8;W*H*4];
+    let mut have_previous_pixels=false;
+    // Kernel FB ownership still lives in the separately retained dumb buffers.
+    // The pointers prove these two heap allocations were retained, not swapped
+    // out for fresh allocations by the frame transport.
+    let staging_allocations=[pixels.as_ptr(),previous_pixels.as_ptr()];
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
     let mut event_router=melania_native::native_drm_flip::DrmFlipEventRouter::default();
     event_router.bind_active_crtcs(&[crtc_handle])?;
@@ -351,9 +362,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if !identity.accepted_after(previous_identity,persistent) {
                 return Err("QEMU continuous KMS received stale or reordered scene".into());
             }
-            let mut pixels=vec![0u8;W*H*4];
             stream.read_exact(&mut pixels)?;
-            if !persistent && previous.as_ref().is_some_and(|last|*last==pixels) {
+            if !persistent && have_previous_pixels && previous_pixels==pixels {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
             }
             // Verify the previously ACKed kernel scanout is STILL ours.
@@ -524,7 +534,6 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 println!("MELANIA_RUST_CONTINUOUS_REOPEN_FRAME_VISIBLE={}",index+1);
                 std::io::stdout().flush()?;
             }
-            previous=Some(pixels);
             previous_identity=Some(identity);
             // Short observable hold for QMP; no 5-second delay per frame.
             // QMP needs time to capture the actual framebuffer on the
@@ -550,6 +559,12 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             println!("MELANIA_RUST_CONTINUOUS_FRAME_ACKED={} generation={}",index+1,generation);
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("persistent DRM frame counter exhausted")?;
+            // Recycle the owned frame storage ONLY after the real kernel
+            // scanout checks and the successful MLA1 acknowledgement.
+            // The previous framebuffer stays available for finite-mode
+            // changed-pixel verification; idle persistent mode is allocation-free.
+            std::mem::swap(&mut pixels,&mut previous_pixels);
+            have_previous_pixels=true;
             if pointer_proof && index+1==12 {
                 // This exact scenario marker is delivered LIVE to the QMP
                 // host via the serial tail of the KMS log; the Smithay
@@ -564,10 +579,18 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     // Never return success until the original CRTC has been restored.
     let restored=rollback.restore();
     if attempt.is_ok() && restored.is_ok() {
+        // Two persistent CPU pixel allocations survived all frame commits.
+        // No hidden per-frame Vec growth may be reported as buffer reuse.
+        let current_allocations=[pixels.as_ptr(),previous_pixels.as_ptr()];
+        if !(current_allocations==staging_allocations ||
+             current_allocations==[staging_allocations[1],staging_allocations[0]]) {
+            return Err("KMS CPU frame staging allocations changed during session".into());
+        }
         card.destroy_framebuffer(fb2)?;
         card.destroy_framebuffer(fb1)?;
         card.destroy_dumb_buffer(db2)?;
         card.destroy_dumb_buffer(db1)?;
+        println!("MELANIA_RUST_KMS_CPU_STAGING_BUFFERS_REUSED=2");
         if persistent {
             println!("MELANIA_RUST_PERSISTENT_KMS_STOPPED_FRAMES={frames_seen}");
         } else {
