@@ -52,15 +52,32 @@ pub fn verify_libseat_drm_node(
         .map_err(|e|format!("Cannot clone libseat DRM FD for fstat: {e}"))?;
     let fd_metadata=File::from(cloned).metadata()
         .map_err(|e|format!("Cannot fstat the libseat DRM FD: {e}"))?;
-    let path_metadata=fs::metadata(path)
-        .map_err(|e|format!("Cannot stat discovered DRM node {}: {e}",path.display()))?;
+    // Inspect the path itself, not its target. A substituted cardN symlink
+    // could otherwise point at the same character device as the seat FD and
+    // silently pass an identity check that was intended for a udev-owned node.
+    let first_path_metadata=fs::symlink_metadata(path)
+        .map_err(|e|format!("Cannot lstat discovered DRM node {}: {e}",path.display()))?;
     let actual=char_identity(&fd_metadata,"Libseat DRM descriptor")?;
-    let discovered=char_identity(&path_metadata,"Discovered DRM device")?;
+    let discovered=char_identity(&first_path_metadata,"Discovered DRM device")?;
     if actual!=discovered {
         return Err("Libseat DRM descriptor differs from udev-discovered device node".into());
     }
     if previous.is_some_and(|baseline|baseline!=actual) {
         return Err("DRM character device was replaced across seat recovery".into());
+    }
+    // The first pathname read and fstat are separate syscalls. Revalidate
+    // the original descriptor AND the discovered pathname before accepting
+    // the seat resource. This catches replacement during the identity probe;
+    // it is not a substitute for GPU hotplug/VT epoch revocation.
+    let final_fd=File::from(seat_fd.try_clone()
+        .map_err(|e|format!("Cannot clone libseat DRM FD for final fstat: {e}"))?);
+    let final_fd_identity=char_identity(&final_fd.metadata()
+        .map_err(|e|format!("Cannot re-fstat libseat DRM FD: {e}"))?,"Final libseat DRM descriptor")?;
+    let final_path_identity=char_identity(&fs::symlink_metadata(path)
+        .map_err(|e|format!("Cannot re-lstat discovered DRM node {}: {e}",path.display()))?,
+        "Final discovered DRM device")?;
+    if final_fd_identity!=actual || final_path_identity!=actual {
+        return Err("DRM descriptor or device node changed during libseat identity verification".into());
     }
     Ok(actual)
 }
@@ -137,6 +154,30 @@ mod tests {
     fn an_unrelated_character_device_cannot_masquerade_as_a_kms_card() {
         let fd=File::open("/dev/zero").expect("Linux /dev/zero");
         assert!(verify_libseat_drm_primary_card(Path::new("/dev/zero"),&fd.into(),None).is_err());
+    }
+
+    #[test]
+    fn symlink_to_same_live_char_device_is_not_a_trusted_drm_node() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64=AtomicU64::new(0);
+        let path=std::env::temp_dir().join(format!(
+            "melania-drm-node-link-{}-{}",std::process::id(),
+            NEXT.fetch_add(1,Ordering::Relaxed)));
+        symlink("/dev/null",&path).expect("create temporary symlink");
+        let fd=null_fd();
+        let outcome=verify_libseat_drm_node(&path,&fd,None);
+        std::fs::remove_file(&path).expect("remove temporary symlink");
+        assert!(outcome.is_err(),"symlink to the exact seat FD must fail closed");
+    }
+
+    #[test]
+    fn repeated_identity_probe_does_not_reject_unchanged_real_device() {
+        let fd=null_fd();
+        let first=verify_libseat_drm_node(Path::new("/dev/null"),&fd,None).unwrap();
+        for _ in 0..16 {
+            assert_eq!(verify_libseat_drm_node(Path::new("/dev/null"),&fd,Some(first)),Ok(first));
+        }
     }
 
     #[test]
