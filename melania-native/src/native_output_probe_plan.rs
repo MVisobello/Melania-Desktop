@@ -52,6 +52,7 @@ mod tests {
         ActiveOutputRoute {
             connector:control::from_u32(conn).unwrap(),
             crtc:control::from_u32(scanout).unwrap(),
+            original_encoder:control::from_u32(conn+1000).unwrap(),
             original_fb:control::from_u32::<framebuffer::Handle>(fb).unwrap(),
             width:w,height:h,
         }
@@ -75,6 +76,16 @@ mod tests {
         let topo=NativeOutputTopology{active:(0..4).map(|i|
             output(i+1,i+11,i+21,3840,2160)
         ).collect()};
+        assert!(plan_active_output_probes(&topo).is_err());
+    }
+    #[test]
+    fn probe_preflight_rejects_two_distinct_crtcs_with_one_encoder() {
+        // The inventory planner must honor the exact kernel encoder
+        // ownership invariant even when connectors and CRTCs differ.
+        let a=output(11,21,31,1920,1080);
+        let mut b=output(12,22,32,1280,720);
+        b.original_encoder=a.original_encoder;
+        let topo=NativeOutputTopology{active:vec![a,b]};
         assert!(plan_active_output_probes(&topo).is_err());
     }
     #[test]
