@@ -52,21 +52,21 @@ preflight() {
     return 78
   }
   local diagnostic
-    for binary in melania-compositor melania-desktop-surface melania-panel \
-                  melania-files melania-settings melania-winctl \
-                  melania-notifyd melania-notifyctl; do
-      diagnostic="$(ldd "$BIN/$binary" 2>&1)" || {
-        echo "BLOCKED: incompatible binary or dynamic loader: $binary" >&2
-        echo "$diagnostic" >&2
-        return 78
-      }
-      if grep -Eq 'not found|version .* not found' <<<"$diagnostic"; then
-        echo "BLOCKED: missing/incompatible Linux runtime for $binary" >&2
-        grep -E 'not found|version .* not found' <<<"$diagnostic" >&2
-        echo 'On Linux Mint install the missing system runtime packages; never replace glibc.' >&2
-        return 78
-      fi
-    done
+  for binary in melania-compositor melania-desktop-surface melania-panel \
+                melania-files melania-settings melania-winctl \
+                melania-notifyd melania-notifyctl; do
+    diagnostic="$(ldd "$BIN/$binary" 2>&1)" || {
+      echo "BLOCKED: incompatible binary or dynamic loader: $binary" >&2
+      echo "$diagnostic" >&2
+      return 78
+    }
+    if grep -Eq 'not found|version .* not found' <<<"$diagnostic"; then
+      echo "BLOCKED: missing/incompatible Linux runtime for $binary" >&2
+      grep -E 'not found|version .* not found' <<<"$diagnostic" >&2
+      echo 'On Linux Mint install the missing system runtime packages; never replace glibc.' >&2
+      return 78
+    fi
+  done
   echo 'MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true'
   echo 'MELANIA_NATIVE_LOGIN_SESSION_READY=false'
 }
