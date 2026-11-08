@@ -70,6 +70,19 @@ pub fn validate_active_routes(routes:&[ActiveOutputRoute])->Result<(),String> {
     Ok(())
 }
 
+/// Resource handles are kernel object IDs. Ignore enumeration order but
+/// refuse duplicate IDs, which would otherwise hide a malformed inventory.
+fn same_resource_handles<T:Ord+Copy>(before:&[T],after:&[T])->bool {
+    if before.len()!=after.len() {return false;}
+    let mut left=before.to_vec();
+    let mut right=after.to_vec();
+    left.sort_unstable();
+    right.sort_unstable();
+    !left.windows(2).any(|w|w[0]==w[1]) &&
+    !right.windows(2).any(|w|w[0]==w[1]) &&
+    left==right
+}
+
 /// Obtain the real currently-active connector -> encoder -> CRTC -> FB_ID
 /// mapping, without guessing card0, a default connector, or a display mode.
 ///
@@ -136,6 +149,18 @@ pub fn inspect_active_outputs(
             return Err("DRM topology exceeds supported active output capacity".into());
         }
     }
+    // Re-read the kernel resource inventory after traversing ALL outputs.
+    // A hotplug or VT takeover can add/remove a connector or CRTC during
+    // the scan, even if the previously observed active routes still match.
+    // An incomplete resource snapshot must never authorize the first KMS
+    // frame. Compare handle SETS (not kernel enumeration order), and reject
+    // duplicate handles rather than silently deduplicating them.
+    let latest_resources=card.resource_handles()
+        .map_err(|e|format!("DRM final output resource list unavailable: {e}"))?;
+    if !same_resource_handles(resources.connectors(),latest_resources.connectors()) ||
+       !same_resource_handles(resources.crtcs(),latest_resources.crtcs()) {
+        return Err("DRM connector/CRTC inventory changed during topology snapshot".into());
+    }
     active.sort_by_key(|route|format!("{:?}",route.connector));
     validate_active_routes(&active)?;
     Ok(NativeOutputTopology{active})
@@ -167,6 +192,15 @@ mod tests {
             original_fb:control::from_u32(fb).unwrap(),
             width:w,height:hgt,
         }
+    }
+    #[test]
+    fn kernel_resource_inventory_rejects_hotplug_and_duplicate_ids() {
+        assert!(same_resource_handles(&[3u32,1,2],&[2,3,1]));
+        assert!(!same_resource_handles(&[1u32,2],&[1,2,3]));
+        assert!(!same_resource_handles(&[1u32,2,3],&[1,2,4]));
+        assert!(!same_resource_handles(&[1u32,1,2],&[1,2,2]));
+        assert!(!same_resource_handles(&[1u32,1],&[1,1]));
+        assert!(same_resource_handles::<u32>(&[],&[]));
     }
     #[test]
     fn two_independent_outputs_keep_unique_crtcs_and_borrowed_fbs() {
