@@ -44,21 +44,19 @@ class TestPanelProof(unittest.TestCase):
         self.assertIn("real-layer-panel-frame12.ppm",host)
 
     def test_qmp_layer_observer_covers_late_tcg_stage_without_weakening_pixels(self):
-        import re
         host=(Path(__file__).resolve().parents[1]/
               "scripts/run-qemu-melania-native.sh").read_text()
-        layer=re.search(
-            r'capture-qemu-real-layer-panel\\.py.*?--timeout (\\d+)',
-            host, re.S)
-        vm=re.search(
-            r'timeout --signal=TERM --kill-after=10s (\\d+)s\\s+\\\\\\s*qemu-system-x86_64',
-            host)
-        self.assertIsNotNone(layer)
-        self.assertIsNotNone(vm)
-        # A prior full QEMU run presented the kernel frame after the old
-        # 1350s observer had already exited. Preserve a finite host bound.
-        self.assertGreater(int(layer.group(1)),1350)
-        self.assertLess(int(layer.group(1)),int(vm.group(1)))
+        stage=host.split('capture-qemu-real-layer-panel.py',1)[1].split(
+            'layer_capture_pid=$!',1)[0]
+        layer_deadline=int(stage.split('--timeout ',1)[1].split()[0])
+        qemu_deadline=int(host.split(
+            'timeout --signal=TERM --kill-after=10s ',1
+        )[1].split('s',1)[0])
+        # The full TCG QEMU guest has presented frame 12 after the old
+        # 1350-second screenshot observer already timed out. Bound the
+        # observation before the guest's independent VM kill deadline.
+        self.assertGreater(layer_deadline,1350)
+        self.assertLess(layer_deadline,qemu_deadline)
         self.assertIn("MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true",host)
         self.assertIn("MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true",host)
         self.assertIn('test -s "$report/real-layer-panel-frame12.ppm"',host)
