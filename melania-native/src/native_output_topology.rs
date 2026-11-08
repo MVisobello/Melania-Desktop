@@ -103,6 +103,29 @@ pub fn inspect_active_outputs(
             .ok_or("DRM active output has no restorable original FB_ID")?;
         let mode=crtc_info.mode()
             .ok_or("DRM active output has no restorable original mode")?;
+        // The connector/encoder/CRTC reads above are separate kernel ioctls.
+        // A VT change or an external DRM master may alter the route during
+        // this single inventory pass even if its connector and FB_ID appear
+        // unchanged in the next full topology pass. Reject a mixed snapshot
+        // before ever describing it as a stable output.
+        let latest_crtc=card.get_crtc(crtc_handle)
+            .map_err(|e|format!("DRM second active CRTC read failed: {e}"))?;
+        if latest_crtc.framebuffer()!=Some(original_fb) ||
+           latest_crtc.mode()!=Some(mode) ||
+           latest_crtc.position()!=crtc_info.position() {
+            return Err("DRM active CRTC changed during topology snapshot".into());
+        }
+        let latest_connector=card.get_connector(connector_handle,false)
+            .map_err(|e|format!("DRM second active connector read failed: {e}"))?;
+        if latest_connector.state()!=connector::State::Connected ||
+           latest_connector.current_encoder()!=Some(encoder_handle) {
+            return Err("DRM connector or encoder changed during topology snapshot".into());
+        }
+        let latest_encoder=card.get_encoder(encoder_handle)
+            .map_err(|e|format!("DRM second attached encoder read failed: {e}"))?;
+        if latest_encoder.crtc()!=Some(crtc_handle) {
+            return Err("DRM attached encoder moved during topology snapshot".into());
+        }
         let (width,height)=mode.size();
         active.push(ActiveOutputRoute{
             connector:connector_handle,
