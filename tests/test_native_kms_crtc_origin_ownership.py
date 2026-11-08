@@ -28,6 +28,17 @@ class NativeKmsCrtcOriginOwnership(unittest.TestCase):
         presenter=SRC[start:end]
         self.assertIn("verify_presenter_ownership(card,crtc,connector,expected_fb,expected_size)",presenter)
         self.assertEqual(presenter.count("original_route(card,crtc,connector,original_encoder)"),2)
+        # The outer readback brackets BOTH original encoder checks, not
+        # only the internal two-pass owner verifier.
+        self.assertIn("let first_crtc=card.get_crtc(crtc)",presenter)
+        self.assertIn("let final_crtc=card.get_crtc(crtc)",presenter)
+        self.assertIn("final_crtc.mode()==Some(first_mode)",presenter)
+        self.assertIn("final_crtc.position()==first_crtc.position()",presenter)
+        self.assertIn("final_crtc.framebuffer()==Some(expected_fb)",presenter)
+        self.assertLess(presenter.index("let first_crtc=card.get_crtc(crtc)"),
+                        presenter.index("if !original_route(card,crtc,connector,original_encoder)?"))
+        self.assertGreater(presenter.index("let final_crtc=card.get_crtc(crtc)"),
+                           presenter.rindex("if !original_route(card,crtc,connector,original_encoder)?"))
 
 if __name__=="__main__":
     unittest.main()

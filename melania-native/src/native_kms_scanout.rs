@@ -62,8 +62,12 @@ pub fn verify_kernel_scanout(
     // Resolution and rounded refresh are not a unique DRM mode identity:
     // distinct pixel clocks / porch timings can share both. A modeset
     // during the split kernel reads must invalidate this frame ACK.
+    // A VT takeover or another DRM master can move this same FB_ID and
+    // exact mode to a different CRTC origin between non-atomic ioctls.
+    // Do not ACK a frame when its visible placement has changed.
     if latest_crtc.framebuffer() != Some(expected_fb) ||
-       latest_crtc.mode() != Some(initial_mode) {
+       latest_crtc.mode() != Some(initial_mode) ||
+       latest_crtc.position() != current.position() {
         return Ok(false);
     }
     let latest_connector = card.get_connector(connector, false)
@@ -74,7 +78,19 @@ pub fn verify_kernel_scanout(
     }
     let latest_encoder = card.get_encoder(encoder)
         .map_err(|error| format!("DRM second get_encoder failed: {error}"))?;
-    Ok(latest_encoder.crtc() == Some(crtc))
+    if latest_encoder.crtc() != Some(crtc) {
+        return Ok(false);
+    }
+    // The second CRTC read happened BEFORE the second connector/encoder
+    // reads. Those ioctls are not an atomic kernel snapshot: a foreign DRM
+    // master can modeset or reposition the same FB_ID during that gap.
+    // Recheck the CRTC *after* the final encoder read, before returning the
+    // verified frame ACK to Wayland. No extra frame or GPU allocation.
+    let final_crtc = card.get_crtc(crtc)
+        .map_err(|error| format!("DRM final get_crtc failed: {error}"))?;
+    Ok(final_crtc.framebuffer() == Some(expected_fb) &&
+       final_crtc.mode() == Some(initial_mode) &&
+       final_crtc.position() == current.position())
 }
 
 /// Validate the scanout owner *before* overwriting its next buffer or issuing
@@ -128,7 +144,19 @@ pub fn verify_presenter_ownership(
     }
     let latest_routing=card.get_encoder(encoder)
         .map_err(|error|format!("DRM owner second get_encoder failed: {error}"))?;
-    Ok(latest_routing.crtc()==Some(crtc))
+    if latest_routing.crtc()!=Some(crtc) {
+        return Ok(false);
+    }
+    // The second CRTC read predates the final connector/encoder ioctls.
+    // A VT takeover or external modeset can move the same framebuffer and
+    // complete mode during that gap. Refuse ownership if the final kernel
+    // CRTC snapshot differs; never write the next owned KMS buffer on a
+    // stale route. This is still not an atomic DRM master/lease guarantee.
+    let final_crtc=card.get_crtc(crtc)
+        .map_err(|error|format!("DRM owner final get_crtc failed: {error}"))?;
+    Ok(final_crtc.framebuffer()==Some(expected_fb) &&
+       final_crtc.mode()==Some(initial_mode) &&
+       final_crtc.position()==current.position())
 }
 
 
@@ -164,13 +192,34 @@ pub fn verify_original_encoder_frame(
             .map_err(|e|format!("DRM original-encoder frame encoder ioctl failed: {e}"))?;
         Ok(routed.crtc()==Some(crtc))
     }
+    // Begin a frame-spanning CRTC baseline BEFORE the first original-route
+    // read. The inner presenter check is not an atomic DRM transaction:
+    // a VT takeover can restore the same connector/encoder identity while
+    // changing CRTC mode or position after its internal second ioctl.
+    let first_crtc=card.get_crtc(crtc)
+        .map_err(|e|format!("DRM original-encoder frame baseline CRTC ioctl failed: {e}"))?;
+    let Some(first_mode)=first_crtc.mode() else {return Ok(false);};
+    if first_crtc.framebuffer()!=Some(expected_fb) ||
+       first_mode.size()!=expected_size {
+        return Ok(false);
+    }
     if !original_route(card,crtc,connector,original_encoder)? {
         return Ok(false);
     }
     if !verify_presenter_ownership(card,crtc,connector,expected_fb,expected_size)? {
         return Ok(false);
     }
-    original_route(card,crtc,connector,original_encoder)
+    if !original_route(card,crtc,connector,original_encoder)? {
+        return Ok(false);
+    }
+    // Close the outer bracket AFTER the final encoder read. Even with the
+    // exact original connector route still attached, never acknowledge a
+    // framebuffer that was moved or modeset between non-atomic read passes.
+    let final_crtc=card.get_crtc(crtc)
+        .map_err(|e|format!("DRM original-encoder frame final CRTC ioctl failed: {e}"))?;
+    Ok(final_crtc.framebuffer()==Some(expected_fb) &&
+       final_crtc.mode()==Some(first_mode) &&
+       final_crtc.position()==first_crtc.position())
 }
 
 /// Validate the original kernel connector -> encoder -> CRTC route before
@@ -247,6 +296,15 @@ pub fn owner_snapshot_matches(
 mod ownership_tests {
     use super::*;
     use drm::control;
+    #[test]
+    fn kernel_scanout_ack_requires_unchanged_crtc_position() {
+        // The production verifier uses two real drm-rs CRTC ioctl reads.
+        // A same-mode/same-FB position takeover must not acknowledge a frame.
+        let source=include_str!("native_kms_scanout.rs");
+        let verifier=source.split("pub fn verify_kernel_scanout(").nth(1).unwrap()
+            .split("pub fn verify_presenter_ownership(").next().unwrap();
+        assert!(verifier.contains("latest_crtc.position() != current.position()"));
+    }
     #[test]
     fn denies_hotplug_modeset_and_external_fb_takeover() {
         let fb=control::from_u32(31).unwrap();
