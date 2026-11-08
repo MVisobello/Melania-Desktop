@@ -16,7 +16,10 @@ class NativeClipboardFocus(unittest.TestCase):
                         BRIDGE.index("impl XdgShellHandler for BridgeState {")]
         self.assertIn("fn focus_changed(&mut self,seat:&Seat<Self>,focused:Option<&WlSurface>)",callback)
         self.assertIn("focused.and_then(|surface|surface.client())",callback)
-        self.assertIn("set_data_device_focus(&self.display_handle,seat,client);",callback)
+        self.assertIn("set_data_device_focus(&self.display_handle,seat,client.clone());",callback)
+        self.assertIn("set_primary_focus(&self.display_handle,seat,client);",callback)
+        self.assertLess(callback.index("set_data_device_focus("),
+                        callback.index("set_primary_focus("))
         self.assertNotIn("fn focus_changed(&mut self,_:&Seat<Self>,_:Option<&WlSurface>){}",callback)
         self.assertIn("DataDeviceState::new::<BridgeState>(&handle)",BRIDGE)
         self.assertIn("display_handle:handle.clone()",BRIDGE)
