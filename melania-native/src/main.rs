@@ -1,7 +1,7 @@
 //! Experimental *seat/hotplug event-loop* test — NOT a native compositor.
 //! Must be invoked explicitly in a dedicated TTY or VM; never from a login
 //! manager and never as an automatic fallback from the nested compositor.
-use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::FileTypeExt}, path::Path, time::Duration};
+use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::FileTypeExt}, path::{Path,PathBuf}, time::Duration};
 use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
@@ -253,6 +253,10 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     // Bind every acquisition epoch to the same real kernel character-node
     // identity, not merely the reusable /dev/dri/cardN pathname.
     let mut first_drm_node:Option<melania_native::native_drm_node_identity::DrmNodeIdentity>=None;
+    // Keep the original selected path while the seat-owned descriptor is
+    // alive. Re-check the kernel identity at every dispatch, not only during
+    // GBM/EGL allocation: udev notification may lag a device replacement.
+    let mut live_card_path:Option<PathBuf>=None;
     let mut observed_pause=false;
     let mut cycled=false;
     let mut physical_resume_verified=false;
@@ -265,10 +269,28 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             return Err(error.into());
         }
         let active=session.is_active() && state.seat_active();
+        if active {
+            if let Some((_,fd))=owned.as_ref() {
+                let path=live_card_path.as_deref()
+                    .ok_or("Seat-owned DRM descriptor has no recorded device path")?;
+                let baseline=first_drm_node
+                    .ok_or("Seat-owned DRM descriptor has no verified device identity")?;
+                if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                    path,fd,Some(baseline)
+                ) {
+                    // A live device substitution is not a normal VT pause.
+                    // Close the real libseat FD and refuse any new GPU work.
+                    let (_,fd)=owned.take().expect("live libseat DRM descriptor");
+                    session.close(fd)?;
+                    return Err(format!("Live DRM device identity invalidated: {error}").into());
+                }
+            }
+        }
         if let Some((epoch,_))=owned.as_ref() {
             if !active || epoch.verify(&state).is_err() {
                 let unexpected_change=active;
                 let (_,fd)=owned.take().expect("owned read-only descriptor");
+                live_card_path=None;
                 // On any libseat pause, release our actual DRM descriptor.
                 // If seatd refuses the release, abort without new opens.
                 session.close(fd)?;
@@ -377,6 +399,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             };
             opened=next_open;
             first_drm_node=Some(kernel_node);
+            live_card_path=Some(card_path.clone());
             println!("MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED={opened} rdev={}",kernel_node.rdev());
             // A physical proof can only complete after an actual libseat
             // PauseSession was observed and a NEW seat-owned FD has passed
@@ -400,6 +423,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // This tests a real FD close+new libseat open on VirtIO without
             // faking a PauseSession event or claiming a VT acceptance test.
             let (_,fd)=owned.take().expect("first DRM acquisition");
+            live_card_path=None;
             session.close(fd)?;
             cycled=true;
             println!("MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true");
