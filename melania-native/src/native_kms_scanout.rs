@@ -113,8 +113,11 @@ pub fn verify_presenter_ownership(
     // Re-read all three kernel objects before accepting the route.
     let latest_crtc=card.get_crtc(crtc)
         .map_err(|error|format!("DRM owner second get_crtc failed: {error}"))?;
+    // An external modeset can reposition the same FB_ID/mode on the CRTC
+    // without changing either handle. Such a split snapshot is not owned.
     if latest_crtc.framebuffer()!=Some(expected_fb) ||
-       latest_crtc.mode()!=Some(initial_mode) {
+       latest_crtc.mode()!=Some(initial_mode) ||
+       latest_crtc.position()!=current.position() {
         return Ok(false);
     }
     let latest_output=card.get_connector(connector,false)
