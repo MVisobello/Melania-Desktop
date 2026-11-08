@@ -1,7 +1,7 @@
 //! Experimental *seat/hotplug event-loop* test — NOT a native compositor.
 //! Must be invoked explicitly in a dedicated TTY or VM; never from a login
 //! manager and never as an automatic fallback from the nested compositor.
-use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::FileTypeExt}, path::Path, time::Duration};
+use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::FileTypeExt}, path::{Path,PathBuf}, time::Duration};
 use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
