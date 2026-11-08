@@ -3878,6 +3878,23 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     }
 }
 
+/// A VT pause or a GPU removal must revoke BOTH the compositor's logical
+/// focus and Smithay's actual wl_keyboard/wl_pointer focus. Clearing only
+/// clipboard offers or private pressed-key bookkeeping leaves the old client
+/// as the protocol focus owner after its libseat/DRM epoch has been revoked.
+/// This emits normal Wayland leave/focus-change messages, not synthetic input.
+fn revoke_wayland_focus_for_lost_seat(state:&mut BridgeState) {
+    let keyboard=state.seat.get_keyboard().expect("keyboard");
+    keyboard.set_focus(state,None,SERIAL_COUNTER.next_serial());
+    state.focused=None;
+    let location=state.pointer_position;
+    let pointer=state.seat.get_pointer().expect("pointer");
+    pointer.motion(state,None,&MotionEvent{
+        location,serial:SERIAL_COUNTER.next_serial(),time:0,
+    });
+    pointer.frame(state);
+}
+
 /// Keep the original libseat-owned descriptor until the DRM worker exits.
 /// The seat's close() callback (not a bare close(2)) retires its device ID.
 struct OwnedSeatCard {
@@ -4132,6 +4149,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                // Revoke GPU/input authorization BEFORE sending any focus
+                // changes; an ActivateSession notification cannot rearm it.
+                state.native_presentation_guard.revoke();
+                revoke_wayland_focus_for_lost_seat(state);
                 state.tab_resize_transaction.revoke();
                 state.tab_resize_images.clear();
                 state.tab_resize_started_at=None;
@@ -4152,7 +4173,6 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.tile_swap_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
-                state.native_presentation_guard.revoke();
                 // A revoked callback is not enough: a pending transport job
                 // could still ask the KMS presenter for a new page flip.
                 // Interrupt the socket and join its worker BEFORE returning
@@ -4166,6 +4186,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 context.suspend();
             },
             SessionEvent::ActivateSession=>{
+                // This QEMU bridge has NO complete DRM/GBM/VT re-acquisition.
+                // libseat reactivation alone cannot restore keyboard focus,
+                // thaw libinput, or re-enable rendering after a revoked KMS
+                // epoch. Keep the whole session inactive until safe teardown.
+                if state.native_presentation_guard.permanently_revoked() {
+                    context.suspend();
+                    state.lifecycle.on_session(SessionEvent::PauseSession);
+                    state.render_scheduler.set_seat_active(false);
+                    state.continuous_redraw.set_seat_active(false);
+                    state.continuous_pending=None;
+                    return;
+                }
                 if context.resume().is_err() {
                     state.native_presentation_guard.revoke();
                     // If libinput cannot resume, never re-use a socket or
@@ -4214,6 +4246,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
+            revoke_wayland_focus_for_lost_seat(state);
             state.tab_resize_transaction.revoke();
             state.tab_resize_images.clear();
             state.tab_resize_started_at=None;
