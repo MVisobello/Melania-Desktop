@@ -210,7 +210,7 @@ class PortablePreviewBundle(unittest.TestCase):
                 self.assertIsNotNone(executable)
                 (fake_path / name).symlink_to(executable)
             dbus = fake_path / "dbus-run-session"
-            dbus.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+            dbus.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             dbus.chmod(0o755)
             bash = shutil.which("bash")
             self.assertIsNotNone(bash)
@@ -240,11 +240,11 @@ class PortablePreviewBundle(unittest.TestCase):
                 self.assertIsNotNone(executable)
                 (fake_path / name).symlink_to(executable)
             dbus = fake_path / "dbus-run-session"
-            dbus.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+            dbus.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             dbus.chmod(0o755)
             ldd = fake_path / "ldd"
             ldd.write_text(
-                "#!/bin/sh\\nprintf 'libgtk4-layer-shell.so.0 => not found\\\\n'\\n",
+                "#!/bin/sh\nprintf 'libgtk4-layer-shell.so.0 => not found\\\n'\n",
                 encoding="utf-8"
             )
             ldd.chmod(0o755)
