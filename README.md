@@ -72,6 +72,20 @@ La prova annidata può essere avviata da un Linux grafico esistente:
 bash scripts/melania-session --nested
 ```
 
+Su VirtualBox, se il compositore mostra solo lo sfondo e il log riporta errori
+Mesa/EGL/Zink/DRI durante l'avvio dei client GTK, provare l'alternativa
+esplicitamente software:
+
+```sh
+bash scripts/melania-session --nested-software
+```
+
+Questa modalita imposta `GSK_RENDERER=cairo` per i componenti GTK e
+`LIBGL_ALWAYS_SOFTWARE=1` per il rendering Mesa; **non** tenta DRM/KMS o
+l'installazione di una sessione di login. Non e una conferma che il problema
+riguardi la GPU: se il pannello resta invisibile, conservare il log del processo
+per la diagnosi.
+
 Per un avvio più rapido si aprono soltanto desktop e barra; Melania Files e
 Impostazioni rimangono disponibili tramite Start. Per la modalità dimostrativa
 che apre anche entrambe le applicazioni (utile per screenshot e test):
