@@ -157,7 +157,11 @@ impl NativeResourceRecovery {
 
     /// Revoke pending KMS ACKs **before** suspending libinput or releasing DRM.
     pub fn pause(&mut self) -> Result<(), RecoveryError> {
-        if self.phase == RecoveryPhase::Failed {
+        // A cold policy has never acquired libseat/DRM and must not be
+        // promoted into a restorable state by a stray pause notification.
+        // A failed session is permanently poisoned. Repeated pause while
+        // already suspended is permitted and invalidates old frame epochs.
+        if matches!(self.phase, RecoveryPhase::Cold | RecoveryPhase::Failed) {
             return Err(RecoveryError::InvalidPhase);
         }
         self.invalidate()?;
@@ -333,6 +337,41 @@ mod tests {
             state.confirm(epoch, ResourceMilestone::VerifiedRollback),
             Err(RecoveryError::PrerequisiteMissing)
         );
+    }
+
+    #[test]
+    fn cold_pause_cannot_fabricate_a_restorable_session() {
+        let mut state=NativeResourceRecovery::default();
+        assert_eq!(state.pause(),Err(RecoveryError::InvalidPhase));
+        assert_eq!(state.phase(),RecoveryPhase::Cold);
+        assert_eq!(state.epoch(),0);
+        assert_eq!(state.begin_restore(),Err(RecoveryError::InvalidPhase));
+        let epoch=state.begin_acquire().unwrap();
+        assert_eq!(state.phase(),RecoveryPhase::Acquiring);
+        assert_eq!(state.confirm(epoch,ResourceMilestone::ActiveSeat),Ok(()));
+        assert_eq!(state.activate(epoch),Err(RecoveryError::IncompleteResources));
+    }
+
+    #[test]
+    fn fail_closed_if_epoch_counter_exhausted() {
+        let mut state=NativeResourceRecovery::default();
+        state.epoch=u64::MAX;
+        assert_eq!(state.begin_acquire(),Err(RecoveryError::CounterExhausted));
+        assert_eq!(state.phase(),RecoveryPhase::Failed);
+        assert_eq!(state.begin_restore(),Err(RecoveryError::InvalidPhase));
+        assert_eq!(state.next_frame(),None);
+    }
+
+    #[test]
+    fn fail_closed_if_frame_sequence_counter_exhausted() {
+        let mut state=NativeResourceRecovery::default();
+        let epoch=state.begin_acquire().unwrap();
+        prove_all(&mut state,epoch);
+        state.sequence=u64::MAX;
+        assert_eq!(state.next_frame(),None);
+        assert_eq!(state.phase(),RecoveryPhase::Failed);
+        assert_eq!(state.pending(),None);
+        assert_eq!(state.begin_restore(),Err(RecoveryError::InvalidPhase));
     }
 
     #[test]
