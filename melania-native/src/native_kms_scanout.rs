@@ -144,7 +144,19 @@ pub fn verify_presenter_ownership(
     }
     let latest_routing=card.get_encoder(encoder)
         .map_err(|error|format!("DRM owner second get_encoder failed: {error}"))?;
-    Ok(latest_routing.crtc()==Some(crtc))
+    if latest_routing.crtc()!=Some(crtc) {
+        return Ok(false);
+    }
+    // The second CRTC read predates the final connector/encoder ioctls.
+    // A VT takeover or external modeset can move the same framebuffer and
+    // complete mode during that gap. Refuse ownership if the final kernel
+    // CRTC snapshot differs; never write the next owned KMS buffer on a
+    // stale route. This is still not an atomic DRM master/lease guarantee.
+    let final_crtc=card.get_crtc(crtc)
+        .map_err(|error|format!("DRM owner final get_crtc failed: {error}"))?;
+    Ok(final_crtc.framebuffer()==Some(expected_fb) &&
+       final_crtc.mode()==Some(initial_mode) &&
+       final_crtc.position()==current.position())
 }
 
 
