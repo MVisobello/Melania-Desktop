@@ -13,7 +13,12 @@ impl OutputScale120 {
     }
     pub fn numerator(self)->u32 {self.0}
     pub fn physical_to_logical(self,value:f64)->Option<f64> {
-        value.is_finite().then_some(value*120.0/f64::from(self.0))
+        // Scale is always >= 1x. Divide by the scale rather than first
+        // multiplying by 120: finite large coordinates must not overflow
+        // an intermediate f64 and masquerade as an infinite pointer.
+        if !value.is_finite() {return None;}
+        let logical=value/(f64::from(self.0)/120.0);
+        logical.is_finite().then_some(logical)
     }
     pub fn logical_to_physical(self,value:f64)->Result<i32,ScaleError> {
         if !value.is_finite() {return Err(ScaleError::InvalidCoordinate);}
@@ -40,6 +45,16 @@ mod tests{
         assert_eq!(one_half.logical_to_physical(200.0),Ok(300));
         assert_eq!(one_half.physical_to_logical(300.0),Some(200.0));
         assert_eq!(one_half.physical_extent(3),Some(5));
+    }
+    #[test]
+    fn extreme_finite_coordinates_never_overflow_the_transform() {
+        let one=OutputScale120::new(120).unwrap();
+        let four=OutputScale120::new(480).unwrap();
+        assert_eq!(one.physical_to_logical(f64::MAX),Some(f64::MAX));
+        assert_eq!(four.physical_to_logical(f64::MAX),Some(f64::MAX/4.0));
+        assert_eq!(four.physical_to_logical(-f64::MAX),Some(-f64::MAX/4.0));
+        assert_eq!(four.physical_to_logical(f64::NEG_INFINITY),None);
+        assert_eq!(four.logical_to_physical(f64::MAX),Err(ScaleError::InvalidCoordinate));
     }
     #[test]
     fn rejects_unbounded_and_nonfinite_geometry() {

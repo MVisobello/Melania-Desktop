@@ -11,6 +11,17 @@ pub struct OutputTopology {
 impl OutputTopology {
     pub fn epoch(&self)->u64 {self.epoch}
     pub fn layout(&self)->&OutputLayout {&self.layout}
+    /// Apply a completed asynchronous connector scan only if the layout
+    /// has not changed since the probe began. A late hotplug/udev worker
+    /// must not resurrect an unplugged output or restore obsolete routing.
+    /// A rejected scan leaves both epoch and current layout untouched.
+    /// The caller still needs real libseat/DRM ownership and re-probing.
+    pub fn replace_all_if_epoch(
+        &mut self, expected_epoch:u64, proposed:&[DisplayRect]
+    )->Result<bool,LayoutError>{
+        if self.epoch!=expected_epoch {return Err(LayoutError::StaleRevision);}
+        self.replace_all(proposed)
+    }
     /// Empty list represents unplugged displays; duplicate connector IDs,
     /// overlap or invalid geometry reject the ENTIRE proposed topology.
     pub fn replace_all(&mut self,proposed:&[DisplayRect])->Result<bool,LayoutError>{
@@ -45,6 +56,21 @@ mod tests {
         assert_eq!(t.layout().route(450.0,0.0),Some((2,50.0,0.0)));
         assert_eq!(t.replace_all(&[d(1,0),d(1,400)]),Err(LayoutError::InvalidOutput));
         assert_eq!(t.epoch(),old);
+    }
+    #[test]
+    fn stale_hotplug_probe_cannot_restore_a_disconnected_output() {
+        let mut t=OutputTopology::default();
+        let first=t.epoch();
+        assert_eq!(t.replace_all_if_epoch(first,&[d(1,0),d(2,400)]),Ok(true));
+        let before_unplug=t.epoch();
+        assert_eq!(t.replace_all_if_epoch(before_unplug,&[]),Ok(true));
+        let after_unplug=t.epoch();
+        assert_eq!(t.replace_all_if_epoch(before_unplug,&[d(1,0),d(2,400)]),
+                   Err(LayoutError::StaleRevision));
+        assert_eq!(t.epoch(),after_unplug);
+        assert!(t.layout().outputs().is_empty());
+        assert_eq!(t.replace_all_if_epoch(after_unplug,&[]),Ok(false));
+        assert_eq!(t.epoch(),after_unplug);
     }
     #[test]
     fn reordered_identical_displays_do_not_invalidate_frames() {

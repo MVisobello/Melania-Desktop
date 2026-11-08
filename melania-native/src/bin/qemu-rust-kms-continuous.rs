@@ -85,39 +85,69 @@ struct Restore<'a> {
     card:&'a Card,
     original:crtc::Info,
     connector:connector::Handle,
+    original_encoder:control::encoder::Handle,
     submitted:bool,
     restored:bool,
+    ownership_lost:bool,
+    owned_fbs:[framebuffer::Handle;2],
 }
 impl Restore<'_> {
     fn restore(&mut self)->Result<(),Box<dyn Error>> {
+        if self.ownership_lost {
+            return Err("DRM ownership lost: refusing stale CRTC rollback".into());
+        }
         if !self.submitted {
             self.restored=true;
             return Ok(());
         }
         let old=self.original;
+        // Do not overwrite a foreign scanout acquired since the last ACK.
+        // An unreadable DRM resource is a lost ownership proof. Mark the
+        // rollback guard permanently unsafe, including its Drop retry.
+        // Read the actual original encoder route twice. A re-routed
+        // connector is foreign KMS ownership, even on the same CRTC.
+        let safe=melania_native::native_kms_scanout::verify_rollback_route(
+            self.card,&old,self.connector,self.original_encoder,&self.owned_fbs,
+        ).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        if !safe {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: original connector/encoder/mode/position/FB changed".into());
+        }
+        println!("MELANIA_RUST_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true");
+        // A failed restoring modeset can have partially affected kernel state.
+        // Never let Drop issue the same ioctl again without fresh ownership
+        // acquisition: the original route may have been taken over.
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
-                           &[self.connector],old.mode())?;
-        let observed=self.card.get_crtc(old.handle())?;
-        // A matching FB_ID alone does not prove that the original connector
-        // is still attached to this CRTC. Verify the encoder -> CRTC route
-        // after the restoring modeset, before destroying the guest buffers.
-        let connector_attached=self.card.get_connector(self.connector,false)?
-            .current_encoder()
-            .and_then(|encoder|self.card.get_encoder(encoder).ok())
-            .and_then(|encoder|encoder.crtc())==Some(old.handle());
-        self.restored=observed.framebuffer()==old.framebuffer()
-            && observed.position()==old.position()
-            && observed.mode()==old.mode()
-            && connector_attached;
+                           &[self.connector],old.mode()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        // Once a restore ioctl has been submitted, unreadable verification
+        // cannot authorize Drop to issue the same modeset again.
+        let connector_attached=melania_native::native_kms_scanout::verify_rollback_route(
+            self.card,&old,self.connector,self.original_encoder,&[],
+        ).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        self.restored=connector_attached;
         println!("MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED={connector_attached}");
         println!("MELANIA_RUST_KMS_RESTORE_VERIFIED={}",self.restored);
-        if !self.restored {return Err("Rust KMS CRTC restore mismatch".into());}
+        if !self.restored {
+            // A verified mismatch may mean another DRM owner took over
+            // after our modeset. Never let Drop attempt that modeset again.
+            self.ownership_lost=true;
+            return Err("Rust KMS CRTC restore mismatch".into());
+        }
         Ok(())
     }
 }
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
-        if self.submitted && !self.restored {
+        if self.submitted && !self.restored && !self.ownership_lost {
             // Best-effort safety recovery even on an intermediate error.
             let _=self.restore();
         }
@@ -234,17 +264,23 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         return Err("QEMU streaming original FB_ID changed after topology capture".into());
     }
     let connected=vec![route.connector];
+    let original_encoder=card.get_connector(route.connector,false)?
+        .current_encoder().ok_or("Original CPU scanout connector has no encoder")?;
+    if card.get_encoder(original_encoder)?.crtc()!=Some(crtc_handle) {
+        return Err("Original CPU scanout encoder moved after route snapshot".into());
+    }
 
     let mut db1=card.create_dumb_buffer((W as u32,H as u32),DrmFourcc::Xrgb8888,32)?;
     let mut db2=card.create_dumb_buffer((W as u32,H as u32),DrmFourcc::Xrgb8888,32)?;
     let fb1=card.add_framebuffer(&db1,24,32)?;
     let fb2=card.add_framebuffer(&db2,24,32)?;
     let mut rollback=Restore{
-        card:&card,original,connector:connected[0],submitted:false,restored:false
+        card:&card,original,connector:connected[0],original_encoder,submitted:false,restored:false,ownership_lost:false,owned_fbs:[fb1,fb2]
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
     let mut event_router=melania_native::native_drm_flip::DrmFlipEventRouter::default();
+    event_router.bind_active_crtcs(&[crtc_handle])?;
 
     // Stage84 allows one real GTK image only with the explicit VM opt-in.
     // All historical tests retain the stricter 8..=64-frame count.
@@ -281,7 +317,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     };
     let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
-        let mut previous_identity:Option<(u64,u64,u64)>=None;
+        let mut previous_identity:Option<melania_native::native_frame_order::FrameIdentity>=None;
         // One CRTC+two retained dumb buffers, with bounded transport and
         // kernel event verification on each flip. No ordinal limit here.
         loop {
@@ -310,14 +346,33 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if length!=W*H*4 || sequence==0 {
                 return Err("QEMU continuous KMS payload or ticket invalid".into());
             }
-            if previous_identity.is_some_and(|(old_epoch,old_sequence,old_generation)|
-                epoch!=old_epoch || sequence<=old_sequence || generation<=old_generation) {
+            let identity=melania_native::native_frame_order::FrameIdentity::new(
+                epoch,sequence,generation);
+            if !identity.accepted_after(previous_identity,persistent) {
                 return Err("QEMU continuous KMS received stale or reordered scene".into());
             }
             let mut pixels=vec![0u8;W*H*4];
             stream.read_exact(&mut pixels)?;
-            if previous.as_ref().is_some_and(|last|*last==pixels) {
+            if !persistent && previous.as_ref().is_some_and(|last|*last==pixels) {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
+            }
+            // Verify the previously ACKed kernel scanout is STILL ours.
+            // A VT pause, external modeset or hotplug must fail closed.
+            let previous_fb=if index==0 {route.original_fb}
+                else if index%2==0 {fb2} else {fb1};
+            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc_handle,connected[0],original_encoder,previous_fb,(W as u16,H as u16),
+            ).map_err(|error| {
+                // EIO/ENODEV during VT loss is not a harmless read failure.
+                // Never reuse the event router after this acquisition fails.
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("persistent CPU DRM scanout ownership changed before submission".into());
             }
             let framebuffer=if index%2==0 {fb1} else {fb2};
             let target=if index%2==0 {&mut db1} else {&mut db2};
@@ -352,7 +407,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 let flip_deadline=Instant::now()+Duration::from_secs(2);
                 loop {
                     match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::EVENT,None) {
-                        Ok(())=>break,
+                        Ok(())=>{
+                            event_router.arm_flip(crtc_handle)?;
+                            break;
+                        },
                         Err(error) if error.raw_os_error()==Some(11) &&
                             Instant::now()<flip_deadline => {
                             thread::sleep(Duration::from_millis(20));
@@ -386,6 +444,22 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             )? {
                 return Err("QEMU continuous KMS scanout lost connector/CRTC route".into());
             }
+            // The original encoder identity must survive the KMS flip,
+            // not merely the eventual restoration at compositor shutdown.
+            // Never send a Wayland callback if another encoder took over.
+            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc_handle,connected[0],original_encoder,framebuffer,(W as u16,H as u16),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("CPU KMS original encoder changed before scene ACK".into());
+            }
+            println!("MELANIA_RUST_KMS_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             if index>0 {
                 println!("MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED={}",
                          flip_ledger.completed_count());
@@ -451,7 +525,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 std::io::stdout().flush()?;
             }
             previous=Some(pixels);
-            previous_identity=Some((epoch,sequence,generation));
+            previous_identity=Some(identity);
             // Short observable hold for QMP; no 5-second delay per frame.
             // QMP needs time to capture the actual framebuffer on the
             // seventh and twelfth presentations (not just its FB_ID).
