@@ -48,6 +48,40 @@ class NativePrimarySelectionFocus(unittest.TestCase):
         self.assertIn("SessionEvent::PauseSession=>{", SOURCE)
         self.assertIn("state.native_presentation_guard.revoke();", SOURCE)
 
+    def test_real_wayland_keyboard_and_pointer_focus_released_on_vt_and_gpu_loss(self):
+        helper = SOURCE[SOURCE.index("fn revoke_wayland_focus_for_lost_seat("):
+                        SOURCE.index("/// Keep the original libseat-owned descriptor", 
+                                     SOURCE.index("fn revoke_wayland_focus_for_lost_seat("))]
+        self.assertIn('keyboard.set_focus(state,None,SERIAL_COUNTER.next_serial());', helper)
+        self.assertIn('state.focused=None;', helper)
+        self.assertIn('pointer.motion(state,None,&MotionEvent{', helper)
+        self.assertIn('pointer.frame(state);', helper)
+        session = SOURCE[SOURCE.index("SessionEvent::PauseSession=>{"):
+                         SOURCE.index("SessionEvent::ActivateSession=>{")]
+        gpu_loss = SOURCE[SOURCE.index("if let Some(reason)=reason {",
+                                      SOURCE.index("events.handle().insert_source(udev,")):
+                          SOURCE.index('eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED=', 
+                                       SOURCE.index("events.handle().insert_source(udev,"))]
+        for block in (session, gpu_loss):
+            self.assertIn("revoke_wayland_focus_for_lost_seat(state);", block)
+            self.assertLess(block.index("state.native_presentation_guard.revoke();"),
+                            block.index("revoke_wayland_focus_for_lost_seat(state);"))
+        self.assertIn("clear_primary_selection(&state.display_handle,&state.seat);", session)
+
+    def test_libseat_reactivation_never_thaws_revoked_drm_or_input(self):
+        start = SOURCE.index("SessionEvent::ActivateSession=>{")
+        end = SOURCE.index("let active=matches!(event,SessionEvent::ActivateSession);",start)
+        branch = SOURCE[start:end]
+        self.assertIn("if state.native_presentation_guard.permanently_revoked() {",branch)
+        self.assertIn("context.suspend();",branch)
+        self.assertIn("state.lifecycle.on_session(SessionEvent::PauseSession);",branch)
+        self.assertIn("state.render_scheduler.set_seat_active(false);",branch)
+        self.assertIn("state.continuous_redraw.set_seat_active(false);",branch)
+        self.assertLess(branch.index("if state.native_presentation_guard.permanently_revoked()"),
+                        branch.index("if context.resume().is_err()"))
+        self.assertLess(branch.index("return;"),branch.index("if context.resume().is_err()"))
+
+
 
 if __name__ == "__main__":
     unittest.main()
