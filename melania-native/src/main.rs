@@ -1,7 +1,7 @@
 //! Experimental *seat/hotplug event-loop* test — NOT a native compositor.
 //! Must be invoked explicitly in a dedicated TTY or VM; never from a login
 //! manager and never as an automatic fallback from the nested compositor.
-use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::FileTypeExt}, path::{Path,PathBuf}, time::Duration};
+use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::{FileTypeExt,MetadataExt}}, path::{Path,PathBuf}, time::Duration};
 use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
@@ -28,6 +28,53 @@ fn blocked(why:&str)->! {
     std::process::exit(BLOCKED);
 }
 
+/// Refuse a spoofed or shared XDG runtime directory BEFORE opening libseat,
+/// libinput, or a DRM FD. The directory must be a real directory (not a
+/// symlink), owned by the running process UID and inaccessible to other users.
+/// This is a prerequisite for secure Wayland socket creation, NOT a complete
+/// login/session-manager implementation.
+fn validate_private_runtime_dir(runtime:&Path)->Result<(),String> {
+    let metadata=fs::symlink_metadata(runtime)
+        .map_err(|e|format!("XDG runtime directory cannot be inspected: {e}"))?;
+    if !metadata.file_type().is_dir() {
+        return Err("XDG runtime directory is not a real directory (symlinks refused)".into());
+    }
+    // /proc/self is kernel-owned and reports the effective credentials of
+    // the process; unlike USER/UID environment variables it cannot be spoofed.
+    let process=fs::metadata("/proc/self")
+        .map_err(|e|format!("Cannot inspect process credentials: {e}"))?;
+    if metadata.uid()!=process.uid() {
+        return Err("XDG runtime directory is owned by another UID".into());
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err("XDG runtime directory is accessible to group/other users".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod runtime_security_tests {
+    use super::*;
+    use std::os::unix::fs::{symlink,PermissionsExt};
+    #[test]
+    fn runtime_rejects_world_accessible_directory_and_symlink() {
+        let base=std::env::temp_dir().join(format!(
+            "melania-native-runtime-{}-{:?}",std::process::id(),std::thread::current().id()
+        ));
+        fs::create_dir(&base).unwrap();
+        fs::set_permissions(&base,fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(validate_private_runtime_dir(&base).is_ok());
+        fs::set_permissions(&base,fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(validate_private_runtime_dir(&base).is_err());
+        fs::set_permissions(&base,fs::Permissions::from_mode(0o700)).unwrap();
+        let link=base.with_extension("symlink");
+        symlink(&base,&link).unwrap();
+        assert!(validate_private_runtime_dir(&link).is_err());
+        fs::remove_file(&link).unwrap();
+        fs::remove_dir(&base).unwrap();
+    }
+}
+
 fn assert_dedicated_console() {
     if env::var("MELANIA_EXPERIMENTAL_SEAT").as_deref()!=Ok("1") {
         blocked("Explicit MELANIA_EXPERIMENTAL_SEAT=1 required");
@@ -48,11 +95,8 @@ fn assert_dedicated_console() {
     }
     let runtime=env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_|blocked("XDG_RUNTIME_DIR missing"));
-    let meta=fs::metadata(runtime)
-        .unwrap_or_else(|_|blocked("XDG runtime directory not accessible"));
-    if !meta.is_dir() {
-        blocked("XDG runtime path is not a directory");
-    }
+    validate_private_runtime_dir(Path::new(&runtime))
+        .unwrap_or_else(|error|blocked(&error));
     let exists_drm=fs::read_dir("/dev/dri")
         .ok().is_some_and(|entries| entries
             .filter_map(Result::ok)
