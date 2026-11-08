@@ -203,6 +203,45 @@ pub fn inspect_active_outputs(
     Ok(NativeOutputTopology{active})
 }
 
+/// A second independent read of all active CRTCs. The high-level route
+/// deliberately exposes only width/height for buffer planning, which cannot
+/// distinguish a same-resolution refresh-rate/scan-timing modeset or a CRTC
+/// position change. Retain the exact drm-rs Mode and position in this
+/// ephemeral, read-only scanout signature; never use it to claim ownership.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+struct ActiveCrtcReadback<M> {
+    crtc:crtc::Handle,
+    framebuffer:framebuffer::Handle,
+    mode:M,
+    position:(u32,u32),
+}
+
+fn read_active_crtc_readbacks(
+    card:&impl ControlDevice,
+    topology:&NativeOutputTopology,
+)->Result<Vec<ActiveCrtcReadback<drm::control::Mode>>,String> {
+    let mut readbacks=Vec::with_capacity(topology.active.len());
+    for route in &topology.active {
+        let info=card.get_crtc(route.crtc)
+            .map_err(|e|format!("DRM CRTC timing readback unavailable: {e}"))?;
+        let framebuffer=info.framebuffer()
+            .ok_or("DRM CRTC lost its original framebuffer during timing readback")?;
+        let mode=info.mode()
+            .ok_or("DRM CRTC lost its original mode during timing readback")?;
+        if framebuffer!=route.original_fb ||
+           mode.size()!=(route.width,route.height) {
+            return Err("DRM CRTC framebuffer or mode dimensions changed during timing readback".into());
+        }
+        readbacks.push(ActiveCrtcReadback {
+            crtc:route.crtc,
+            framebuffer,
+            mode,
+            position:info.position(),
+        });
+    }
+    Ok(readbacks)
+}
+
 /// Read the same kernel topology twice before rendering; reject a hotplug
 /// or external modeset that moves a connector, changes mode or replaces
 /// the baseline framebuffer between scans. The output owner must still
@@ -211,9 +250,14 @@ pub fn inspect_stable_active_outputs(
     card:&impl ControlDevice,
 )->Result<NativeOutputTopology,String> {
     let before=inspect_active_outputs(card)?;
+    let before_crtcs=read_active_crtc_readbacks(card,&before)?;
     let after=inspect_active_outputs(card)?;
-    if before!=after {
-        return Err("DRM topology changed while capturing scanout baseline".into());
+    let after_crtcs=read_active_crtc_readbacks(card,&after)?;
+    // This includes exact display timings, not just the dimensions stored
+    // in ActiveOutputRoute. A same-size refresh-rate change or translated
+    // CRTC cannot silently pass the two complete topology scans.
+    if before!=after || before_crtcs!=after_crtcs {
+        return Err("DRM route, CRTC timing or position changed while capturing scanout baseline".into());
     }
     Ok(after)
 }
@@ -263,6 +307,24 @@ mod tests {
         let distinct:Vec<encoder::Handle>=[17u32,18].into_iter()
             .map(|id|control::from_u32(id).unwrap()).collect();
         assert!(same_resource_handles(&distinct,&distinct));
+    }
+    #[test]
+    fn active_crtc_readbacks_reject_same_size_mode_timing_position_and_fb_changes() {
+        // The Mode field in production is the complete drm::control::Mode,
+        // whose Eq includes timings. Here a simple numeric mode signature
+        // isolates the readback comparison without a privileged DRM FD.
+        let baseline=ActiveCrtcReadback {
+            crtc:control::from_u32(21).unwrap(),
+            framebuffer:control::from_u32(31).unwrap(),
+            mode:60_000u32,
+            position:(0,0),
+        };
+        assert_eq!([baseline],[baseline]);
+        assert_ne!([baseline],[ActiveCrtcReadback{mode:75_000,..baseline}]);
+        assert_ne!([baseline],[ActiveCrtcReadback{position:(1920,0),..baseline}]);
+        assert_ne!([baseline],[ActiveCrtcReadback{
+            framebuffer:control::from_u32(32).unwrap(),..baseline
+        }]);
     }
     #[test]
     fn two_independent_outputs_keep_unique_crtcs_and_borrowed_fbs() {
