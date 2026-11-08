@@ -29,8 +29,18 @@ class NativeClipboardFocus(unittest.TestCase):
         pause=BRIDGE[BRIDGE.index("SessionEvent::PauseSession=>{"):
                      BRIDGE.index("SessionEvent::ActivateSession=>{")]
         self.assertIn("set_data_device_focus(&state.display_handle,&state.seat,None);",pause)
+        # Revoke frame/seat authorization before any Wayland focus update.
+        # Both clipboard and real wl_keyboard/wl_pointer focus must still
+        # be cleared before the KMS transport is interrupted and libinput
+        # is suspended; the old client cannot retain a usable seat.
+        self.assertLess(pause.index("state.native_presentation_guard.revoke();"),
+                        pause.index("revoke_wayland_focus_for_lost_seat(state);"))
+        self.assertLess(pause.index("revoke_wayland_focus_for_lost_seat(state);"),
+                        pause.index("set_data_device_focus("))
         self.assertLess(pause.index("set_data_device_focus("),
-                        pause.index("state.native_presentation_guard.revoke();"))
+                        pause.index("state.continuous_worker.take();"))
+        self.assertLess(pause.index("state.continuous_worker.take();"),
+                        pause.index("context.suspend();"))
         udev=BRIDGE[BRIDGE.index("let reason=state.gpu_watch.observe(&change);"):
                     BRIDGE.index("let live_stream=std::env::var(")]
         self.assertIn("state.native_presentation_guard.revoke();",udev)
