@@ -62,8 +62,13 @@ pub fn verify_kernel_scanout(
     // Resolution and rounded refresh are not a unique DRM mode identity:
     // distinct pixel clocks / porch timings can share both. A modeset
     // during the split kernel reads must invalidate this frame ACK.
+    // Even with identical FB_ID and pixel timings, a foreign KMS master
+    // can move the scanout origin between these non-atomic ioctls. A frame
+    // ACK cannot certify a stable output when its CRTC position changed.
+    // Match the ownership verifier's fail-closed position requirement.
     if latest_crtc.framebuffer() != Some(expected_fb) ||
-       latest_crtc.mode() != Some(initial_mode) {
+       latest_crtc.mode() != Some(initial_mode) ||
+       latest_crtc.position() != current.position() {
         return Ok(false);
     }
     let latest_connector = card.get_connector(connector, false)
