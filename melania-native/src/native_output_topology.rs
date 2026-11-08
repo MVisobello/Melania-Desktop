@@ -72,15 +72,21 @@ pub fn validate_active_routes(routes:&[ActiveOutputRoute])->Result<(),String> {
 
 /// Resource handles are kernel object IDs. Ignore enumeration order but
 /// refuse duplicate IDs, which would otherwise hide a malformed inventory.
-fn same_resource_handles<T:Ord+Copy>(before:&[T],after:&[T])->bool {
+fn same_resource_handles<T:Eq>(before:&[T],after:&[T])->bool {
     if before.len()!=after.len() {return false;}
-    let mut left=before.to_vec();
-    let mut right=after.to_vec();
-    left.sort_unstable();
-    right.sort_unstable();
-    !left.windows(2).any(|w|w[0]==w[1]) &&
-    !right.windows(2).any(|w|w[0]==w[1]) &&
-    left==right
+    // drm-rs connector::Handle and crtc::Handle implement Eq, but NOT Ord.
+    // Compare bounded (<=32) kernel object-ID sets without sorting or
+    // converting handles into fabricated IDs. Reject duplicates on EITHER
+    // read, including two identical malformed inventories.
+    for (i,handle) in before.iter().enumerate() {
+        if before[..i].contains(handle) || !after.contains(handle) {
+            return false;
+        }
+    }
+    for (i,handle) in after.iter().enumerate() {
+        if after[..i].contains(handle) {return false;}
+    }
+    true
 }
 
 /// Obtain the real currently-active connector -> encoder -> CRTC -> FB_ID
