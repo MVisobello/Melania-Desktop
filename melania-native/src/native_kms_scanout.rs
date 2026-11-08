@@ -78,7 +78,19 @@ pub fn verify_kernel_scanout(
     }
     let latest_encoder = card.get_encoder(encoder)
         .map_err(|error| format!("DRM second get_encoder failed: {error}"))?;
-    Ok(latest_encoder.crtc() == Some(crtc))
+    if latest_encoder.crtc() != Some(crtc) {
+        return Ok(false);
+    }
+    // The second CRTC read happened BEFORE the second connector/encoder
+    // reads. Those ioctls are not an atomic kernel snapshot: a foreign DRM
+    // master can modeset or reposition the same FB_ID during that gap.
+    // Recheck the CRTC *after* the final encoder read, before returning the
+    // verified frame ACK to Wayland. No extra frame or GPU allocation.
+    let final_crtc = card.get_crtc(crtc)
+        .map_err(|error| format!("DRM final get_crtc failed: {error}"))?;
+    Ok(final_crtc.framebuffer() == Some(expected_fb) &&
+       final_crtc.mode() == Some(initial_mode) &&
+       final_crtc.position() == current.position())
 }
 
 /// Validate the scanout owner *before* overwriting its next buffer or issuing

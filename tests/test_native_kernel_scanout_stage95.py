@@ -42,6 +42,21 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         self.assertLess(block.index("latest_crtc.framebuffer()"),
                         block.index("latest_encoder.crtc()"))
 
+    def test_final_kernel_crtc_read_brackets_the_last_encoder_route(self):
+        block = PROBE[PROBE.index("pub fn verify_kernel_scanout("):
+                      PROBE.index("pub fn verify_presenter_ownership(")]
+        # A real get_crtc ioctl AFTER the final encoder ioctl prevents an
+        # ACK for a framebuffer/mode/origin changed during the last route read.
+        self.assertIn("let final_crtc = card.get_crtc(crtc)", block)
+        self.assertIn("final_crtc.framebuffer() == Some(expected_fb)", block)
+        self.assertIn("final_crtc.mode() == Some(initial_mode)", block)
+        self.assertIn("final_crtc.position() == current.position()", block)
+        self.assertLess(block.index("let latest_encoder = card.get_encoder(encoder)"),
+                        block.index("let final_crtc = card.get_crtc(crtc)"))
+        self.assertLess(block.index("let final_crtc = card.get_crtc(crtc)"),
+                        block.index("Ok(final_crtc.framebuffer()"))
+        self.assertNotIn("Ok(latest_encoder.crtc() == Some(crtc))", block)
+
     def test_presenter_owner_rejects_same_resolution_mode_timing_switch(self):
         block = PROBE[PROBE.index("pub fn verify_presenter_ownership("):
                       PROBE.index("pub fn owner_snapshot_matches(")]
