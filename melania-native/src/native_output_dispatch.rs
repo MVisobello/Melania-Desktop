@@ -10,7 +10,7 @@
 //! or missed deadline invalidates all outstanding permission to release
 //! Wayland buffers or send client frame callbacks.
 
-use drm::control::{connector, crtc, framebuffer, Device as ControlDevice};
+use drm::control::{connector, crtc, encoder, framebuffer, Device as ControlDevice};
 
 use crate::{
     continuous_redraw::{ContinuousRedraw, PlannedSceneFrame},
@@ -116,23 +116,30 @@ impl NativeOutputDispatch {
         Ok(Some(submission))
     }
 
-    /// Verify a presentation against REAL DRM kernel state, including the
-    /// connector -> encoder -> CRTC route, rather than trusting a socket ACK
-    /// or allowing an external boolean to release Wayland client buffers.
+    /// Confirm a frame only while the original connector encoder remains
+    /// assigned to this CRTC, at the exact expected mode size and framebuffer.
+    /// Checking only an encoder -> CRTC route is insufficient: another encoder
+    /// may take ownership of the same CRTC between Wayland client commits.
     ///
-    /// The caller must own this device through an active libseat session and
-    /// must not call after a pause/hotplug. The caller also owns the lifetime
-    /// and scanout compatibility of the expected framebuffer.
+    /// This calls real drm-rs CRTC/connector/encoder kernel ioctls through
+    /// verify_original_encoder_frame, as the CPU and GPU KMS presenters do.
+    /// A mismatched original encoder, mode, CRTC position or FB_ID revokes
+    /// the generation; no frame callback or wl_buffer release is authorized.
     ///
-    /// Stale submissions are discarded without probing or cancelling the
-    /// current frame. Missing routing or FB_ID permanently invalidates the
-    /// pending output generation.
+    /// Caller must hold an active libseat/DRM resource generation and must
+    /// not call after a VT pause or GPU hotplug. This is not an atomic kernel
+    /// snapshot or proof of native login readiness.
+    ///
+    /// Stale submissions are discarded without probing the kernel or
+    /// cancelling another generation's current in-flight frame.
     pub fn verify_and_present(
         &mut self,
         card: &impl ControlDevice,
         connector: connector::Handle,
         crtc: crtc::Handle,
+        original_encoder: encoder::Handle,
         expected_fb: framebuffer::Handle,
+        expected_size: (u16, u16),
         submission: OutputSubmission,
         now_ms: u64,
     ) -> Result<bool, String> {
@@ -140,10 +147,10 @@ impl NativeOutputDispatch {
             self.inflight != Some(submission) {
             return Ok(false);
         }
-        // Use the exact kernel probe also exercised by the real QEMU KMS
-        // receiver, not a mockable or caller-provided success flag.
-        let verified = crate::native_kms_scanout::verify_kernel_scanout(
-            card, crtc, connector, expected_fb,
+        // A generic scanout check can accept an external encoder routed to
+        // the same CRTC; require the exact original encoder before ACK.
+        let verified = crate::native_kms_scanout::verify_original_encoder_frame(
+            card, crtc, connector, original_encoder, expected_fb, expected_size,
         );
         match verified {
             Ok(kernel_presented) => Ok(self.presented(

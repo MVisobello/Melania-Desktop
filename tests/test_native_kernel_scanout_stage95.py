@@ -25,8 +25,18 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
             "routed.crtc() == Some(crtc)",
         ):
             self.assertIn(marker, PROBE)
-        self.assertIn("crate::native_kms_scanout::verify_kernel_scanout(", block)
-        self.assertLess(block.index("verify_kernel_scanout("), block.index("self.presented("))
+        # Original-encoder ownership is required even if another encoder
+        # can drive the same CRTC. Preserve the current final-read checks.
+        self.assertIn("original_encoder: encoder::Handle", block)
+        self.assertIn("expected_size: (u16, u16)", block)
+        self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame(", block)
+        self.assertLess(block.index("verify_original_encoder_frame("),
+                        block.index("self.presented("))
+        original_route = PROBE[PROBE.index("pub fn verify_original_encoder_frame("):
+                               PROBE.index("pub fn verify_rollback_route(")]
+        self.assertIn("output.current_encoder()!=Some(original_encoder)", original_route)
+        self.assertIn("card.get_encoder(original_encoder)", original_route)
+        self.assertIn("verify_presenter_ownership(", original_route)
         self.assertIn("Ok(self.presented(", block)
 
     def test_ack_rejects_unplugged_monitor_and_changed_crtc_mode(self):
@@ -87,7 +97,7 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         block = SOURCE[SOURCE.index("pub fn verify_and_present("):SOURCE.index("fn presented(")]
         self.assertIn("self.inflight != Some(submission)", block)
         self.assertLess(block.index("self.inflight != Some(submission)"),
-                        block.index("verify_kernel_scanout("))
+                        block.index("verify_original_encoder_frame("))
         self.assertIn("return Ok(false);", block)
 
     def test_drm_read_errors_and_missing_route_fail_closed(self):
