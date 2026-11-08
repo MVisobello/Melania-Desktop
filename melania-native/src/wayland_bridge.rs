@@ -25,7 +25,7 @@ use smithay::{
         udev::{UdevBackend,UdevEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
-    delegate_data_device,
+    delegate_data_device, delegate_primary_selection,
     input::{keyboard::FilterResult, pointer::{AxisFrame, ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
@@ -43,7 +43,9 @@ use smithay::{
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
-            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus}},
+            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus},
+            primary_selection::{PrimarySelectionHandler,PrimarySelectionState,
+                set_primary_focus,clear_primary_selection}},
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData,Configure},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
@@ -114,6 +116,9 @@ struct BridgeState {
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
     data_device:DataDeviceState,
+    // Smithay primary selection (highlight + middle-click paste) is scoped to
+    // the real keyboard-focus client and cleared on seat/device revocation.
+    primary_selection:PrimarySelectionState,
     // Focus clipboard offers on real client ownership within this Wayland display.
     display_handle:DisplayHandle,
     output:Output,
@@ -2747,7 +2752,8 @@ impl SeatHandler for BridgeState {
         // A focus transition transfers wl_data_device offers only to the actual client.
         // Unmapped or destroyed surfaces revoke the offer instead of keeping stale focus.
         let client=focused.and_then(|surface|surface.client());
-        set_data_device_focus(&self.display_handle,seat,client);
+        set_data_device_focus(&self.display_handle,seat,client.clone());
+        set_primary_focus(&self.display_handle,seat,client);
     }
     fn cursor_image(&mut self,_:&Seat<Self>,_:CursorImageStatus){}
 }
@@ -3231,7 +3237,11 @@ impl ServerDndGrabHandler for BridgeState {}
 impl DataDeviceHandler for BridgeState {
     fn data_device_state(&self)->&DataDeviceState {&self.data_device}
 }
+impl PrimarySelectionHandler for BridgeState {
+    fn primary_selection_state(&self)->&PrimarySelectionState {&self.primary_selection}
+}
 delegate_data_device!(BridgeState);
+delegate_primary_selection!(BridgeState);
 delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
 delegate_xdg_shell!(BridgeState);
@@ -3931,6 +3941,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
+        primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
         output_manager:OutputManagerState::new_with_xdg_output::<BridgeState>(&handle),
         output,
@@ -4125,6 +4136,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 state.tab_resize_images.clear();
                 state.tab_resize_started_at=None;
                 set_data_device_focus(&state.display_handle,&state.seat,None);
+                set_primary_focus(&state.display_handle,&state.seat,None);
+                clear_primary_selection(&state.display_handle,&state.seat);
                 state.pointer_buttons_held.clear();
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
@@ -4205,6 +4218,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.tab_resize_images.clear();
             state.tab_resize_started_at=None;
             set_data_device_focus(&state.display_handle,&state.seat,None);
+                set_primary_focus(&state.display_handle,&state.seat,None);
+                clear_primary_selection(&state.display_handle,&state.seat);
             state.pointer_buttons_held.clear();
             state.continuous_worker.take();
             state.continuous_inflight.take();
