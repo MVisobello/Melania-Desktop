@@ -46,7 +46,7 @@ class TestPanelProof(unittest.TestCase):
     def test_qmp_layer_observer_covers_late_tcg_stage_without_weakening_pixels(self):
         host=(Path(__file__).resolve().parents[1]/
               "scripts/run-qemu-melania-native.sh").read_text()
-        stage=host.split('capture-qemu-real-layer-panel.py',1)[1].split(
+        stage=host.rsplit('python3 "$root/scripts/capture-qemu-real-layer-panel.py"',1)[1].split(
             'layer_capture_pid=$!',1)[0]
         layer_deadline=int(stage.split('--timeout ',1)[1].split()[0])
         qemu_deadline=int(host.split(
