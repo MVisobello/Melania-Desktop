@@ -12,7 +12,7 @@ use std::{collections::VecDeque, error::Error, ffi::{OsStr, OsString}, fs, io::{
 
 use smithay::{
     backend::{
-        input::{AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyboardKeyEvent, KeyState, PointerButtonEvent},
+        input::{AbsolutePositionEvent, Axis, ButtonState, Event, InputEvent, KeyboardKeyEvent, KeyState, PointerAxisEvent, PointerButtonEvent},
         renderer::{
             element::{surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement}, Kind},
             gles::GlesRenderer,
@@ -26,7 +26,7 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Subpixel},
     input::{
         keyboard::{keysyms, FilterResult},
-        pointer::{ButtonEvent, CursorImageStatus, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent},
         Seat, SeatHandler, SeatState,
     },
     reexports::wayland_server::{
@@ -761,6 +761,22 @@ fn spawn_nested_client(program: OsString, socket: &OsStr, control_path: &Path) -
     Ok((program, child))
 }
 
+/// Translate Winit wheel detents (v120) into Wayland pixel scrolling while
+/// retaining v120 precision for clients that support discrete axis events.
+/// Winit's trackpad events already carry pixel deltas; do not rescale them.
+fn scroll_axis_delta(pixels:Option<f64>,steps_v120:Option<f64>)->Option<(f64,Option<i32>)> {
+    let v120=steps_v120.filter(|v|v.is_finite());
+    let distance=pixels.filter(|v|v.is_finite())
+        .or_else(||v120.map(|v|v*15.0/120.0))?;
+    if !distance.is_finite() || distance==0.0 {return None;}
+    let discrete=v120.and_then(|v|{
+        let count=v.round();
+        (count!=0.0 && count>=i32::MIN as f64 && count<=i32::MAX as f64)
+            .then_some(count as i32)
+    });
+    Some((distance,discrete))
+}
+
 /// Cap full-frame nested redraws to the advertised 60 Hz output. Unlike an
 /// uncapped busy loop, this leaves CPU/GPU time for GTK clients on llvmpipe.
 /// When rendering itself exceeds the budget, never add extra latency.
@@ -994,6 +1010,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                         serial: SERIAL_COUNTER.next_serial(), time: event.time_msec(),
                     });
                     pointer.frame(&mut state);
+                }
+                InputEvent::PointerAxis { event, .. } => {
+                    // Winit generates a real axis event for mouse wheels and
+                    // touchpads. Without forwarding it via wl_pointer, GTK
+                    // ScrolledWindow (Start, Files, Settings) only responds
+                    // to dragging the scrollbar.
+                    let mut frame=AxisFrame::new(event.time_msec()).source(event.source());
+                    let mut scroll_changed=false;
+                    for axis in [Axis::Horizontal,Axis::Vertical] {
+                        let pixels=event.amount(axis);
+                        let steps_v120=event.amount_v120(axis);
+                        if let Some((distance,v120))=scroll_axis_delta(pixels,steps_v120) {
+                            frame=frame.value(axis,distance);
+                            if let Some(v120)=v120 { frame=frame.v120(axis,v120); }
+                            frame=frame.relative_direction(axis,event.relative_direction(axis));
+                            scroll_changed=true;
+                        }
+                    }
+                    if scroll_changed {
+                        let pointer=state.seat.get_pointer().expect("pointer");
+                        pointer.axis(&mut state,frame);
+                        pointer.frame(&mut state);
+                    }
                 }
                 InputEvent::PointerButton { event, .. } => {
                     let pointer = state.seat.get_pointer().expect("pointer");
@@ -1292,8 +1331,29 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod frame_pacing_tests {
-    use super::{frame_idle_budget,should_render_scene};
+    use super::{frame_idle_budget,should_render_scene,scroll_axis_delta};
     use std::time::Duration;
+
+    #[test]
+    fn wheel_detents_forward_vertical_and_horizontal_delta() {
+        assert_eq!(scroll_axis_delta(None,Some(120.0)),Some((15.0,Some(120))));
+        assert_eq!(scroll_axis_delta(None,Some(-120.0)),Some((-15.0,Some(-120))));
+        assert_eq!(scroll_axis_delta(None,Some(60.0)),Some((7.5,Some(60))));
+    }
+
+    #[test]
+    fn touchpad_pixels_are_not_multiplied_as_wheel_detents() {
+        assert_eq!(scroll_axis_delta(Some(-12.5),None),Some((-12.5,None)));
+        assert_eq!(scroll_axis_delta(Some(0.0),None),None);
+        assert_eq!(scroll_axis_delta(None,Some(0.0)),None);
+    }
+
+    #[test]
+    fn axis_sample_rejects_non_finite_untrusted_input() {
+        assert_eq!(scroll_axis_delta(Some(f64::NAN),None),None);
+        assert_eq!(scroll_axis_delta(None,Some(f64::INFINITY)),None);
+        assert_eq!(scroll_axis_delta(Some(f64::INFINITY),Some(120.0)),Some((15.0,Some(120))));
+    }
 
     #[test]
     fn full_speed_nested_frame_is_paced_to_sixty_hertz() {
