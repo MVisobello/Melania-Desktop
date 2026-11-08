@@ -61,6 +61,29 @@ class TestPanelProof(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true",host)
         self.assertIn('test -s "$report/real-layer-panel-frame12.ppm"',host)
 
+    def test_managed_xdg_qmp_observer_covers_late_tcg_stage_and_requires_real_pixels(self):
+        host=(Path(__file__).resolve().parents[1]/
+              "scripts/run-qemu-melania-native.sh").read_text()
+        stage=host.rsplit('python3 "$root/scripts/capture-qemu-managed-xdg-roles.py"',1)[1].split(
+            'managed_role_capture_pid=$!',1)[0]
+        managed_deadline=int(stage.split('--timeout ',1)[1].split()[0])
+        layer_stage=host.rsplit('python3 "$root/scripts/capture-qemu-real-layer-panel.py"',1)[1].split(
+            'layer_capture_pid=$!',1)[0]
+        layer_deadline=int(layer_stage.split('--timeout ',1)[1].split()[0])
+        qemu_deadline=int(host.split(
+            'timeout --signal=TERM --kill-after=10s ',1
+        )[1].split('s',1)[0])
+        # The 1350s observer expired before a real ~1403s QEMU guest had
+        # finished. Never replace the missing screendumps with a serial-only
+        # claim, and keep the observer bounded by the VM hard timeout.
+        self.assertGreater(managed_deadline,1403)
+        self.assertGreaterEqual(managed_deadline,layer_deadline)
+        self.assertLess(managed_deadline,qemu_deadline)
+        for frame in (3,5,7,9,13,14):
+            self.assertIn(f"MELANIA_QEMU_MANAGED_XDG_FRAME{frame}_PIXELS_VERIFIED=true",host)
+            self.assertIn(f'test -s "$report/managed-role-frame{frame}.ppm"',host)
+        self.assertIn("MELANIA_QEMU_MANAGED_XDG_SIX_FRAMES_VERIFIED=true",host)
+
     def test_correct_pixels(self):self.assertEqual(len(m.verify(picture())),8)
     def test_wrong_edge_fails(self):
         b=bytearray(picture());b[-3:]=b"\x00\x00\x00"
