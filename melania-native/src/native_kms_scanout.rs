@@ -62,8 +62,12 @@ pub fn verify_kernel_scanout(
     // Resolution and rounded refresh are not a unique DRM mode identity:
     // distinct pixel clocks / porch timings can share both. A modeset
     // during the split kernel reads must invalidate this frame ACK.
+    // A VT takeover or another DRM master can move this same FB_ID and
+    // exact mode to a different CRTC origin between non-atomic ioctls.
+    // Do not ACK a frame when its visible placement has changed.
     if latest_crtc.framebuffer() != Some(expected_fb) ||
-       latest_crtc.mode() != Some(initial_mode) {
+       latest_crtc.mode() != Some(initial_mode) ||
+       latest_crtc.position() != current.position() {
         return Ok(false);
     }
     let latest_connector = card.get_connector(connector, false)
@@ -247,6 +251,15 @@ pub fn owner_snapshot_matches(
 mod ownership_tests {
     use super::*;
     use drm::control;
+    #[test]
+    fn kernel_scanout_ack_requires_unchanged_crtc_position() {
+        // The production verifier uses two real drm-rs CRTC ioctl reads.
+        // A same-mode/same-FB position takeover must not acknowledge a frame.
+        let source=include_str!("native_kms_scanout.rs");
+        let verifier=source.split("pub fn verify_kernel_scanout(").nth(1).unwrap()
+            .split("pub fn verify_presenter_ownership(").next().unwrap();
+        assert!(verifier.contains("latest_crtc.position() != current.position()"));
+    }
     #[test]
     fn denies_hotplug_modeset_and_external_fb_takeover() {
         let fb=control::from_u32(31).unwrap();
