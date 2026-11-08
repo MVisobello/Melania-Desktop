@@ -360,8 +360,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
-            let owned=melania_native::native_kms_scanout::verify_presenter_ownership(
-                &card,crtc_handle,connected[0],previous_fb,(W as u16,H as u16),
+            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc_handle,connected[0],original_encoder,previous_fb,(W as u16,H as u16),
             ).map_err(|error| {
                 // EIO/ENODEV during VT loss is not a harmless read failure.
                 // Never reuse the event router after this acquisition fails.
@@ -444,6 +444,22 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             )? {
                 return Err("QEMU continuous KMS scanout lost connector/CRTC route".into());
             }
+            // The original encoder identity must survive the KMS flip,
+            // not merely the eventual restoration at compositor shutdown.
+            // Never send a Wayland callback if another encoder took over.
+            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc_handle,connected[0],original_encoder,framebuffer,(W as u16,H as u16),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("CPU KMS original encoder changed before scene ACK".into());
+            }
+            println!("MELANIA_RUST_KMS_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             if index>0 {
                 println!("MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED={}",
                          flip_ledger.completed_count());
