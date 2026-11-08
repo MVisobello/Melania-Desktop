@@ -21,8 +21,13 @@ class SharedKernelScanoutStage96(unittest.TestCase):
         self.assertIn("current.framebuffer() != Some(expected_fb)", HELPER)
         self.assertIn("routed.crtc() == Some(crtc)", HELPER)
 
-    def test_same_helper_in_future_dispatch_and_actual_qemu_scanout(self):
-        self.assertIn("crate::native_kms_scanout::verify_kernel_scanout(", DISPATCH)
+    def test_dispatch_uses_stronger_original_encoder_guard_and_qemu_rechecks_route(self):
+        # QEMU continues to use the actual legacy kernel FB_ID+encoder-route
+        # verifier, while the public dispatch ACK now requires exact startup
+        # encoder identity and full-size CRTC ownership in addition.
+        self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame(", DISPATCH)
+        self.assertIn("pub fn verify_original_encoder_frame(", HELPER)
+        self.assertIn("verify_presenter_ownership(", HELPER)
         self.assertIn("melania_native::native_kms_scanout::verify_kernel_scanout(", QEMU)
         frame=QEMU[QEMU.index("wait_for_fb(&card,crtc_handle,framebuffer)?;"):]
         self.assertLess(frame.index("verify_kernel_scanout("),frame.index("stream.write_all(&ack)?"))
