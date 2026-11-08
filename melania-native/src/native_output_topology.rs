@@ -10,7 +10,7 @@
 //! before KMS presents the first framebuffer.
 
 use drm::control::{
-    connector, crtc, framebuffer, Device as ControlDevice,
+    connector, crtc, encoder, framebuffer, Device as ControlDevice,
 };
 
 pub const MAX_ACTIVE_DRM_OUTPUTS:usize=8;
@@ -22,6 +22,9 @@ const MAX_OUTPUT_SIDE:u16=16384;
 pub struct ActiveOutputRoute {
     pub connector:connector::Handle,
     pub crtc:crtc::Handle,
+    /// Preserve the exact kernel encoder identity across both complete scans.
+    /// Matching CRTC / FB_ID alone does not prove that a route stayed owned.
+    pub original_encoder:encoder::Handle,
     /// Borrowed kernel FB_ID, not an owned GEM/GBM framebuffer resource.
     pub original_fb:framebuffer::Handle,
     pub width:u16,
@@ -46,8 +49,8 @@ impl NativeOutputTopology {
 }
 
 /// Validate invariants that a future per-output KMS owner needs: no CRTC
-/// may be implicitly shared by two outputs and no connector may appear
-/// twice. Display mirroring via cloned CRTCs is intentionally unsupported
+/// may be implicitly shared by two outputs and no connector or encoder
+/// may appear twice. Display mirroring via cloned CRTCs is intentionally unsupported
 /// until explicitly modeled; it must not accidentally share one swapchain.
 pub fn validate_active_routes(routes:&[ActiveOutputRoute])->Result<(),String> {
     if routes.is_empty() {
@@ -62,9 +65,10 @@ pub fn validate_active_routes(routes:&[ActiveOutputRoute])->Result<(),String> {
             return Err("DRM topology has invalid framebuffer dimensions".into());
         }
         if routes[..i].iter().any(|old|{
-            old.connector==route.connector || old.crtc==route.crtc
+            old.connector==route.connector || old.crtc==route.crtc ||
+            old.original_encoder==route.original_encoder
         }) {
-            return Err("DRM topology has duplicate connector or shared CRTC".into());
+            return Err("DRM topology has duplicate connector/encoder or shared CRTC".into());
         }
     }
     Ok(())
@@ -149,6 +153,7 @@ pub fn inspect_active_outputs(
         active.push(ActiveOutputRoute{
             connector:connector_handle,
             crtc:crtc_handle,
+            original_encoder:encoder_handle,
             original_fb,width,height,
         });
         if active.len()>MAX_ACTIVE_DRM_OUTPUTS {
@@ -195,6 +200,7 @@ mod tests {
         ActiveOutputRoute {
             connector:control::from_u32(conn).unwrap(),
             crtc:control::from_u32(scanout).unwrap(),
+            original_encoder:control::from_u32(conn+1000).unwrap(),
             original_fb:control::from_u32(fb).unwrap(),
             width:w,height:hgt,
         }
@@ -221,6 +227,23 @@ mod tests {
         let a=route(11,21,31,1920,1080);
         assert!(validate_active_routes(&[a,route(12,21,32,1920,1080)]).is_err());
         assert!(validate_active_routes(&[a,route(11,22,32,1920,1080)]).is_err());
+    }
+    #[test]
+    fn encoder_takeover_between_complete_snapshots_is_detected() {
+        // A connector can keep the same CRTC, FB_ID and dimensions after
+        // external DRM ownership changes: the identity must still differ.
+        let first=NativeOutputTopology{active:vec![route(11,21,31,1920,1080)]};
+        let mut changed=first.clone();
+        changed.active[0].original_encoder=control::from_u32(2999).unwrap();
+        assert_ne!(first,changed);
+        assert!(validate_active_routes(&changed.active).is_ok());
+    }
+    #[test]
+    fn two_output_snapshot_rejects_encoder_reuse_with_distinct_crtcs() {
+        let first=route(11,21,31,1920,1080);
+        let mut second=route(12,22,32,1920,1080);
+        second.original_encoder=first.original_encoder;
+        assert!(validate_active_routes(&[first,second]).is_err());
     }
     #[test]
     fn rejects_empty_excessive_and_invalid_output_modes() {
