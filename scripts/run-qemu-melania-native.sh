@@ -307,9 +307,14 @@ python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --out-dir "$report" --timeout 1350 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
+# Stage82D runs near the END of the full TCG guest (~23 minutes).
+# Give this one real QMP pixel observer time to see the kernel frame-12
+# marker; its deadline remains below QEMU's hard 1750s kill limit.
+# All other probes, actual screendump/pixel checks, and guest rollback gates
+# remain mandatory and unchanged. This is NOT a synthetic presentation.
 python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/real-layer-panel-frame12.ppm" --timeout 1350 \
+  --output "$report/real-layer-panel-frame12.ppm" --timeout 1680 \
   > "$report/qmp-real-layer-panel.log" 2>&1 &
 layer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-gtk-panel.py" \

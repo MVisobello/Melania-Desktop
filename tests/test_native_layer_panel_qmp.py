@@ -43,6 +43,26 @@ class TestPanelProof(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true",host)
         self.assertIn("real-layer-panel-frame12.ppm",host)
 
+    def test_qmp_layer_observer_covers_late_tcg_stage_without_weakening_pixels(self):
+        import re
+        host=(Path(__file__).resolve().parents[1]/
+              "scripts/run-qemu-melania-native.sh").read_text()
+        layer=re.search(
+            r'capture-qemu-real-layer-panel\\.py.*?--timeout (\\d+)',
+            host, re.S)
+        vm=re.search(
+            r'timeout --signal=TERM --kill-after=10s (\\d+)s\\s+\\\\\\s*qemu-system-x86_64',
+            host)
+        self.assertIsNotNone(layer)
+        self.assertIsNotNone(vm)
+        # A prior full QEMU run presented the kernel frame after the old
+        # 1350s observer had already exited. Preserve a finite host bound.
+        self.assertGreater(int(layer.group(1)),1350)
+        self.assertLess(int(layer.group(1)),int(vm.group(1)))
+        self.assertIn("MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true",host)
+        self.assertIn("MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true",host)
+        self.assertIn('test -s "$report/real-layer-panel-frame12.ppm"',host)
+
     def test_correct_pixels(self):self.assertEqual(len(m.verify(picture())),8)
     def test_wrong_edge_fails(self):
         b=bytearray(picture());b[-3:]=b"\x00\x00\x00"
