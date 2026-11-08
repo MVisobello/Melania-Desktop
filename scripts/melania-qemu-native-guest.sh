@@ -2585,16 +2585,22 @@ if [[ -z "$managed_socket" || ! -S /run/melania-native-qemu/continuous-frame-str
   cat "$managed_server_log"
   fatal 'managed_role_live_Wayland_stream_unavailable'
 fi
-# The host cannot inspect restored or replayed frames: stream each live
-# KMS-visible marker to serial while its framebuffer is still active.
-tail -n +1 -f -s 0.05 "$managed_kms_log" > /dev/ttyS0 &
+# Forward REAL KMS markers synchronously to serial while their CRTC
+# framebuffer is still scanning out. A polling tail -f on this late TCG
+# stage can miss the 2.5s hold; a FIFO tee also preserves the full kernel
+# output for the independent guest ACK and original-route rollback checks.
+# This never manufactures a marker or a QMP pixel.
+managed_kms_forward_dir="$(mktemp -d -t melania-managed-serial-XXXXXX)"
+managed_kms_fifo="$managed_kms_forward_dir/frames.fifo"
+mkfifo -m 600 "$managed_kms_fifo"
+tee "$managed_kms_log" < "$managed_kms_fifo" > /dev/ttyS0 &
 managed_tail_pid=$!
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=14 \
 MELANIA_QEMU_CONTINUOUS_TWO_WINDOWS=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_MANAGED_ROLE_QMP=YES_QEMU_VM \
   timeout --signal=TERM --kill-after=3s 96s \
-  "$continuous_kms" < /dev/tty1 > "$managed_kms_log" 2>&1 &
+  "$continuous_kms" < /dev/tty1 > "$managed_kms_fifo" 2>&1 &
 managed_kms_pid=$!
 for attempt in $(seq 1 100); do
   grep -q '^MELANIA_RUST_CONTINUOUS_KMS_CONNECTED=true' "$managed_kms_log" && break
@@ -2626,8 +2632,14 @@ if ! wait "$managed_server_pid"; then
   cat "$managed_server_log"
   fatal 'managed_role_Smithay_live_stream_failed'
 fi
-kill "$managed_tail_pid" 2>/dev/null || true
-wait "$managed_tail_pid" 2>/dev/null || true
+# Confirm the live serial forwarder drained every kernel marker before
+# cleaning the FIFO. Failure is a failed QMP proof, never a screenshot pass.
+if ! wait "$managed_tail_pid"; then
+  cat "$managed_kms_log" "$managed_server_log"
+  fatal 'managed_role_serial_forwarder_failed'
+fi
+rm -f "$managed_kms_fifo"
+rmdir "$managed_kms_forward_dir"
 cat "$managed_client_log" "$managed_kms_log" "$managed_server_log"
 for index in 3 5 7 9 13 14; do
   grep -q "^MELANIA_RUST_CONTINUOUS_MANAGED_ROLE_FRAME_VISIBLE=$index$" "$managed_kms_log" ||

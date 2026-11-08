@@ -302,20 +302,17 @@ python3 "$root/scripts/inject-qemu-edge-drop.py" \
   --out-dir "$report" --timeout 1350 \
   > "$report/qmp-edge-drop.log" 2>&1 &
 edge_inject_pid=$!
-# Managed XDG roles run in the final part of the full TCG VM. In a real
-# completed guest run (~1403s uptime), a 1350s observer exits before frame 3.
-# Keep independent QMP screendumps and all six pixel checks mandatory.
-# The observer still ends before QEMU's separate 1750s hard limit.
+# Managed XDG roles run late in the genuine TCG guest (~1400 s).
+# Preserve all six independent QMP pixel checks; only extend the observer
+# window beyond the actual live frame stage and below QEMU's 1750s hard stop.
 python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --out-dir "$report" --timeout 1680 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
-# Stage82D runs near the END of the full TCG guest (~23 minutes).
-# Give this one real QMP pixel observer time to see the kernel frame-12
-# marker; its deadline remains below QEMU's hard 1750s kill limit.
-# All other probes, actual screendump/pixel checks, and guest rollback gates
-# remain mandatory and unchanged. This is NOT a synthetic presentation.
+# The real layer-shell frame 12 is produced after the managed XDG stage:
+# its QMP observer must survive the same late TCG boot (~1400s in evidence).
+# Keep the exact framebuffer pixel check and stay under QEMU's 1750s limit.
 python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --output "$report/real-layer-panel-frame12.ppm" --timeout 1680 \
