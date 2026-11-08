@@ -32,6 +32,26 @@ class ReleaseInvariants(unittest.TestCase):
         for token in ['init_layer_shell()', 'fn start_window', 'fn quick_window', 'fn taskbar']:
             self.assertIn(token, source)
 
+    def test_panel_defers_external_quick_probes_until_mapped(self):
+        panel = (ROOT/'melania-panel/src/main.rs').read_text()
+        binary = panel.split('fn binary(', 1)[1].split('fn slider(', 1)[0]
+        slider = panel.split('fn slider(', 1)[1].split('fn quick_window(', 1)[0]
+        self.assertIn('b.connect_map(move |button|', binary)
+        self.assertIn('scale.connect_map(move |_|', slider)
+        self.assertIn('MELANIA_PANEL_STAGE=taskbar_presented', panel)
+        self.assertIn('fn quick_service_async<T: Send', panel)
+        self.assertIn('std::sync::mpsc::channel()', panel)
+        self.assertIn('quick_service_async(title, move || getter()', binary)
+        self.assertIn('quick_service_async(title, move || get()', slider)
+        self.assertNotIn('match getter() {', binary)
+        self.assertNotIn('let value=get().ok()', slider)
+        # The outer Gtk mapping callbacks are not allowed to block on D-Bus.
+        self.assertIn('let current=getter()?;', binary)
+        services=(ROOT/'melania-services/src/lib.rs').read_text()
+        self.assertIn('SERVICE_COMMAND_TIMEOUT', services)
+        self.assertIn('Command::new("timeout")', services)
+        self.assertIn('--kill-after=1s', services)
+
     def test_virtualbox_software_preview_is_explicit_opt_in(self):
         script = (ROOT/'scripts/melania-session').read_text()
         self.assertIn('--nested|--nested-software)', script)
