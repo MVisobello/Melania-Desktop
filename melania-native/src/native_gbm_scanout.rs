@@ -219,8 +219,8 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 else {handles[(index-1) as usize%2]};
             // Even a failed DRM ioctl read is loss of trusted ownership.
             // Revoke the pending event epoch before propagating the error.
-            let owned=crate::native_kms_scanout::verify_presenter_ownership(
-                &card,crtc,connector,prior_fb,(w,h),
+            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,prior_fb,(w,h),
             ).map_err(|error| {
                 event_router.revoke();
                 rollback.ownership_lost=true;
@@ -266,6 +266,21 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             wait_for_scanout(&card,crtc,connector,handles[index as usize%2])?;
+            // A DRM vblank and FB_ID do not authorize a frame ACK if the
+            // original connector encoder has changed on this live CRTC.
+            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,handles[index as usize%2],(w,h),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("GPU KMS original encoder changed before frame ACK".into());
+            }
+            println!("MELANIA_NATIVE_GBM_KMS_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             if index>0 {
                 println!("MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED={}",
                          flip_ledger.completed_count());
@@ -444,8 +459,8 @@ pub fn qemu_wayland_gpu_scene_stream(
             // between frames. Never render/submit into a lost DRM route.
             let previous_fb=if index==0 {route.original_fb}
                 else {handles[(index-1) as usize%2]};
-            let owned=crate::native_kms_scanout::verify_presenter_ownership(
-                &card,crtc,connector,previous_fb,(W as u16,H as u16),
+            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,previous_fb,(W as u16,H as u16),
             ).map_err(|error| {
                 event_router.revoke();
                 rollback.ownership_lost=true;
@@ -487,6 +502,19 @@ pub fn qemu_wayland_gpu_scene_stream(
             // A kernel page flip event alone is NOT evidence that the desired
             // framebuffer was routed to this physical CRTC/connector.
             wait_for_scanout(&card,crtc,connector,framebuffer)?;
+            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,framebuffer,(W as u16,H as u16),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("GPU Wayland original encoder changed before client ACK".into());
+            }
+            println!("MELANIA_NATIVE_GPU_WAYLAND_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             println!("MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE={}",index+1);
             if index>0 {
                 println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
