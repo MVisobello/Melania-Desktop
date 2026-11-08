@@ -250,6 +250,9 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     // pause, GPU hotplug, or another acquisition epoch. No DMA-BUF is made.
     let mut owned:Option<(melania_native::device_epoch::DeviceEpoch,OwnedFd)>=None;
     let mut opened=0u32;
+    // Bind every acquisition epoch to the same real kernel character-node
+    // identity, not merely the reusable /dev/dri/cardN pathname.
+    let mut first_drm_node:Option<melania_native::native_drm_node_identity::DrmNodeIdentity>=None;
     let mut observed_pause=false;
     let mut cycled=false;
     let mut physical_resume_verified=false;
@@ -293,6 +296,15 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // Actual libseat/seatd acquisition, NEVER a direct /dev/dri open.
             let fd=session.open(&card_path,
                 OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK)?;
+            let kernel_node=match melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                &card_path,&fd,first_drm_node
+            ) {
+                Ok(node)=>node,
+                Err(error)=>{
+                    session.close(fd)?;
+                    return Err(error.into());
+                }
+            };
             // Keep a single libseat-issued DRM FD alive while rebuilding
             // the renderer on a fresh cloned descriptor. GBM/EGL, its real
             // DMA-BUF allocations and GPU fences are dropped completely
@@ -347,7 +359,25 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                 session.close(fd)?;
                 return Err("Seat/GPU invalidated during real DRM reacquisition".into());
             }
-            opened=opened.checked_add(1).ok_or("DRM acquisition counter overflow")?;
+            // Detect a replaced device node EVEN when udev delivered no
+            // notification during GPU initialization. Refuse stale handles
+            // rather than treating a matching /dev/dri path as ownership.
+            if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                &card_path,&fd,Some(kernel_node)
+            ) {
+                session.close(fd)?;
+                return Err(error.into());
+            }
+            let next_open=match opened.checked_add(1) {
+                Some(next)=>next,
+                None=>{
+                    session.close(fd)?;
+                    return Err("DRM acquisition counter overflow".into());
+                }
+            };
+            opened=next_open;
+            first_drm_node=Some(kernel_node);
+            println!("MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED={opened} rdev={}",kernel_node.rdev());
             // A physical proof can only complete after an actual libseat
             // PauseSession was observed and a NEW seat-owned FD has passed
             // every real output-sized GPU render/sync and epoch check.
