@@ -33,6 +33,11 @@ on:
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
       - scripts/inject-qemu-hover-focus.py
+      - scripts/inject-qemu-native-tab-stacks.py
+      - scripts/inject-qemu-combined-tab-tiling.py
+      - tests/test_native_tab_stacks_qemu_stage129.py
+      - tests/test_native_combined_tab_tiling_stage136.py
+      - tests/test_native_tab_resize_wiring_stage132.py
       - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
@@ -116,6 +121,11 @@ on:
       - scripts/inject-qemu-authenticated-resize.py
       - scripts/inject-qemu-alt-tab.py
       - scripts/inject-qemu-hover-focus.py
+      - scripts/inject-qemu-native-tab-stacks.py
+      - scripts/inject-qemu-combined-tab-tiling.py
+      - tests/test_native_tab_stacks_qemu_stage129.py
+      - tests/test_native_combined_tab_tiling_stage136.py
+      - tests/test_native_tab_resize_wiring_stage132.py
       - scripts/capture-qemu-real-xdg-popup.py
       - scripts/capture-qemu-dynamic-pointer.py
       - scripts/capture-qemu-managed-xdg-roles.py
@@ -181,7 +191,7 @@ jobs:
   native-kms:
     name: Rust melania-native KMS TEST_ONLY in isolated VirtIO GPU guest
     runs-on: ubuntu-24.04
-    timeout-minutes: 29
+    timeout-minutes: 38
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -217,6 +227,9 @@ jobs:
           python3 -m py_compile scripts/inject-qemu-alt-tab.py
           python3 -m py_compile scripts/inject-qemu-hover-focus.py
           python3 -m unittest discover -s tests -p 'test_native_focus_follows_pointer_qemu_stage130.py' -v
+          python3 -m py_compile scripts/inject-qemu-native-tab-stacks.py
+          python3 -m py_compile scripts/inject-qemu-combined-tab-tiling.py
+          python3 -m unittest discover -s tests -p 'test_native_combined_tab_tiling_stage136.py' -v
           python3 -m py_compile scripts/capture-qemu-real-xdg-popup.py
           python3 -m py_compile scripts/inject-qemu-edge-drop.py
           python3 -m unittest discover -s tests -p 'test_native_edge_drop_qemu_stage121.py' -v
@@ -250,6 +263,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_native_xdg_qmp_role_pixels.py' -v
           python3 -m unittest discover -s tests -p 'test_native_authenticated_resize_qemu_stage114.py' -v
           python3 -m unittest discover -s tests -p 'test_native_alt_tab_qemu_stage116.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_tab_stacks_qemu_stage129.py' -v
+          python3 -m unittest discover -s tests -p 'test_native_tab_resize_wiring_stage132.py' -v
           python3 -m unittest discover -s tests -p 'test_native_xdg_popup_qemu_stage118.py' -v
           python3 -m unittest discover -s tests -p 'test_native_popup_escape_qemu_stage125.py' -v
           python3 -m py_compile scripts/capture-qemu-live-kms-stream.py
