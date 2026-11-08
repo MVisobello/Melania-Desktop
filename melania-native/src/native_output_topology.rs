@@ -30,10 +30,10 @@ pub struct ActiveOutputRoute {
     pub original_fb:framebuffer::Handle,
     pub width:u16,
     pub height:u16,
-    /// Actual origin of this CRTC in the kernel framebuffer coordinate space.
+    /// Exact drm-rs kernel CRTC position in framebuffer coordinates (u32).
     /// Preserve it across full scans: FB_ID, encoder and mode dimensions can
     /// remain identical while an external modeset moves an output.
-    pub origin:(i32,i32),
+    pub origin:(u32,u32),
 }
 
 #[derive(Clone,Debug,PartialEq,Eq)]
@@ -300,7 +300,7 @@ mod tests {
         // when the exact FB, connector, encoder and mode size are unchanged.
         // The current baseline must therefore retain the kernel CRTC origin.
         let mut a=route(11,21,31,1920,1080);
-        a.origin=(-1920,0);
+        a.origin=(1920,0);
         let original=NativeOutputTopology{active:vec![a]};
         let mut moved=original.clone();
         moved.active[0].origin=(0,0);
