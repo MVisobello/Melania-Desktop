@@ -168,13 +168,34 @@ pub fn verify_original_encoder_frame(
             .map_err(|e|format!("DRM original-encoder frame encoder ioctl failed: {e}"))?;
         Ok(routed.crtc()==Some(crtc))
     }
+    // Begin a frame-spanning CRTC baseline BEFORE the first original-route
+    // read. The inner presenter check is not an atomic DRM transaction:
+    // a VT takeover can restore the same connector/encoder identity while
+    // changing CRTC mode or position after its internal second ioctl.
+    let first_crtc=card.get_crtc(crtc)
+        .map_err(|e|format!("DRM original-encoder frame baseline CRTC ioctl failed: {e}"))?;
+    let Some(first_mode)=first_crtc.mode() else {return Ok(false);};
+    if first_crtc.framebuffer()!=Some(expected_fb) ||
+       first_mode.size()!=expected_size {
+        return Ok(false);
+    }
     if !original_route(card,crtc,connector,original_encoder)? {
         return Ok(false);
     }
     if !verify_presenter_ownership(card,crtc,connector,expected_fb,expected_size)? {
         return Ok(false);
     }
-    original_route(card,crtc,connector,original_encoder)
+    if !original_route(card,crtc,connector,original_encoder)? {
+        return Ok(false);
+    }
+    // Close the outer bracket AFTER the final encoder read. Even with the
+    // exact original connector route still attached, never acknowledge a
+    // framebuffer that was moved or modeset between non-atomic read passes.
+    let final_crtc=card.get_crtc(crtc)
+        .map_err(|e|format!("DRM original-encoder frame final CRTC ioctl failed: {e}"))?;
+    Ok(final_crtc.framebuffer()==Some(expected_fb) &&
+       final_crtc.mode()==Some(first_mode) &&
+       final_crtc.position()==first_crtc.position())
 }
 
 /// Validate the original kernel connector -> encoder -> CRTC route before
