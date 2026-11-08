@@ -30,6 +30,10 @@ pub struct ActiveOutputRoute {
     pub original_fb:framebuffer::Handle,
     pub width:u16,
     pub height:u16,
+    /// Actual origin of this CRTC in the kernel framebuffer coordinate space.
+    /// Preserve it across full scans: FB_ID, encoder and mode dimensions can
+    /// remain identical while an external modeset moves an output.
+    pub origin:(i32,i32),
 }
 
 #[derive(Clone,Debug,PartialEq,Eq)]
@@ -170,6 +174,7 @@ pub fn inspect_active_outputs(
             crtc:crtc_handle,
             original_encoder:encoder_handle,
             original_fb,width,height,
+            origin:crtc_info.position(),
         });
         if active.len()>MAX_ACTIVE_DRM_OUTPUTS {
             return Err("DRM topology exceeds supported active output capacity".into());
@@ -229,6 +234,7 @@ mod tests {
             original_encoder:control::from_u32(conn+1000).unwrap(),
             original_fb:control::from_u32(fb).unwrap(),
             width:w,height:hgt,
+            origin:(0,0),
         }
     }
     #[test]
@@ -287,6 +293,20 @@ mod tests {
         changed.active[0].original_encoder=control::from_u32(2999).unwrap();
         assert_ne!(first,changed);
         assert!(validate_active_routes(&changed.active).is_ok());
+    }
+    #[test]
+    fn crtc_origin_takeover_between_full_kernel_scans_is_detected() {
+        // Two independent full scans may each be internally consistent even
+        // when the exact FB, connector, encoder and mode size are unchanged.
+        // The current baseline must therefore retain the kernel CRTC origin.
+        let mut a=route(11,21,31,1920,1080);
+        a.origin=(-1920,0);
+        let original=NativeOutputTopology{active:vec![a]};
+        let mut moved=original.clone();
+        moved.active[0].origin=(0,0);
+        assert_ne!(original,moved);
+        assert!(validate_active_routes(&original.active).is_ok());
+        assert!(validate_active_routes(&moved.active).is_ok());
     }
     #[test]
     fn two_output_snapshot_rejects_encoder_reuse_with_distinct_crtcs() {

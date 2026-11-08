@@ -21,6 +21,7 @@ class NativeTopologySnapshotOwnership(unittest.TestCase):
             "latest_crtc.framebuffer()!=Some(original_fb)",
             "latest_crtc.mode()!=Some(mode)",
             "latest_crtc.position()!=crtc_info.position()",
+            "origin:crtc_info.position()",
             "let latest_connector=card.get_connector(connector_handle,false)",
             "latest_connector.state()!=connector::State::Connected",
             "latest_connector.current_encoder()!=Some(encoder_handle)",
@@ -44,6 +45,8 @@ class NativeTopologySnapshotOwnership(unittest.TestCase):
         self.assertIn("let before=inspect_active_outputs(card)?;", SRC)
         self.assertIn("let after=inspect_active_outputs(card)?;", SRC)
         self.assertIn("if before!=after", SRC)
+        self.assertIn("origin:crtc_info.position()", SRC)
+        self.assertIn("fn crtc_origin_takeover_between_full_kernel_scans_is_detected()", SRC)
         self.assertIn("validate_active_routes(&active)?;", SRC)
 
 

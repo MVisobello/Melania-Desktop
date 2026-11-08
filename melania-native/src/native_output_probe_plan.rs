@@ -55,6 +55,7 @@ mod tests {
             original_encoder:control::from_u32(conn+1000).unwrap(),
             original_fb:control::from_u32::<framebuffer::Handle>(fb).unwrap(),
             width:w,height:h,
+            origin:(0,0),
         }
     }
     #[test]
