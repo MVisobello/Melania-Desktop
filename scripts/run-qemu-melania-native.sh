@@ -302,9 +302,12 @@ python3 "$root/scripts/inject-qemu-edge-drop.py" \
   --out-dir "$report" --timeout 1350 \
   > "$report/qmp-edge-drop.log" 2>&1 &
 edge_inject_pid=$!
+# Managed XDG roles run late in the genuine TCG guest (~1400 s).
+# Preserve all six independent QMP pixel checks; only extend the observer
+# window beyond the actual live frame stage and below QEMU's 1750s hard stop.
 python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --out-dir "$report" --timeout 1350 \
+  --out-dir "$report" --timeout 1680 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
