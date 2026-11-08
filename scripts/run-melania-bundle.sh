@@ -43,8 +43,15 @@ preflight() {
     }
     export LD_LIBRARY_PATH="$ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   fi
-  if command -v ldd >/dev/null 2>&1; then
-    local diagnostic
+  # Never report an apparently healthy desktop if the host cannot perform
+  # runtime linker checks: missing GTK4 layer-shell can leave only wallpaper.
+  # `ldd` is a required preflight dependency, not an optional diagnostic.
+  command -v ldd >/dev/null 2>&1 || {
+    echo 'BLOCKED: ldd is required to check bundled Linux runtime libraries' >&2
+    echo 'HINT: install the distribution-provided ldd (libc-bin on Ubuntu/Mint).' >&2
+    return 78
+  }
+  local diagnostic
     for binary in melania-compositor melania-desktop-surface melania-panel \
                   melania-files melania-settings melania-winctl \
                   melania-notifyd melania-notifyctl; do
@@ -60,7 +67,6 @@ preflight() {
         return 78
       fi
     done
-  fi
   echo 'MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true'
   echo 'MELANIA_NATIVE_LOGIN_SESSION_READY=false'
 }

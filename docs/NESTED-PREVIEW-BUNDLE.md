@@ -68,7 +68,7 @@ install/uninstall scripts; they are **not part of this portable archive**.
 
 ## Problems and evidence
 
-Run `./run.sh --check` for missing-host/bundle prerequisites. Report the
+Run `./run.sh --check` for missing-host/bundle prerequisites. This\ncheck now *fails closed* (exit code 78) if `ldd` is absent, or if any GTK4\nor other bundled executable library is unresolved. On Ubuntu/Mint, `ldd`\nis usually provided by `libc-bin`. Do not bypass the check or mix system\nlibraries from another Linux release. Report the
 `manifest.json` commit, distribution version, GPU, terminal output and the
 relevant GitHub Actions run URLs. Never treat "runner started" as equivalent
 to "end-to-end tests passed".
