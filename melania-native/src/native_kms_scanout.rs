@@ -128,6 +128,59 @@ pub fn verify_presenter_ownership(
     Ok(latest_routing.crtc()==Some(crtc))
 }
 
+
+/// Validate the original kernel connector -> encoder -> CRTC route before
+/// restoring an owned framebuffer and after the restore ioctl completes.
+/// Linux may move a connector to another encoder targeting the SAME CRTC;
+/// accepting only the CRTC would overwrite a foreign scanout. Require the
+/// original encoder, full DRM mode, position and permitted FB_ID, in TWO
+/// independent kernel-read passes. This is not an atomic snapshot or DRM
+/// master lease, so physical VT/hotplug validation remains mandatory.
+///
+/// The owner may pass its currently allocated FB_IDs before restoration;
+/// passing [] after set_crtc permits ONLY the original framebuffer.
+pub fn verify_rollback_route(
+    card:&impl ControlDevice,
+    original:&crtc::Info,
+    connector:connector::Handle,
+    original_encoder:drm::control::encoder::Handle,
+    owned_fbs:&[framebuffer::Handle],
+)->Result<bool,String> {
+    fn snapshot(
+        card:&impl ControlDevice,
+        original:&crtc::Info,
+        connector:connector::Handle,
+        expected_encoder:drm::control::encoder::Handle,
+        owned_fbs:&[framebuffer::Handle],
+    )->Result<Option<framebuffer::Handle>,String> {
+        let current=card.get_crtc(original.handle())
+            .map_err(|e|format!("DRM rollback get_crtc failed: {e}"))?;
+        if current.mode()!=original.mode() || current.position()!=original.position() {
+            return Ok(None);
+        }
+        let Some(fb)=current.framebuffer() else {return Ok(None)};
+        if original.framebuffer()!=Some(fb) && !owned_fbs.contains(&fb) {
+            return Ok(None);
+        }
+        let output=card.get_connector(connector,false)
+            .map_err(|e|format!("DRM rollback get_connector failed: {e}"))?;
+        if output.state()!=connector::State::Connected ||
+            output.current_encoder()!=Some(expected_encoder) {
+            return Ok(None);
+        }
+        let encoder=card.get_encoder(expected_encoder)
+            .map_err(|e|format!("DRM rollback get_encoder failed: {e}"))?;
+        if encoder.crtc()!=Some(original.handle()) {
+            return Ok(None);
+        }
+        Ok(Some(fb))
+    }
+    let first=snapshot(card,original,connector,original_encoder,owned_fbs)?;
+    if first.is_none() {return Ok(false);}
+    let second=snapshot(card,original,connector,original_encoder,owned_fbs)?;
+    Ok(first==second)
+}
+
 /// Pure snapshot predicate for regression tests and for consumers that
 /// already read the DRM resources. No virtual GPU or fabricated event is
 /// treated as a physical acceptance test.
