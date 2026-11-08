@@ -310,9 +310,12 @@ python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --out-dir "$report" --timeout 1680 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
+# The real layer-shell frame 12 is produced after the managed XDG stage:
+# its QMP observer must survive the same late TCG boot (~1400s in evidence).
+# Keep the exact framebuffer pixel check and stay under QEMU's 1750s limit.
 python3 "$root/scripts/capture-qemu-real-layer-panel.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/real-layer-panel-frame12.ppm" --timeout 1350 \
+  --output "$report/real-layer-panel-frame12.ppm" --timeout 1680 \
   > "$report/qmp-real-layer-panel.log" 2>&1 &
 layer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-gtk-panel.py" \
