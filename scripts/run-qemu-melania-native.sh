@@ -302,9 +302,13 @@ python3 "$root/scripts/inject-qemu-edge-drop.py" \
   --out-dir "$report" --timeout 1350 \
   > "$report/qmp-edge-drop.log" 2>&1 &
 edge_inject_pid=$!
+# Managed XDG roles run in the final part of the full TCG VM. In a real
+# completed guest run (~1403s uptime), a 1350s observer exits before frame 3.
+# Keep independent QMP screendumps and all six pixel checks mandatory.
+# The observer still ends before QEMU's separate 1750s hard limit.
 python3 "$root/scripts/capture-qemu-managed-xdg-roles.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --out-dir "$report" --timeout 1350 \
+  --out-dir "$report" --timeout 1680 \
   > "$report/qmp-managed-xdg-roles.log" 2>&1 &
 managed_role_capture_pid=$!
 # Stage82D runs near the END of the full TCG guest (~23 minutes).
