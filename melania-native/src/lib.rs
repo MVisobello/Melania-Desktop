@@ -46,6 +46,7 @@ pub mod input_registry;
 pub mod native_presentation_guard;
 pub mod native_frame_budget;
 pub mod native_resource_recovery;
+pub mod native_drm_node_identity;
 pub mod native_gpu_watch;
 pub mod native_output_dispatch;
 pub mod native_kms_scanout;

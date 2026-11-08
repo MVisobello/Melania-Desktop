@@ -54,8 +54,20 @@ class GpuKmsBridge(unittest.TestCase):
         self.assertIn("session.open(",body)
         self.assertIn("fd.try_clone()?",body)
         self.assertIn("session.close(fd)",body)
-        self.assertLess(body.index("qemu_two_gpu_frames(cloned)"),
-                        body.index("session.close(fd)"))
+        # An early libseat close is intentional on a failed DRM FD identity
+        # check. The success path must instead finish GPU scanout/rollback
+        # before releasing the real seat-owned descriptor.
+        scanout=body.index("qemu_two_gpu_frames(cloned)")
+        early_close=body.index("session.close(fd)")
+        final_close=body.rindex("session.close(fd)")
+        self.assertLess(early_close,scanout)
+        self.assertLess(scanout,final_close)
+        self.assertIn("verify_libseat_drm_primary_card(",body)
+        self.assertLess(body.index("verify_libseat_drm_primary_card("),scanout)
+        self.assertLess(scanout,body.rindex("verify_libseat_drm_primary_card("))
+        self.assertLess(body.rindex("verify_libseat_drm_primary_card("),final_close)
+        self.assertLess(final_close,body.index("outcome?;"))
+        self.assertLess(final_close,body.index("still_same?;"))
         self.assertIn("NATIVE_SESSION_READY=false",body)
         self.assertNotIn("NATIVE_SESSION_READY=true",MAIN)
         self.assertIn('--experimental-gbm-kms-scanout',MAIN)

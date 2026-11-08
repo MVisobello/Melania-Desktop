@@ -90,6 +90,47 @@ fi
 rm -f "$input_log"
 report 'MELANIA_QEMU_NATIVE_LIBINPUT_SESSION_PASS=true'
 
+# Exercise real libseat/seatd DRM FD acquisition, close, and reopen in the
+# disposable VM. Every new descriptor must initialize an independent real
+# GBM/EGL/GLES context for EACH actual active CRTC mode, allocate and
+# synchronize TWO DMA-BUF GPU frames per output and verify the kernel DRM
+# topology unchanged. No VT switch is faked; no scanout is modified.
+readonly_reopen_log="$(mktemp -t melania-qemu-readonly-reopen-XXXXXX)"
+if ! MELANIA_NATIVE_READONLY_CYCLE=YES_QEMU_VM timeout --signal=TERM --kill-after=3s 40s \
+  "$binary" --experimental-vt-reacquire < /dev/tty1 | tee "$readonly_reopen_log"; then
+  cat "$readonly_reopen_log"
+  rm -f "$readonly_reopen_log"
+  fatal 'native_real_libseat_DRM_reopen_failed'
+fi
+if ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=1 crtcs=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=2 crtcs=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACQUISITIONS=2$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_READONLY_ACTUAL_PAUSE_OBSERVED=false$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=1 rdev=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=2 rdev=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=1 frames=2$' "$readonly_reopen_log" ||
+   ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=2 frames=2$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=1 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=2 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   [[ "$(grep -Ec '^MELANIA_NATIVE_VT_REAL_OUTPUT_GBM crtc=.+ [0-9]+x[0-9]+ frames=2$' "$readonly_reopen_log")" -lt 2 ]]; then
+  cat "$readonly_reopen_log"
+  rm -f "$readonly_reopen_log"
+  fatal 'native_libseat_DRM_reopen_evidence_missing'
+fi
+# Both independent seatd acquisitions MUST correspond to the same real
+# kernel character-device number. The Rust backend additionally checks
+# the inode and filesystem device on every opened libseat FD.
+if [[ "$(grep -Ec '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=[12] rdev=[1-9][0-9]*$' "$readonly_reopen_log")" != 2 ]] ||
+   [[ "$(grep -E '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=[12] rdev=[1-9][0-9]*$' "$readonly_reopen_log" | awk '{print $2}' | sort -u | wc -l)" != 1 ]]; then
+  cat "$readonly_reopen_log"
+  rm -f "$readonly_reopen_log"
+  fatal 'libseat_DRM_node_identity_changed_across_reopen'
+fi
+rm -f "$readonly_reopen_log"
+report 'MELANIA_QEMU_REAL_LIBSEAT_DRM_NODE_IDENTITY_PASS=true'
+report 'MELANIA_QEMU_REAL_LIBSEAT_DRM_REOPEN_PASS=true'
+
 # Try the genuine Rust/Smithay KMS preflight, not a C substitute or mock.
 # It is TEST_ONLY and never issues an atomic commit/page flip/scanout.
 set +e
@@ -132,13 +173,17 @@ cat "$gpu_kms_log"
 for marker in \
   'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=1' \
   'MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=2' \
+  'MELANIA_NATIVE_GBM_KMS_ORIGINAL_ENCODER_FRAME_ACK=1' \
+  'MELANIA_NATIVE_GBM_KMS_ORIGINAL_ENCODER_FRAME_ACK=2' \
   'MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK=2' \
   'MELANIA_NATIVE_GBM_KMS_TOPOLOGY_STABLE_OUTPUTS=1' \
   'MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED=1' \
+  'MELANIA_NATIVE_GBM_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_TWO_GPU_FRAMES_PASS=true' \
-  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true'; do
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true' \
+   'MELANIA_NATIVE_GBM_KMS_DRM_FD_IDENTITY_VERIFIED=true'; do
   grep -q "^${marker}$" "$gpu_kms_log" ||
     fatal "native_GLES_KMS_missing_${marker}"
 done
@@ -161,6 +206,8 @@ fi
 for index in $(seq 1 24); do
   grep -q "^MELANIA_NATIVE_GBM_KMS_GPU_FRAME_VISIBLE=$index$" "$gpu_stress_log" ||
     fatal "GPU_stress_real_CRTC_frame_${index}_missing"
+  grep -q "^MELANIA_NATIVE_GBM_KMS_ORIGINAL_ENCODER_FRAME_ACK=$index$" "$gpu_stress_log" ||
+    fatal "GPU_stress_original_encoder_frame_${index}_unverified"
 done
 for marker in \
   'MELANIA_NATIVE_GBM_KMS_TOPOLOGY_STABLE_OUTPUTS=1' \
@@ -168,9 +215,11 @@ for marker in \
   'MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED=23' \
   'MELANIA_NATIVE_GBM_KMS_REUSED_DMA_BUFS=2' \
   'MELANIA_NATIVE_GBM_KMS_24_GPU_FRAMES_PASS=true' \
+  'MELANIA_NATIVE_GBM_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
-  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true'; do
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true' \
+   'MELANIA_NATIVE_GBM_KMS_DRM_FD_IDENTITY_VERIFIED=true'; do
   grep -q "^$marker$" "$gpu_stress_log" || {
     cat "$gpu_stress_log"
     fatal "GPU_stress_missing_${marker}"
@@ -1193,6 +1242,8 @@ for index in $(seq 1 24); do
 done
 for marker in \
   'MELANIA_RUST_KMS_SCANOUT_ROUTE_VERIFIED=24' \
+  'MELANIA_RUST_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true' \
+  'MELANIA_RUST_KMS_ORIGINAL_ENCODER_FRAME_ACK=24' \
   'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
   'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' \
   'MELANIA_RUST_CONTINUOUS_FRAMES_PASS=24' \

@@ -85,6 +85,7 @@ struct Restore<'a> {
     card:&'a Card,
     original:crtc::Info,
     connector:connector::Handle,
+    original_encoder:control::encoder::Handle,
     submitted:bool,
     restored:bool,
     ownership_lost:bool,
@@ -103,31 +104,19 @@ impl Restore<'_> {
         // Do not overwrite a foreign scanout acquired since the last ACK.
         // An unreadable DRM resource is a lost ownership proof. Mark the
         // rollback guard permanently unsafe, including its Drop retry.
-        let current=self.card.get_crtc(old.handle()).map_err(|error|{
+        // Read the actual original encoder route twice. A re-routed
+        // connector is foreign KMS ownership, even on the same CRTC.
+        let safe=melania_native::native_kms_scanout::verify_rollback_route(
+            self.card,&old,self.connector,self.original_encoder,&self.owned_fbs,
+        ).map_err(|error|{
             self.ownership_lost=true;
             error
         })?;
-        let output=self.card.get_connector(self.connector,false).map_err(|error|{
+        if !safe {
             self.ownership_lost=true;
-            error
-        })?;
-        if output.state()!=connector::State::Connected {
-            self.ownership_lost=true;
-            return Err("DRM rollback refused: connector disconnected".into());
+            return Err("DRM rollback refused: original connector/encoder/mode/position/FB changed".into());
         }
-        let routed=match output.current_encoder() {
-            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
-                self.ownership_lost=true;
-                error
-            })?.crtc()==Some(old.handle()),
-            None=>false,
-        };
-        let known=current.framebuffer()==old.framebuffer() ||
-            current.framebuffer().is_some_and(|fb|self.owned_fbs.contains(&fb));
-        if !routed || current.mode()!=old.mode() || !known {
-            self.ownership_lost=true;
-            return Err("DRM rollback refused: live CRTC route/mode/FB changed".into());
-        }
+        println!("MELANIA_RUST_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true");
         // A failed restoring modeset can have partially affected kernel state.
         // Never let Drop issue the same ioctl again without fresh ownership
         // acquisition: the original route may have been taken over.
@@ -138,28 +127,13 @@ impl Restore<'_> {
         })?;
         // Once a restore ioctl has been submitted, unreadable verification
         // cannot authorize Drop to issue the same modeset again.
-        let observed=self.card.get_crtc(old.handle()).map_err(|error|{
+        let connector_attached=melania_native::native_kms_scanout::verify_rollback_route(
+            self.card,&old,self.connector,self.original_encoder,&[],
+        ).map_err(|error|{
             self.ownership_lost=true;
             error
         })?;
-        // A matching FB_ID alone does not prove that the original connector
-        // is still attached to this CRTC. Verify the encoder -> CRTC route
-        // after the restoring modeset, before destroying the guest buffers.
-        let restored_output=self.card.get_connector(self.connector,false).map_err(|error|{
-            self.ownership_lost=true;
-            error
-        })?;
-        let connector_attached=match restored_output.current_encoder() {
-            Some(encoder)=>self.card.get_encoder(encoder).map_err(|error|{
-                self.ownership_lost=true;
-                error
-            })?.crtc()==Some(old.handle()),
-            None=>false,
-        };
-        self.restored=observed.framebuffer()==old.framebuffer()
-            && observed.position()==old.position()
-            && observed.mode()==old.mode()
-            && connector_attached;
+        self.restored=connector_attached;
         println!("MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED={connector_attached}");
         println!("MELANIA_RUST_KMS_RESTORE_VERIFIED={}",self.restored);
         if !self.restored {
@@ -290,13 +264,18 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         return Err("QEMU streaming original FB_ID changed after topology capture".into());
     }
     let connected=vec![route.connector];
+    let original_encoder=card.get_connector(route.connector,false)?
+        .current_encoder().ok_or("Original CPU scanout connector has no encoder")?;
+    if card.get_encoder(original_encoder)?.crtc()!=Some(crtc_handle) {
+        return Err("Original CPU scanout encoder moved after route snapshot".into());
+    }
 
     let mut db1=card.create_dumb_buffer((W as u32,H as u32),DrmFourcc::Xrgb8888,32)?;
     let mut db2=card.create_dumb_buffer((W as u32,H as u32),DrmFourcc::Xrgb8888,32)?;
     let fb1=card.add_framebuffer(&db1,24,32)?;
     let fb2=card.add_framebuffer(&db2,24,32)?;
     let mut rollback=Restore{
-        card:&card,original,connector:connected[0],submitted:false,restored:false,ownership_lost:false,owned_fbs:[fb1,fb2]
+        card:&card,original,connector:connected[0],original_encoder,submitted:false,restored:false,ownership_lost:false,owned_fbs:[fb1,fb2]
     };
     let mut previous:Option<Vec<u8>>=None;
     let mut flip_ledger=melania_native::native_flip_ledger::NativeFlipLedger::default();
@@ -381,8 +360,8 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
-            let owned=melania_native::native_kms_scanout::verify_presenter_ownership(
-                &card,crtc_handle,connected[0],previous_fb,(W as u16,H as u16),
+            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc_handle,connected[0],original_encoder,previous_fb,(W as u16,H as u16),
             ).map_err(|error| {
                 // EIO/ENODEV during VT loss is not a harmless read failure.
                 // Never reuse the event router after this acquisition fails.
@@ -465,6 +444,22 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             )? {
                 return Err("QEMU continuous KMS scanout lost connector/CRTC route".into());
             }
+            // The original encoder identity must survive the KMS flip,
+            // not merely the eventual restoration at compositor shutdown.
+            // Never send a Wayland callback if another encoder took over.
+            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc_handle,connected[0],original_encoder,framebuffer,(W as u16,H as u16),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("CPU KMS original encoder changed before scene ACK".into());
+            }
+            println!("MELANIA_RUST_KMS_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             if index>0 {
                 println!("MELANIA_RUST_KMS_FLIP_LEDGER_CONFIRMED={}",
                          flip_ledger.completed_count());
