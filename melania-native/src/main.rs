@@ -671,10 +671,23 @@ fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
     if !session.is_active() {
         return Err("QEMU GPU scanout requires an active libseat session".into());
     }
+    let card_path=Path::new("/dev/dri/card0");
     let fd=session.open(
-        Path::new("/dev/dri/card0"),
+        card_path,
         OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
     )?;
+    // The scanout probe must not trust the pathname alone: require the
+    // actual libseat-issued FD to be this kernel DRM primary card before
+    // any GBM allocation or KMS modeset can be attempted.
+    let original_node=match melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+        card_path,&fd,None
+    ) {
+        Ok(node)=>node,
+        Err(error)=>{
+            session.close(fd)?;
+            return Err(error.into());
+        }
+    };
     // The native GPU/KMS probe must finish (and restore the CRTC)
     // before the original libseat device is released.
     let cloned=fd.try_clone()?;
@@ -687,11 +700,20 @@ fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
             melania_native::native_gbm_scanout::qemu_stress_gpu_frames(cloned,24),
         Some(_)=>Err("invalid QEMU GBM stress opt-in".into()),
     };
+    // Even a successful real KMS presentation must not be accepted if the
+    // node was removed/replaced while the scanout/rollback routine ran.
+    // Do not let this check skip the existing rollback: the KMS routine
+    // has already returned before this second identity inspection.
+    let still_same=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+        card_path,&fd,Some(original_node)
+    );
     let released=session.close(fd);
     drop(notifier);
     println!("MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED={}",released.is_ok());
     released?;
     outcome?;
+    still_same?;
+    println!("MELANIA_NATIVE_GBM_KMS_DRM_FD_IDENTITY_VERIFIED=true");
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }

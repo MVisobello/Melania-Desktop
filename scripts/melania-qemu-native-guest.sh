@@ -179,7 +179,8 @@ for marker in \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_TWO_GPU_FRAMES_PASS=true' \
-  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true'; do
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true' \
+   'MELANIA_NATIVE_GBM_KMS_DRM_FD_IDENTITY_VERIFIED=true'; do
   grep -q "^${marker}$" "$gpu_kms_log" ||
     fatal "native_GLES_KMS_missing_${marker}"
 done
@@ -211,7 +212,8 @@ for marker in \
   'MELANIA_NATIVE_GBM_KMS_24_GPU_FRAMES_PASS=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
-  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true'; do
+  'MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED=true' \
+   'MELANIA_NATIVE_GBM_KMS_DRM_FD_IDENTITY_VERIFIED=true'; do
   grep -q "^$marker$" "$gpu_stress_log" || {
     cat "$gpu_stress_log"
     fatal "GPU_stress_missing_${marker}"
