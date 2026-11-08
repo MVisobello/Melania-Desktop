@@ -25,8 +25,8 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
             "routed.crtc() == Some(crtc)",
         ):
             self.assertIn(marker, PROBE)
-        # The coordinator now requires MORE than a valid encoder->CRTC
-        # route: the exact original encoder handle must survive both passes.
+        # Original-encoder ownership is required even if another encoder
+        # can drive the same CRTC. Preserve the current final-read checks.
         self.assertIn("original_encoder: encoder::Handle", block)
         self.assertIn("expected_size: (u16, u16)", block)
         self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame(", block)
@@ -48,9 +48,42 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         self.assertIn("latest_crtc.mode() != Some(initial_mode)", block)
         self.assertNotIn("latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh()))", block)
         self.assertIn("latest_connector.current_encoder() != Some(encoder)", block)
-        self.assertIn("latest_encoder.crtc() == Some(crtc)", block)
+        # The final encoder ioctl must reject a detached route before
+        # the new final CRTC ownership check.
+        self.assertIn("latest_encoder.crtc() != Some(crtc)", block)
         self.assertLess(block.index("latest_crtc.framebuffer()"),
                         block.index("latest_encoder.crtc()"))
+
+    def test_final_kernel_crtc_read_brackets_the_last_encoder_route(self):
+        block = PROBE[PROBE.index("pub fn verify_kernel_scanout("):
+                      PROBE.index("pub fn verify_presenter_ownership(")]
+        # A real get_crtc ioctl AFTER the final encoder ioctl prevents an
+        # ACK for a framebuffer/mode/origin changed during the last route read.
+        self.assertIn("let final_crtc = card.get_crtc(crtc)", block)
+        self.assertIn("final_crtc.framebuffer() == Some(expected_fb)", block)
+        self.assertIn("final_crtc.mode() == Some(initial_mode)", block)
+        self.assertIn("final_crtc.position() == current.position()", block)
+        self.assertLess(block.index("let latest_encoder = card.get_encoder(encoder)"),
+                        block.index("let final_crtc = card.get_crtc(crtc)"))
+        self.assertLess(block.index("let final_crtc = card.get_crtc(crtc)"),
+                        block.index("Ok(final_crtc.framebuffer()"))
+        self.assertNotIn("Ok(latest_encoder.crtc() == Some(crtc))", block)
+
+    def test_presenter_rechecks_kernel_crtc_after_last_encoder_read(self):
+        block = PROBE[PROBE.index("pub fn verify_presenter_ownership("):
+                      PROBE.index("pub fn verify_original_encoder_frame(")]
+        # This path runs before the next CPU/GBM KMS frame is submitted.
+        # Route-only ACKs must not survive a final modeset or FB takeover.
+        self.assertIn("if latest_routing.crtc()!=Some(crtc)", block)
+        self.assertIn("let final_crtc=card.get_crtc(crtc)", block)
+        self.assertIn("final_crtc.framebuffer()==Some(expected_fb)", block)
+        self.assertIn("final_crtc.mode()==Some(initial_mode)", block)
+        self.assertIn("final_crtc.position()==current.position()", block)
+        self.assertLess(block.index("let latest_routing=card.get_encoder(encoder)"),
+                        block.index("let final_crtc=card.get_crtc(crtc)"))
+        self.assertLess(block.index("if latest_routing.crtc()!=Some(crtc)"),
+                        block.index("let final_crtc=card.get_crtc(crtc)"))
+        self.assertIn('DRM owner final get_crtc failed:', block)
 
     def test_presenter_owner_rejects_same_resolution_mode_timing_switch(self):
         block = PROBE[PROBE.index("pub fn verify_presenter_ownership("):
