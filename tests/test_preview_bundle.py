@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tarfile
@@ -193,6 +194,73 @@ class PortablePreviewBundle(unittest.TestCase):
             result = subprocess.run(["bash", "-n", str(ROOT / script)],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+
+    def test_bundle_check_fails_closed_when_ldd_is_missing(self):
+        # A real --check invocation must not report success when the host
+        # cannot inspect GTK4 layer-shell and the other dynamic dependencies.
+        with tempfile.TemporaryDirectory(prefix="melania-no-ldd-") as tmp:
+            root = Path(tmp)
+            packager.stage(self.make_binaries(root), root / "output", "unknown")
+            bundle = root / "output" / packager.BUNDLE_NAME
+            fake_path = root / "tools"
+            fake_path.mkdir()
+            for name in ("uname", "dirname"):
+                executable = shutil.which(name)
+                self.assertIsNotNone(executable)
+                (fake_path / name).symlink_to(executable)
+            dbus = fake_path / "dbus-run-session"
+            dbus.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            dbus.chmod(0o755)
+            bash = shutil.which("bash")
+            self.assertIsNotNone(bash)
+            env = os.environ.copy()
+            env.update(PATH=str(fake_path), DISPLAY=":99",
+                       XDG_RUNTIME_DIR=str(root))
+            env.pop("BASH_ENV", None)
+            result = subprocess.run(
+                [bash, str(bundle / "run.sh"), "--check"],
+                env=env, capture_output=True, text=True, timeout=10
+            )
+            self.assertEqual(result.returncode, 78, result.stderr)
+            self.assertIn("BLOCKED: ldd is required", result.stderr)
+            self.assertNotIn("MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true", result.stdout)
+
+    def test_bundle_check_rejects_missing_gtk4_layer_shell(self):
+        # The fake linker reports one missing library, independently of any
+        # desktop session, graphics card or system GTK installation.
+        with tempfile.TemporaryDirectory(prefix="melania-bad-gtk4-") as tmp:
+            root = Path(tmp)
+            packager.stage(self.make_binaries(root), root / "output", "unknown")
+            bundle = root / "output" / packager.BUNDLE_NAME
+            fake_path = root / "tools"
+            fake_path.mkdir()
+            for name in ("uname", "dirname", "grep"):
+                executable = shutil.which(name)
+                self.assertIsNotNone(executable)
+                (fake_path / name).symlink_to(executable)
+            dbus = fake_path / "dbus-run-session"
+            dbus.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            dbus.chmod(0o755)
+            ldd = fake_path / "ldd"
+            ldd.write_text(
+                "#!/bin/sh\nprintf 'libgtk4-layer-shell.so.0 => not found\\\n'\n",
+                encoding="utf-8"
+            )
+            ldd.chmod(0o755)
+            bash = shutil.which("bash")
+            self.assertIsNotNone(bash)
+            env = os.environ.copy()
+            env.update(PATH=str(fake_path), DISPLAY=":99",
+                       XDG_RUNTIME_DIR=str(root))
+            env.pop("BASH_ENV", None)
+            result = subprocess.run(
+                [bash, str(bundle / "run.sh"), "--check"],
+                env=env, capture_output=True, text=True, timeout=10
+            )
+            self.assertEqual(result.returncode, 78, result.stderr)
+            self.assertIn("libgtk4-layer-shell.so.0 => not found", result.stderr)
+            self.assertNotIn("MELANIA_NESTED_BUNDLE_PREFLIGHT_OK=true", result.stdout)
 
     def test_portable_wallpaper_respects_user_preference(self):
         text = (ROOT / "melania-desktop-surface/src/main.rs").read_text()

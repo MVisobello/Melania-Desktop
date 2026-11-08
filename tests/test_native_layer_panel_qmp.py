@@ -43,6 +43,28 @@ class TestPanelProof(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true",host)
         self.assertIn("real-layer-panel-frame12.ppm",host)
 
+    def test_late_real_layer_observer_does_not_expire_before_frame12(self):
+        host=(Path(__file__).resolve().parents[1]/
+              "scripts/run-qemu-melania-native.sh").read_text()
+        layer_stage=host.split('python3 "$root/scripts/capture-qemu-real-layer-panel.py"',1)[1].split(
+            'layer_capture_pid=$!',1)[0]
+        managed_stage=host.split('python3 "$root/scripts/capture-qemu-managed-xdg-roles.py"',1)[1].split(
+            'managed_role_capture_pid=$!',1)[0]
+        layer_deadline=int(layer_stage.split('--timeout ',1)[1].split()[0])
+        managed_deadline=int(managed_stage.split('--timeout ',1)[1].split()[0])
+        vm_deadline=int(host.split(
+            'timeout --signal=TERM --kill-after=10s ',1
+        )[1].split('s',1)[0])
+        # In real failed QEMU evidence the 1350s layer watcher exited
+        # before the guest's ~1398s frame12 KMS marker. No canned frames:
+        # the host must still see and verify its own QMP screendump.
+        self.assertGreater(layer_deadline,1403)
+        self.assertGreaterEqual(layer_deadline,managed_deadline)
+        self.assertLess(layer_deadline,vm_deadline)
+        self.assertIn('MELANIA_QEMU_REAL_LAYER_PANEL_PIXELS=true',host)
+        self.assertIn('test -s "$report/real-layer-panel-frame12.ppm"',host)
+        self.assertIn('MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true',host)
+
     def test_correct_pixels(self):self.assertEqual(len(m.verify(picture())),8)
     def test_wrong_edge_fails(self):
         b=bytearray(picture());b[-3:]=b"\x00\x00\x00"
