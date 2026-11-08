@@ -129,6 +129,47 @@ pub fn verify_presenter_ownership(
 }
 
 
+/// Verify that the SAME connector encoder remains attached across a
+/// complete KMS frame, not only during eventual scanout rollback. Another
+/// encoder may map to the same CRTC after a VT/hotplug takeover; do not ACK
+/// that frame or release Wayland client buffers as if still owned.
+///
+/// Read the exact original route before and after the existing two-pass
+/// framebuffer/mode verification, via genuine drm-rs kernel ioctls.
+/// This is not an atomic DRM lease or a physical VT acceptance test.
+pub fn verify_original_encoder_frame(
+    card:&impl ControlDevice,
+    crtc:crtc::Handle,
+    connector:connector::Handle,
+    original_encoder:drm::control::encoder::Handle,
+    expected_fb:framebuffer::Handle,
+    expected_size:(u16,u16),
+)->Result<bool,String> {
+    fn original_route(
+        card:&impl ControlDevice,
+        crtc:crtc::Handle,
+        connector:connector::Handle,
+        original_encoder:drm::control::encoder::Handle,
+    )->Result<bool,String> {
+        let output=card.get_connector(connector,false)
+            .map_err(|e|format!("DRM original-encoder frame connector ioctl failed: {e}"))?;
+        if output.state()!=connector::State::Connected ||
+           output.current_encoder()!=Some(original_encoder) {
+            return Ok(false);
+        }
+        let routed=card.get_encoder(original_encoder)
+            .map_err(|e|format!("DRM original-encoder frame encoder ioctl failed: {e}"))?;
+        Ok(routed.crtc()==Some(crtc))
+    }
+    if !original_route(card,crtc,connector,original_encoder)? {
+        return Ok(false);
+    }
+    if !verify_presenter_ownership(card,crtc,connector,expected_fb,expected_size)? {
+        return Ok(false);
+    }
+    original_route(card,crtc,connector,original_encoder)
+}
+
 /// Validate the original kernel connector -> encoder -> CRTC route before
 /// restoring an owned framebuffer and after the restore ioctl completes.
 /// Linux may move a connector to another encoder targeting the SAME CRTC;
