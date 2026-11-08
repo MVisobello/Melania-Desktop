@@ -16,6 +16,7 @@ use drm::control::{
 pub const MAX_ACTIVE_DRM_OUTPUTS:usize=8;
 const MAX_CONNECTORS:usize=32;
 const MAX_CRTCS:usize=32;
+const MAX_ENCODERS:usize=64;
 const MAX_OUTPUT_SIDE:u16=16384;
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -105,8 +106,17 @@ pub fn inspect_active_outputs(
     let resources=card.resource_handles()
         .map_err(|e|format!("DRM output resource list unavailable: {e}"))?;
     if resources.connectors().len()>MAX_CONNECTORS ||
-       resources.crtcs().len()>MAX_CRTCS {
-        return Err("DRM topology unbounded connector/CRTC resource count".into());
+       resources.crtcs().len()>MAX_CRTCS ||
+       resources.encoders().len()>MAX_ENCODERS {
+        return Err("DRM topology unbounded connector/CRTC/encoder resource count".into());
+    }
+    // Reject malformed initial inventories before any per-connector ioctl.
+    // Comparing a snapshot with itself detects duplicate IDs, which a
+    // before/after comparison alone would otherwise only reject at the end.
+    if !same_resource_handles(resources.connectors(),resources.connectors()) ||
+       !same_resource_handles(resources.crtcs(),resources.crtcs()) ||
+       !same_resource_handles(resources.encoders(),resources.encoders()) {
+        return Err("DRM initial resource inventory contains duplicate handles".into());
     }
     let mut active=Vec::new();
     for &connector_handle in resources.connectors() {
@@ -114,6 +124,11 @@ pub fn inspect_active_outputs(
             .map_err(|e|format!("DRM connector read failed: {e}"))?;
         if info.state()!=connector::State::Connected {continue;}
         let Some(encoder_handle)=info.current_encoder() else {continue;};
+        // Reject an encoder attached after the initial kernel inventory.
+        // Mixed ioctl snapshots must never authorize a stale KMS route.
+        if !resources.encoders().contains(&encoder_handle) {
+            return Err("DRM attached encoder outside discovered encoder inventory".into());
+        }
         let encoder=card.get_encoder(encoder_handle)
             .map_err(|e|format!("DRM attached encoder read failed: {e}"))?;
         let Some(crtc_handle)=encoder.crtc() else {continue;};
@@ -164,13 +179,24 @@ pub fn inspect_active_outputs(
     // A hotplug or VT takeover can add/remove a connector or CRTC during
     // the scan, even if the previously observed active routes still match.
     // An incomplete resource snapshot must never authorize the first KMS
-    // frame. Compare handle SETS (not kernel enumeration order), and reject
-    // duplicate handles rather than silently deduplicating them.
+    // frame. Compare ALL three resource handle SETS: detached/standby
+    // encoders also matter. An encoder can hotplug/disappear while its
+    // connector and CRTC inventories remain unchanged; otherwise a later
+    // modeset could acknowledge a frame against stale hardware topology.
+    // Ignore kernel enumeration order, but reject duplicate resource IDs.
     let latest_resources=card.resource_handles()
         .map_err(|e|format!("DRM final output resource list unavailable: {e}"))?;
+    // The final kernel inventory must obey the same resource bounds.
+    // Do not scan an unbounded hotplug result, even if the original was safe.
+    if latest_resources.connectors().len()>MAX_CONNECTORS ||
+       latest_resources.crtcs().len()>MAX_CRTCS ||
+       latest_resources.encoders().len()>MAX_ENCODERS {
+        return Err("DRM final topology exceeds connector/CRTC/encoder limits".into());
+    }
     if !same_resource_handles(resources.connectors(),latest_resources.connectors()) ||
-       !same_resource_handles(resources.crtcs(),latest_resources.crtcs()) {
-        return Err("DRM connector/CRTC inventory changed during topology snapshot".into());
+       !same_resource_handles(resources.crtcs(),latest_resources.crtcs()) ||
+       !same_resource_handles(resources.encoders(),latest_resources.encoders()) {
+        return Err("DRM connector/CRTC/encoder inventory changed during topology snapshot".into());
     }
     active.sort_by_key(|route|format!("{:?}",route.connector));
     validate_active_routes(&active)?;
@@ -213,6 +239,30 @@ mod tests {
         assert!(!same_resource_handles(&[1u32,1,2],&[1,2,2]));
         assert!(!same_resource_handles(&[1u32,1],&[1,1]));
         assert!(same_resource_handles::<u32>(&[],&[]));
+    }
+    #[test]
+    fn drm_encoder_handles_detect_dormant_encoder_hotplug_even_without_crtc_change() {
+        let original:Vec<encoder::Handle> = [101u32,102,103].into_iter()
+            .map(|id|control::from_u32(id).unwrap()).collect();
+        let reordered=vec![original[2],original[0],original[1]];
+        assert!(same_resource_handles(&original,&reordered));
+        // A disconnected/standby encoder can disappear while the visible
+        // connector/CRTC IDs remain unchanged: never accept that snapshot.
+        assert!(!same_resource_handles(&original,&original[..2]));
+        let mut replaced=original.clone();
+        replaced[2]=control::from_u32(104).unwrap();
+        assert!(!same_resource_handles(&original,&replaced));
+        let duplicated=vec![original[0],original[0],original[2]];
+        assert!(!same_resource_handles(&duplicated,&duplicated));
+    }
+    #[test]
+    fn malformed_initial_resource_inventory_is_rejected_even_when_unchanged() {
+        let duplicate_encoders:Vec<encoder::Handle>=[17u32,17].into_iter()
+            .map(|id|control::from_u32(id).unwrap()).collect();
+        assert!(!same_resource_handles(&duplicate_encoders,&duplicate_encoders));
+        let distinct:Vec<encoder::Handle>=[17u32,18].into_iter()
+            .map(|id|control::from_u32(id).unwrap()).collect();
+        assert!(same_resource_handles(&distinct,&distinct));
     }
     #[test]
     fn two_independent_outputs_keep_unique_crtcs_and_borrowed_fbs() {
