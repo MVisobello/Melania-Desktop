@@ -186,9 +186,15 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertEqual(dismissal.count("self.evict_native_popup(&outermost)"),1)
         self.assertIn("self.grabbed_popup_roles.is_empty()",dismissal)
         for lifecycle in ("InputEvent::DeviceRemoved", "SessionEvent::PauseSession"):
-            block=BRIDGE[BRIDGE.index(lifecycle):BRIDGE.index(lifecycle)+350]
+            begin=BRIDGE.index(lifecycle)
+            # Bound by the real grab-cleanup operation, not a brittle
+            # character count: additional safety guards before it are valid.
+            final=BRIDGE.index("state.grabbed_popup_roles.clear();",begin)
+            block=BRIDGE[begin:final]
             self.assertIn("state.last_popup_press=None;",block)
             self.assertIn("state.suppressed_popup_button=None;",block)
+            self.assertLess(block.index("state.last_popup_press=None;"),
+                            block.index("state.suppressed_popup_button=None;"))
 
     def test_real_qemu_usb_click_issues_wl_pointer_grab_before_popup_map(self):
         for token in ("wl_pointer::Event::Button","wl_seat::WlSeat",

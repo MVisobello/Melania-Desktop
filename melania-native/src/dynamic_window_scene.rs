@@ -26,6 +26,7 @@ pub enum DynamicSceneError {
     InvalidClient,
     TooManyWindows,
     ClientMemoryBudget,
+    DuplicateWindow,
     UnknownWindow,
     RenderFailed,
 }
@@ -68,6 +69,18 @@ impl WindowPixels {
     pub fn height(&self)->usize {self.height}
     pub fn alpha(&self)->DynamicAlpha {self.alpha}
     pub fn bytes(&self)->usize {self.data.len()}
+}
+
+/// Fully owned, already validated Wayland image plus desired layout.
+/// The caller must never hold a borrowed wl_shm pool pointer here.
+#[derive(Debug)]
+pub struct WindowBatchUpdate {
+    pub key:u64,
+    pub x:i32,
+    pub y:i32,
+    pub layer:Layer,
+    pub visible:bool,
+    pub image:WindowPixels,
 }
 
 #[derive(Debug)]
@@ -153,6 +166,72 @@ impl DynamicWindowScene {
         ->Result<(),DynamicSceneError>
     {
         self.upsert_in_layer(key,x,y,Layer::Normal,image)
+    }
+
+    /// Apply a group of owned Wayland images, geometry and visibility as
+    /// *one* retained-scene transaction. Validate the final client count,
+    /// memory budget and unique IDs before mutating ANY scene state.
+    /// No intermediate visibility/damage state can be observed by the
+    /// compositor or submitted to KMS. This is the scene-side half of the
+    /// per-XDG-ACK tab-group resize transaction.
+    pub fn upsert_batch(
+        &mut self,updates:Vec<WindowBatchUpdate>
+    )->Result<bool,DynamicSceneError> {
+        if updates.is_empty(){return Ok(false);}
+        let mut new_clients=0usize;
+        let mut bytes=self.used_bytes;
+        for (index,update) in updates.iter().enumerate() {
+            if update.key==0{return Err(DynamicSceneError::InvalidClient);}
+            if updates[..index].iter().any(|prev|prev.key==update.key){
+                return Err(DynamicSceneError::DuplicateWindow);
+            }
+            let old=self.windows.iter().find(|window|window.key==update.key);
+            if old.is_none(){new_clients+=1;}
+            bytes=bytes.checked_sub(old.map(|window|window.image.bytes()).unwrap_or(0))
+                .and_then(|remaining|remaining.checked_add(update.image.bytes()))
+                .ok_or(DynamicSceneError::ClientMemoryBudget)?;
+        }
+        if self.windows.len().saturating_add(new_clients)>MAX_DYNAMIC_WINDOWS {
+            return Err(DynamicSceneError::TooManyWindows);
+        }
+        if bytes>MAX_TOTAL_CLIENT_BYTES {
+            return Err(DynamicSceneError::ClientMemoryBudget);
+        }
+        // No possible errors after this point. One scene mutation, one
+        // generation change, and both old/new visible rectangles damaged.
+        self.used_bytes=bytes;
+        for update in updates {
+            if let Some(previous)=self.windows.iter().find(|w|w.key==update.key) {
+                if previous.visible {
+                    self.damage.invalidate(
+                        previous.x,previous.y,
+                        previous.image.width,previous.image.height
+                    );
+                }
+            }
+            let x=update.x;
+            let y=update.y;
+            let new_width=update.image.width;
+            let new_height=update.image.height;
+            let visible=update.visible;
+            if let Some(existing)=self.windows.iter_mut().find(|w|w.key==update.key) {
+                existing.x=x;
+                existing.y=y;
+                existing.layer=update.layer;
+                existing.image=update.image;
+                existing.visible=visible;
+            } else {
+                self.windows.push(Window{
+                    key:update.key,x,y,layer:update.layer,
+                    visible,image:update.image
+                });
+            }
+            if visible {
+                self.damage.invalidate(x,y,new_width,new_height);
+            }
+        }
+        self.dirty();
+        Ok(true)
     }
 
     /// The default upsert above remains unchanged for all existing QEMU
@@ -360,6 +439,99 @@ impl DynamicWindowScene {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn atomic_multi_client_relayout_has_no_intermediate_visibility_or_damage() {
+        let mut scene=DynamicWindowScene::new(120,80,[2,4,6,0]).unwrap();
+        let mk=|pixel:[u8;4]|WindowPixels::new(
+            20,20,DynamicAlpha::Opaque,
+            pixel.repeat(20*20)
+        ).unwrap();
+        scene.upsert(1,2,2,mk([20,30,40,0])).unwrap();
+        scene.upsert(2,65,2,mk([50,60,70,0])).unwrap();
+        scene.confirm_presented_damage(scene.generation());
+        let previous=scene.generation();
+        let old_bytes=scene.used_bytes();
+        assert_eq!(scene.hit_test(5.0,5.0),Some(1));
+        assert!(scene.upsert_batch(vec![
+            WindowBatchUpdate{
+                key:1,x:25,y:20,layer:Layer::Normal,
+                visible:false,image:mk([90,80,70,0])
+            },
+            WindowBatchUpdate{
+                key:2,x:25,y:20,layer:Layer::Normal,
+                visible:true,image:mk([11,22,33,0])
+            },
+        ]).unwrap());
+        assert_eq!(scene.generation(),previous+1);
+        assert_eq!(scene.used_bytes(),old_bytes);
+        assert_eq!(scene.window_count(),2);
+        assert_eq!(scene.hit_test(5.0,5.0),None);
+        assert_eq!(scene.hit_test(30.0,25.0),Some(2));
+        let result=scene.composite().unwrap();
+        let at=(25*120+30)*4;
+        assert_eq!(&result[at..at+3],&[11,22,33]);
+        assert!(!scene.damage_regions().is_clean());
+        assert!(scene.confirm_presented_damage(scene.generation()));
+        assert!(scene.damage_regions().is_clean());
+    }
+
+    #[test]
+    fn rejected_batch_does_not_change_any_retained_window_or_generation() {
+        let mut scene=DynamicWindowScene::new(128,90,[1,2,3,0]).unwrap();
+        let mk=||WindowPixels::new(
+            12,12,DynamicAlpha::Opaque,vec![77;12*12*4]
+        ).unwrap();
+        scene.upsert(1,2,2,mk()).unwrap();
+        scene.confirm_presented_damage(scene.generation());
+        let before=scene.composite().unwrap();
+        let generation=scene.generation();
+        let bytes=scene.used_bytes();
+        assert_eq!(scene.upsert_batch(vec![
+            WindowBatchUpdate{
+                key:1,x:10,y:10,layer:Layer::Normal,
+                visible:false,image:mk()
+            },
+            WindowBatchUpdate{
+                key:1,x:30,y:30,layer:Layer::Normal,
+                visible:true,image:mk()
+            },
+        ]),Err(DynamicSceneError::DuplicateWindow));
+        assert_eq!(scene.upsert_batch(vec![
+            WindowBatchUpdate{
+                key:1,x:10,y:10,layer:Layer::Normal,
+                visible:false,image:mk()
+            },
+            WindowBatchUpdate{
+                key:0,x:30,y:30,layer:Layer::Normal,
+                visible:true,image:mk()
+            },
+        ]),Err(DynamicSceneError::InvalidClient));
+        assert_eq!(scene.generation(),generation);
+        assert_eq!(scene.used_bytes(),bytes);
+        assert_eq!(scene.composite().unwrap(),before);
+        assert_eq!(scene.hit_test(4.0,4.0),Some(1));
+        assert!(scene.damage_regions().is_clean());
+    }
+
+    #[test]
+    fn atomic_batch_preserves_z_order_of_existing_clients() {
+        let mut scene=DynamicWindowScene::new(48,48,[0,0,0,0]).unwrap();
+        let mk=|r:u8|WindowPixels::new(
+            20,20,DynamicAlpha::Opaque,vec![r;20*20*4]
+        ).unwrap();
+        scene.upsert(1,1,1,mk(10)).unwrap();
+        scene.upsert(2,1,1,mk(20)).unwrap();
+        assert_eq!(scene.hit_test(5.0,5.0),Some(2));
+        scene.upsert_batch(vec![
+            WindowBatchUpdate{key:2,x:1,y:1,layer:Layer::Normal,
+                              visible:true,image:mk(50)},
+            WindowBatchUpdate{key:1,x:1,y:1,layer:Layer::Normal,
+                              visible:false,image:mk(60)},
+        ]).unwrap();
+        assert_eq!(scene.hit_test(5.0,5.0),Some(2));
+        assert_eq!(scene.window_count(),2);
+    }
     #[test]
     fn keyboard_switcher_filters_minimized_and_layer_shell_windows() {
         let mut scene=DynamicWindowScene::new(128,90,[1,2,3,0]).unwrap();
