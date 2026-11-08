@@ -9,7 +9,7 @@
 //! An explicit restoration attempt takes place before any GPU framebuffer is
 //! released, even on render/import/flip failure. The Drop guard is a second
 //! best-effort recovery path for unexpected early unwinding.
-use drm::control::{self, connector, crtc, framebuffer, Device as ControlDevice, PageFlipFlags};
+use drm::control::{self, connector, crtc, encoder, framebuffer, Device as ControlDevice, PageFlipFlags};
 use smithay::backend::{
     allocator::{
         gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
@@ -30,30 +30,62 @@ struct Restore<'a> {
     card: &'a DrmDeviceFd,
     original: crtc::Info,
     connector: connector::Handle,
+    original_encoder: encoder::Handle,
     submitted: bool,
     restored: bool,
+    ownership_lost: bool,
+    owned_fbs:[framebuffer::Handle;2],
 }
 
 impl Restore<'_> {
     fn restore(&mut self) -> Result<(),Box<dyn Error>> {
+        if self.ownership_lost {
+            return Err("DRM ownership lost: refusing stale CRTC rollback".into());
+        }
         if !self.submitted {
             self.restored=true;
             return Ok(());
         }
         let old=self.original;
+        // Do not overwrite a foreign scanout acquired since the last ACK.
+        // An unreadable DRM resource is a lost ownership proof. Mark the
+        // rollback guard permanently unsafe, including its Drop retry.
+        // Refuse rollback if connector, original encoder, full mode, CRTC
+        // position or owned FB_ID changed, even when the CRTC ID is unchanged.
+        let safe=crate::native_kms_scanout::verify_rollback_route(
+            self.card,&old,self.connector,self.original_encoder,&self.owned_fbs,
+        ).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        if !safe {
+            self.ownership_lost=true;
+            return Err("DRM rollback refused: original connector/encoder/mode/position/framebuffer changed".into());
+        }
+        println!("MELANIA_NATIVE_GBM_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true");
+        // A failed restoring modeset can have partially affected kernel state.
+        // Never let Drop issue the same ioctl again without fresh ownership
+        // acquisition: the original route may have been taken over.
         self.card.set_crtc(old.handle(),old.framebuffer(),old.position(),
-            &[self.connector],old.mode())?;
-        let observed=self.card.get_crtc(old.handle())?;
-        let attached=self.card.get_connector(self.connector,false)?
-            .current_encoder()
-            .and_then(|enc|self.card.get_encoder(enc).ok())
-            .and_then(|enc|enc.crtc())==Some(old.handle());
-        self.restored=observed.framebuffer()==old.framebuffer()
-            && observed.position()==old.position()
-            && observed.mode()==old.mode() && attached;
+            &[self.connector],old.mode()).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        // Once a restore ioctl has been submitted, unreadable verification
+        // cannot authorize Drop to issue the same modeset again.
+        let attached=crate::native_kms_scanout::verify_rollback_route(
+            self.card,&old,self.connector,self.original_encoder,&[],
+        ).map_err(|error|{
+            self.ownership_lost=true;
+            error
+        })?;
+        self.restored=attached;
         println!("MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE={attached}");
         println!("MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE={}",self.restored);
         if !self.restored {
+            // Unknown post-restore state is not proof of continued DRM
+            // ownership: Drop must not blindly repeat the modeset.
+            self.ownership_lost=true;
             return Err("QEMU GPU-generated framebuffer original CRTC restore failed".into());
         }
         Ok(())
@@ -61,7 +93,7 @@ impl Restore<'_> {
 }
 impl Drop for Restore<'_> {
     fn drop(&mut self) {
-        if self.submitted && !self.restored {
+        if self.submitted && !self.restored && !self.ownership_lost {
             let _=self.restore();
         }
     }
@@ -127,6 +159,11 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
         return Err("QEMU GBM original FB_ID changed after topology capture".into());
     }
     let connector=route.connector;
+    let original_encoder=card.get_connector(connector,false)?
+        .current_encoder().ok_or("Native GBM output missing its original connector encoder")?;
+    if card.get_encoder(original_encoder)?.crtc()!=Some(crtc) {
+        return Err("Native GBM encoder route changed after topology acquisition".into());
+    }
     // drm-rs set_crtc expects a connector slice; retain exactly the
     // verified connector from this stable kernel topology snapshot.
     let connected=[connector];
@@ -152,8 +189,9 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
     let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
+    event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
-        card:&card, original, connector, submitted:false, restored:false,
+        card:&card, original, connector, original_encoder, submitted:false, restored:false, ownership_lost:false,owned_fbs:handles,
     };
     let work=(||->Result<(),Box<dyn Error>> {
         for index in 0..total_frames {
@@ -177,6 +215,22 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
             frame.finish()?.wait()?;
             drop(framebuffer);
 
+            let prior_fb=if index==0 {route.original_fb}
+                else {handles[(index-1) as usize%2]};
+            // Even a failed DRM ioctl read is loss of trusted ownership.
+            // Revoke the pending event epoch before propagating the error.
+            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,prior_fb,(w,h),
+            ).map_err(|error| {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("GPU stress scanout owner changed before KMS submission".into());
+            }
             if index==0 {
                 // Even a failed initial modeset requires restoration.
                 rollback.submitted=true;
@@ -190,7 +244,10 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 let until=Instant::now()+Duration::from_secs(3);
                 loop {
                     match card.page_flip(crtc,handles[index as usize%2],PageFlipFlags::EVENT,None) {
-                        Ok(())=>break,
+                        Ok(())=>{
+                            event_router.arm_flip(crtc)?;
+                            break;
+                        },
                         Err(error) if error.raw_os_error()==Some(11) && Instant::now()<until =>
                             thread::sleep(Duration::from_millis(20)),
                         Err(error)=>return Err(error.into()),
@@ -209,6 +266,21 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 println!("MELANIA_NATIVE_GBM_KMS_VBLANK_EVENT_ACK={}",index+1);
             }
             wait_for_scanout(&card,crtc,connector,handles[index as usize%2])?;
+            // A DRM vblank and FB_ID do not authorize a frame ACK if the
+            // original connector encoder has changed on this live CRTC.
+            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,handles[index as usize%2],(w,h),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("GPU KMS original encoder changed before frame ACK".into());
+            }
+            println!("MELANIA_NATIVE_GBM_KMS_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             if index>0 {
                 println!("MELANIA_NATIVE_GBM_KMS_FLIP_LEDGER_CONFIRMED={}",
                          flip_ledger.completed_count());
@@ -273,6 +345,11 @@ pub fn qemu_wayland_gpu_scene_stream(
     let route=topology.single_active()?;
     let crtc=route.crtc;
     let connector=route.connector;
+    let original_encoder=card.get_connector(connector,false)?
+        .current_encoder().ok_or("Native GBM output missing its original connector encoder")?;
+    if card.get_encoder(original_encoder)?.crtc()!=Some(crtc) {
+        return Err("Native GBM encoder route changed after topology acquisition".into());
+    }
     let original=card.get_crtc(crtc)?;
     let mode=original.mode().ok_or("Wayland GPU CRTC has no active mode")?;
     if mode.size()!=(W as u16,H as u16) ||
@@ -302,15 +379,16 @@ pub fn qemu_wayland_gpu_scene_stream(
     }
     let mut flip_ledger=crate::native_flip_ledger::NativeFlipLedger::default();
     let mut event_router=crate::native_drm_flip::DrmFlipEventRouter::default();
+    event_router.bind_active_crtcs(&[crtc])?;
     let mut rollback=Restore {
-        card:&card,original,connector,submitted:false,restored:false,
+        card:&card,original,connector,original_encoder,submitted:false,restored:false,ownership_lost:false,owned_fbs:handles,
     };
     println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_READY=true");
     println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",
              topology.active.len());
     let mut frames_seen=0u64;
     let attempt=(||->Result<(),Box<dyn Error>> {
-        let mut prior_identity:Option<(u64,u64,u64)>=None;
+        let mut prior_identity:Option<crate::native_frame_order::FrameIdentity>=None;
         // Retain two fixed-size CPU staging buffers for the entire GPU
         // presenter lifetime. Neither a client commit nor a KMS flip may
         // allocate another 4 MiB scene Vec. The previous buffer is marked
@@ -340,9 +418,9 @@ pub fn qemu_wayland_gpu_scene_stream(
             if length!=W*H*4 || sequence==0 {
                 return Err("GPU Wayland scene has invalid frame buffer dimensions".into());
             }
-            if prior_identity.is_some_and(|(old_epoch,old_sequence,old_generation)|
-                epoch!=old_epoch || sequence<=old_sequence || generation<=old_generation
-            ) {
+            let identity=crate::native_frame_order::FrameIdentity::new(
+                epoch,sequence,generation);
+            if !identity.accepted_after(prior_identity,persistent) {
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
             stream.read_exact(&mut pixels)?;
@@ -377,6 +455,22 @@ pub fn qemu_wayland_gpu_scene_stream(
             frame.finish()?.wait()?;
             drop(bound);
 
+            // A previously confirmed scanout may have been taken over
+            // between frames. Never render/submit into a lost DRM route.
+            let previous_fb=if index==0 {route.original_fb}
+                else {handles[(index-1) as usize%2]};
+            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,previous_fb,(W as u16,H as u16),
+            ).map_err(|error| {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("GPU Wayland lost DRM connector/CRTC/mode/FB ownership before submission".into());
+            }
             let framebuffer=handles[index as usize%2];
             if index==0 {
                 rollback.submitted=true;
@@ -388,7 +482,10 @@ pub fn qemu_wayland_gpu_scene_stream(
                 let deadline=Instant::now()+Duration::from_secs(3);
                 loop {
                     match card.page_flip(crtc,framebuffer,PageFlipFlags::EVENT,None) {
-                        Ok(())=>break,
+                        Ok(())=>{
+                            event_router.arm_flip(crtc)?;
+                            break;
+                        },
                         Err(err) if err.raw_os_error()==Some(11) &&
                             Instant::now()<deadline => {
                             thread::sleep(Duration::from_millis(20));
@@ -405,6 +502,19 @@ pub fn qemu_wayland_gpu_scene_stream(
             // A kernel page flip event alone is NOT evidence that the desired
             // framebuffer was routed to this physical CRTC/connector.
             wait_for_scanout(&card,crtc,connector,framebuffer)?;
+            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                &card,crtc,connector,original_encoder,framebuffer,(W as u16,H as u16),
+            ).map_err(|error|{
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                error
+            })?;
+            if !ack_owned {
+                event_router.revoke();
+                rollback.ownership_lost=true;
+                return Err("GPU Wayland original encoder changed before client ACK".into());
+            }
+            println!("MELANIA_NATIVE_GPU_WAYLAND_ORIGINAL_ENCODER_FRAME_ACK={}",index+1);
             println!("MELANIA_NATIVE_GPU_WAYLAND_FRAME_VISIBLE={}",index+1);
             if index>0 {
                 println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
@@ -425,7 +535,7 @@ pub fn qemu_wayland_gpu_scene_stream(
             println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("GPU Wayland compositor frame counter exhausted")?;
-            prior_identity=Some((epoch,sequence,generation));
+            prior_identity=Some(identity);
             std::mem::swap(&mut pixels,&mut prior_pixels);
             have_prior_pixels=true;
         }

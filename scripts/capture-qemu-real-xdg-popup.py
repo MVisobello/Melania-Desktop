@@ -89,6 +89,39 @@ def qmp_key(path:Path,which:str,pressed:bool)->None:
                 raise RuntimeError("QMP USB key not acknowledged")
 
 
+def qmp_mouse(path:Path,action:str,x:int=220,y:int=180)->None:
+    # Genuine QEMU USB tablet: normalized 0..32767 coordinates and a
+    # physical left-button event. This is NOT a compositor control command.
+    if not (0<=x<W and 0<=y<H):
+        raise ValueError("physical popup pointer outside 1280x800 output")
+    if action=="move":
+        events=[
+            {"type":"abs","data":{"axis":"x","value":round(x*32767/(W-1))}},
+            {"type":"abs","data":{"axis":"y","value":round(y*32767/(H-1))}},
+        ]
+    elif action in ("press","release"):
+        events=[{"type":"btn","data":{"button":"left","down":action=="press"}}]
+    else:
+        raise ValueError("unsupported QEMU mouse action")
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as sock:
+        sock.settimeout(7)
+        sock.connect(str(path))
+        io=sock.makefile("rwb",buffering=0)
+        if "QMP" not in json.loads(io.readline()):
+            raise RuntimeError("invalid QMP greeting for real popup pointer")
+        for cmd in ({"execute":"qmp_capabilities"},
+                    {"execute":"input-send-event","arguments":{"events":events}}):
+            io.write((json.dumps(cmd)+"\n").encode())
+            for _ in range(60):
+                response=json.loads(io.readline())
+                if "error" in response:
+                    raise RuntimeError("QMP rejected physical pointer input: "+str(response["error"]))
+                if "return" in response:
+                    break
+            else:
+                raise RuntimeError("QMP physical pointer response missing")
+
+
 def verify(path:Path,popup_visible:bool)->None:
     blob=path.read_bytes()
     header=re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s",blob)
@@ -133,6 +166,14 @@ def main()->int:
     p.add_argument("--timeout",default=1350,type=float)
     args=p.parse_args()
     deadline=time.monotonic()+args.timeout
+    wait_marker(args.serial,"MELANIA_NATIVE_REAL_POPUP_GRAB_PARENT_READY=true",deadline)
+    qmp_mouse(args.qmp,"move",220,180)
+    qmp_mouse(args.qmp,"press")
+    # Keep the physical button depressed until the compositor authenticates
+    # xdg_popup.grab against the exact wl_pointer press serial.
+    wait_marker(args.serial,"MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true",deadline)
+    qmp_mouse(args.qmp,"release")
+    print("MELANIA_QEMU_XDG_POPUP_REAL_USB_GRAB=true",flush=True)
     wait_marker(args.serial,"MELANIA_NATIVE_REAL_POPUP_CONFIGURE_ACK=280,115 180x100",deadline)
     wait_marker(args.serial,"MELANIA_NATIVE_XDG_POPUP_CLIENT_BUFFER_ACCEPTED=180x100",deadline)
     wait_marker(args.serial,"MELANIA_NATIVE_REAL_POPUP_CLIENT_FRAME2_ACK=true",deadline)

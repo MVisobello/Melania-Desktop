@@ -29,6 +29,27 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         self.assertLess(block.index("verify_kernel_scanout("), block.index("self.presented("))
         self.assertIn("Ok(self.presented(", block)
 
+    def test_ack_rejects_unplugged_monitor_and_changed_crtc_mode(self):
+        block = PROBE[PROBE.index("pub fn verify_kernel_scanout("):
+                      PROBE.index("pub fn verify_presenter_ownership(")]
+        self.assertIn("attached.state() != connector::State::Connected", block)
+        self.assertIn("let Some(initial_mode) = current.mode() else", block)
+        self.assertIn("let initial_refresh = initial_mode.vrefresh()", block)
+        self.assertIn("latest_crtc.mode() != Some(initial_mode)", block)
+        self.assertNotIn("latest_crtc.mode().map(|mode| (mode.size(), mode.vrefresh()))", block)
+        self.assertIn("latest_connector.current_encoder() != Some(encoder)", block)
+        self.assertIn("latest_encoder.crtc() == Some(crtc)", block)
+        self.assertLess(block.index("latest_crtc.framebuffer()"),
+                        block.index("latest_encoder.crtc()"))
+
+    def test_presenter_owner_rejects_same_resolution_mode_timing_switch(self):
+        block = PROBE[PROBE.index("pub fn verify_presenter_ownership("):
+                      PROBE.index("pub fn owner_snapshot_matches(")]
+        self.assertIn("let Some(initial_mode)=current.mode() else", block)
+        self.assertIn("initial_mode.size()!=expected_size", block)
+        self.assertIn("latest_crtc.mode()!=Some(initial_mode)", block)
+        self.assertNotIn("latest_crtc.mode().map(|mode|mode.size())", block)
+
     def test_stale_ack_never_probes_or_cancels_new_frame(self):
         block = SOURCE[SOURCE.index("pub fn verify_and_present("):SOURCE.index("fn presented(")]
         self.assertIn("self.inflight != Some(submission)", block)

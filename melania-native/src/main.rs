@@ -1,7 +1,7 @@
 //! Experimental *seat/hotplug event-loop* test — NOT a native compositor.
 //! Must be invoked explicitly in a dedicated TTY or VM; never from a login
 //! manager and never as an automatic fallback from the nested compositor.
-use std::{env, error::Error, fs, os::unix::fs::FileTypeExt, path::Path, time::Duration};
+use std::{env, error::Error, fs, os::{fd::OwnedFd, unix::fs::{FileTypeExt,MetadataExt}}, path::{Path,PathBuf}, time::Duration};
 use smithay::{
     backend::{
         drm::{DrmDevice, DrmDeviceFd},
@@ -28,6 +28,53 @@ fn blocked(why:&str)->! {
     std::process::exit(BLOCKED);
 }
 
+/// Refuse a spoofed or shared XDG runtime directory BEFORE opening libseat,
+/// libinput, or a DRM FD. The directory must be a real directory (not a
+/// symlink), owned by the running process UID and inaccessible to other users.
+/// This is a prerequisite for secure Wayland socket creation, NOT a complete
+/// login/session-manager implementation.
+fn validate_private_runtime_dir(runtime:&Path)->Result<(),String> {
+    let metadata=fs::symlink_metadata(runtime)
+        .map_err(|e|format!("XDG runtime directory cannot be inspected: {e}"))?;
+    if !metadata.file_type().is_dir() {
+        return Err("XDG runtime directory is not a real directory (symlinks refused)".into());
+    }
+    // /proc/self is kernel-owned and reports the effective credentials of
+    // the process; unlike USER/UID environment variables it cannot be spoofed.
+    let process=fs::metadata("/proc/self")
+        .map_err(|e|format!("Cannot inspect process credentials: {e}"))?;
+    if metadata.uid()!=process.uid() {
+        return Err("XDG runtime directory is owned by another UID".into());
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err("XDG runtime directory is accessible to group/other users".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod runtime_security_tests {
+    use super::*;
+    use std::os::unix::fs::{symlink,PermissionsExt};
+    #[test]
+    fn runtime_rejects_world_accessible_directory_and_symlink() {
+        let base=std::env::temp_dir().join(format!(
+            "melania-native-runtime-{}-{:?}",std::process::id(),std::thread::current().id()
+        ));
+        fs::create_dir(&base).unwrap();
+        fs::set_permissions(&base,fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(validate_private_runtime_dir(&base).is_ok());
+        fs::set_permissions(&base,fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(validate_private_runtime_dir(&base).is_err());
+        fs::set_permissions(&base,fs::Permissions::from_mode(0o700)).unwrap();
+        let link=base.with_extension("symlink");
+        symlink(&base,&link).unwrap();
+        assert!(validate_private_runtime_dir(&link).is_err());
+        fs::remove_file(&link).unwrap();
+        fs::remove_dir(&base).unwrap();
+    }
+}
+
 fn assert_dedicated_console() {
     if env::var("MELANIA_EXPERIMENTAL_SEAT").as_deref()!=Ok("1") {
         blocked("Explicit MELANIA_EXPERIMENTAL_SEAT=1 required");
@@ -48,11 +95,8 @@ fn assert_dedicated_console() {
     }
     let runtime=env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_|blocked("XDG_RUNTIME_DIR missing"));
-    let meta=fs::metadata(runtime)
-        .unwrap_or_else(|_|blocked("XDG runtime directory not accessible"));
-    if !meta.is_dir() {
-        blocked("XDG runtime path is not a directory");
-    }
+    validate_private_runtime_dir(Path::new(&runtime))
+        .unwrap_or_else(|error|blocked(&error));
     let exists_drm=fs::read_dir("/dev/dri")
         .ok().is_some_and(|entries| entries
             .filter_map(Result::ok)
@@ -194,6 +238,252 @@ fn experiment() -> Result<(),Box<dyn Error>> {
     let (keyboards,pointers,touch)=state.input_registry().counts();
     println!("MELANIA_NATIVE_INPUT_ENUMERATED keyboards={keyboards} pointers={pointers} touch={touch} forwarded=false");
     println!("MELANIA_NATIVE_INPUT_WAYLAND_READY=false");
+    println!("NATIVE_SESSION_READY=false");
+    Ok(())
+}
+
+/// Real libseat DRM descriptor acquisition/release/reopen exercise.
+/// This probe never calls set_crtc, page_flip or enables Wayland presentation.
+/// The QEMU-only forced cycle proves two real seatd opens, NOT a VT switch.
+/// A real pause/resume requires an external VT switch and physical validation.
+fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
+    assert_dedicated_console();
+    let forced_cycle=match env::var("MELANIA_NATIVE_READONLY_CYCLE").ok().as_deref() {
+        None=>false,
+        Some("YES_QEMU_VM")=>{
+            assert_qemu_test_guest();
+            true
+        }
+        Some(_)=>blocked("Invalid read-only libseat cycle opt-in"),
+    };
+    // Optional physical dedicated-VT exercise; the forced QEMU descriptor
+    // cycle must always exercise real GBM/EGL/DMA-BUF reconstruction.
+    let render_gbm_each_acquire=forced_cycle ||
+        match env::var("MELANIA_NATIVE_VT_GBM_ON_REACQUIRE").ok().as_deref() {
+            None=>false,
+            Some("1")=>true,
+            Some(_)=>blocked("MELANIA_NATIVE_VT_GBM_ON_REACQUIRE must be 1"),
+        };
+    let physical_vt_proof=match env::var("MELANIA_NATIVE_PHYSICAL_VT_PROOF").ok().as_deref() {
+        None=>false,
+        Some("1") if !forced_cycle=>true,
+        Some("1")=>blocked("Physical VT proof is incompatible with the forced QEMU descriptor cycle"),
+        Some(_)=>blocked("MELANIA_NATIVE_PHYSICAL_VT_PROOF must be 1"),
+    };
+    // A physical VT proof MUST rebuild real GBM/DMA-BUFs on the resumed FD.
+    let render_gbm_each_acquire=render_gbm_each_acquire || physical_vt_proof;
+    let (mut session,notifier)=LibSeatSession::new()?;
+    let seat=session.seat().to_string();
+    let udev=UdevBackend::new(&seat)?;
+    let initial=udev.device_list()
+        .map(|(id,path)|(id as u64,path.to_path_buf())).collect::<Vec<_>>();
+    let mut state=NativeLifecycle::default();
+    if session.is_active() {state.on_session(SessionEvent::ActivateSession);}
+    for (id,path) in initial {
+        state.on_device(melania_native::DeviceChange::Added{id,path});
+    }
+    let mut event_loop=calloop::EventLoop::<NativeLifecycle>::try_new()?;
+    event_loop.handle().insert_source(notifier,|event,_,state|{
+        state.on_session(event);
+    })?;
+    event_loop.handle().insert_source(udev,|event,_,state|{
+        state.on_udev(event);
+    })?;
+
+    // The owned FD stays inside this probe; never persist across libseat
+    // pause, GPU hotplug, or another acquisition epoch. No DMA-BUF is made.
+    let mut owned:Option<(melania_native::device_epoch::DeviceEpoch,OwnedFd)>=None;
+    let mut opened=0u32;
+    // Bind every acquisition epoch to the same real kernel character-node
+    // identity, not merely the reusable /dev/dri/cardN pathname.
+    let mut first_drm_node:Option<melania_native::native_drm_node_identity::DrmNodeIdentity>=None;
+    // Keep the original selected path while the seat-owned descriptor is
+    // alive. Re-check the kernel identity at every dispatch, not only during
+    // GBM/EGL allocation: udev notification may lag a device replacement.
+    let mut live_card_path:Option<PathBuf>=None;
+    let mut observed_pause=false;
+    let mut cycled=false;
+    let mut physical_resume_verified=false;
+    let cycles=if forced_cycle {40} else if physical_vt_proof {600} else {300};
+    for _ in 0..cycles {
+        // Even while polling for real libseat pause/hotplug, release the
+        // descriptor explicitly if the event loop itself fails.
+        if let Err(error)=event_loop.dispatch(Some(Duration::from_millis(100)),&mut state) {
+            if let Some((_,fd))=owned.take() {session.close(fd)?;}
+            return Err(error.into());
+        }
+        let active=session.is_active() && state.seat_active();
+        if active {
+            if let Some((_,fd))=owned.as_ref() {
+                let path=live_card_path.as_deref()
+                    .ok_or("Seat-owned DRM descriptor has no recorded device path")?;
+                let baseline=first_drm_node
+                    .ok_or("Seat-owned DRM descriptor has no verified device identity")?;
+                if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                    path,fd,Some(baseline)
+                ) {
+                    // A live device substitution is not a normal VT pause.
+                    // Close the real libseat FD and refuse any new GPU work.
+                    let (_,fd)=owned.take().expect("live libseat DRM descriptor");
+                    session.close(fd)?;
+                    return Err(format!("Live DRM device identity invalidated: {error}").into());
+                }
+            }
+        }
+        if let Some((epoch,_))=owned.as_ref() {
+            if !active || epoch.verify(&state).is_err() {
+                let unexpected_change=active;
+                let (_,fd)=owned.take().expect("owned read-only descriptor");
+                live_card_path=None;
+                // On any libseat pause, release our actual DRM descriptor.
+                // If seatd refuses the release, abort without new opens.
+                session.close(fd)?;
+                if unexpected_change {
+                    return Err("DRM GPU changed while seat remained active; refusing stale reopen".into());
+                }
+                observed_pause=true;
+                println!("MELANIA_NATIVE_VT_READONLY_PAUSED=true");
+            }
+        }
+        if active && owned.is_none() {
+            let watch=melania_native::native_gpu_watch::NativeGpuWatch::from_discovered(
+                state.devices().iter().map(|(id,path)|(*id,path.clone())),
+            );
+            let card_path=watch.single_primary_card()
+                .map_err(|err|format!("Read-only DRM GPU selection refused: {err:?}"))?
+                .to_path_buf();
+            let id=*state.devices().iter()
+                .find(|(_,path)|**path==card_path)
+                .map(|(id,_)|id)
+                .ok_or("Read-only DRM card no longer present on seat")?;
+            let epoch=melania_native::device_epoch::DeviceEpoch::capture(
+                &state,id,&card_path,
+            ).map_err(|err|format!("Read-only DRM epoch unavailable: {err:?}"))?;
+            // Actual libseat/seatd acquisition, NEVER a direct /dev/dri open.
+            let fd=session.open(&card_path,
+                OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK)?;
+            let kernel_node=match melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                &card_path,&fd,first_drm_node
+            ) {
+                Ok(node)=>node,
+                Err(error)=>{
+                    session.close(fd)?;
+                    return Err(error.into());
+                }
+            };
+            // Keep a single libseat-issued DRM FD alive while rebuilding
+            // the renderer on a fresh cloned descriptor. GBM/EGL, its real
+            // DMA-BUF allocations and GPU fences are dropped completely
+            // BEFORE libseat closes the original FD. On ANY error, close
+            // the owned seat descriptor rather than escaping via '?'.
+            let acquired=(|| -> Result<(usize,Vec<melania_native::native_output_probe_plan::OutputBufferProbe>),Box<dyn Error>> {
+                let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
+                let crtcs=card.resource_handles()?.crtcs().len();
+                if crtcs==0 {
+                    return Err("Libseat-owned DRM card has no CRTC resources".into());
+                }
+                let probes=if render_gbm_each_acquire {
+                    // Read the actual kernel connector->encoder->CRTC->FB
+                    // mapping, rather than rendering a guessed 640x480 surface.
+                    // Every independently active CRTC must be renderable;
+                    // one failed output rejects the entire reacquisition.
+                    let before=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
+                    let plan=melania_native::native_output_probe_plan::plan_active_output_probes(&before)?;
+                    for probe in &plan {
+                        melania_native::renderer::smoke_render_gbm_output_buffers(
+                            card.clone(),probe.width,probe.height,2
+                        ).map_err(|error|format!(
+                            "Fresh libseat DRM FD failed GBM/EGL/DMA-BUF output {:?} ({}x{}): {error}",
+                            probe.crtc,probe.width,probe.height
+                        ))?;
+                    }
+                    // Do not count allocations if an external modeset,
+                    // hotplug or replaced original FB happened while the
+                    // EGL/GBM resources were being rebuilt.
+                    let after=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
+                    if before!=after {
+                        return Err("Active DRM CRTC/connector/framebuffer changed during GPU reacquisition".into());
+                    }
+                    plan
+                } else { Vec::new() };
+                Ok((crtcs,probes))
+            })();
+            let (crtcs,probes)=match acquired {
+                Ok(value)=>value,
+                Err(error)=>{
+                    session.close(fd)?;
+                    return Err(error);
+                }
+            };
+            // A notifier/udev polling error must also release the actual
+            // seatd-owned FD before aborting: never strand GPU ownership.
+            if let Err(error)=event_loop.dispatch(Some(Duration::ZERO),&mut state) {
+                session.close(fd)?;
+                return Err(error.into());
+            }
+            if !session.is_active() || epoch.verify(&state).is_err() {
+                session.close(fd)?;
+                return Err("Seat/GPU invalidated during real DRM reacquisition".into());
+            }
+            // Detect a replaced device node EVEN when udev delivered no
+            // notification during GPU initialization. Refuse stale handles
+            // rather than treating a matching /dev/dri path as ownership.
+            if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                &card_path,&fd,Some(kernel_node)
+            ) {
+                session.close(fd)?;
+                return Err(error.into());
+            }
+            let next_open=match opened.checked_add(1) {
+                Some(next)=>next,
+                None=>{
+                    session.close(fd)?;
+                    return Err("DRM acquisition counter overflow".into());
+                }
+            };
+            opened=next_open;
+            first_drm_node=Some(kernel_node);
+            live_card_path=Some(card_path.clone());
+            println!("MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED={opened} rdev={}",kernel_node.rdev());
+            // A physical proof can only complete after an actual libseat
+            // PauseSession was observed and a NEW seat-owned FD has passed
+            // every real output-sized GPU render/sync and epoch check.
+            if physical_vt_proof && observed_pause && opened>=2 {
+                physical_resume_verified=true;
+                println!("MELANIA_NATIVE_PHYSICAL_VT_RESUME_GBM_VERIFIED=true");
+            }
+            println!("MELANIA_NATIVE_VT_READONLY_DRM_OPEN={} crtcs={crtcs}",opened);
+            if render_gbm_each_acquire {
+                println!("MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT={opened} frames=2");
+                println!("MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT={opened} count={}",probes.len());
+                for probe in &probes {
+                    println!("MELANIA_NATIVE_VT_REAL_OUTPUT_GBM crtc={:?} {}x{} frames=2",
+                             probe.crtc,probe.width,probe.height);
+                }
+            }
+            owned=Some((epoch,fd));
+        }
+        if forced_cycle && !cycled && owned.is_some() {
+            // This tests a real FD close+new libseat open on VirtIO without
+            // faking a PauseSession event or claiming a VT acceptance test.
+            let (_,fd)=owned.take().expect("first DRM acquisition");
+            live_card_path=None;
+            session.close(fd)?;
+            cycled=true;
+            println!("MELANIA_NATIVE_VT_READONLY_QEMU_CYCLE=true");
+        }
+        if forced_cycle && cycled && opened==2 {break;}
+        if physical_resume_verified {break;}
+    }
+    if let Some((_,fd))=owned.take() {session.close(fd)?;}
+    if physical_vt_proof && !physical_resume_verified {
+        return Err("No genuine libseat VT pause and GPU-verified DRM resume within the physical test window".into());
+    }
+    if forced_cycle && (!cycled || opened!=2) {
+        return Err("QEMU real libseat DRM descriptor reopen not observed".into());
+    }
+    println!("MELANIA_NATIVE_VT_READONLY_ACQUISITIONS={opened}");
+    println!("MELANIA_NATIVE_VT_READONLY_ACTUAL_PAUSE_OBSERVED={observed_pause}");
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }
@@ -425,10 +715,23 @@ fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
     if !session.is_active() {
         return Err("QEMU GPU scanout requires an active libseat session".into());
     }
+    let card_path=Path::new("/dev/dri/card0");
     let fd=session.open(
-        Path::new("/dev/dri/card0"),
+        card_path,
         OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
     )?;
+    // The scanout probe must not trust the pathname alone: require the
+    // actual libseat-issued FD to be this kernel DRM primary card before
+    // any GBM allocation or KMS modeset can be attempted.
+    let original_node=match melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+        card_path,&fd,None
+    ) {
+        Ok(node)=>node,
+        Err(error)=>{
+            session.close(fd)?;
+            return Err(error.into());
+        }
+    };
     // The native GPU/KMS probe must finish (and restore the CRTC)
     // before the original libseat device is released.
     let cloned=fd.try_clone()?;
@@ -441,11 +744,20 @@ fn experimental_gbm_kms_scanout() -> Result<(),Box<dyn Error>> {
             melania_native::native_gbm_scanout::qemu_stress_gpu_frames(cloned,24),
         Some(_)=>Err("invalid QEMU GBM stress opt-in".into()),
     };
+    // Even a successful real KMS presentation must not be accepted if the
+    // node was removed/replaced while the scanout/rollback routine ran.
+    // Do not let this check skip the existing rollback: the KMS routine
+    // has already returned before this second identity inspection.
+    let still_same=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+        card_path,&fd,Some(original_node)
+    );
     let released=session.close(fd);
     drop(notifier);
     println!("MELANIA_NATIVE_GBM_KMS_LIBSEAT_RELEASED={}",released.is_ok());
     released?;
     outcome?;
+    still_same?;
+    println!("MELANIA_NATIVE_GBM_KMS_DRM_FD_IDENTITY_VERIFIED=true");
     println!("NATIVE_SESSION_READY=false");
     Ok(())
 }
@@ -562,6 +874,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        [flag] if flag=="--experimental-vt-reacquire" =>{
+            if let Err(error)=experimental_vt_reacquire() {
+                eprintln!("Melania read-only libseat DRM reacquisition: {error}");
+                std::process::exit(1);
+            }
+        }
         [flag] if flag=="--experimental-drm" =>{
             if let Err(error)=experimental_drm(false,false){
                 eprintln!("Melania native stage2: {error}");
@@ -604,7 +922,7 @@ fn main() {
             }
         }
         _ =>{
-            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-gbm-kms-scanout | --experimental-kms-test");
+            eprintln!("Usage: melania-native --capabilities | --experimental-seat | --experimental-vt-reacquire | --experimental-drm | --experimental-offscreen | --experimental-gbm-output | --experimental-gbm-kms-scanout | --experimental-kms-test");
             std::process::exit(2);
         }
     }

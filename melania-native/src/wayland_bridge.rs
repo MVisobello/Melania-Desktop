@@ -8,6 +8,7 @@
 //! roundtrips without claiming these clients are displayed.
 use std::{
     error::Error,
+    collections::BTreeSet,
     fs,
     io::{Read,Write},
     os::unix::{fs::PermissionsExt,net::{UnixDatagram,UnixListener,UnixStream}},
@@ -32,7 +33,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData,ClientId,DisconnectReason},
             protocol::{wl_buffer,wl_surface::WlSurface,wl_seat,wl_output::WlOutput},
-            Client, Display, ListeningSocket,
+            Client, Display, DisplayHandle, Resource, ListeningSocket,
         },
     },
     utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
@@ -42,7 +43,7 @@ use smithay::{
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
-            ClientDndGrabHandler,ServerDndGrabHandler}},
+            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus}},
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
@@ -64,11 +65,15 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+use melania_native::auto_tiling::{AutoTiling,TileAxis,TileDirection};
+use melania_native::tile_swap_shortcuts::{TileSwapKeyHandler,SwapKeyAction};
+use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
 use melania_native::native_popup_layout::PopupPlacement;
 use melania_native::snap_layout::{SnapZone,EdgeDrop,edge_drop_target};
 use melania_native::snap_shortcuts::{SnapKeyHandler,SnapKeyAction};
 use smithay::utils::Rectangle;
 use melania_native::keyboard_window_cycle::{KeyboardWindowCycle,ShortcutResult};
+use melania_native::focus_follows_pointer::{HoverFocusGate,should_focus_on_motion};
 use signal_hook::consts::signal::{SIGINT,SIGTERM};
 
 /// Publish a QEMU-only post-DRM-ACK receipt atomically. The Wayland test
@@ -105,6 +110,8 @@ struct BridgeState {
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
     data_device:DataDeviceState,
+    // Focus clipboard offers on real client ownership within this Wayland display.
+    display_handle:DisplayHandle,
     output:Output,
     output_manager:OutputManagerState,
     pixel_probe:bool,
@@ -167,6 +174,10 @@ struct BridgeState {
     // Opt-in VM-only bridge of real xdg_toplevel requests to Stage77.
     managed_xdg_mode:bool,
     managed_windows:Vec<(WlSurface,ManagedWindow)>,
+    // Explicit QEMU opt-in: one output/workspace until native multi-output exists.
+    auto_tiling:AutoTiling,
+    auto_tile_keys:AutoTileKeyHandler,
+    tile_swap_keys:TileSwapKeyHandler,
     // A configure alone is not a displayed resize: wait for the matching
     // wl_shm client image before changing the retained KMS scene.
     managed_pending_sizes:Vec<(WlSurface,(usize,usize))>,
@@ -175,6 +186,11 @@ struct BridgeState {
     // Configured xdg_popup children; only ACKed client pixels enter KMS.
     // Parent identity is retained to follow real parent drags/destroy.
     native_popup_roles:Vec<(PopupSurface,WlSurface)>,
+    // XDG popup.grab is scoped to a real seat/button serial. The stack is
+    // limited by native_popup_roles (8) and never grants a DRM/login permit.
+    grabbed_popup_roles:Vec<WlSurface>,
+    last_popup_press:Option<(WlSurface,Serial)>,
+    suppressed_popup_button:Option<u32>,
     window_interaction:WindowInteraction,
     keyboard_window_cycle:KeyboardWindowCycle,
     snap_keys:SnapKeyHandler,
@@ -182,6 +198,10 @@ struct BridgeState {
     // One-shot move authorization minted from a real libinput left click,
     // scoped to its Wayland surface and the exact wl_pointer button serial.
     last_xdg_press:Option<(WlSurface,Serial)>,
+    // Focus follows pointer is opt-in only inside an isolated QEMU VM.
+    // Never steal focus from active button grabs, popup menus or host sessions.
+    focus_follows_pointer_mode:bool,
+    pointer_buttons_held:BTreeSet<u32>,
     known_window_surfaces:WindowSlots<WlSurface>,
     stream:Option<UnixStream>,
     pixel_frame_count:u8,
@@ -612,6 +632,39 @@ impl BridgeState {
         Some((surface,(f64::from(x),f64::from(y)).into()))
     }
 
+    /// Optional COSMIC-style sloppy focus for the actual QEMU libinput seat.
+    /// Hover never raises/reorders a window and never submits a KMS frame.
+    /// Only a mapped, hit-tested XDG toplevel with owned visible client
+    /// pixels can receive a real wl_keyboard focus transition.
+    fn maybe_focus_hovered_toplevel(&mut self,point:Point<f64,Logical>) {
+        if !self.focus_follows_pointer_mode ||
+           !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.multi_window_mode {
+            return;
+        }
+        let Some((surface,_))=self.pointer_target(point) else {return;};
+        let is_toplevel=self.xdg_shell.toplevel_surfaces()
+            .iter().any(|top|top.wl_surface()==&surface);
+        let permitted=should_focus_on_motion(HoverFocusGate {
+            enabled:self.focus_follows_pointer_mode,
+            seat_active:self.lifecycle.seat_active(),
+            revoked:self.native_presentation_guard.permanently_revoked(),
+            button_held:!self.pointer_buttons_held.is_empty(),
+            interactive_grab:self.window_interaction.active_key().is_some(),
+            popup_grab:!self.grabbed_popup_roles.is_empty(),
+            visible_toplevel:is_toplevel,
+            already_focused:self.focused.as_ref()==Some(&surface),
+        });
+        if !permitted {return;}
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else {return;};
+        self.keyboard_window_cycle.cancel_cycle();
+        let keyboard=self.seat.get_keyboard().expect("keyboard");
+        keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+        self.focused=Some(surface);
+        println!("MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER={id}");
+        let _=std::io::stdout().flush();
+    }
+
     /// Changes to model geometry are bounded and require an active real
     /// pointer grab. A compositor-only change is not proof of repaint; the
     /// current KMS stream still presents only on subsequent client commits.
@@ -955,6 +1008,10 @@ impl BridgeState {
             removal.contains(focus));
         let pressed_removed=self.last_xdg_press.as_ref().is_some_and(|(pressed,_)|
             removal.contains(pressed));
+        let popup_pressed_removed=self.last_popup_press.as_ref().is_some_and(|(pressed,_)|
+            removal.contains(pressed));
+        // A dismissed popup must never retain ownership of a later click.
+        self.grabbed_popup_roles.retain(|role|!removal.contains(role));
 
         let mut scene_changed=false;
         for candidate in &removal {
@@ -986,6 +1043,7 @@ impl BridgeState {
             }
         }
         if pressed_removed {self.last_xdg_press=None;}
+        if popup_pressed_removed {self.last_popup_press=None;}
         if focused_removed {
             self.focused=None;
             let target=self.pointer_target(self.pointer_position);
@@ -1005,6 +1063,38 @@ impl BridgeState {
     fn evict_native_popup(&mut self,surface:&WlSurface) {
         let _=self.evict_native_popup_tree(surface,false,false);
     }
+
+    /// Dismiss the actual grabbed popup subtree on a physical outside click.
+    /// If the click is inside an earlier grabbed popup, only nested submenus
+    /// are removed and the click may still reach that surviving parent.
+    /// A click outside the entire stack is consumed (along with its release)
+    /// to prevent accidental click-through to a different application.
+    fn dismiss_grabbed_popups_on_press(&mut self,point:Point<f64,Logical>)->bool {
+        if self.grabbed_popup_roles.is_empty() {return false;}
+        let clicked=self.pointer_target(point).map(|(surface,_)|surface);
+        let edges=self.native_popup_roles.iter()
+            .map(|(role,parent)|(parent.clone(),role.wl_surface().clone()))
+            .collect::<Vec<_>>();
+        let removals=melania_native::native_popup_layout::popup_click_dismissals(
+            &self.grabbed_popup_roles,clicked.as_ref(),&edges);
+        if removals.is_empty() {return false;}
+        // Evict the outermost affected role once, including all of its
+        // descendants. This sends their popup_done events in bounded
+        // descendant-before-parent order and requests only ONE KMS redraw.
+        let outermost=removals.last().expect("nonempty dismissals").clone();
+        if let Some(role)=self.native_popup_roles.iter()
+            .find(|(role,_)|role.wl_surface()==&outermost)
+            .map(|(role,_)|role.clone()) {
+            role.send_popup_done();
+        }
+        self.evict_native_popup(&outermost);
+        println!("MELANIA_NATIVE_XDG_POPUP_OUTSIDE_PRESS_DISMISSED=true");
+        let _=std::io::stdout().flush();
+        // If another grabbed popup still owns input, the click is within
+        // that surviving parent and may be forwarded to it.
+        self.grabbed_popup_roles.is_empty()
+    }
+
     /// Esc from the real active libinput seat dismisses only a mapped XDG
     /// popup belonging to the focused parent chain, never another app's menu.
     /// The client receives the standard popup_done; visible pixels leave the
@@ -1117,6 +1207,250 @@ impl BridgeState {
         rect.valid_for(1280,800).then_some(rect)
     }
 
+    /// Native XDG auto-tiling: a plan is purely geometry until every affected
+    /// client ACKs XDG configure and commits a matching wl_shm image.
+    /// One actual output, one workspace in the disposable QEMU bridge. No
+    /// scene pixel mutation or speculative DRM frame ACK happens here.
+    fn reflow_auto_tiling(&mut self) {
+        if !self.auto_tiling.enabled() || !self.managed_xdg_mode ||
+           !self.dynamic_window_mode || !self.multi_window_mode {return;}
+        let work=if self.gtk_layer_mode {
+            self.mapped_normal_work_area()
+        } else {
+            Some(WindowRect{x:0,y:0,width:1280,height:800})
+        };
+        let Some(work)=work else {return;};
+
+        // Tiled windows with normal XDG state participate in the layout;
+        // minimized and user-maximized/fullscreen/snapped roles do not.
+        for (surface,model) in &self.managed_windows {
+            let Some(id)=self.known_window_surfaces.id_of(surface) else {continue;};
+            let state=model.state();
+            let _=self.auto_tiling.set_minimized(id,
+                state==WindowDisplayState::Minimized);
+            let _=self.auto_tiling.set_role_excluded(id,
+                state!=WindowDisplayState::Normal &&
+                state!=WindowDisplayState::Minimized);
+        }
+        let placements=match self.auto_tiling.plan(work,1280,800) {
+            Ok(Some(placements))=>placements,
+            Ok(None)=>return,
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_AUTO_TILING_REFUSED={error:?}");
+                return;
+            },
+        };
+
+        // Commit geometry requests only after the complete layout is valid.
+        // For changed sizes, wait for the client's matching wl_shm buffer.
+        // For position-only changes, already-accepted owned pixels can be
+        // moved by the compositor directly: xdg_toplevel has no (x,y)
+        // configure and clients need not commit a new same-sized buffer.
+        let mut changes=Vec::new();
+        for placement in placements {
+            let Some(surface)=self.known_window_surfaces.get(placement.window_id).cloned()
+                else {continue;};
+            let Some((_,window))=self.managed_windows.iter_mut()
+                .find(|(role,_)|role==&surface) else {continue;};
+            if window.set_tiled_geometry(placement.rect) {
+                changes.push((surface,placement.rect));
+            }
+        }
+        let mut retained_scene_moved=false;
+        for (surface,rect) in changes {
+            // NEVER relocate pixels with an outstanding XDG resize or an
+            // uncommitted size. This path is valid only for an existing,
+            // visible, already-owned shm image of the *same* dimensions.
+            let pending=self.managed_pending_sizes.iter().any(|(role,_)|role==&surface)
+                || self.managed_pending_resize.iter().any(|(role,_)|role==&surface);
+            if !pending && self.lifecycle.seat_active() &&
+               !self.native_presentation_guard.permanently_revoked() {
+                if let Some(key)=self.known_window_surfaces.id_of(&surface) {
+                    if let Some((x,y,width,height))=self.dynamic_scene.geometry(key) {
+                        if width==rect.width as usize && height==rect.height as usize &&
+                           self.dynamic_scene.is_visible(key)==Some(true) {
+                            if (x,y)!=(rect.x,rect.y) {
+                                if self.dynamic_scene.move_to(key,rect.x,rect.y).is_ok() {
+                                    self.reposition_native_popups_for_parent(key);
+                                    retained_scene_moved=true;
+                                    println!("MELANIA_NATIVE_AUTO_TILE_RETAINED_MOVE={key} x={} y={}",
+                                        rect.x,rect.y);
+                                    continue;
+                                }
+                            } else {
+                                // Current client pixels and geometry already
+                                // match; no XDG configure or new KMS work.
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            let top=self.xdg_shell.toplevel_surfaces().iter()
+                .find(|top|top.wl_surface()==&surface).cloned();
+            let Some(top)=top else {continue;};
+            self.cancel_surface_grab(&surface);
+            top.with_pending_state(|state|{
+                state.states.unset(xdg_toplevel::State::Resizing);
+                state.size=Some((rect.width,rect.height).into());
+            });
+            top.send_pending_configure();
+            self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+            self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+            self.managed_pending_sizes.push((
+                surface.clone(),(rect.width as usize,rect.height as usize)
+            ));
+            println!("MELANIA_NATIVE_AUTO_TILE_XDG_CONFIGURED={}x{} at {},{}",
+                rect.width,rect.height,rect.x,rect.y);
+        }
+        if retained_scene_moved {
+            self.note_scene_change();
+            if self.continuous_kms_mode &&
+               (self.persistent_kms_mode ||
+                self.continuous_frame_count<self.continuous_frame_target) {
+                if let Err(error)=self.submit_continuous_frame() {
+                    eprintln!("native tiled retained-frame swap rejected: {error}");
+                }
+            }
+        }
+    }
+
+    /// Guest-only Ctrl+Super+T changes the actual XDG tiled geometry.
+    /// Disabling tiling restores each client's preserved floating rectangle
+    /// via configure, not by teleporting old retained pixels into a new KMS
+    /// framebuffer. The client must commit a size-matching buffer.
+    fn toggle_auto_tiling(&mut self) {
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.multi_window_mode || !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let enabled=!self.auto_tiling.enabled();
+        self.auto_tiling.set_enabled(enabled);
+        if enabled {
+            self.reflow_auto_tiling();
+        } else {
+            let mut changes=Vec::new();
+            for (surface,window) in &mut self.managed_windows {
+                if window.clear_tiled_geometry() {
+                    if let Some(rect)=window.geometry() {
+                        changes.push((surface.clone(),rect));
+                    }
+                }
+            }
+            for (surface,rect) in changes {
+                let top=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned();
+                let Some(top)=top else {continue;};
+                self.cancel_surface_grab(&surface);
+                top.with_pending_state(|pending|{
+                    pending.states.unset(xdg_toplevel::State::Resizing);
+                    pending.size=Some((rect.width,rect.height).into());
+                });
+                top.send_pending_configure();
+                self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+                self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                self.managed_pending_sizes.push((
+                    surface.clone(),(rect.width as usize,rect.height as usize)
+                ));
+                println!("MELANIA_NATIVE_AUTO_TILE_RESTORE_CONFIGURED={}x{} at {},{}",
+                    rect.width,rect.height,rect.x,rect.y);
+            }
+        }
+        println!("MELANIA_NATIVE_AUTO_TILING_ENABLED={enabled}");
+    }
+
+    /// COSMIC Super+X followed by a real arrow: swap adjacent active tiles
+    /// in the validated work-area layout, then ask real XDG clients to
+    /// draw their new sizes. Keyboard focus remains with the originating
+    /// surface; only post-commit wl_shm pixel buffers enter KMS.
+    fn swap_tiled_focused(&mut self,direction:TileDirection) {
+        if !self.auto_tiling.enabled() || !self.managed_xdg_mode ||
+           !self.dynamic_window_mode || !self.multi_window_mode ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let Some(focused)=self.focused.as_ref() else {return;};
+        let Some(id)=self.known_window_surfaces.id_of(focused) else{return;};
+        let work=if self.gtk_layer_mode {
+            self.mapped_normal_work_area()
+        } else {
+            Some(WindowRect{x:0,y:0,width:1280,height:800})
+        };
+        let Some(work)=work else{return;};
+        match self.auto_tiling.swap_direction(id,direction,work,1280,800) {
+            Ok(Some(target))=>{
+                // reflow sends per-client configure; it neither fabricates
+                // KMS page flips nor bypasses stale-buffer rejection.
+                self.reflow_auto_tiling();
+                println!("MELANIA_NATIVE_AUTO_TILE_SWAP={id}:{target} direction={direction:?}");
+            },
+            Ok(None)=>{},
+            Err(error)=>eprintln!("MELANIA_NATIVE_AUTO_TILE_SWAP_REFUSED={error:?}"),
+        }
+    }
+
+    /// COSMIC-style floating exception, gated to the disposable QEMU native
+    /// XDG bridge. A floating restore must ACK a new client buffer; it is
+    /// not an immediate retained-frame relocation.
+    fn toggle_floating_focused(&mut self) {
+        if !self.auto_tiling.enabled() ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() ||
+           !self.grabbed_popup_roles.is_empty() {return;}
+        let Some(surface)=self.focused.as_ref().cloned() else {return;};
+        let Some(id)=self.known_window_surfaces.id_of(&surface) else {return;};
+        if !self.managed_windows.iter().any(|(role,window)|
+            role==&surface && window.state()==WindowDisplayState::Normal) {
+            return;
+        }
+        let Ok(was_floating)=self.auto_tiling.is_floating(id) else {return;};
+        let floating=!was_floating;
+        if self.auto_tiling.set_floating(id,floating).is_err() {return;}
+        if floating {
+            let rect=self.managed_windows.iter_mut()
+                .find(|(role,_)|role==&surface)
+                .and_then(|(_,window)|{
+                    window.clear_tiled_geometry().then(||window.geometry()).flatten()
+                });
+            if let Some(rect)=rect {
+                let top=self.xdg_shell.toplevel_surfaces().iter()
+                    .find(|top|top.wl_surface()==&surface).cloned();
+                if let Some(top)=top {
+                    self.cancel_surface_grab(&surface);
+                    top.with_pending_state(|state|{
+                        state.states.unset(xdg_toplevel::State::Resizing);
+                        state.size=Some((rect.width,rect.height).into());
+                    });
+                    top.send_pending_configure();
+                    self.managed_pending_resize.retain(|(role,_)|role!=&surface);
+                    self.managed_pending_sizes.retain(|(role,_)|role!=&surface);
+                    self.managed_pending_sizes.push((
+                        surface.clone(),(rect.width as usize,rect.height as usize)
+                    ));
+                }
+            }
+        }
+        self.reflow_auto_tiling();
+        println!("MELANIA_NATIVE_AUTO_TILE_FLOATING={floating} id={id}");
+    }
+
+    fn rotate_auto_tiling(&mut self) {
+        if !self.auto_tiling.enabled() ||
+           !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() ||
+           self.window_interaction.active_key().is_some() {return;}
+        let axis=match self.auto_tiling.axis() {
+            TileAxis::Horizontal=>TileAxis::Vertical,
+            TileAxis::Vertical=>TileAxis::Horizontal,
+        };
+        self.auto_tiling.set_axis(axis);
+        self.reflow_auto_tiling();
+        println!("MELANIA_NATIVE_AUTO_TILE_AXIS={axis:?}");
+    }
+
     /// Reflow existing snapped/maximized windows when a real GTK4 panel
     /// maps, changes its exclusive zone, or disappears. Never synthesize a
     /// wl_shm buffer: wait for each client's real XDG configure/commit.
@@ -1129,7 +1463,7 @@ impl BridgeState {
             let previous=window.geometry();
             if !window.set_work_area(area) {continue;}
             let next=window.geometry();
-            if previous!=next {
+            if previous!=next && !window.is_tiled() {
                 if let Some(rect)=next {changes.push((surface.clone(),rect));}
             }
         }
@@ -1151,6 +1485,7 @@ impl BridgeState {
             println!("MELANIA_NATIVE_XDG_WORK_AREA_REFLOW={}x{} at {},{}",
                 rect.width,rect.height,rect.x,rect.y);
         }
+        self.reflow_auto_tiling();
     }
 
     /// Apply actual xdg_toplevel requests to the QEMU compositor state and
@@ -1199,6 +1534,7 @@ impl BridgeState {
                 ));
             }
         }
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_MAXIMIZED={enabled}");
     }
 
@@ -1238,6 +1574,7 @@ impl BridgeState {
         self.managed_pending_sizes.push((
             surface.clone(),(rect.width as usize,rect.height as usize)
         ));
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_SUPER_SNAP_CONFIGURED={:?} {}x{} at {},{}",
                  zone,rect.width,rect.height,rect.x,rect.y);
     }
@@ -1288,6 +1625,7 @@ impl BridgeState {
                 ));
             }
         }
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_FULLSCREEN={enabled}");
     }
 }
@@ -1367,6 +1705,7 @@ impl BridgeState {
                 let keyboard=self.seat.get_keyboard().expect("keyboard");
                 keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
                 self.focused=Some(surface);
+                if minimized {self.reflow_auto_tiling();}
                 println!("MELANIA_NATIVE_CONTROL_ACTIVATED={id}");
                 ACK.into()
             },
@@ -1945,7 +2284,12 @@ impl SeatHandler for BridgeState {
     type PointerFocus=WlSurface;
     type TouchFocus=WlSurface;
     fn seat_state(&mut self)->&mut SeatState<Self> {&mut self.seats}
-    fn focus_changed(&mut self,_:&Seat<Self>,_:Option<&WlSurface>){}
+    fn focus_changed(&mut self,seat:&Seat<Self>,focused:Option<&WlSurface>){
+        // A focus transition transfers wl_data_device offers only to the actual client.
+        // Unmapped or destroyed surfaces revoke the offer instead of keeping stale focus.
+        let client=focused.and_then(|surface|surface.client());
+        set_data_device_focus(&self.display_handle,seat,client);
+    }
     fn cursor_image(&mut self,_:&Seat<Self>,_:CursorImageStatus){}
 }
 // Match the protocol implementations of the nested compositor, but keep
@@ -1970,6 +2314,7 @@ impl XdgShellHandler for BridgeState {
                             window.set_work_area(work);
                         }
                         self.managed_windows.push((top.wl_surface().clone(),window));
+                        let _=self.auto_tiling.register(key);
                     }
                 }
             }
@@ -1980,6 +2325,7 @@ impl XdgShellHandler for BridgeState {
             self.dynamic_toplevels.push(top.clone());
         }
         top.send_configure();
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_XDG_TOPLEVEL_CONFIGURE_SENT=true");
     }
     fn new_popup(&mut self,popup:PopupSurface,positioner:PositionerState) {
@@ -2046,7 +2392,8 @@ impl XdgShellHandler for BridgeState {
         // Requiring a normal managed role also prevents moving a stale scene
         // slot whose XDG role is no longer eligible for interactive movement.
         if !self.managed_windows.iter().any(|(role,window)|
-            role==surface && window.state()==WindowDisplayState::Normal) {
+            role==surface && window.state()==WindowDisplayState::Normal &&
+            !window.is_tiled()) {
             return;
         }
         let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
@@ -2149,6 +2496,7 @@ impl XdgShellHandler for BridgeState {
             });
             pointer.frame(self);
         }
+        self.reflow_auto_tiling();
         println!("MELANIA_NATIVE_MANAGED_XDG_MINIMIZED=true");
     }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
@@ -2168,6 +2516,10 @@ impl XdgShellHandler for BridgeState {
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         let parent_key=self.known_window_surfaces.remove(&surface);
+        if let Some(id)=parent_key {
+            self.auto_tiling.forget(id);
+            self.reflow_auto_tiling();
+        }
         // A parent can be destroyed before it ever committed an accepted
         // wl_shm buffer. Its child roles may still have retained pixels: do
         // not skip the scene damage just because the parent's slot is absent.
@@ -2228,7 +2580,37 @@ impl XdgShellHandler for BridgeState {
             pointer.frame(self);
         }
     }
-    fn grab(&mut self,_:PopupSurface,_:wl_seat::WlSeat,_:Serial){}
+    fn grab(&mut self,popup:PopupSurface,seat:wl_seat::WlSeat,serial:Serial){
+        // A request alone is never an input grab. Require exactly the
+        // libinput button serial forwarded to the live parent Wayland role.
+        if !self.managed_xdg_mode || !self.dynamic_window_mode ||
+           !self.seat.owns(&seat) || !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.permanently_revoked() {
+            popup.send_popup_done();
+            return;
+        }
+        let parent=self.native_popup_roles.iter()
+            .find(|(role,_)|role.wl_surface()==popup.wl_surface())
+            .map(|(_,parent)|parent.clone());
+        let Some(parent)=parent else {popup.send_popup_done();return;};
+        let serial_matches=self.last_popup_press.as_ref().is_some_and(|(pressed,issued)|
+            pressed==&parent && *issued==serial);
+        let nested_ok=self.grabbed_popup_roles.last().is_none_or(|previous|
+            previous==&parent);
+        if !serial_matches || !nested_ok || self.grabbed_popup_roles.len()>=8 {
+            popup.send_popup_done();
+            return;
+        }
+        self.last_popup_press=None;
+        // The same physical button cannot be reused to start a toplevel
+        // move/resize after it authorized an XDG popup grab.
+        if self.last_xdg_press.as_ref().is_some_and(|(_,issued)|*issued==serial) {
+            self.last_xdg_press=None;
+        }
+        self.grabbed_popup_roles.push(popup.wl_surface().clone());
+        println!("MELANIA_NATIVE_XDG_POPUP_GRAB_GRANTED=true");
+        let _=std::io::stdout().flush();
+    }
     fn reposition_request(&mut self,popup:PopupSurface,positioner:PositionerState,token:u32){
         if !self.managed_xdg_mode || !self.dynamic_window_mode {
             popup.send_repositioned(token);
@@ -2377,11 +2759,18 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     match event {
         InputEvent::DeviceAdded {device} =>register(state,device),
         InputEvent::DeviceRemoved {device} => {
+            state.pointer_buttons_held.clear();
             state.last_xdg_press=None;
+            state.last_popup_press=None;
+            state.suppressed_popup_button=None;
+            // A removed physical input device cannot retain a popup grab.
+            state.grabbed_popup_roles.clear();
             state.window_interaction.cancel();
             state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
             state.snap_keys.reset();
+            state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
             state.lifecycle.input_registry_mut().device_removed(&InputDevice::id(&device));
         },
         InputEvent::Keyboard {event} => {
@@ -2421,11 +2810,59 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // The model sees real libinput codes (XKB = evdev + 8) even
             // when the experimental GTK Super handler consumes Meta first.
             let code:u32=event.key_code().into();
+            if state.auto_tiling.enabled() && state.managed_xdg_mode &&
+               state.dynamic_window_mode && state.multi_window_mode &&
+               std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                   .as_deref()==Ok("YES_QEMU_VM") {
+                match state.tile_swap_keys.event(
+                    code.checked_sub(8),event.state()==KeyState::Pressed
+                ) {
+                    SwapKeyAction::Forward=>{},
+                    SwapKeyAction::Consume=>return,
+                    SwapKeyAction::Arm=>{
+                        println!("MELANIA_NATIVE_AUTO_TILE_SWAP_ARMED=true");
+                        return;
+                    },
+                    SwapKeyAction::Swap(direction)=>{
+                        state.swap_tiled_focused(direction);
+                        return;
+                    },
+                }
+            }
             let snap_action=if state.managed_xdg_mode &&
                state.dynamic_window_mode && state.multi_window_mode {
                 state.snap_keys.event(code.checked_sub(8),
                     event.state()==KeyState::Pressed)
             } else {SnapKeyAction::Forward};
+            // A physical Ctrl+Super+T toggles tiling in the disposable QEMU
+            // guest. Do not intercept ordinary Ctrl+T or Super+T or
+            // synthesize input in a normal user session.
+            if state.managed_xdg_mode && state.dynamic_window_mode &&
+               state.multi_window_mode &&
+               std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                   .as_deref()==Ok("YES_QEMU_VM") {
+                match state.auto_tile_keys.event(
+                    code.checked_sub(8),event.state()==KeyState::Pressed
+                ) {
+                    AutoTileKeyAction::Forward=>{},
+                    AutoTileKeyAction::Consume=>return,
+                    AutoTileKeyAction::Toggle=>{
+                        state.toggle_auto_tiling();
+                        // Never reuse a pending swap request across a layout
+                        // enable/disable transition or libseat epoch.
+                        state.tile_swap_keys.reset();
+                        return;
+                    },
+                    AutoTileKeyAction::ToggleFloating=>{
+                        state.toggle_floating_focused();
+                        return;
+                    },
+                    AutoTileKeyAction::RotateLayout=>{
+                        state.rotate_auto_tiling();
+                        return;
+                    },
+                }
+            }
             // Stage87: ACTUAL USB-keyboard -> libinput -> private GTK Start IPC.
             // The isolated QEMU shell has no initial keyboard-focused xdg
             // client, so the legacy focused-only filter would drop Super.
@@ -2622,6 +3059,9 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
+            // Actual libinput motion changes keyboard focus only in the
+            // explicit guest-only policy; it never raises the client.
+            state.maybe_focus_hovered_toplevel(point);
             state.delivered_motions+=1;
         }
         InputEvent::PointerMotionAbsolute {event} => {
@@ -2647,6 +3087,9 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 &MotionEvent{location:point,serial:SERIAL_COUNTER.next_serial(),
                              time:event.time_msec()});
             pointer.frame(state);
+            // Actual libinput motion changes keyboard focus only in the
+            // explicit guest-only policy; it never raises the client.
+            state.maybe_focus_hovered_toplevel(point);
             state.delivered_motions+=1;
         }
         InputEvent::PointerAxis {event} => {
@@ -2694,7 +3137,30 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
+            // Keep real button holds so a drag cannot cause hover-focus
+            // to cross clients, including a popup's suppressed click.
+            match event.state() {
+                ButtonState::Pressed => {state.pointer_buttons_held.insert(event.button_code());},
+                ButtonState::Released => {state.pointer_buttons_held.remove(&event.button_code());},
+            }
+            // The outside click which dismisses a grabbed popup may not
+            // activate the application beneath it. Suppress its paired
+            // release too; unrelated buttons remain independently routed.
+            if state.suppressed_popup_button==Some(event.button_code()) {
+                if event.state()==ButtonState::Released {
+                    state.suppressed_popup_button=None;
+                }
+                return;
+            }
             let point=state.pointer_position;
+            if event.state()==ButtonState::Pressed &&
+               state.managed_xdg_mode && state.dynamic_window_mode &&
+               state.dismiss_grabbed_popups_on_press(point) {
+                state.last_xdg_press=None;
+                state.last_popup_press=None;
+                state.suppressed_popup_button=Some(event.button_code());
+                return;
+            }
             if state.multi_window_mode {
                 let target_key=if state.dynamic_window_mode {
                     state.dynamic_scene.hit_test(point.x,point.y)
@@ -2785,6 +3251,14 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             // must follow their actual Wayland event emission order.
             // The authorization token is the precise forwarded button serial.
             let button_serial=SERIAL_COUNTER.next_serial();
+            if state.managed_xdg_mode && state.dynamic_window_mode {
+                if event.state()==ButtonState::Pressed {
+                    state.last_popup_press=state.pointer_target(point)
+                        .map(|(surface,_)|(surface,button_serial));
+                } else if event.state()==ButtonState::Released {
+                    state.last_popup_press=None;
+                }
+            }
             if event.button_code()==0x110 {
                 if event.state()==ButtonState::Pressed &&
                    state.managed_xdg_mode && state.dynamic_window_mode {
@@ -2911,6 +3385,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
+        display_handle:handle.clone(),
         output_manager:OutputManagerState::new_with_xdg_output::<BridgeState>(&handle),
         output,
         pixel_probe:std::env::var("MELANIA_NATIVE_CLIENT_PIXELS")
@@ -2990,14 +3465,41 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         managed_xdg_mode:std::env::var("MELANIA_NATIVE_MANAGED_XDG")
             .as_deref()==Ok("YES_QEMU_VM"),
         managed_windows:Vec::new(),
+        auto_tile_keys:AutoTileKeyHandler::default(),
+        tile_swap_keys:TileSwapKeyHandler::default(),
+        auto_tiling:{
+            let mut model=AutoTiling::default();
+            // Explicit guest-only switch. This is not an automatic tiling
+            // feature of production login and cannot affect the host DE.
+            if std::env::var("MELANIA_NATIVE_AUTO_TILING")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+               std::env::var("MELANIA_NATIVE_MANAGED_XDG")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+               std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
+                .as_deref()==Ok("YES_QEMU_VM") &&
+               std::env::var("MELANIA_NATIVE_TWO_WINDOWS")
+                .as_deref()==Ok("YES_QEMU_VM") {
+                model.set_enabled(true);
+            }
+            model
+        },
         managed_pending_sizes:Vec::new(),
         managed_pending_resize:Vec::new(),
         native_popup_roles:Vec::new(),
+        grabbed_popup_roles:Vec::new(),
+        last_popup_press:None,
+        suppressed_popup_button:None,
         window_interaction:WindowInteraction::default(),
         keyboard_window_cycle:KeyboardWindowCycle::default(),
         snap_keys:SnapKeyHandler::default(),
         popup_escape_held:false,
         last_xdg_press:None,
+        focus_follows_pointer_mode:std::env::var("MELANIA_NATIVE_FOCUS_FOLLOWS_POINTER")
+            .as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_MANAGED_XDG").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE").as_deref()==Ok("YES_QEMU_VM") &&
+            std::env::var("MELANIA_NATIVE_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM"),
+        pointer_buttons_held:BTreeSet::new(),
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") {
                 WindowSlots::with_capacity(16).expect("bounded QEMU window registry")
@@ -3036,11 +3538,19 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                set_data_device_focus(&state.display_handle,&state.seat,None);
+                state.pointer_buttons_held.clear();
                 state.last_xdg_press=None;
+                state.last_popup_press=None;
+                state.suppressed_popup_button=None;
+                // A suspended libseat session loses all active input grabs.
+                state.grabbed_popup_roles.clear();
                 state.window_interaction.cancel();
                 state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
             state.snap_keys.reset();
+            state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 state.native_presentation_guard.revoke();
@@ -3082,6 +3592,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.keyboard_window_cycle.reset();
             state.popup_escape_held=false;
             state.snap_keys.reset();
+            state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
         }
     })?;
     events.handle().insert_source(udev,|event,_,state|{
@@ -3103,6 +3615,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
+            set_data_device_focus(&state.display_handle,&state.seat,None);
             state.continuous_worker.take();
             state.continuous_inflight.take();
             state.continuous_presentation_token.take();
@@ -3112,7 +3625,21 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.render_scheduler.set_seat_active(false);
             state.continuous_redraw.set_seat_active(false);
             state.window_interaction.cancel();
+            // The udev handler directly revokes the seat lifecycle; it does
+            // not pass through SessionEvent::PauseSession above. Explicitly
+            // discard every input capability minted by the old GPU/VT epoch,
+            // including popup serials and the click-through suppression flag.
+            // Reacquiring a DRM route must never resurrect those grabs.
+            state.pointer_buttons_held.clear();
             state.last_xdg_press=None;
+            state.last_popup_press=None;
+            state.suppressed_popup_button=None;
+            state.grabbed_popup_roles.clear();
+            state.popup_escape_held=false;
+            state.snap_keys.reset();
+            state.auto_tile_keys.reset();
+            state.tile_swap_keys.reset();
+            state.keyboard_window_cycle.reset();
             eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
     })?;
