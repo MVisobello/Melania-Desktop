@@ -446,6 +446,13 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                     return Err(error);
                 }
             };
+            // Keep the just-rendered exact scanout epoch for one final kernel
+            // readback after processing queued libseat/udev events. Unlike
+            // across VT owners, a new framebuffer inside this same acquired
+            // epoch is a race and must not pass the physical proof.
+            let post_dispatch_snapshot=if physical_vt_proof {
+                reacquired_topology.clone()
+            } else {None};
             // Verify that an actual post-VT restore has preserved the complete
             // original connector/encoder/CRTC set and dimensions. A new FB_ID
             // is allowed: a different VT may have used its own framebuffer.
@@ -496,6 +503,48 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             ) {
                 session.close(fd)?;
                 return Err(error.into());
+            }
+            // A queued libseat/udev event may invalidate the proof AFTER
+            // GBM buffers were rebuilt but BEFORE the acceptance marker.
+            // Re-read exact connector/encoder/CRTC/FB_ID, full mode and
+            // origin from the same seat-owned DRM FD after event dispatch.
+            // Every error path must release the real libseat descriptor.
+            if physical_vt_proof {
+                let (captured_routes,captured_timings)=match post_dispatch_snapshot.as_ref() {
+                    Some(snapshot)=>snapshot,
+                    None=>{
+                        session.close(fd)?;
+                        return Err("Physical VT missing post-render DRM scanout snapshot".into());
+                    }
+                };
+                let rechecked=(|| -> Result<_,Box<dyn Error>> {
+                    let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
+                    Ok(melania_native::native_output_topology::inspect_stable_active_outputs_with_timings(&card)?)
+                })();
+                let (final_routes,final_timings)=match rechecked {
+                    Ok(snapshot)=>snapshot,
+                    Err(error)=>{
+                        session.close(fd)?;
+                        return Err(format!("Physical VT final DRM scanout readback failed: {error}").into());
+                    }
+                };
+                if let Err(error)=melania_native::native_output_topology::verify_unchanged_scanout_epoch(
+                    captured_routes,captured_timings,&final_routes,&final_timings
+                ) {
+                    session.close(fd)?;
+                    return Err(format!("Physical VT post-dispatch output invalidated: {error}").into());
+                }
+                if !session.is_active() || !state.seat_active() || epoch.verify(&state).is_err() {
+                    session.close(fd)?;
+                    return Err("Physical VT seat or GPU invalidated during final scanout check".into());
+                }
+                if let Err(error)=melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                    &card_path,&fd,Some(kernel_node)
+                ) {
+                    session.close(fd)?;
+                    return Err(format!("Physical VT DRM node replaced during final scanout check: {error}").into());
+                }
+                println!("MELANIA_NATIVE_VT_POST_DISPATCH_SCANOUT_STABLE=true");
             }
             let next_open=match opened.checked_add(1) {
                 Some(next)=>next,
