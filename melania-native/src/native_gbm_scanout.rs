@@ -161,6 +161,14 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
     let connector=route.connector;
     let original_encoder=card.get_connector(connector,false)?
         .current_encoder().ok_or("Native GBM output missing its original connector encoder")?;
+    // The stable DRM snapshot identified THIS encoder, not merely its
+    // destination CRTC. A VT/hotplug takeover can swap the encoder while
+    // keeping the same CRTC and framebuffer: do not adopt that new route.
+    // Both the 24-frame and persistent GPU Wayland paths must check before
+    // creating or reusing any GBM scanout buffers.
+    if original_encoder!=route.original_encoder {
+        return Err("GBM KMS original encoder changed since stable topology".into());
+    }
     if card.get_encoder(original_encoder)?.crtc()!=Some(crtc) {
         return Err("Native GBM encoder route changed after topology acquisition".into());
     }
@@ -347,6 +355,14 @@ pub fn qemu_wayland_gpu_scene_stream(
     let connector=route.connector;
     let original_encoder=card.get_connector(connector,false)?
         .current_encoder().ok_or("Native GBM output missing its original connector encoder")?;
+    // The stable DRM snapshot identified THIS encoder, not merely its
+    // destination CRTC. A VT/hotplug takeover can swap the encoder while
+    // keeping the same CRTC and framebuffer: do not adopt that new route.
+    // Both the 24-frame and persistent GPU Wayland paths must check before
+    // creating or reusing any GBM scanout buffers.
+    if original_encoder!=route.original_encoder {
+        return Err("GBM KMS original encoder changed since stable topology".into());
+    }
     if card.get_encoder(original_encoder)?.crtc()!=Some(crtc) {
         return Err("Native GBM encoder route changed after topology acquisition".into());
     }
