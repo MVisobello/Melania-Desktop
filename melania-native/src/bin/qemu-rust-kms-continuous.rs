@@ -266,6 +266,13 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     let connected=vec![route.connector];
     let original_encoder=card.get_connector(route.connector,false)?
         .current_encoder().ok_or("Original CPU scanout connector has no encoder")?;
+    // The stable inventory pins an exact connector->encoder identity. Merely
+    // finding *another* encoder aimed at the same CRTC after hotplug/VT can
+    // make us adopt a foreign scanout as our original rollback target.
+    // Reject the takeover BEFORE allocating owned CPU dumb framebuffers.
+    if original_encoder!=route.original_encoder {
+        return Err("CPU KMS original encoder changed since stable topology".into());
+    }
     if card.get_encoder(original_encoder)?.crtc()!=Some(crtc_handle) {
         return Err("Original CPU scanout encoder moved after route snapshot".into());
     }
