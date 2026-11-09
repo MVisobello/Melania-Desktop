@@ -249,6 +249,11 @@ pub fn verify_rollback_route(
     // while the output is disabled. Fail closed before ANY restore modeset,
     // even if two kernel snapshots happen to agree on that inactive state.
     let Some(original_mode)=original.mode() else {return Ok(false);};
+    // A restorable active scanout requires an original framebuffer. Without
+    // one, a post-restore CRTC can retain an owned FB and still satisfy the
+    // old route predicate when the caller passes it among owned_fbs.
+    // Never enter a KMS rollback modeset without a concrete saved FB_ID.
+    if original.framebuffer().is_none() {return Ok(false);}
     let original_size=original_mode.size();
     if original_size.0==0 || original_size.1==0 || original_mode.vrefresh()==0 {
         return Ok(false);
@@ -321,6 +326,18 @@ pub fn owner_snapshot_matches(
 mod ownership_tests {
     use super::*;
     use drm::control;
+    #[test]
+    fn rollback_requires_saved_framebuffer_before_kernel_restore() {
+        // This precondition must run before the first kernel snapshot and
+        // therefore before either CPU or GBM Restore guard calls set_crtc.
+        let source=include_str!("native_kms_scanout.rs");
+        let verifier=source.split("pub fn verify_rollback_route(").nth(1).unwrap()
+            .split("/// Pure snapshot predicate").next().unwrap();
+        let missing=verifier.find("if original.framebuffer().is_none() {return Ok(false);}").unwrap();
+        let first_read=verifier.find("let first=snapshot(").unwrap();
+        assert!(missing<first_read);
+    }
+
     #[test]
     fn kernel_scanout_ack_requires_unchanged_crtc_position() {
         // The production verifier uses two real drm-rs CRTC ioctl reads.
