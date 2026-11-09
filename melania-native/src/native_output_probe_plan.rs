@@ -43,6 +43,39 @@ pub fn plan_active_output_probes(
     Ok(probes)
 }
 
+
+/// Verify the complete set of previously active output routes after a real
+/// libseat VT pause and re-acquisition. A new FB_ID is legitimate when the
+/// other VT's compositor has replaced its own scanout framebuffer; however,
+/// losing a connector, moving its encoder/CRTC, or silently changing its
+/// buffer dimensions must not be reported as restored physical output.
+///
+/// This is a read-only safety gate for the dedicated-VT hardware probe, not
+/// hotplug recovery, KMS ownership or a mode-setting implementation.
+pub fn verify_vt_output_restore(
+    before:&NativeOutputTopology,
+    after:&NativeOutputTopology,
+)->Result<(),String> {
+    validate_active_routes(&before.active)?;
+    validate_active_routes(&after.active)?;
+    if before.active.len()!=after.active.len() {
+        return Err("VT resume changed the number of active DRM outputs".into());
+    }
+    for original in &before.active {
+        let restored=after.active.iter()
+            .find(|route|route.connector==original.connector)
+            .ok_or("VT resume lost an original active DRM connector")?;
+        if restored.original_encoder!=original.original_encoder ||
+           restored.crtc!=original.crtc {
+            return Err("VT resume changed an original connector/encoder/CRTC route".into());
+        }
+        if restored.width!=original.width || restored.height!=original.height {
+            return Err("VT resume changed the original active DRM output dimensions".into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,4 +133,40 @@ mod tests {
         let too_wide=NativeOutputTopology{active:vec![output(1,11,21,5000,800)]};
         assert!(plan_active_output_probes(&too_wide).is_err());
     }
+
+    #[test]
+    fn physical_vt_resume_requires_every_original_connector_and_route() {
+        let a=output(11,21,31,1920,1080);
+        let b=output(12,22,32,1280,720);
+        let baseline=NativeOutputTopology{active:vec![a,b]};
+        // An external DRM master may change FB_ID across a real VT switch:
+        // that is not proof of a missing connector or failed buffer reinit.
+        let replaced_fb=ActiveOutputRoute {
+            original_fb:control::from_u32::<framebuffer::Handle>(99).unwrap(),..a
+        };
+        let reordered=NativeOutputTopology{active:vec![b,replaced_fb]};
+        assert!(verify_vt_output_restore(&baseline,&reordered).is_ok());
+        assert!(verify_vt_output_restore(
+            &baseline,&NativeOutputTopology{active:vec![a]}
+        ).is_err());
+        assert!(verify_vt_output_restore(
+            &baseline,&NativeOutputTopology{active:vec![a,output(13,23,33,1280,720)]}
+        ).is_err());
+        assert!(verify_vt_output_restore(
+            &baseline,&NativeOutputTopology{active:vec![a,ActiveOutputRoute{
+                crtc:control::from_u32(23).unwrap(),..b
+            }]}
+        ).is_err());
+        assert!(verify_vt_output_restore(
+            &baseline,&NativeOutputTopology{active:vec![a,ActiveOutputRoute{
+                original_encoder:control::from_u32(2012).unwrap(),..b
+            }]}
+        ).is_err());
+        assert!(verify_vt_output_restore(
+            &baseline,&NativeOutputTopology{active:vec![a,ActiveOutputRoute{
+                width:1600,..b
+            }]}
+        ).is_err());
+    }
+
 }
