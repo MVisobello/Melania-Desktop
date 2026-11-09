@@ -311,6 +311,9 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     // Bind every acquisition epoch to the same real kernel character-node
     // identity, not merely the reusable /dev/dri/cardN pathname.
     let mut first_drm_node:Option<melania_native::native_drm_node_identity::DrmNodeIdentity>=None;
+    // The physical VT proof must restore *every* initially active output,
+    // not merely render whatever subset is still active after the switch.
+    let mut baseline_output_topology:Option<melania_native::native_output_topology::NativeOutputTopology>=None;
     // Keep the original selected path while the seat-owned descriptor is
     // alive. Re-check the kernel identity at every dispatch, not only during
     // GBM/EGL allocation: udev notification may lag a device replacement.
@@ -390,8 +393,9 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // DMA-BUF allocations and GPU fences are dropped completely
             // BEFORE libseat closes the original FD. On ANY error, close
             // the owned seat descriptor rather than escaping via '?'.
-            let acquired=(|| -> Result<(usize,Vec<melania_native::native_output_probe_plan::OutputBufferProbe>),Box<dyn Error>> {
+            let acquired=(|| -> Result<(usize,Vec<melania_native::native_output_probe_plan::OutputBufferProbe>,Option<melania_native::native_output_topology::NativeOutputTopology>),Box<dyn Error>> {
                 let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
+                let mut verified_output_topology=None;
                 let crtcs=card.resource_handles()?.crtcs().len();
                 if crtcs==0 {
                     return Err("Libseat-owned DRM card has no CRTC resources".into());
@@ -425,17 +429,37 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                     if before!=after {
                         return Err("Active DRM CRTC/connector/framebuffer changed during GPU reacquisition".into());
                     }
+                    if physical_vt_proof {
+                        verified_output_topology=Some(after);
+                    }
                     plan
                 } else { Vec::new() };
-                Ok((crtcs,probes))
+                Ok((crtcs,probes,verified_output_topology))
             })();
-            let (crtcs,probes)=match acquired {
+            let (crtcs,probes,reacquired_topology)=match acquired {
                 Ok(value)=>value,
                 Err(error)=>{
                     session.close(fd)?;
                     return Err(error);
                 }
             };
+            // Verify that an actual post-VT restore has preserved the complete
+            // original connector/encoder/CRTC set and dimensions. A new FB_ID
+            // is allowed: a different VT may have used its own framebuffer.
+            // Rejection closes the libseat-owned descriptor before returning.
+            if let Some(topology)=reacquired_topology {
+                if let Some(baseline)=baseline_output_topology.as_ref() {
+                    if let Err(error)=melania_native::native_output_probe_plan::verify_vt_output_restore(
+                        baseline,&topology
+                    ) {
+                        session.close(fd)?;
+                        return Err(format!("Physical VT multi-output restore refused: {error}").into());
+                    }
+                    println!("MELANIA_NATIVE_VT_ALL_ORIGINAL_OUTPUTS_RESTORED=true count={}",topology.active.len());
+                } else {
+                    baseline_output_topology=Some(topology);
+                }
+            }
             // A notifier/udev polling error must also release the actual
             // seatd-owned FD before aborting: never strand GPU ownership.
             if let Err(error)=event_loop.dispatch(Some(Duration::ZERO),&mut state) {
