@@ -28,27 +28,29 @@ class NativeClipboardFocus(unittest.TestCase):
     def test_revocation_on_real_libseat_and_gpu_events(self):
         pause=BRIDGE[BRIDGE.index("SessionEvent::PauseSession=>{"):
                      BRIDGE.index("SessionEvent::ActivateSession=>{")]
-        self.assertIn("set_data_device_focus(&state.display_handle,&state.seat,None);",pause)
-        # Revoke frame/seat authorization before any Wayland focus update.
-        # Both clipboard and real wl_keyboard/wl_pointer focus must still
-        # be cleared before the KMS transport is interrupted and libinput
-        # is suspended; the old client cannot retain a usable seat.
-        self.assertLess(pause.index("state.native_presentation_guard.revoke();"),
-                        pause.index("revoke_wayland_focus_for_lost_seat(state);"))
-        self.assertLess(pause.index("revoke_wayland_focus_for_lost_seat(state);"),
-                        pause.index("set_data_device_focus("))
-        self.assertLess(pause.index("set_data_device_focus("),
-                        pause.index("state.continuous_worker.take();"))
-        self.assertLess(pause.index("state.continuous_worker.take();"),
-                        pause.index("context.suspend();"))
         udev=BRIDGE[BRIDGE.index("let reason=state.gpu_watch.observe(&change);"):
                     BRIDGE.index("let live_stream=std::env::var(")]
-        self.assertIn("state.native_presentation_guard.revoke();",udev)
-        self.assertIn("set_data_device_focus(&state.display_handle,&state.seat,None);",udev)
-        self.assertLess(udev.index("state.native_presentation_guard.revoke();"),
-                        udev.index("set_data_device_focus("))
-        self.assertLess(udev.index("set_data_device_focus("),
-                        udev.index("state.continuous_worker.take();"))
+        revoker=BRIDGE[BRIDGE.index("fn revoke_wayland_input_for_lost_seat("):
+                       BRIDGE.index("/// Keep the original libseat-owned descriptor")]
+        # Verify the real Smithay keyboard/pointer and clipboard release,
+        # and that both hardware event handlers reach it before transport
+        # teardown; the refactor must not weaken either fail-closed path.
+        self.assertIn("revoke_wayland_focus_for_lost_seat(state);",revoker)
+        self.assertIn("set_data_device_focus(&state.display_handle,&state.seat,None);",revoker)
+        self.assertIn("set_primary_focus(&state.display_handle,&state.seat,None);",revoker)
+        for block in (pause,udev):
+            self.assertIn("state.native_presentation_guard.revoke();",block)
+            self.assertIn("revoke_wayland_input_for_lost_seat(state);",block)
+            self.assertLess(block.index("state.native_presentation_guard.revoke();"),
+                            block.index("revoke_wayland_input_for_lost_seat(state);"))
+            self.assertLess(block.index("revoke_wayland_input_for_lost_seat(state);"),
+                            block.index("state.continuous_worker.take();"))
+        self.assertLess(pause.index("state.continuous_worker.take();"),
+                        pause.index("context.suspend();"))
+        self.assertIn("udev_input_context.suspend();",udev)
+        self.assertLess(udev.index("state.continuous_worker.take();"),
+                        udev.index("udev_input_context.suspend();"))
+
 
     def test_clipboard_is_client_scoped_not_fabricated_server_selection(self):
         handler=BRIDGE[BRIDGE.index("fn focus_changed(&mut self,seat:&Seat<Self>"):
