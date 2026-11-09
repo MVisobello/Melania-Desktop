@@ -15,7 +15,7 @@ use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
     net::Shutdown,
-    sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+    sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError}},
     thread,
 };
 
@@ -48,6 +48,9 @@ pub struct ContinuousKmsWorker {
     // A second handle lets shutdown interrupt a blocked read_exact() on
     // VT loss or compositor error without waiting for a socket timeout.
     shutdown: UnixStream,
+    // A transport failure is permanent: never accept another Wayland scene
+    // even before the worker has dropped its queue receiver.
+    poisoned: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -98,6 +101,8 @@ impl ContinuousKmsWorker {
         let shutdown = stream.try_clone()?;
         let (sender, jobs) = mpsc::sync_channel::<ContinuousKmsJob>(1);
         let (results, receiver) = mpsc::sync_channel::<ContinuousKmsResult>(1);
+        let poisoned = Arc::new(AtomicBool::new(false));
+        let worker_poisoned = Arc::clone(&poisoned);
         let worker = thread::spawn(move || {
             while let Ok(job) = jobs.recv() {
                 let status = transfer(&mut stream, &job);
@@ -108,20 +113,26 @@ impl ContinuousKmsWorker {
                 let result=ContinuousKmsResult {
                     planned:job.planned,status,pixels:job.pixels,
                 };
+                // Publish failure BEFORE the result: the Smithay thread must
+                // not enqueue a subsequent scene after a failed kernel ACK.
+                if failed { worker_poisoned.store(true, Ordering::Release); }
                 // Never block the worker while handing results to a stalled
                 // compositor: a full result channel is a fatal desync.
-                if results.try_send(result).is_err() || failed {
-                    // A partially transferred frame or bad ACK poisons this
-                    // stream. Never reuse it or invent a successful callback.
+                if results.try_send(result).is_err() {
+                    worker_poisoned.store(true, Ordering::Release);
                     break;
                 }
+                if failed { break; }
             }
         });
-        Ok(Self { sender: Some(sender), receiver, shutdown, worker: Some(worker) })
+        Ok(Self { sender: Some(sender), receiver, shutdown, poisoned, worker: Some(worker) })
     }
 
     pub fn submit(&self, job: ContinuousKmsJob)
         -> Result<(), TrySendError<ContinuousKmsJob>> {
+        if self.poisoned.load(Ordering::Acquire) {
+            return Err(TrySendError::Disconnected(job));
+        }
         match &self.sender {
             Some(sender) => sender.try_send(job),
             None => Err(TrySendError::Disconnected(job)),
@@ -131,6 +142,7 @@ impl ContinuousKmsWorker {
     /// Revoke queued jobs, abort any blocked socket I/O and join the writer
     /// before the owner releases the libseat DRM descriptor. Idempotent.
     pub fn stop(&mut self) {
+        self.poisoned.store(true, Ordering::Release);
         self.sender.take();
         let _ = self.shutdown.shutdown(Shutdown::Both);
         if let Some(worker) = self.worker.take() {
@@ -312,6 +324,26 @@ mod tests {
             peer.write_all(&ack(wrong, 0)).unwrap();
             assert!(result_for(&worker).status.is_err());
         }
+    }
+
+    #[test]
+    fn failed_ack_poison_prevents_followup_wayland_scene() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let worker = ContinuousKmsWorker::spawn(client).unwrap();
+        let first = plan(10, 1, 50);
+        worker.submit(ContinuousKmsJob {
+            planned: first, pixels: vec![0x41; IMAGE_BYTES],
+        }).unwrap();
+        assert_eq!(consume(&mut peer), first);
+        peer.write_all(&ack(first, 1)).unwrap();
+        assert!(result_for(&worker).status.is_err());
+        // No new ticket may be accepted after a rejected DRM presentation.
+        let second = plan(10, 2, 51);
+        assert!(matches!(worker.submit(ContinuousKmsJob {
+            planned: second, pixels: vec![0x42; IMAGE_BYTES],
+        }), Err(TrySendError::Disconnected(_))));
     }
 
     #[test]
