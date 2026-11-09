@@ -185,12 +185,24 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertIn("let outermost=removals.last()",dismissal)
         self.assertEqual(dismissal.count("self.evict_native_popup(&outermost)"),1)
         self.assertIn("self.grabbed_popup_roles.is_empty()",dismissal)
+        # VT pause now calls the shared *real Rust* seat revoker, while a
+        # single physical input-device removal retains its direct reset.
+        # Follow the callsite and check the complete helper implementation,
+        # rather than relying on duplicated inline revocation code.
+        revoker=BRIDGE[BRIDGE.index("fn revoke_wayland_input_for_lost_seat("):
+                       BRIDGE.index("/// Keep the original libseat-owned descriptor")]
         for lifecycle in ("InputEvent::DeviceRemoved", "SessionEvent::PauseSession"):
             begin=BRIDGE.index(lifecycle)
-            # Bound by the real grab-cleanup operation, not a brittle
-            # character count: additional safety guards before it are valid.
-            final=BRIDGE.index("state.grabbed_popup_roles.clear();",begin)
-            block=BRIDGE[begin:final]
+            if lifecycle=="InputEvent::DeviceRemoved":
+                final=BRIDGE.index("state.grabbed_popup_roles.clear();",begin)
+                block=BRIDGE[begin:final]
+            else:
+                callback=BRIDGE[begin:BRIDGE.index("SessionEvent::ActivateSession=>",begin)]
+                self.assertIn("revoke_wayland_input_for_lost_seat(state);",callback)
+                self.assertLess(callback.index("state.native_presentation_guard.revoke();"),
+                                callback.index("revoke_wayland_input_for_lost_seat(state);"))
+                block=revoker
+                self.assertIn("state.grabbed_popup_roles.clear();",block)
             self.assertIn("state.last_popup_press=None;",block)
             self.assertIn("state.suppressed_popup_button=None;",block)
             self.assertLess(block.index("state.last_popup_press=None;"),
@@ -240,18 +252,31 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         callback=BRIDGE[BRIDGE.index("let reason=state.gpu_watch.observe(&change);"):]
         callback=callback[:callback.index("let live_stream=std::env::var(")]
         self.assertIn("state.lifecycle.on_session(SessionEvent::PauseSession);",callback)
-        for token in ("state.last_xdg_press=None;",
+        self.assertIn("revoke_wayland_input_for_lost_seat(state);",callback)
+        # Kernel udev revoke must suspend the real shared libinput context,
+        # not only skip dispatching events after the GPU is gone.
+        self.assertIn("udev_input_context.suspend();",callback)
+        self.assertLess(callback.index("state.native_presentation_guard.revoke();"),
+                        callback.index("revoke_wayland_input_for_lost_seat(state);"))
+        self.assertLess(callback.index("revoke_wayland_input_for_lost_seat(state);"),
+                        callback.index("udev_input_context.suspend();"))
+        self.assertLess(callback.index("udev_input_context.suspend();"),
+                        callback.index('MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED='))
+        revoker=BRIDGE[BRIDGE.index("fn revoke_wayland_input_for_lost_seat("):
+                       BRIDGE.index("/// Keep the original libseat-owned descriptor")]
+        for token in ("revoke_wayland_focus_for_lost_seat(state);",
+                      "set_data_device_focus(&state.display_handle,&state.seat,None);",
+                      "set_primary_focus(&state.display_handle,&state.seat,None);",
+                      "clear_primary_selection(&state.display_handle,&state.seat);",
+                      "state.last_xdg_press=None;",
                       "state.last_popup_press=None;",
                       "state.suppressed_popup_button=None;",
                       "state.grabbed_popup_roles.clear();",
                       "state.popup_escape_held=false;",
                       "state.snap_keys.reset();",
-                      "state.keyboard_window_cycle.reset();"):
-            self.assertIn(token,callback)
-        self.assertLess(callback.index("state.native_presentation_guard.revoke();"),
-                        callback.index("state.grabbed_popup_roles.clear();"))
-        self.assertLess(callback.index("state.grabbed_popup_roles.clear();"),
-                        callback.index('MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED='))
+                      "state.keyboard_window_cycle.reset();",
+                      "state.tab_keys.reset();"):
+            self.assertIn(token,revoker)
 
     def test_qmp_emits_actual_usb_key_press_and_release(self):
         fn=runpy.run_path(str(ROOT/"scripts/capture-qemu-real-xdg-popup.py"))["qmp_key"]
