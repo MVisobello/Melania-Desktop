@@ -251,6 +251,21 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                     .map_err(|error|format!("GBM flip already pending or revoked: {error:?}"))?;
                 let until=Instant::now()+Duration::from_secs(3);
                 loop {
+                    // Verify the real encoder/CRTC/FB before EVERY ioctl.
+                    // EAGAIN followed by a VT change must never turn the
+                    // next attempt into a page flip on somebody else's CRTC.
+                    let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                        &card,crtc,connector,original_encoder,prior_fb,(w,h),
+                    ).map_err(|error|{
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        error
+                    })?;
+                    if !retry_owned {
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        return Err("GBM stress page-flip retry lost original DRM ownership".into());
+                    }
                     match card.page_flip(crtc,handles[index as usize%2],PageFlipFlags::EVENT,None) {
                         Ok(())=>{
                             event_router.arm_flip(crtc)?;
@@ -527,6 +542,22 @@ pub fn qemu_wayland_gpu_scene_stream(
                     .map_err(|err|format!("Wayland GPU duplicate flip: {err:?}"))?;
                 let deadline=Instant::now()+Duration::from_secs(3);
                 loop {
+                    // The frame was rendered before this ioctl, but EAGAIN
+                    // can sleep through a VT pause or foreign modeset. Check
+                    // the actual kernel route before each subsequent retry.
+                    let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                        &card,crtc,connector,original_encoder,previous_fb,
+                        (W as u16,H as u16),
+                    ).map_err(|error|{
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        error
+                    })?;
+                    if !retry_owned {
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        return Err("GPU Wayland page-flip retry lost original DRM ownership".into());
+                    }
                     match card.page_flip(crtc,framebuffer,PageFlipFlags::EVENT,None) {
                         Ok(())=>{
                             event_router.arm_flip(crtc)?;
