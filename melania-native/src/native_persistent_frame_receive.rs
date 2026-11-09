@@ -70,7 +70,7 @@ impl PersistentFrameRead {
             .ok_or_else(||Error::new(ErrorKind::InvalidInput,
                 "persistent KMS partial-frame deadline overflow"))?;
         let reader=Self{deadline};
-        reader.read_exact_before_deadline(stream,&mut header[1..])?;
+        reader.read_exact_before_deadline_guarded(stream,&mut header[1..],&mut guard)?;
         Ok(Some(reader))
     }
 
@@ -82,25 +82,42 @@ impl PersistentFrameRead {
         stream:&mut UnixStream,
         pixels:&mut [u8],
     )->io::Result<()> {
-        self.read_exact_before_deadline(stream,pixels)?;
+        self.read_payload_guarded(stream,pixels,||Ok(()))
+    }
+
+    /// Check the real kernel DRM owner even while a client is transmitting
+    /// a partially completed frame. The same first-byte absolute deadline
+    /// governs the header AND payload; checking ownership cannot extend it.
+    /// A lost VT/CRTC aborts before the next client ACK or KMS page flip.
+    pub fn read_payload_guarded(
+        self,
+        stream:&mut UnixStream,
+        pixels:&mut [u8],
+        mut guard:impl FnMut()->io::Result<()>,
+    )->io::Result<()> {
+        self.read_exact_before_deadline_guarded(stream,pixels,&mut guard)?;
         stream.set_read_timeout(None)
     }
 
-    fn read_exact_before_deadline(
+    fn read_exact_before_deadline_guarded(
         &self,
         stream:&mut UnixStream,
         mut destination:&mut [u8],
+        mut guard:impl FnMut()->io::Result<()>,
     )->io::Result<()> {
         while !destination.is_empty() {
+            // A stolen DRM CRTC must be noticed even if a client already
+            // sent a frame prefix and stopped before completing the image.
+            guard()?;
             let remaining=self.deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(Error::new(ErrorKind::TimedOut,
                     "persistent KMS scene incomplete after frame deadline"));
             }
-            // A kernel socket read may wake for one byte at a time; update
-            // the timeout from the ORIGINAL deadline, never from the most
-            // recently received byte. EINTR also cannot extend the deadline.
-            stream.set_read_timeout(Some(remaining))?;
+            // The DRM callback must run at least every 250ms during partial
+            // reads, but no callback or socket timeout resets the original
+            // first-byte-to-complete deadline. EINTR cannot extend it.
+            stream.set_read_timeout(Some(remaining.min(IDLE_OWNERSHIP_POLL)))?;
             match stream.read(destination) {
                 Ok(0)=>return Err(Error::new(ErrorKind::UnexpectedEof,
                     "persistent KMS scene truncated within frame")),
@@ -112,9 +129,7 @@ impl PersistentFrameRead {
                     destination=&mut destination[received..];
                 },
                 Err(error) if error.kind()==ErrorKind::Interrupted=>continue,
-                Err(error) if matches!(error.kind(),ErrorKind::TimedOut|ErrorKind::WouldBlock)=>
-                    return Err(Error::new(ErrorKind::TimedOut,
-                        "persistent KMS scene stalled before completion")),
+                Err(error) if matches!(error.kind(),ErrorKind::TimedOut|ErrorKind::WouldBlock)=>continue,
                 Err(error)=>return Err(error),
             }
         }
@@ -298,5 +313,63 @@ mod tests {
         pending.read_payload(&mut reader,&mut payload).unwrap();
         assert_eq!(payload,[0x71u8;16]);
         sender.join().unwrap();
+    }
+
+    #[test]
+    fn partial_header_cannot_hide_revoked_drm_crtc_until_frame_deadline() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(b"M").unwrap(); // One real socket byte, no rest of header.
+        let mut checks=0;
+        let error=match PersistentFrameRead::begin_with_idle_guard(
+            &mut reader,&mut [0u8;32],Duration::from_secs(3),||{
+                checks+=1;
+                if checks>=4 {
+                    Err(Error::new(ErrorKind::PermissionDenied,"Kernel DRM CRTC no longer owned"))
+                } else {Ok(())}
+            }
+        ) {
+            Ok(_)=>panic!("partial header hid lost DRM ownership"),
+            Err(error)=>error,
+        };
+        assert_eq!(error.kind(),ErrorKind::PermissionDenied);
+        assert!(checks>=4);
+    }
+
+    #[test]
+    fn partial_pixel_payload_aborts_on_revoked_crtc_before_timeout() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(&header()).unwrap();
+        writer.write_all(&[0x1a;2]).unwrap(); // Incomplete real pixel payload.
+        let mut received=[0u8;32];
+        let pending=PersistentFrameRead::begin(
+            &mut reader,&mut received,Duration::from_secs(3)
+        ).unwrap().unwrap();
+        let mut checks=0;
+        let mut payload=[0u8;16];
+        let error=pending.read_payload_guarded(&mut reader,&mut payload,||{
+            checks+=1;
+            if checks>=3 {
+                Err(Error::new(ErrorKind::PermissionDenied,"GPU scanout was replaced"))
+            } else {Ok(())}
+        }).unwrap_err();
+        assert_eq!(error.kind(),ErrorKind::PermissionDenied);
+        assert!(checks>=3);
+    }
+
+    #[test]
+    fn partial_frame_polling_does_not_reset_original_hard_deadline() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(&header()).unwrap();
+        writer.write_all(&[0x88;1]).unwrap();
+        let pending=PersistentFrameRead::begin(
+            &mut reader,&mut [0u8;32],Duration::from_millis(90)
+        ).unwrap().unwrap();
+        let mut checks=0;
+        let error=pending.read_payload_guarded(&mut reader,&mut [0u8;16],||{
+            checks+=1;
+            Ok(())
+        }).unwrap_err();
+        assert_eq!(error.kind(),ErrorKind::TimedOut);
+        assert!(checks>=1);
     }
 }
