@@ -25,7 +25,7 @@ use smithay::{
         udev::{UdevBackend,UdevEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
-    delegate_data_device,
+    delegate_data_device, delegate_primary_selection,
     input::{keyboard::FilterResult, pointer::{AxisFrame, ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
@@ -43,7 +43,9 @@ use smithay::{
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
-            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus}},
+            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus},
+            primary_selection::{PrimarySelectionHandler,PrimarySelectionState,
+                set_primary_focus,clear_primary_selection}},
         output::{OutputHandler,OutputManagerState},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData,Configure},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
@@ -114,6 +116,9 @@ struct BridgeState {
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
     data_device:DataDeviceState,
+    // Smithay primary selection (highlight + middle-click paste) is scoped to
+    // the real keyboard-focus client and cleared on seat/device revocation.
+    primary_selection:PrimarySelectionState,
     // Focus clipboard offers on real client ownership within this Wayland display.
     display_handle:DisplayHandle,
     output:Output,
@@ -2747,7 +2752,8 @@ impl SeatHandler for BridgeState {
         // A focus transition transfers wl_data_device offers only to the actual client.
         // Unmapped or destroyed surfaces revoke the offer instead of keeping stale focus.
         let client=focused.and_then(|surface|surface.client());
-        set_data_device_focus(&self.display_handle,seat,client);
+        set_data_device_focus(&self.display_handle,seat,client.clone());
+        set_primary_focus(&self.display_handle,seat,client);
     }
     fn cursor_image(&mut self,_:&Seat<Self>,_:CursorImageStatus){}
 }
@@ -3231,7 +3237,11 @@ impl ServerDndGrabHandler for BridgeState {}
 impl DataDeviceHandler for BridgeState {
     fn data_device_state(&self)->&DataDeviceState {&self.data_device}
 }
+impl PrimarySelectionHandler for BridgeState {
+    fn primary_selection_state(&self)->&PrimarySelectionState {&self.primary_selection}
+}
 delegate_data_device!(BridgeState);
+delegate_primary_selection!(BridgeState);
 delegate_compositor!(BridgeState);
 delegate_seat!(BridgeState);
 delegate_xdg_shell!(BridgeState);
@@ -3868,6 +3878,23 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
     }
 }
 
+/// A VT pause or a GPU removal must revoke BOTH the compositor's logical
+/// focus and Smithay's actual wl_keyboard/wl_pointer focus. Clearing only
+/// clipboard offers or private pressed-key bookkeeping leaves the old client
+/// as the protocol focus owner after its libseat/DRM epoch has been revoked.
+/// This emits normal Wayland leave/focus-change messages, not synthetic input.
+fn revoke_wayland_focus_for_lost_seat(state:&mut BridgeState) {
+    let keyboard=state.seat.get_keyboard().expect("keyboard");
+    keyboard.set_focus(state,None,SERIAL_COUNTER.next_serial());
+    state.focused=None;
+    let location=state.pointer_position;
+    let pointer=state.seat.get_pointer().expect("pointer");
+    pointer.motion(state,None,&MotionEvent{
+        location,serial:SERIAL_COUNTER.next_serial(),time:0,
+    });
+    pointer.frame(state);
+}
+
 /// Keep the original libseat-owned descriptor until the DRM worker exits.
 /// The seat's close() callback (not a bare close(2)) retires its device ID.
 struct OwnedSeatCard {
@@ -3931,6 +3958,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
+        primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
         output_manager:OutputManagerState::new_with_xdg_output::<BridgeState>(&handle),
         output,
@@ -4121,10 +4149,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
+                // Revoke GPU/input authorization BEFORE sending any focus
+                // changes; an ActivateSession notification cannot rearm it.
+                state.native_presentation_guard.revoke();
+                revoke_wayland_focus_for_lost_seat(state);
                 state.tab_resize_transaction.revoke();
                 state.tab_resize_images.clear();
                 state.tab_resize_started_at=None;
                 set_data_device_focus(&state.display_handle,&state.seat,None);
+                set_primary_focus(&state.display_handle,&state.seat,None);
+                clear_primary_selection(&state.display_handle,&state.seat);
                 state.pointer_buttons_held.clear();
                 state.last_xdg_press=None;
                 state.last_popup_press=None;
@@ -4139,7 +4173,6 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.tile_swap_keys.reset();
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
-                state.native_presentation_guard.revoke();
                 // A revoked callback is not enough: a pending transport job
                 // could still ask the KMS presenter for a new page flip.
                 // Interrupt the socket and join its worker BEFORE returning
@@ -4153,6 +4186,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 context.suspend();
             },
             SessionEvent::ActivateSession=>{
+                // This QEMU bridge has NO complete DRM/GBM/VT re-acquisition.
+                // libseat reactivation alone cannot restore keyboard focus,
+                // thaw libinput, or re-enable rendering after a revoked KMS
+                // epoch. Keep the whole session inactive until safe teardown.
+                if state.native_presentation_guard.permanently_revoked() {
+                    context.suspend();
+                    state.lifecycle.on_session(SessionEvent::PauseSession);
+                    state.render_scheduler.set_seat_active(false);
+                    state.continuous_redraw.set_seat_active(false);
+                    state.continuous_pending=None;
+                    return;
+                }
                 if context.resume().is_err() {
                     state.native_presentation_guard.revoke();
                     // If libinput cannot resume, never re-use a socket or
@@ -4201,10 +4246,13 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
+            revoke_wayland_focus_for_lost_seat(state);
             state.tab_resize_transaction.revoke();
             state.tab_resize_images.clear();
             state.tab_resize_started_at=None;
             set_data_device_focus(&state.display_handle,&state.seat,None);
+                set_primary_focus(&state.display_handle,&state.seat,None);
+                clear_primary_selection(&state.display_handle,&state.seat);
             state.pointer_buttons_held.clear();
             state.continuous_worker.take();
             state.continuous_inflight.take();
