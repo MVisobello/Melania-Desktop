@@ -244,6 +244,15 @@ pub fn verify_rollback_route(
     original_encoder:drm::control::encoder::Handle,
     owned_fbs:&[framebuffer::Handle],
 )->Result<bool,String> {
+    // A saved CRTC with no active video mode cannot be used as proof that
+    // rollback is safe. A stale framebuffer handle may survive a VT switch
+    // while the output is disabled. Fail closed before ANY restore modeset,
+    // even if two kernel snapshots happen to agree on that inactive state.
+    let Some(original_mode)=original.mode() else {return Ok(false);};
+    let original_size=original_mode.size();
+    if original_size.0==0 || original_size.1==0 || original_mode.vrefresh()==0 {
+        return Ok(false);
+    }
     fn snapshot(
         card:&impl ControlDevice,
         original:&crtc::Info,
