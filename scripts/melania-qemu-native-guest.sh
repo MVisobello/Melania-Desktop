@@ -1182,6 +1182,10 @@ grep -q '^MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=12' "$integrated_server_log"
   fatal 'integrated_Wayland_DRM_join_incomplete'
 grep -q '^MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true' "$integrated_server_log" ||
   fatal 'integrated_DRM_card_not_acquired_through_libseat'
+grep -q '^MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' "$integrated_server_log" ||
+  fatal 'integrated_KMS_primary_card_fd_not_verified_on_acquire'
+grep -q '^MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' "$integrated_server_log" ||
+  fatal 'integrated_KMS_primary_card_fd_changed_before_release'
 grep -q '^MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' "$integrated_server_log" ||
   fatal 'integrated_libseat_DRM_card_not_closed_after_rollback'
 rm -f "$integrated_server_log" "$integrated_client_log"
@@ -1325,6 +1329,8 @@ for marker in \
   'MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=24' \
   'NATIVE_SESSION_READY=false'; do
@@ -1414,6 +1420,8 @@ for marker in \
   'MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true' \
   'NATIVE_SESSION_READY=false'; do
@@ -1529,6 +1537,8 @@ for marker in \
   'MELANIA_NATIVE_AUTH_RESIZE_FINAL_CONFIGURE_ACK=true' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$marker" "$auth_server_log" "$auth_client_log" ||
@@ -1627,6 +1637,8 @@ wait "$snap_server_tail_pid" "$snap_client_tail_pid" 2>/dev/null || true
 for receipt in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$receipt" "$snap_server_log" || fatal "snap_rollback_missing_$receipt"
@@ -1714,6 +1726,8 @@ wait "$edge_tail_server_pid" "$edge_tail_client_pid" 2>/dev/null || true
 for receipt in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$receipt" "$edge_server_log" ||
@@ -1797,6 +1811,8 @@ wait "$alt_server_tail_pid" "$alt_client_tail_pid" 2>/dev/null || true
 for marker in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$marker" "$alt_server_log" ||
@@ -1885,6 +1901,8 @@ wait "$tab_tail_server_pid" "$tab_tail_client_pid" 2>/dev/null || true
 for receipt in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$receipt" "$tab_server_log" ||
@@ -1962,6 +1980,8 @@ wait "$hover_server_tail_pid" "$hover_client_tail_pid" 2>/dev/null || true
 for marker in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$marker" "$hover_server_log" ||
@@ -2056,6 +2076,8 @@ wait "$combined_server_tail_pid" "$combined_client_tail_pid" 2>/dev/null || true
 for marker in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$marker" "$combined_server_log" ||
@@ -2143,6 +2165,8 @@ wait "$popup_server_tail_pid" "$popup_client_tail_pid" 2>/dev/null || true
 for marker in \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
   'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'NATIVE_SESSION_READY=false'; do
   grep -qx "$marker" "$popup_server_log" ||
@@ -2218,6 +2242,8 @@ for marker in \
   'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
   'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true' \
   'NATIVE_SESSION_READY=false'; do
