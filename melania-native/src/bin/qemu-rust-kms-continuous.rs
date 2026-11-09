@@ -342,37 +342,34 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if total.is_some_and(|limit|frames_seen>=limit) {break;}
             let index=frames_seen;
             let mut header=[0u8;32];
+            // Keep checking this exact kernel CRTC, encoder and last ACKed
+            // framebuffer during idle AND fragmented header/pixel reads.
+            // No partial MLF1 client can hide a VT takeover for 30 seconds.
+            let expected_read_fb=if index==0 {route.original_fb}
+                else if index%2==0 {fb2} else {fb1};
+            let mut verify_read_drm=||{
+                let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                    &card,crtc_handle,connected[0],original_encoder,
+                    expected_read_fb,(W as u16,H as u16),
+                );
+                match owned {
+                    Ok(true)=>Ok(()),
+                    Ok(false) | Err(_) => {
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "Persistent CPU output lost original DRM scanout during frame reception",
+                        ))
+                    }
+                }
+            };
             let pending_read=if persistent {
-                // Idle between commits is unlimited. ONCE the first MLF1
-                // byte arrives, the *entire* header and pixels must arrive
-                // before one absolute deadline. Partial frames can never
-                // hold an owned DRM scanout or libseat VT indefinitely.
-                let expected_idle_fb=if index==0 {route.original_fb}
-                    else if index%2==0 {fb2} else {fb1};
                 let Some(read)=melania_native::native_persistent_frame_receive::
                     PersistentFrameRead::begin_with_idle_guard(
                         &mut stream,&mut header,
                         melania_native::native_persistent_frame_receive::MAX_PARTIAL_FRAME_TIME,
-                        || {
-                            // The stream may remain idle for hours, but a
-                            // takeover of the real CRTC must revoke this
-                            // persistent CPU scanout without another frame.
-                            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
-                                &card,crtc_handle,connected[0],original_encoder,
-                                expected_idle_fb,(W as u16,H as u16),
-                            );
-                            match owned {
-                                Ok(true)=>Ok(()),
-                                Ok(false) | Err(_) => {
-                                    event_router.revoke();
-                                    rollback.ownership_lost=true;
-                                    Err(std::io::Error::new(
-                                        std::io::ErrorKind::PermissionDenied,
-                                        "Persistent CPU output lost original DRM scanout while idle",
-                                    ))
-                                }
-                            }
-                        },
+                        &mut verify_read_drm,
                     )? else {
                     // A clean EOF at a frame boundary is a normal shutdown.
                     break;
@@ -398,7 +395,7 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 return Err("QEMU continuous KMS received stale or reordered scene".into());
             }
             if let Some(read)=pending_read {
-                read.read_payload(&mut stream,&mut pixels)?;
+                read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
             } else {
                 stream.read_exact(&mut pixels)?;
             }
