@@ -458,8 +458,13 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                         session.close(fd)?;
                         return Err(format!("Physical VT multi-output restore refused: {error}").into());
                     }
-                    let initial_timings=baseline_output_timings.as_ref()
-                        .ok_or("Physical VT lacks the original output timing baseline")?;
+                    let initial_timings=match baseline_output_timings.as_ref() {
+                        Some(initial)=>initial,
+                        None=>{
+                            session.close(fd)?;
+                            return Err("Physical VT lacks the original output timing baseline".into());
+                        }
+                    };
                     if let Err(error)=melania_native::native_output_topology::verify_restored_output_timings(
                         initial_timings,&timings
                     ) {
