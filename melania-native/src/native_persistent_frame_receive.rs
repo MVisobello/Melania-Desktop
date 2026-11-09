@@ -16,6 +16,9 @@ use std::{
 /// Bound one partially transmitted 1280x800 frame while permitting unlimited
 /// idle time *before* the first byte. This is not a DRM/page-flip deadline.
 pub const MAX_PARTIAL_FRAME_TIME:Duration=Duration::from_secs(30);
+/// A persistent compositor may be idle indefinitely, but a DRM owner must
+/// revalidate its live kernel CRTC even when no Wayland frame arrives.
+pub const IDLE_OWNERSHIP_POLL:Duration=Duration::from_millis(250);
 
 pub struct PersistentFrameRead {
     deadline:Instant,
@@ -28,20 +31,38 @@ impl PersistentFrameRead {
         header:&mut [u8;32],
         timeout:Duration,
     )->io::Result<Option<Self>> {
-        // The runtime always supplies MAX_PARTIAL_FRAME_TIME. Refuse a
-        // caller-provided zero/unbounded timeout before reading the first
-        // byte: no future backend may silently disable partial-frame safety.
+        Self::begin_with_idle_guard(stream,header,timeout,||Ok(()))
+    }
+
+    /// Preserve unlimited *total* idle time while repeatedly checking the
+    /// caller's real DRM ownership. Never allow a sleeping UnixStream to keep
+    /// a stale scanout after hotplug, VT loss or a foreign modeset. The guard
+    /// runs before the first read AND at every idle poll; any failure aborts
+    /// the frame path so that its caller can revoke flips and guard rollback.
+    /// Once the first byte arrives the ORIGINAL absolute partial-frame
+    /// deadline applies; the idle poll must not lengthen it.
+    pub fn begin_with_idle_guard(
+        stream:&mut UnixStream,
+        header:&mut [u8;32],
+        timeout:Duration,
+        mut guard:impl FnMut()->io::Result<()>,
+    )->io::Result<Option<Self>> {
         if timeout.is_zero() || timeout>MAX_PARTIAL_FRAME_TIME {
             return Err(Error::new(ErrorKind::InvalidInput,
                 "persistent KMS frame deadline must be bounded and nonzero"));
         }
-        stream.set_read_timeout(None)?;
+        stream.set_read_timeout(Some(IDLE_OWNERSHIP_POLL))?;
         loop {
+            guard()?;
             match stream.read(&mut header[..1]) {
-                Ok(0)=>return Ok(None),
+                Ok(0)=> {
+                    stream.set_read_timeout(None)?;
+                    return Ok(None);
+                },
                 Ok(1)=>break,
                 Ok(_)=>unreachable!("single-byte slice"),
                 Err(error) if error.kind()==ErrorKind::Interrupted=>continue,
+                Err(error) if matches!(error.kind(),ErrorKind::TimedOut|ErrorKind::WouldBlock)=>continue,
                 Err(error)=>return Err(error),
             }
         }
@@ -230,6 +251,52 @@ mod tests {
         let error=in_flight.read_payload(&mut reader,&mut pixels).unwrap_err();
         assert_eq!(error.kind(),ErrorKind::TimedOut);
         drop(reader);
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn idle_guard_revokes_real_socket_wait_without_a_new_wayland_frame() {
+        // Keep the peer open and silent: the ownership checker, not a frame
+        // timeout or synthetic EOF, must abort an idle persistent receiver.
+        let (mut reader,_writer)=UnixStream::pair().unwrap();
+        let mut checks=0u32;
+        let error=match PersistentFrameRead::begin_with_idle_guard(
+            &mut reader,&mut [0u8;32],Duration::from_secs(1),||{
+                checks+=1;
+                if checks==3 {
+                    return Err(Error::new(ErrorKind::PermissionDenied,"DRM CRTC was taken over"));
+                }
+                Ok(())
+            },
+        ) {
+            Ok(_)=>panic!("idle DRM ownership loss was not propagated"),
+            Err(error)=>error,
+        };
+        assert_eq!(error.kind(),ErrorKind::PermissionDenied);
+        assert_eq!(checks,3);
+    }
+
+    #[test]
+    fn long_idle_does_not_consume_partial_frame_deadline() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        let sender=thread::spawn(move ||{
+            thread::sleep(Duration::from_millis(550));
+            writer.write_all(&header()).unwrap();
+            writer.write_all(&[0x71u8;16]).unwrap();
+        });
+        let mut observed=0usize;
+        let mut received=[0u8;32];
+        let pending=PersistentFrameRead::begin_with_idle_guard(
+            &mut reader,&mut received,Duration::from_millis(100),||{
+                observed+=1;
+                Ok(())
+            }
+        ).unwrap().unwrap();
+        assert!(observed>=2);
+        assert_eq!(received,header());
+        let mut payload=[0u8;16];
+        pending.read_payload(&mut reader,&mut payload).unwrap();
+        assert_eq!(payload,[0x71u8;16]);
         sender.join().unwrap();
     }
 }

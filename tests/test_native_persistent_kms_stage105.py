@@ -33,13 +33,21 @@ class PersistentKmsStage105(unittest.TestCase):
         self.assertIn("if total.is_some_and(|limit|frames_seen>=limit)",RECEIVER)
         # Frame-boundary EOF is allowed but an incomplete frame must abort
         # with no Wayland KMS ACK, even if the sender trickles bytes.
-        self.assertIn("PersistentFrameRead::begin(",RECEIVER)
+        self.assertIn("PersistentFrameRead::begin_with_idle_guard(",RECEIVER)
         self.assertIn("let Some(read)=",RECEIVER)
         self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
+        self.assertIn("verify_original_encoder_frame(",RECEIVER)
+        self.assertIn("rollback.ownership_lost=true;",RECEIVER)
+        # The real CPU and GBM receivers now poll kernel scanout ownership
+        # during unlimited idle; this is not an artificial timeout.
+        self.assertIn("IDLE_OWNERSHIP_POLL",READER)
+        self.assertIn("guard()?;",READER)
+
         self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",RECEIVER)
         self.assertIn("stream.read_exact(&mut header)?;",RECEIVER)
         self.assertIn("stream.read_exact(&mut pixels)?;",RECEIVER)
-        self.assertIn("Ok(0)=>return Ok(None)",READER)
+        self.assertIn("Ok(0)=> {",READER)
+        self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("read_exact_before_deadline(stream,&mut header[1..])?;",READER)
         self.assertIn("self.read_exact_before_deadline(stream,pixels)?;",READER)
         self.assertIn("ErrorKind::UnexpectedEof",READER)
