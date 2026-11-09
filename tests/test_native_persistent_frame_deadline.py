@@ -21,8 +21,8 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
             self.assertIn("MAX_PARTIAL_FRAME_TIME",stream)
             self.assertIn("verify_original_encoder_frame(",stream)
             self.assertIn("ownership_lost=true;",stream)
-            self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",stream)
-            self.assertLess(stream.index("read.read_payload(&mut stream,&mut pixels)?;"),
+            self.assertIn("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;",stream)
+            self.assertLess(stream.index("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;"),
                             stream.index("stream.write_all(&ack)?;"))
             # Finite 24-frame KMS proof keeps its previous real read path.
             self.assertIn("stream.read_exact(&mut header)?;",presenter)
@@ -33,13 +33,17 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
     def test_idle_time_unlimited_but_partial_frame_has_one_deadline(self):
         self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("deadline:Instant",READER)
+        # The payload and fragmented header now enforce the same real DRM
+        # owner guard; the original fixed partial-frame deadline is retained.
+        self.assertIn("read_payload_guarded(",READER)
+        self.assertIn("read_exact_before_deadline_guarded(",READER)
         # The real CPU and GBM receivers now poll kernel scanout ownership
         # during unlimited idle; this is not an artificial timeout.
         self.assertIn("IDLE_OWNERSHIP_POLL",READER)
         self.assertIn("guard()?;",READER)
 
         self.assertIn("saturating_duration_since(Instant::now())",READER)
-        self.assertIn("stream.set_read_timeout(Some(remaining))?;",READER)
+        self.assertIn("stream.set_read_timeout(Some(remaining.min(IDLE_OWNERSHIP_POLL)))?;",READER)
         self.assertIn("ErrorKind::UnexpectedEof",READER)
         self.assertIn("trickled_payload_cannot_extend_original_header_deadline",READER)
         self.assertIn("real_fragmented_header_and_pixels_complete_before_one_deadline",READER)
