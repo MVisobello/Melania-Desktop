@@ -4709,7 +4709,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     identity_result.map_err(|error|format!("{error}"))?;
                     println!("MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true");
                     println!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true");
-                    println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}
+                    println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}",
                              state.continuous_frame_target);
                 }
                 println!("MELANIA_NATIVE_SESSION_READY=false");
