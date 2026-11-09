@@ -347,10 +347,32 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 // byte arrives, the *entire* header and pixels must arrive
                 // before one absolute deadline. Partial frames can never
                 // hold an owned DRM scanout or libseat VT indefinitely.
+                let expected_idle_fb=if index==0 {route.original_fb}
+                    else if index%2==0 {fb2} else {fb1};
                 let Some(read)=melania_native::native_persistent_frame_receive::
-                    PersistentFrameRead::begin(
+                    PersistentFrameRead::begin_with_idle_guard(
                         &mut stream,&mut header,
                         melania_native::native_persistent_frame_receive::MAX_PARTIAL_FRAME_TIME,
+                        || {
+                            // The stream may remain idle for hours, but a
+                            // takeover of the real CRTC must revoke this
+                            // persistent CPU scanout without another frame.
+                            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                                &card,crtc_handle,connected[0],original_encoder,
+                                expected_idle_fb,(W as u16,H as u16),
+                            );
+                            match owned {
+                                Ok(true)=>Ok(()),
+                                Ok(false) | Err(_) => {
+                                    event_router.revoke();
+                                    rollback.ownership_lost=true;
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::PermissionDenied,
+                                        "Persistent CPU output lost original DRM scanout while idle",
+                                    ))
+                                }
+                            }
+                        },
                     )? else {
                     // A clean EOF at a frame boundary is a normal shutdown.
                     break;
