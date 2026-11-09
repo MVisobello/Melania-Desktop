@@ -110,8 +110,13 @@ pub fn verify_presenter_ownership(
     // clock or sync timing can appear after a concurrent modeset. Capture
     // the complete first kernel mode and require the same mode on re-read.
     let Some(initial_mode)=current.mode() else {return Ok(false);};
+    // A CRTC carrying a stale FB_ID is not an active scanout if its
+    // kernel mode is malformed (zero dimensions or zero refresh).
+    // Reject before trusting the connector route or reusing the buffer.
+    let size=initial_mode.size();
     if current.framebuffer()!=Some(expected_fb) ||
-       initial_mode.size()!=expected_size {
+       size.0==0 || size.1==0 ||
+       initial_mode.size()!=expected_size || initial_mode.vrefresh()==0 {
         return Ok(false);
     }
     let output=card.get_connector(connector,false)
@@ -239,6 +244,20 @@ pub fn verify_rollback_route(
     original_encoder:drm::control::encoder::Handle,
     owned_fbs:&[framebuffer::Handle],
 )->Result<bool,String> {
+    // A saved CRTC with no active video mode cannot be used as proof that
+    // rollback is safe. A stale framebuffer handle may survive a VT switch
+    // while the output is disabled. Fail closed before ANY restore modeset,
+    // even if two kernel snapshots happen to agree on that inactive state.
+    let Some(original_mode)=original.mode() else {return Ok(false);};
+    // A restorable active scanout requires an original framebuffer. Without
+    // one, a post-restore CRTC can retain an owned FB and still satisfy the
+    // old route predicate when the caller passes it among owned_fbs.
+    // Never enter a KMS rollback modeset without a concrete saved FB_ID.
+    if original.framebuffer().is_none() {return Ok(false);}
+    let original_size=original_mode.size();
+    if original_size.0==0 || original_size.1==0 || original_mode.vrefresh()==0 {
+        return Ok(false);
+    }
     fn snapshot(
         card:&impl ControlDevice,
         original:&crtc::Info,
@@ -271,7 +290,18 @@ pub fn verify_rollback_route(
     let first=snapshot(card,original,connector,original_encoder,owned_fbs)?;
     if first.is_none() {return Ok(false);}
     let second=snapshot(card,original,connector,original_encoder,owned_fbs)?;
-    Ok(first==second)
+    if first!=second {return Ok(false);}
+    // Each snapshot finishes at get_encoder, AFTER its last CRTC read.
+    // A concurrent VT handoff/modeset can change FB_ID, complete DRM mode
+    // or CRTC origin in that gap while retaining the original encoder.
+    // Re-read the actual kernel CRTC after the last route ioctl, for both
+    // pre-restore and post-restore checks in CPU and GBM Restore guards.
+    // This cannot substitute for atomic ownership or hardware VT testing.
+    let final_crtc=card.get_crtc(original.handle())
+        .map_err(|e|format!("DRM rollback final get_crtc failed: {e}"))?;
+    Ok(final_crtc.framebuffer()==first &&
+       final_crtc.mode()==original.mode() &&
+       final_crtc.position()==original.position())
 }
 
 /// Pure snapshot predicate for regression tests and for consumers that
@@ -297,6 +327,18 @@ mod ownership_tests {
     use super::*;
     use drm::control;
     #[test]
+    fn rollback_requires_saved_framebuffer_before_kernel_restore() {
+        // This precondition must run before the first kernel snapshot and
+        // therefore before either CPU or GBM Restore guard calls set_crtc.
+        let source=include_str!("native_kms_scanout.rs");
+        let verifier=source.split("pub fn verify_rollback_route(").nth(1).unwrap()
+            .split("/// Pure snapshot predicate").next().unwrap();
+        let missing=verifier.find("if original.framebuffer().is_none() {return Ok(false);}").unwrap();
+        let first_read=verifier.find("let first=snapshot(").unwrap();
+        assert!(missing<first_read);
+    }
+
+    #[test]
     fn kernel_scanout_ack_requires_unchanged_crtc_position() {
         // The production verifier uses two real drm-rs CRTC ioctl reads.
         // A same-mode/same-FB position takeover must not acknowledge a frame.
@@ -304,6 +346,18 @@ mod ownership_tests {
         let verifier=source.split("pub fn verify_kernel_scanout(").nth(1).unwrap()
             .split("pub fn verify_presenter_ownership(").next().unwrap();
         assert!(verifier.contains("latest_crtc.position() != current.position()"));
+    }
+    #[test]
+    fn presenter_rejects_inactive_zero_refresh_modes_before_reuse() {
+        // Guard the production DRM ioctl path rather than a fabricated
+        // success predicate: a stale framebuffer handle is insufficient.
+        let source=include_str!("native_kms_scanout.rs");
+        let verifier=source.split("pub fn verify_presenter_ownership(").nth(1).unwrap()
+            .split("pub fn verify_original_encoder_frame(").next().unwrap();
+        assert!(verifier.contains("size.0==0 || size.1==0"));
+        assert!(verifier.contains("initial_mode.vrefresh()==0"));
+        assert!(verifier.find("initial_mode.vrefresh()==0").unwrap()
+            < verifier.find("card.get_connector(connector,false)").unwrap());
     }
     #[test]
     fn denies_hotplug_modeset_and_external_fb_takeover() {
