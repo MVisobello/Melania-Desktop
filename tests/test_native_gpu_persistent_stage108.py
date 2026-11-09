@@ -11,6 +11,7 @@ KMS=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
 MAIN=(ROOT/"melania-native/src/main.rs").read_text()
 RECEIVER=(ROOT/"melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
+READER=(ROOT/"melania-native/src/native_persistent_frame_receive.rs").read_text()
 
 class ReusableGpuNativeStage108(unittest.TestCase):
     def test_persistent_receiver_cannot_idle_timeout_on_a_healthy_gpu(self):
@@ -18,7 +19,15 @@ class ReusableGpuNativeStage108(unittest.TestCase):
         self.assertIn("stream.set_read_timeout(if idle_persistent {",RECEIVER)
         self.assertIn("None\n    } else {\n        Some(Duration::from_secs(12))",RECEIVER)
         self.assertIn("stream.set_write_timeout(Some(Duration::from_secs(7)))?",RECEIVER)
-        self.assertIn("if stream.read(&mut header[..1])?==0",RECEIVER)
+        # The real persistent socket reader is shared by CPU and GBM.
+        # Unlimited idle is safe only BEFORE the first frame byte; partial
+        # header/payload I/O now requires a bounded absolute deadline.
+        self.assertIn("PersistentFrameRead::begin(",RECEIVER)
+        self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
+        self.assertIn("stream.set_read_timeout(None)?;",READER)
+        self.assertIn("Ok(0)=>return Ok(None)",READER)
+        self.assertIn("read_exact_before_deadline(stream,&mut header[1..])?;",READER)
+        self.assertIn("self.read_exact_before_deadline(stream,pixels)?;",READER)
         begin=GUEST.index("# A fixed-length receiver would have exited after frame 24")
         segment=GUEST[begin:GUEST.index("kill -TERM \"$persistent_server_pid\"",begin)]
         self.assertIn("sleep 15",segment)

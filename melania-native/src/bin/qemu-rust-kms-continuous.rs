@@ -342,18 +342,24 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if total.is_some_and(|limit|frames_seen>=limit) {break;}
             let index=frames_seen;
             let mut header=[0u8;32];
-            if persistent {
-                // EOF at a frame boundary is an orderly shutdown request.
-                // EOF mid-header/pixels is a fatal truncated transmission.
-                if stream.read(&mut header[..1])?==0 {
-                    // A desktop may exit before any window has ever been
-                    // mapped. No modeset was submitted: restore is a no-op.
+            let pending_read=if persistent {
+                // Idle between commits is unlimited. ONCE the first MLF1
+                // byte arrives, the *entire* header and pixels must arrive
+                // before one absolute deadline. Partial frames can never
+                // hold an owned DRM scanout or libseat VT indefinitely.
+                let Some(read)=melania_native::native_persistent_frame_receive::
+                    PersistentFrameRead::begin(
+                        &mut stream,&mut header,
+                        melania_native::native_persistent_frame_receive::MAX_PARTIAL_FRAME_TIME,
+                    )? else {
+                    // A clean EOF at a frame boundary is a normal shutdown.
                     break;
-                }
-                stream.read_exact(&mut header[1..])?;
+                };
+                Some(read)
             } else {
                 stream.read_exact(&mut header)?;
-            }
+                None
+            };
             if &header[..4]!=b"MLF1" {
                 return Err("QEMU continuous KMS frame magic mismatch".into());
             }
@@ -369,7 +375,11 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if !identity.accepted_after(previous_identity,persistent) {
                 return Err("QEMU continuous KMS received stale or reordered scene".into());
             }
-            stream.read_exact(&mut pixels)?;
+            if let Some(read)=pending_read {
+                read.read_payload(&mut stream,&mut pixels)?;
+            } else {
+                stream.read_exact(&mut pixels)?;
+            }
             if !persistent && have_previous_pixels && previous_pixels==pixels {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
             }
