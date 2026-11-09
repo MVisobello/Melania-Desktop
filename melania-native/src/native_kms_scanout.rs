@@ -110,8 +110,13 @@ pub fn verify_presenter_ownership(
     // clock or sync timing can appear after a concurrent modeset. Capture
     // the complete first kernel mode and require the same mode on re-read.
     let Some(initial_mode)=current.mode() else {return Ok(false);};
+    // A CRTC carrying a stale FB_ID is not an active scanout if its
+    // kernel mode is malformed (zero dimensions or zero refresh).
+    // Reject before trusting the connector route or reusing the buffer.
+    let size=initial_mode.size();
     if current.framebuffer()!=Some(expected_fb) ||
-       initial_mode.size()!=expected_size {
+       size.0==0 || size.1==0 ||
+       initial_mode.size()!=expected_size || initial_mode.vrefresh()==0 {
         return Ok(false);
     }
     let output=card.get_connector(connector,false)
@@ -315,6 +320,18 @@ mod ownership_tests {
         let verifier=source.split("pub fn verify_kernel_scanout(").nth(1).unwrap()
             .split("pub fn verify_presenter_ownership(").next().unwrap();
         assert!(verifier.contains("latest_crtc.position() != current.position()"));
+    }
+    #[test]
+    fn presenter_rejects_inactive_zero_refresh_modes_before_reuse() {
+        // Guard the production DRM ioctl path rather than a fabricated
+        // success predicate: a stale framebuffer handle is insufficient.
+        let source=include_str!("native_kms_scanout.rs");
+        let verifier=source.split("pub fn verify_presenter_ownership(").nth(1).unwrap()
+            .split("pub fn verify_original_encoder_frame(").next().unwrap();
+        assert!(verifier.contains("size.0==0 || size.1==0"));
+        assert!(verifier.contains("initial_mode.vrefresh()==0"));
+        assert!(verifier.find("initial_mode.vrefresh()==0").unwrap()
+            < verifier.find("card.get_connector(connector,false)").unwrap());
     }
     #[test]
     fn denies_hotplug_modeset_and_external_fb_takeover() {
