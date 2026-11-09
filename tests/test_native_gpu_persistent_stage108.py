@@ -22,10 +22,17 @@ class ReusableGpuNativeStage108(unittest.TestCase):
         # The real persistent socket reader is shared by CPU and GBM.
         # Unlimited idle is safe only BEFORE the first frame byte; partial
         # header/payload I/O now requires a bounded absolute deadline.
-        self.assertIn("PersistentFrameRead::begin(",RECEIVER)
+        self.assertIn("PersistentFrameRead::begin_with_idle_guard(",RECEIVER)
         self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
+        self.assertIn("verify_original_encoder_frame(",RECEIVER)
+        # The real CPU and GBM receivers now poll kernel scanout ownership
+        # during unlimited idle; this is not an artificial timeout.
+        self.assertIn("IDLE_OWNERSHIP_POLL",READER)
+        self.assertIn("guard()?;",READER)
+
         self.assertIn("stream.set_read_timeout(None)?;",READER)
-        self.assertIn("Ok(0)=>return Ok(None)",READER)
+        self.assertIn("Ok(0)=> {",READER)
+        self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("read_exact_before_deadline(stream,&mut header[1..])?;",READER)
         self.assertIn("self.read_exact_before_deadline(stream,pixels)?;",READER)
         begin=GUEST.index("# A fixed-length receiver would have exited after frame 24")
