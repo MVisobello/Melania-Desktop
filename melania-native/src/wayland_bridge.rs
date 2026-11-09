@@ -3928,8 +3928,23 @@ fn revoke_wayland_input_for_lost_seat(state:&mut BridgeState) {
 struct OwnedSeatCard {
     session:LibSeatSession,
     fd:Option<OwnedFd>,
+    // The selected udev path and the libseat-owned FD must continue to
+    // refer to the SAME kernel DRM primary node throughout this KMS epoch.
+    // A reused /dev/dri/cardN pathname is never sufficient evidence.
+    drm_path:PathBuf,
+    drm_identity:melania_native::native_drm_node_identity::DrmNodeIdentity,
 }
 impl OwnedSeatCard {
+    fn verify_identity(&self)->Result<(),String> {
+        let fd=self.fd.as_ref()
+            .ok_or("libseat DRM descriptor already released")?;
+        melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+            &self.drm_path,fd,Some(self.drm_identity),
+        ).map(|_|()).map_err(|error|
+            format!("libseat KMS primary node identity invalidated: {error}")
+        )
+    }
+
     fn release(&mut self)->Result<(),String> {
         if let Some(fd)=self.fd.take() {
             self.session.close(fd)
@@ -4442,8 +4457,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             card_path,
             OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
         )?;
+        // Bind the actual libseat-issued FD to the exact kernel character
+        // node, not just the udev pathname. A replaced device or unexpected
+        // render node must abort BEFORE creating the presenter or GBM buffers.
+        let drm_identity=match melania_native::native_drm_node_identity::
+            verify_libseat_drm_primary_card(card_path,&fd,None) {
+            Ok(identity)=>identity,
+            Err(error)=>{
+                session.close(fd)?;
+                return Err(format!("libseat KMS initial DRM node identity refused: {error}").into());
+            },
+        };
+        integrated_drm=Some(OwnedSeatCard{
+            session:session.clone(),fd:Some(fd),
+            drm_path:card_path.to_path_buf(),drm_identity,
+        });
+        println!("MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true");
         println!("MELANIA_NATIVE_SEAT_DRM_CARD={}",card_path.display());
-        integrated_drm=Some(OwnedSeatCard{session:session.clone(),fd:Some(fd)});
         let presenter_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
         let (sender,receiver)=UnixStream::pair()?;
         sender.set_read_timeout(Some(Duration::from_secs(8)))?;
@@ -4554,6 +4584,17 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         if state.native_presentation_guard.permanently_revoked() {
             return Err("native QEMU bridge stopped: libseat paused or DRM hotplug; safe revalidation unavailable".into());
         }
+        // udev may lag a node replacement. Recheck the real FD AND the
+        // discovered path before processing new client commits or retiring
+        // any KMS ACK. On mismatch, force the normal presenter join/rollback
+        // and libseat.close cleanup; never promote stale Wayland callbacks.
+        if let Some(owner)=integrated_drm.as_ref() {
+            if let Err(error)=owner.verify_identity() {
+                state.native_presentation_guard.revoke();
+                revoke_wayland_input_for_lost_seat(&mut state);
+                return Err(format!("native KMS DRM identity revoked: {error}").into());
+            }
+        }
         while let Some(stream)=listener.accept()? {
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
@@ -4659,9 +4700,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     let Some(mut owner)=integrated_drm.take() else {
                         return Err("libseat DRM ownership disappeared before cleanup".into());
                     };
-                    owner.release().map_err(|error|format!("{error}"))?;
+                    // Verify the actual kernel node once more AFTER the
+                    // presenter has restored CRTC/FB_ID. Always release the
+                    // libseat FD even if the identity changed during rollback.
+                    let identity_result=owner.verify_identity();
+                    let release_result=owner.release();
+                    release_result.map_err(|error|format!("{error}"))?;
+                    identity_result.map_err(|error|format!("{error}"))?;
+                    println!("MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true");
                     println!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true");
-                    println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}",
+                    println!("MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS={}
                              state.continuous_frame_target);
                 }
                 println!("MELANIA_NATIVE_SESSION_READY=false");
@@ -4780,7 +4828,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         let Some(mut owner)=integrated_drm.take() else {
             return Err("persistent DRM lost its libseat owner".into());
         };
-        owner.release().map_err(|error|format!("{error}"))?;
+        // A clean persistent shutdown must retain the same DRM primary
+        // node identity even after the kernel CRTC rollback completed.
+        // Run libseat.close regardless of identity verification outcome.
+        let identity_result=owner.verify_identity();
+        let release_result=owner.release();
+        release_result.map_err(|error|format!("{error}"))?;
+        identity_result.map_err(|error|format!("{error}"))?;
+        println!("MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true");
         println!("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true");
         println!("MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true");
         println!("NATIVE_SESSION_READY=false");
