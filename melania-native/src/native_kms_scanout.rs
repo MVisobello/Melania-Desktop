@@ -116,7 +116,7 @@ pub fn verify_presenter_ownership(
     let size=initial_mode.size();
     if current.framebuffer()!=Some(expected_fb) ||
        size.0==0 || size.1==0 ||
-       size!=expected_size || initial_mode.vrefresh()==0 {
+       initial_mode.size()!=expected_size || initial_mode.vrefresh()==0 {
         return Ok(false);
     }
     let output=card.get_connector(connector,false)
