@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RUST = (ROOT / "melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 GUEST = (ROOT / "scripts/melania-qemu-native-guest.sh").read_text()
+GPU = (ROOT / "melania-native/src/native_gbm_scanout.rs").read_text()
 
 
 class PersistentCpuKmsStaging(unittest.TestCase):
@@ -49,6 +50,30 @@ class PersistentCpuKmsStaging(unittest.TestCase):
         )
         self.assertIn("'MELANIA_RUST_CONTINUOUS_FRAMES_PASS=24'", GUEST)
         self.assertIn("'MELANIA_RUST_KMS_ROLLBACK_ORIGINAL_ENCODER_VERIFIED=true'", GUEST)
+
+    def test_original_encoder_is_pinned_before_cpu_and_gbm_buffers(self):
+        # These are the real rust-drm connector IOCTL results, read AFTER
+        # inspect_stable_active_outputs. A different encoder aimed at the same
+        # CRTC must never be mistaken for the inventoried scanout owner.
+        cpu=RUST[RUST.index("fn run_stream("):]
+        self.assertEqual(cpu.count("original_encoder!=route.original_encoder"),1)
+        self.assertLess(cpu.index("original_encoder!=route.original_encoder"),
+                        cpu.index("let mut db1=card.create_dumb_buffer("))
+        self.assertLess(cpu.index("original_encoder!=route.original_encoder"),
+                        cpu.index("let mut rollback=Restore{"))
+        # One check in actual GPU KMS smoke, one in the persistent real
+        # Wayland GPU DMA-BUF scanout; neither is an isolated helper-only fix.
+        self.assertEqual(GPU.count("original_encoder!=route.original_encoder"),2)
+        finite=GPU[GPU.index("fn qemu_gpu_frames("):
+                   GPU.index("pub fn qemu_wayland_gpu_scene_stream(")]
+        persistent=GPU[GPU.index("pub fn qemu_wayland_gpu_scene_stream("):]
+        for backend in (finite,persistent):
+            self.assertEqual(backend.count("original_encoder!=route.original_encoder"),1)
+            self.assertLess(backend.index("original_encoder!=route.original_encoder"),
+                            backend.index("let gbm=GbmDevice::new(card.clone())?;"))
+            self.assertIn("card.get_encoder(original_encoder)?.crtc()!=Some(crtc)",backend)
+        self.assertIn("Original CPU scanout connector has no encoder",cpu)
+        self.assertIn("Native GBM output missing its original connector encoder",GPU)
 
     def test_qemu_and_native_session_gates_unchanged(self):
         self.assertIn("fn guest_only()", RUST)
