@@ -28,6 +28,13 @@ impl PersistentFrameRead {
         header:&mut [u8;32],
         timeout:Duration,
     )->io::Result<Option<Self>> {
+        // The runtime always supplies MAX_PARTIAL_FRAME_TIME. Refuse a
+        // caller-provided zero/unbounded timeout before reading the first
+        // byte: no future backend may silently disable partial-frame safety.
+        if timeout.is_zero() || timeout>MAX_PARTIAL_FRAME_TIME {
+            return Err(Error::new(ErrorKind::InvalidInput,
+                "persistent KMS frame deadline must be bounded and nonzero"));
+        }
         stream.set_read_timeout(None)?;
         loop {
             match stream.read(&mut header[..1]) {
@@ -169,6 +176,40 @@ mod tests {
         let mut pixels=[0u8;16];
         let error=in_flight.read_payload(&mut reader,&mut pixels).unwrap_err();
         assert_eq!(error.kind(),ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn invalid_deadline_rejected_without_blocking_idle_socket() {
+        let (mut reader,_writer)=UnixStream::pair().unwrap();
+        let mut h=[0u8;32];
+        for invalid in [Duration::ZERO,MAX_PARTIAL_FRAME_TIME+Duration::from_secs(1)] {
+            let error=match PersistentFrameRead::begin(&mut reader,&mut h,invalid) {
+                Ok(_)=>panic!("invalid persistent deadline accepted"),
+                Err(e)=>e,
+            };
+            assert_eq!(error.kind(),ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn interrupted_header_or_payload_eof_is_not_clean_shutdown() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(b"ML").unwrap();
+        drop(writer);
+        let error=match PersistentFrameRead::begin(
+            &mut reader,&mut [0u8;32],Duration::from_secs(1),
+        ) {Ok(_)=>panic!("truncated header accepted"),Err(e)=>e};
+        assert_eq!(error.kind(),ErrorKind::UnexpectedEof);
+
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(&header()).unwrap();
+        writer.write_all(&[9u8;3]).unwrap();
+        drop(writer);
+        let pending=PersistentFrameRead::begin(
+            &mut reader,&mut [0u8;32],Duration::from_secs(1),
+        ).unwrap().unwrap();
+        let error=pending.read_payload(&mut reader,&mut [0u8;16]).unwrap_err();
+        assert_eq!(error.kind(),ErrorKind::UnexpectedEof);
     }
 
     #[test]
