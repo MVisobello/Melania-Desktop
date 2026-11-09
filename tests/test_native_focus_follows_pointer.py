@@ -38,11 +38,25 @@ class NativeFocusFollowsPointer(unittest.TestCase):
     def test_revoke_held_buttons_on_device_and_seat_loss(self):
         self.assertIn('state.pointer_buttons_held.insert(event.button_code())', BRIDGE)
         self.assertIn('state.pointer_buttons_held.remove(&event.button_code())', BRIDGE)
-        self.assertGreaterEqual(BRIDGE.count('state.pointer_buttons_held.clear()'), 3)
+        # Device removal clears buttons directly; both real VT pause and
+        # udev GPU loss call the shared Rust revoker. Do not just count
+        # duplicated text or miss a path after safe helper extraction.
+        device=BRIDGE[BRIDGE.index("InputEvent::DeviceRemoved"):
+                      BRIDGE.index("InputEvent::Keyboard {event}")]
+        revoker=BRIDGE[BRIDGE.index("fn revoke_wayland_input_for_lost_seat("):
+                       BRIDGE.index("/// Keep the original libseat-owned descriptor")]
+        self.assertIn("state.pointer_buttons_held.clear();",device)
+        self.assertIn("state.pointer_buttons_held.clear();",revoker)
+        for start,end in (("SessionEvent::PauseSession=>{","SessionEvent::ActivateSession=>{"),
+                          ("let reason=state.gpu_watch.observe(&change);",
+                           "MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED=")):
+            block=BRIDGE[BRIDGE.index(start):BRIDGE.index(end,BRIDGE.index(start))]
+            self.assertIn("revoke_wayland_input_for_lost_seat(state);",block)
         for item in ('!gate.button_held','!gate.interactive_grab',
                      '!gate.popup_grab','gate.visible_toplevel',
                      '!gate.revoked','gate.seat_active'):
             self.assertIn(item, POLICY)
+
 
 if __name__=="__main__":
     unittest.main()

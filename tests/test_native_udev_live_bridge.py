@@ -25,13 +25,24 @@ class RealUdevKmsRevocation(unittest.TestCase):
         end=BRIDGE.index("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED",start)
         handler=BRIDGE[start:end]
         self.assertLess(handler.index("native_presentation_guard.revoke()"),
+                        handler.index("revoke_wayland_input_for_lost_seat(state);"))
+        self.assertLess(handler.index("revoke_wayland_input_for_lost_seat(state);"),
                         handler.index("continuous_worker.take()"))
         for term in ("continuous_inflight.take()","continuous_presentation_token.take()",
-                     "dynamic_confirmed_frame=None","continuous_redraw.set_seat_active(false)",
-                     "window_interaction.cancel()"):
+                     "continuous_redraw.set_seat_active(false)",
+                     "udev_input_context.suspend();"):
             self.assertIn(term,handler)
+        # The same real Rust cleanup must remove retained scene pixels and
+        # interactive move/resize grabs before the KMS worker is dropped.
+        revoker=BRIDGE[BRIDGE.index("fn revoke_wayland_input_for_lost_seat("):
+                       BRIDGE.index("/// Keep the original libseat-owned descriptor")]
+        for term in ("dynamic_confirmed_frame=None","window_interaction.cancel()",
+                     "state.grabbed_popup_roles.clear();",
+                     "set_primary_focus(&state.display_handle,&state.seat,None);"):
+            self.assertIn(term,revoker)
         self.assertIn("native_presentation_guard.permanently_revoked()",BRIDGE)
         self.assertIn("libseat paused or DRM hotplug",BRIDGE)
+
 
     def test_no_implicit_gpu_rearming_or_native_login(self):
         self.assertIn("pub fn revoked(&self)->bool",WATCH)
