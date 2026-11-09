@@ -403,6 +403,13 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                     // one failed output rejects the entire reacquisition.
                     let before=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
                     let plan=melania_native::native_output_probe_plan::plan_active_output_probes(&before)?;
+                    // A physical VT resume cannot be accepted if no active
+                    // CRTC has produced a real output-sized GBM/DMA-BUF.
+                    // Headless discovery is valid for diagnostics, not proof
+                    // that a visible desktop recovered after VT activation.
+                    if physical_vt_proof && plan.is_empty() {
+                        return Err("Physical VT resume has no active DRM output to validate".into());
+                    }
                     for probe in &plan {
                         melania_native::renderer::smoke_render_gbm_output_buffers(
                             card.clone(),probe.width,probe.height,2
