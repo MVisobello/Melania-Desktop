@@ -227,6 +227,43 @@ pub fn verify_original_encoder_frame(
        final_crtc.position()==first_crtc.position())
 }
 
+/// Pin the complete original DRM mode and CRTC origin for every frame
+/// readback. A foreign modeset may preserve connector, encoder, FB_ID and
+/// resolution while changing refresh, sync timings or visible placement.
+/// Such a frame must never be acknowledged or used for another KMS ioctl.
+/// These are genuine kernel CRTC reads, not an atomic DRM lease.
+pub fn verify_original_encoder_frame_at_baseline(
+    card:&impl ControlDevice,
+    crtc:crtc::Handle,
+    connector:connector::Handle,
+    original_encoder:drm::control::encoder::Handle,
+    expected_fb:framebuffer::Handle,
+    expected_size:(u16,u16),
+    expected_mode:drm::control::Mode,
+    expected_position:(u32,u32),
+)->Result<bool,String> {
+    let before=card.get_crtc(crtc)
+        .map_err(|e|format!("DRM baseline frame first CRTC ioctl failed: {e}"))?;
+    if before.mode()!=Some(expected_mode) ||
+       before.position()!=expected_position ||
+       before.framebuffer()!=Some(expected_fb) {
+        return Ok(false);
+    }
+    if !verify_original_encoder_frame(
+        card,crtc,connector,original_encoder,expected_fb,expected_size
+    )? {
+        return Ok(false);
+    }
+    // Close the bracket after the original encoder's final kernel read.
+    // Do not accept a same-size foreign mode/position transition between
+    // independent DRM ioctls or a changed FB_ID after the route check.
+    let after=card.get_crtc(crtc)
+        .map_err(|e|format!("DRM baseline frame final CRTC ioctl failed: {e}"))?;
+    Ok(after.mode()==Some(expected_mode) &&
+       after.position()==expected_position &&
+       after.framebuffer()==Some(expected_fb))
+}
+
 /// Validate the original kernel connector -> encoder -> CRTC route before
 /// restoring an owned framebuffer and after the restore ioctl completes.
 /// Linux may move a connector to another encoder targeting the SAME CRTC;
