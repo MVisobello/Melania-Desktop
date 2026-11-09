@@ -11,6 +11,7 @@ BRIDGE=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
 RECEIVER=(ROOT/"melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
 CARGO=(ROOT/"melania-native/Cargo.toml").read_text()
+READER=(ROOT/"melania-native/src/native_persistent_frame_receive.rs").read_text()
 
 class PersistentKmsStage105(unittest.TestCase):
     def test_qemu_seat_and_explicit_one_process_opt_in_remain_mandatory(self):
@@ -30,11 +31,20 @@ class PersistentKmsStage105(unittest.TestCase):
     def test_receiver_reads_until_complete_frame_boundary_then_restores(self):
         self.assertIn("let total=if persistent {None} else",RECEIVER)
         self.assertIn("if total.is_some_and(|limit|frames_seen>=limit)",RECEIVER)
-        self.assertIn("if stream.read(&mut header[..1])?==0 {",RECEIVER)
-        self.assertIn("stream.read_exact(&mut header[1..])?;",RECEIVER)
+        # Frame-boundary EOF is allowed but an incomplete frame must abort
+        # with no Wayland KMS ACK, even if the sender trickles bytes.
+        self.assertIn("PersistentFrameRead::begin(",RECEIVER)
+        self.assertIn("let Some(read)=",RECEIVER)
+        self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
+        self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",RECEIVER)
+        self.assertIn("stream.read_exact(&mut header)?;",RECEIVER)
         self.assertIn("stream.read_exact(&mut pixels)?;",RECEIVER)
+        self.assertIn("Ok(0)=>return Ok(None)",READER)
+        self.assertIn("read_exact_before_deadline(stream,&mut header[1..])?;",READER)
+        self.assertIn("self.read_exact_before_deadline(stream,pixels)?;",READER)
+        self.assertIn("ErrorKind::UnexpectedEof",READER)
+        self.assertIn("saturating_duration_since(Instant::now())",READER)
         self.assertNotIn("persistent DRM closed before first frame",RECEIVER)
-        self.assertIn("if stream.read(&mut header[..1])?==0",RECEIVER)
         self.assertIn("let restored=rollback.restore();",RECEIVER)
         self.assertIn("MELANIA_RUST_PERSISTENT_KMS_STOPPED_FRAMES={frames_seen}",RECEIVER)
         self.assertIn("MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}",RECEIVER)

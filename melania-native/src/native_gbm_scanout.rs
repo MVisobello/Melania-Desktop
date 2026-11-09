@@ -416,14 +416,20 @@ pub fn qemu_wayland_gpu_scene_stream(
             if !persistent && frames_seen>=TOTAL {break;}
             let index=frames_seen;
             let mut header=[0u8;32];
-            if persistent {
-                // EOF is valid only at a complete frame boundary, never
-                // after a partially transferred MLF1 header or image.
-                if stream.read(&mut header[..1])?==0 {break;}
-                stream.read_exact(&mut header[1..])?;
+            let pending_read=if persistent {
+                // Unlike idle time, a partially transmitted Wayland scene
+                // has one absolute deadline shared across header and pixels.
+                // A hung client must not keep the owned GBM/DRM VT forever.
+                let Some(read)=crate::native_persistent_frame_receive::
+                    PersistentFrameRead::begin(
+                        &mut stream,&mut header,
+                        crate::native_persistent_frame_receive::MAX_PARTIAL_FRAME_TIME,
+                    )? else {break;};
+                Some(read)
             } else {
                 stream.read_exact(&mut header)?;
-            }
+                None
+            };
             if &header[..4]!=b"MLF1" {
                 return Err("GPU Wayland frame header has wrong protocol version".into());
             }
@@ -439,7 +445,11 @@ pub fn qemu_wayland_gpu_scene_stream(
             if !identity.accepted_after(prior_identity,persistent) {
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
-            stream.read_exact(&mut pixels)?;
+            if let Some(read)=pending_read {
+                read.read_payload(&mut stream,&mut pixels)?;
+            } else {
+                stream.read_exact(&mut pixels)?;
+            }
             if have_prior_pixels && prior_pixels==pixels && !persistent {
                 // Preserve the finite QEMU pixel-change acceptance. In a
                 // persistent desktop, however, a real Wayland client may

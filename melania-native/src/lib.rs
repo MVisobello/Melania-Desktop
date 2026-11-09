@@ -31,6 +31,7 @@ pub mod async_kms_stream;
 pub mod render_scheduler;
 pub mod continuous_redraw;
 pub mod continuous_kms_stream;
+pub mod native_persistent_frame_receive;
 pub mod client_commit_ledger;
 pub mod owned_shm;
 pub mod planes;

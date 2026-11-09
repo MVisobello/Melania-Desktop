@@ -7,6 +7,7 @@ GPU=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
 RUN=(ROOT/"melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 BRIDGE=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
 GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
+READER=(ROOT/"melania-native/src/native_persistent_frame_receive.rs").read_text()
 
 class PersistentGpuWayland110(unittest.TestCase):
     def test_gpu_owner_has_no_idle_timeout_or_frame_budget_when_persistent(self):
@@ -16,9 +17,17 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn("stream.set_read_timeout(if persistent {",body)
         self.assertIn("None\n    } else {\n        Some(Duration::from_secs(12))",body)
         self.assertIn("if !persistent && frames_seen>=TOTAL {break;}",body)
-        self.assertIn("if stream.read(&mut header[..1])?==0 {break;}",body)
-        self.assertIn("stream.read_exact(&mut header[1..])?;",body)
+        # Idle is unlimited until a real header begins, but a hung/trickled
+        # GPU image cannot retain the DRM/GBM CRTC beyond the deadline.
+        self.assertIn("PersistentFrameRead::begin(",body)
+        self.assertIn("MAX_PARTIAL_FRAME_TIME",body)
+        self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",body)
+        self.assertIn("stream.read_exact(&mut header)?;",body)
         self.assertIn("stream.read_exact(&mut pixels)?;",body)
+        self.assertIn("stream.set_read_timeout(None)?;",READER)
+        self.assertIn("Ok(0)=>return Ok(None)",READER)
+        self.assertIn("ErrorKind::UnexpectedEof",READER)
+        self.assertIn("saturating_duration_since(Instant::now())",READER)
         self.assertIn("frames_seen=frames_seen.checked_add(1)",body)
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true",body)
         self.assertIn("let restored=rollback.restore();",body)
