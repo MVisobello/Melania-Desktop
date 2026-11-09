@@ -282,8 +282,22 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     for (id,path) in initial {
         state.on_device(melania_native::DeviceChange::Added{id,path});
     }
+    // Physical VT proof must observe a genuine ordered libseat PauseSession
+    // followed by ActivateSession; a missing/late udev notification or an
+    // inactive epoch is not proof of a kernel VT roundtrip.
+    let vt_transitions=std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let notifier_transitions=vt_transitions.clone();
     let mut event_loop=calloop::EventLoop::<NativeLifecycle>::try_new()?;
-    event_loop.handle().insert_source(notifier,|event,_,state|{
+    event_loop.handle().insert_source(notifier,move |event,_,state|{
+        use std::sync::atomic::Ordering;
+        match event {
+            SessionEvent::PauseSession => notifier_transitions.store(1,Ordering::SeqCst),
+            SessionEvent::ActivateSession => {
+                if notifier_transitions.load(Ordering::SeqCst)==1 {
+                    notifier_transitions.store(2,Ordering::SeqCst);
+                }
+            }
+        }
         state.on_session(event);
     })?;
     event_loop.handle().insert_source(udev,|event,_,state|{
@@ -448,7 +462,8 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // A physical proof can only complete after an actual libseat
             // PauseSession was observed and a NEW seat-owned FD has passed
             // every real output-sized GPU render/sync and epoch check.
-            if physical_vt_proof && observed_pause && opened>=2 {
+            if physical_vt_proof && observed_pause && opened>=2 &&
+                vt_transitions.load(std::sync::atomic::Ordering::SeqCst)==2 {
                 physical_resume_verified=true;
                 println!("MELANIA_NATIVE_PHYSICAL_VT_RESUME_GBM_VERIFIED=true");
             }
