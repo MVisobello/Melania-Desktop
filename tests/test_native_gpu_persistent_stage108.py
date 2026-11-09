@@ -28,13 +28,17 @@ class ReusableGpuNativeStage108(unittest.TestCase):
         # The real CPU and GBM receivers now poll kernel scanout ownership
         # during unlimited idle; this is not an artificial timeout.
         self.assertIn("IDLE_OWNERSHIP_POLL",READER)
+        # The payload and fragmented header now enforce the same real DRM
+        # owner guard; the original fixed partial-frame deadline is retained.
+        self.assertIn("read_payload_guarded(",READER)
+        self.assertIn("read_exact_before_deadline_guarded(",READER)
         self.assertIn("guard()?;",READER)
 
         self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("Ok(0)=> {",READER)
         self.assertIn("stream.set_read_timeout(None)?;",READER)
-        self.assertIn("read_exact_before_deadline(stream,&mut header[1..])?;",READER)
-        self.assertIn("self.read_exact_before_deadline(stream,pixels)?;",READER)
+        self.assertIn("read_exact_before_deadline_guarded(stream,&mut header[1..],&mut guard)?;",READER)
+        self.assertIn("self.read_exact_before_deadline_guarded(stream,pixels,&mut guard)?;",READER)
         begin=GUEST.index("# A fixed-length receiver would have exited after frame 24")
         segment=GUEST[begin:GUEST.index("kill -TERM \"$persistent_server_pid\"",begin)]
         self.assertIn("sleep 15",segment)

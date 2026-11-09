@@ -416,36 +416,34 @@ pub fn qemu_wayland_gpu_scene_stream(
             if !persistent && frames_seen>=TOTAL {break;}
             let index=frames_seen;
             let mut header=[0u8;32];
+            // The SAME real DRM ownership checker now protects the idle
+            // socket, partial header and incomplete pixel buffer. A client
+            // cannot hold a stolen GBM CRTC until the 30s scene deadline.
+            let expected_read_fb=if index==0 {route.original_fb}
+                else {handles[((index-1)%2) as usize]};
+            let mut verify_read_drm=||{
+                let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                    &card,crtc,connector,original_encoder,expected_read_fb,
+                    (W as u16,H as u16),
+                );
+                match owned {
+                    Ok(true)=>Ok(()),
+                    Ok(false) | Err(_) => {
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "Persistent GBM output lost original DRM scanout during frame reception",
+                        ))
+                    }
+                }
+            };
             let pending_read=if persistent {
-                // Unlike idle time, a partially transmitted Wayland scene
-                // has one absolute deadline shared across header and pixels.
-                // A hung client must not keep the owned GBM/DRM VT forever.
-                let expected_idle_fb=if index==0 {route.original_fb}
-                    else {handles[((index-1)%2) as usize]};
                 let Some(read)=crate::native_persistent_frame_receive::
                     PersistentFrameRead::begin_with_idle_guard(
                         &mut stream,&mut header,
                         crate::native_persistent_frame_receive::MAX_PARTIAL_FRAME_TIME,
-                        || {
-                            // A silent Wayland client cannot strand a stolen
-                            // GBM CRTC indefinitely. Perform real kernel
-                            // connector/encoder/CRTC/FB/mode reads while idle.
-                            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
-                                &card,crtc,connector,original_encoder,expected_idle_fb,
-                                (W as u16,H as u16),
-                            );
-                            match owned {
-                                Ok(true)=>Ok(()),
-                                Ok(false) | Err(_) => {
-                                    event_router.revoke();
-                                    rollback.ownership_lost=true;
-                                    Err(std::io::Error::new(
-                                        std::io::ErrorKind::PermissionDenied,
-                                        "Persistent GBM output lost original DRM scanout while idle",
-                                    ))
-                                }
-                            }
-                        },
+                        &mut verify_read_drm,
                     )? else {break;};
                 Some(read)
             } else {
@@ -468,7 +466,7 @@ pub fn qemu_wayland_gpu_scene_stream(
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
             if let Some(read)=pending_read {
-                read.read_payload(&mut stream,&mut pixels)?;
+                read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
             } else {
                 stream.read_exact(&mut pixels)?;
             }
