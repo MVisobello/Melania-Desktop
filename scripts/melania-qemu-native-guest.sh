@@ -133,13 +133,17 @@ report 'MELANIA_QEMU_REAL_LIBSEAT_DRM_REOPEN_PASS=true'
 
 # Try the genuine Rust/Smithay KMS preflight, not a C substitute or mock.
 # It is TEST_ONLY and never issues an atomic commit/page flip/scanout.
+kms_test_log="$(mktemp -t melania-kms-preflight-XXXXXX)"
 set +e
 timeout --signal=TERM --kill-after=4s 70s \
-  "$binary" --experimental-kms-test < /dev/tty1
+  "$binary" --experimental-kms-test < /dev/tty1 | tee "$kms_test_log"
 code=$?
 set -e
 report "MELANIA_QEMU_NATIVE_KMS_EXIT=$code"
 [[ "$code" -eq 0 ]] || fatal 'native_KMS_TEST_ONLY_failed'
+grep -qx 'MELANIA_NATIVE_KMS_TEST_LIBSEAT_DRM_CLOSED=true' "$kms_test_log" ||
+  fatal 'native_KMS_TEST_ONLY_retained_seatd_DRM_device'
+rm -f "$kms_test_log"
 report 'MELANIA_QEMU_NATIVE_KMS_PASS=true'
 
 # Probe two REAL monitor-sized GBM DMA-BUF/GLES frames, rendered against the
@@ -154,6 +158,8 @@ if ! grep -Eq '^MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED=[0-9]+x[0-9]+x2$' "
   cat "$gpu_output_log"
   fatal 'native_output_sized_GBM_two_frames_not_verified'
 fi
+grep -qx 'MELANIA_NATIVE_STAGE2_LIBSEAT_DRM_CLOSED=true' "$gpu_output_log" ||
+  fatal 'native_output_sized_GBM_did_not_retire_libseat_device'
 rm -f "$gpu_output_log"
 report 'MELANIA_QEMU_NATIVE_GBM_OUTPUT_SIZED_PASS=true'
 

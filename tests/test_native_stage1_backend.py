@@ -15,7 +15,14 @@ class NativeStage1Contracts(unittest.TestCase):
         self.assertIn("LibSeatSession::new()?",NATIVE)
         self.assertIn('session.open(',NATIVE)
         self.assertIn('OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK',NATIVE)
-        self.assertIn('DrmDeviceFd::new(DeviceFd::from(descriptor))',NATIVE)
+        # Keep the seatd-issued original registered until GPU/DRM clone teardown.
+        # Raw FD Drop alone cannot retire libseat's device token.
+        self.assertIn('DrmDeviceFd::new(DeviceFd::from(descriptor.try_clone()?))',NATIVE)
+        self.assertNotIn('DrmDeviceFd::new(DeviceFd::from(descriptor))',NATIVE)
+        self.assertIn('let released=session.close(descriptor);',NATIVE)
+        self.assertIn('session.close(descriptor)?;',NATIVE)
+        self.assertIn('MELANIA_NATIVE_STAGE2_LIBSEAT_DRM_CLOSED=true',NATIVE)
+        self.assertIn('MELANIA_NATIVE_KMS_TEST_LIBSEAT_DRM_CLOSED=true',NATIVE)
         self.assertIn('DrmDevice::new(fd,false)',NATIVE)
         self.assertIn('device.crtcs().len()',NATIVE)
 
