@@ -452,6 +452,25 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                     .map_err(|error|format!("DRM flip already pending or revoked: {error:?}"))?;
                 let flip_deadline=Instant::now()+Duration::from_secs(2);
                 loop {
+                    // An EAGAIN retry is a NEW KMS ioctl. A VT takeover or
+                    // external modeset may happen during the sleep between
+                    // attempts, even though the first ownership check passed.
+                    // Verify the exact current kernel encoder/CRTC/FB_ID
+                    // before EVERY retry, and permanently revoke rollback
+                    // if this seat no longer owns that scanout.
+                    let retry_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                        &card,crtc_handle,connected[0],original_encoder,
+                        previous_fb,(W as u16,H as u16),
+                    ).map_err(|error|{
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        error
+                    })?;
+                    if !retry_owned {
+                        event_router.revoke();
+                        rollback.ownership_lost=true;
+                        return Err("CPU KMS page-flip retry lost original DRM ownership".into());
+                    }
                     match card.page_flip(crtc_handle,framebuffer,PageFlipFlags::EVENT,None) {
                         Ok(())=>{
                             event_router.arm_flip(crtc_handle)?;
