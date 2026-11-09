@@ -63,7 +63,7 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
         self.assertIn(".map_err(|e|format!", helper)
         self.assertIn("let first=snapshot(", helper)
         self.assertIn("let second=snapshot(", helper)
-        self.assertIn("Ok(first==second)", helper)
+        self.assertIn("if first!=second {return Ok(false);}", helper)
         self.assertIn("if first.is_none() {return Ok(false);}", helper)
         self.assertIn("output.state()!=connector::State::Connected", helper)
         self.assertIn("!owned_fbs.contains(&fb)", helper)
@@ -99,6 +99,21 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
                 "if self.submitted && !self.restored && !self.ownership_lost",
                 drop,
             )
+
+    def test_rollback_final_kernel_crtc_follows_last_encoder_read(self):
+        helper = kernel_rollback_helper()
+        # Real drm-rs ioctls in the shared CPU/GBM pre/post rollback route,
+        # never a simulated framebuffer success flag.
+        self.assertIn('let final_crtc=card.get_crtc(original.handle())', helper)
+        self.assertIn('DRM rollback final get_crtc failed:', helper)
+        self.assertIn('final_crtc.framebuffer()==first', helper)
+        self.assertIn('final_crtc.mode()==original.mode()', helper)
+        self.assertIn('final_crtc.position()==original.position()', helper)
+        self.assertLess(helper.index('let second=snapshot('),
+                        helper.index('let final_crtc=card.get_crtc('))
+        self.assertLess(helper.index('if first!=second {return Ok(false);}'),
+                        helper.index('let final_crtc=card.get_crtc('))
+        self.assertNotIn('Ok(first==second)', helper)
 
     def test_real_qemu_proves_both_gpu_and_cpu_original_encoder_restore(self):
         self.assertIn(
