@@ -348,10 +348,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             let expected_read_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
             let mut verify_read_drm=||{
-                let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                let owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                     &card,crtc_handle,connected[0],original_encoder,
                     expected_read_fb,(W as u16,H as u16),
-                );
+                ,mode,original.position());
                 match owned {
                     Ok(true)=>Ok(()),
                     Ok(false) | Err(_) => {
@@ -406,9 +406,9 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
-            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc_handle,connected[0],original_encoder,previous_fb,(W as u16,H as u16),
-            ).map_err(|error| {
+            ,mode,original.position()).map_err(|error| {
                 // EIO/ENODEV during VT loss is not a harmless read failure.
                 // Never reuse the event router after this acquisition fails.
                 event_router.revoke();
@@ -458,10 +458,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                     // Verify the exact current kernel encoder/CRTC/FB_ID
                     // before EVERY retry, and permanently revoke rollback
                     // if this seat no longer owns that scanout.
-                    let retry_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                    let retry_owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                         &card,crtc_handle,connected[0],original_encoder,
                         previous_fb,(W as u16,H as u16),
-                    ).map_err(|error|{
+                    ,mode,original.position()).map_err(|error|{
                         event_router.revoke();
                         rollback.ownership_lost=true;
                         error
@@ -512,9 +512,9 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // The original encoder identity must survive the KMS flip,
             // not merely the eventual restoration at compositor shutdown.
             // Never send a Wayland callback if another encoder took over.
-            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc_handle,connected[0],original_encoder,framebuffer,(W as u16,H as u16),
-            ).map_err(|error|{
+            ,mode,original.position()).map_err(|error|{
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
