@@ -283,6 +283,34 @@ pub fn verify_restored_output_timings<M:PartialEq>(
     Ok(())
 }
 
+/// The completed GBM rebuild is NOT proof if a queued libseat/udev event or an
+/// external modeset changes scanout before the final VT acceptance marker.
+/// Unlike a comparison across two VT owners, FB_ID must remain the same
+/// within this *single* newly-acquired seat epoch. Fail closed on a missing,
+/// duplicate or foreign CRTC timing even when the route lists look identical.
+pub fn verify_unchanged_scanout_epoch<M:PartialEq>(
+    before_routes:&NativeOutputTopology,
+    before_timings:&[ActiveOutputTiming<M>],
+    after_routes:&NativeOutputTopology,
+    after_timings:&[ActiveOutputTiming<M>],
+)->Result<(),String> {
+    for (routes,timings) in [(before_routes,before_timings),(after_routes,after_timings)] {
+        validate_active_routes(&routes.active)?;
+        if routes.active.len()!=timings.len() {
+            return Err("DRM scanout timing count no longer matches active outputs".into());
+        }
+        for route in &routes.active {
+            if timings.iter().filter(|t|t.crtc==route.crtc).count()!=1 {
+                return Err("DRM scanout has missing, duplicate or foreign CRTC timing".into());
+            }
+        }
+    }
+    if before_routes!=after_routes || before_timings!=after_timings {
+        return Err("DRM connector/encoder/CRTC/FB_ID or full mode and position changed after event dispatch".into());
+    }
+    Ok(())
+}
+
 /// Inspect every active route and the full kernel CRTC scanout timing in the
 /// same two-pass stability transaction. Never combine a timing from one
 /// topology epoch with connector/encoder IDs from another epoch.
@@ -377,6 +405,36 @@ mod tests {
         let third=ActiveOutputTiming{crtc:control::from_u32(23).unwrap(),..second};
         assert!(verify_restored_output_timings(&baseline,&[first,third]).is_err());
         assert!(verify_restored_output_timings::<u32>(&[],&[]).is_err());
+    }
+    #[test]
+    fn post_dispatch_vt_epoch_rejects_fb_timing_position_and_crtc_races() {
+        let first=route(11,21,31,1920,1080);
+        let second=route(12,22,32,1280,720);
+        let routes=NativeOutputTopology{active:vec![first,second]};
+        let timing_first=ActiveOutputTiming {
+            crtc:first.crtc,mode:60_000u32,position:(0,0),
+        };
+        let timing_second=ActiveOutputTiming {
+            crtc:second.crtc,mode:60_000u32,position:(1920,0),
+        };
+        let timings=[timing_first,timing_second];
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&routes,&timings).is_ok());
+        let changed_fb=NativeOutputTopology{active:vec![
+            ActiveOutputRoute{original_fb:control::from_u32(99).unwrap(),..first},
+            second,
+        ]};
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&changed_fb,&timings).is_err());
+        let refresh=[timing_first,ActiveOutputTiming{mode:75_000,..timing_second}];
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&routes,&refresh).is_err());
+        let shifted=[timing_first,ActiveOutputTiming{position:(1920,200),..timing_second}];
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&routes,&shifted).is_err());
+        let duplicate=[timing_first,timing_first];
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&routes,&duplicate).is_err());
+        let foreign=[timing_first,ActiveOutputTiming{
+            crtc:control::from_u32(23).unwrap(),..timing_second
+        }];
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&routes,&foreign).is_err());
+        assert!(verify_unchanged_scanout_epoch(&routes,&timings,&routes,&timings[..1]).is_err());
     }
     #[test]
     fn active_crtc_readbacks_reject_same_size_mode_timing_position_and_fb_changes() {
