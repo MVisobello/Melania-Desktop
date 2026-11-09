@@ -17,8 +17,10 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
         self.assertIn("pub mod native_persistent_frame_receive;",LIB)
         for presenter in (CPU,GPU):
             stream=presenter[presenter.index("let pending_read=if persistent {"):]
-            self.assertIn("PersistentFrameRead::begin(",stream)
+            self.assertIn("PersistentFrameRead::begin_with_idle_guard(",stream)
             self.assertIn("MAX_PARTIAL_FRAME_TIME",stream)
+            self.assertIn("verify_original_encoder_frame(",stream)
+            self.assertIn("ownership_lost=true;",stream)
             self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",stream)
             self.assertLess(stream.index("read.read_payload(&mut stream,&mut pixels)?;"),
                             stream.index("stream.write_all(&ack)?;"))
@@ -31,6 +33,11 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
     def test_idle_time_unlimited_but_partial_frame_has_one_deadline(self):
         self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("deadline:Instant",READER)
+        # The real CPU and GBM receivers now poll kernel scanout ownership
+        # during unlimited idle; this is not an artificial timeout.
+        self.assertIn("IDLE_OWNERSHIP_POLL",READER)
+        self.assertIn("guard()?;",READER)
+
         self.assertIn("saturating_duration_since(Instant::now())",READER)
         self.assertIn("stream.set_read_timeout(Some(remaining))?;",READER)
         self.assertIn("ErrorKind::UnexpectedEof",READER)
