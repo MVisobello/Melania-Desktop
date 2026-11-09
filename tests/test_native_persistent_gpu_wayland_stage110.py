@@ -21,6 +21,8 @@ class PersistentGpuWayland110(unittest.TestCase):
         # GPU image cannot retain the DRM/GBM CRTC beyond the deadline.
         self.assertIn("PersistentFrameRead::begin_with_idle_guard(",body)
         self.assertIn("MAX_PARTIAL_FRAME_TIME",body)
+        self.assertIn("read_payload_guarded(",READER)
+        self.assertIn("read_exact_before_deadline_guarded(",READER)
         self.assertIn("verify_original_encoder_frame(",body)
         self.assertIn("rollback.ownership_lost=true;",body)
         # The real CPU and GBM receivers now poll kernel scanout ownership
@@ -28,7 +30,7 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn("IDLE_OWNERSHIP_POLL",READER)
         self.assertIn("guard()?;",READER)
 
-        self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",body)
+        self.assertIn("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;",body)
         self.assertIn("stream.read_exact(&mut header)?;",body)
         self.assertIn("stream.read_exact(&mut pixels)?;",body)
         self.assertIn("stream.set_read_timeout(None)?;",READER)
