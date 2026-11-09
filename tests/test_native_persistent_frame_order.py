@@ -27,7 +27,14 @@ class PersistentFrameOrder(unittest.TestCase):
         self.assertIn("thousands_of_persistent_repaints_do_not_require_new_scene_mutations",COMMON)
 
     def test_finite_frame_proof_stays_strict_on_both_kernel_paths(self):
-        self.assertIn("if !persistent && previous.as_ref().is_some_and(",CPU)
+        # The two persistent CPU scene buffers replace the former
+        # per-frame Option<Vec<u8>>. The actual finite-mode unchanged-pixel
+        # rejection must still compare the PREVIOUS fully ACKed scene.
+        self.assertIn("if !persistent && have_previous_pixels && previous_pixels==pixels",CPU)
+        self.assertIn("return Err(\"QEMU continuous KMS received identical",CPU)
+        self.assertIn("std::mem::swap(&mut pixels,&mut previous_pixels);",CPU)
+        self.assertLess(CPU.index("stream.write_all(&ack)?;"),
+                        CPU.index("std::mem::swap(&mut pixels,&mut previous_pixels);"))
         self.assertIn("if have_prior_pixels && prior_pixels==pixels && !persistent",GPU)
         self.assertIn("let total=if persistent {None} else",CPU)
         self.assertIn("if !persistent && frames_seen>=TOTAL {break;}",GPU)
