@@ -271,7 +271,18 @@ pub fn verify_rollback_route(
     let first=snapshot(card,original,connector,original_encoder,owned_fbs)?;
     if first.is_none() {return Ok(false);}
     let second=snapshot(card,original,connector,original_encoder,owned_fbs)?;
-    Ok(first==second)
+    if first!=second {return Ok(false);}
+    // Each snapshot finishes at get_encoder, AFTER its last CRTC read.
+    // A concurrent VT handoff/modeset can change FB_ID, complete DRM mode
+    // or CRTC origin in that gap while retaining the original encoder.
+    // Re-read the actual kernel CRTC after the last route ioctl, for both
+    // pre-restore and post-restore checks in CPU and GBM Restore guards.
+    // This cannot substitute for atomic ownership or hardware VT testing.
+    let final_crtc=card.get_crtc(original.handle())
+        .map_err(|e|format!("DRM rollback final get_crtc failed: {e}"))?;
+    Ok(final_crtc.framebuffer()==first &&
+       final_crtc.mode()==original.mode() &&
+       final_crtc.position()==original.position())
 }
 
 /// Pure snapshot predicate for regression tests and for consumers that
