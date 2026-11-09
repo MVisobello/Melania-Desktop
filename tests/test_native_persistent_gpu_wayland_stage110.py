@@ -19,13 +19,21 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn("if !persistent && frames_seen>=TOTAL {break;}",body)
         # Idle is unlimited until a real header begins, but a hung/trickled
         # GPU image cannot retain the DRM/GBM CRTC beyond the deadline.
-        self.assertIn("PersistentFrameRead::begin(",body)
+        self.assertIn("PersistentFrameRead::begin_with_idle_guard(",body)
         self.assertIn("MAX_PARTIAL_FRAME_TIME",body)
+        self.assertIn("verify_original_encoder_frame(",body)
+        self.assertIn("rollback.ownership_lost=true;",body)
+        # The real CPU and GBM receivers now poll kernel scanout ownership
+        # during unlimited idle; this is not an artificial timeout.
+        self.assertIn("IDLE_OWNERSHIP_POLL",READER)
+        self.assertIn("guard()?;",READER)
+
         self.assertIn("read.read_payload(&mut stream,&mut pixels)?;",body)
         self.assertIn("stream.read_exact(&mut header)?;",body)
         self.assertIn("stream.read_exact(&mut pixels)?;",body)
         self.assertIn("stream.set_read_timeout(None)?;",READER)
-        self.assertIn("Ok(0)=>return Ok(None)",READER)
+        self.assertIn("Ok(0)=> {",READER)
+        self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("ErrorKind::UnexpectedEof",READER)
         self.assertIn("saturating_duration_since(Instant::now())",READER)
         self.assertIn("frames_seen=frames_seen.checked_add(1)",body)
