@@ -509,7 +509,12 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                 continue;
             },
         };
-        let fd=DrmDeviceFd::new(DeviceFd::from(descriptor));
+        // Keep the original libseat-issued device descriptor registered
+        // until every DRM/GBM/EGL clone has been dropped. A bare close(2)
+        // on DrmDeviceFd does NOT notify seatd/libseat of device release.
+        // This scope also covers the early invalid-output-plan path.
+        let probe=(|| -> Result<(),Box<dyn Error>> {
+        let fd=DrmDeviceFd::new(DeviceFd::from(descriptor.try_clone()?));
         // false preserves existing connector state: no automatic blanking
         // while inspecting available CRTC scanout controllers.
         match DrmDevice::new(fd,false) {
@@ -553,7 +558,7 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                 // or none of them count as a successful multi-output probe.
                 if output_sized && active_output_plan.is_none() {
                     eprintln!("Melania native output-sized probe refused unstable or unrenderable physical DRM topology");
-                    continue;
+                    return Ok(());
                 }
                 // Inspect only: never call set_crtc, reset_state or surface
                 // creation. No mode is applied by this probe.
@@ -683,12 +688,22 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                         Err(error)=>eprintln!("Melania native offscreen GLES frames: {error}"),
                     }
                 }
-                // Device ownership and DRM master return to libseat on drop.
+                // DRM/EGL/GBM clones are dropped on exit from this scope.
             }
             Err(error)=>{
                 eprintln!("Melania DRM: unable to initialize {}: {error}",path.display());
             }
         }
+        Ok(())
+        })();
+        // Every successful libseat.open MUST have an explicit libseat.close,
+        // including failed initialization, invalid output plans, GPU render
+        // failures and clone errors. Report close failure, never continue to
+        // another card with a potentially unretired seatd device token.
+        let released=session.close(descriptor);
+        released?;
+        println!("MELANIA_NATIVE_STAGE2_LIBSEAT_DRM_CLOSED=true");
+        probe?;
     }
     drop(notifier);
     println!("Melania native stage2: scanned={scanned}, initialized={initialized}");
@@ -818,10 +833,17 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
             Ok(fd)=>fd,
             Err(error)=>{eprintln!("Melania KMS VM device {}: {error}",path.display());continue;}
         };
-        let fd=DrmDeviceFd::new(DeviceFd::from(descriptor));
+        // The seatd-owned original stays registered while a cloned DRM FD
+        // performs TEST_ONLY. Always close the original through libseat after
+        // destroying all temporary kernel/GPU handles, including failures.
+        let tested=(|| -> Result<bool,Box<dyn Error>> {
+        let fd=DrmDeviceFd::new(DeviceFd::from(descriptor.try_clone()?));
         let (mut device,_drm_events)=match DrmDevice::new(fd,false) {
             Ok(result)=>result,
-            Err(error)=>{eprintln!("Melania KMS VM init {}: {error}",path.display());continue;}
+            Err(error)=>{
+                eprintln!("Melania KMS VM init {}: {error}",path.display());
+                return Ok(false);
+            }
         };
         let mut invalidated=false;
         let result=melania_native::kms_test::prepare_and_render_test_only(&mut device,|| {
@@ -847,16 +869,22 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
                     report.borrowed_framebuffer_count,report.resources_unchanged,
                     report.restoration_implemented,report.visible_frame_submitted,
                     report.rollback_blockers);
-                completed=true;
-                break;
+                Ok(true)
             }
             Err(error)=>{
                 if invalidated {
                     return Err(format!("QEMU preflight aborted without scanout: {error}").into());
                 }
                 eprintln!("Melania KMS VM preflight {}: {error}",path.display());
+                Ok(false)
             }
         }
+        })();
+        // Releasing through libseat is mandatory even if the test returned
+        // an error. The cloned DrmDevice/GBM resources have gone out of scope.
+        session.close(descriptor)?;
+        println!("MELANIA_NATIVE_KMS_TEST_LIBSEAT_DRM_CLOSED=true");
+        if tested? {completed=true;break;}
     }
     println!("NATIVE_SESSION_READY=false");
     if !completed {
