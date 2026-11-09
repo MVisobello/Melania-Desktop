@@ -3895,6 +3895,34 @@ fn revoke_wayland_focus_for_lost_seat(state:&mut BridgeState) {
     pointer.frame(state);
 }
 
+/// Invalidate all real Wayland seat input capabilities when the current
+/// libseat/DRM generation is lost. The bridge cannot re-acquire DRM/GBM
+/// safely yet: focus/selection, pointer serials and interactive grabs must
+/// never survive a hotplug, VT pause, or libinput resume error.
+fn revoke_wayland_input_for_lost_seat(state:&mut BridgeState) {
+    revoke_wayland_focus_for_lost_seat(state);
+    state.tab_resize_transaction.revoke();
+    state.tab_resize_images.clear();
+    state.tab_resize_started_at=None;
+    set_data_device_focus(&state.display_handle,&state.seat,None);
+    set_primary_focus(&state.display_handle,&state.seat,None);
+    clear_primary_selection(&state.display_handle,&state.seat);
+    state.pointer_buttons_held.clear();
+    state.last_xdg_press=None;
+    state.last_popup_press=None;
+    state.suppressed_popup_button=None;
+    state.grabbed_popup_roles.clear();
+    state.window_interaction.cancel();
+    state.keyboard_window_cycle.reset();
+    state.popup_escape_held=false;
+    state.snap_keys.reset();
+    state.auto_tile_keys.reset();
+    state.tile_swap_keys.reset();
+    state.tab_keys.reset();
+    state.qemu_start_super_down=None;
+    state.dynamic_confirmed_frame=None;
+}
+
 /// Keep the original libseat-owned descriptor until the DRM worker exits.
 /// The seat's close() callback (not a bare close(2)) retires its device ID.
 struct OwnedSeatCard {
@@ -4145,32 +4173,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     }
     let backend=LibinputInputBackend::new(context.clone());
     let mut events=calloop::EventLoop::<BridgeState>::try_new()?;
+    // Clones share the SAME libinput context: the udev GPU-loss handler
+    // must actually suspend it, not just ignore subsequent input events.
+    let mut udev_input_context=context.clone();
     events.handle().insert_source(backend,|event,_,state|handle_input(state,event))?;
     events.handle().insert_source(notifier,move |event,_,state|{
         match event {
             SessionEvent::PauseSession=>{
-                // Revoke GPU/input authorization BEFORE sending any focus
-                // changes; an ActivateSession notification cannot rearm it.
+                // Poison rendering BEFORE any Wayland focus/selection change.
                 state.native_presentation_guard.revoke();
-                revoke_wayland_focus_for_lost_seat(state);
-                state.tab_resize_transaction.revoke();
-                state.tab_resize_images.clear();
-                state.tab_resize_started_at=None;
-                set_data_device_focus(&state.display_handle,&state.seat,None);
-                set_primary_focus(&state.display_handle,&state.seat,None);
-                clear_primary_selection(&state.display_handle,&state.seat);
-                state.pointer_buttons_held.clear();
-                state.last_xdg_press=None;
-                state.last_popup_press=None;
-                state.suppressed_popup_button=None;
-                // A suspended libseat session loses all active input grabs.
-                state.grabbed_popup_roles.clear();
-                state.window_interaction.cancel();
-                state.keyboard_window_cycle.reset();
-            state.popup_escape_held=false;
-            state.snap_keys.reset();
-            state.auto_tile_keys.reset();
-            state.tile_swap_keys.reset();
+                revoke_wayland_input_for_lost_seat(state);
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
                 // A revoked callback is not enough: a pending transport job
@@ -4200,6 +4212,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 }
                 if context.resume().is_err() {
                     state.native_presentation_guard.revoke();
+                    // A partially resumed device must not retain clipboard,
+                    // pointer serials or keyboard focus from its old VT epoch.
+                    revoke_wayland_input_for_lost_seat(state);
+                    context.suspend();
                     // If libinput cannot resume, never re-use a socket or
                     // presentation ticket from the old DRM/VT generation.
                     state.continuous_worker.take();
@@ -4227,7 +4243,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.tile_swap_keys.reset();
         }
     })?;
-    events.handle().insert_source(udev,|event,_,state|{
+    events.handle().insert_source(udev,move |event,_,state|{
         // Do not trust an old framebuffer, CRTC route or GBM handle after
         // any real udev GPU topology change. This bridge cannot re-acquire
         // and rebuild those kernel resources, so it must abort safely.
@@ -4246,37 +4262,18 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // joins the presenter, attempts CRTC rollback and calls libseat
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
-            revoke_wayland_focus_for_lost_seat(state);
-            state.tab_resize_transaction.revoke();
-            state.tab_resize_images.clear();
-            state.tab_resize_started_at=None;
-            set_data_device_focus(&state.display_handle,&state.seat,None);
-                set_primary_focus(&state.display_handle,&state.seat,None);
-                clear_primary_selection(&state.display_handle,&state.seat);
-            state.pointer_buttons_held.clear();
+            revoke_wayland_input_for_lost_seat(state);
             state.continuous_worker.take();
             state.continuous_inflight.take();
             state.continuous_presentation_token.take();
             state.continuous_pending=None;
-             state.dynamic_confirmed_frame=None;
             state.lifecycle.on_session(SessionEvent::PauseSession);
             state.render_scheduler.set_seat_active(false);
             state.continuous_redraw.set_seat_active(false);
-            state.window_interaction.cancel();
-            // The udev handler directly revokes the seat lifecycle; it does
-            // not pass through SessionEvent::PauseSession above. Explicitly
-            // discard every input capability minted by the old GPU/VT epoch,
-            // including popup serials and the click-through suppression flag.
-            // Reacquiring a DRM route must never resurrect those grabs.
-            state.last_xdg_press=None;
-            state.last_popup_press=None;
-            state.suppressed_popup_button=None;
-            state.grabbed_popup_roles.clear();
-            state.popup_escape_held=false;
-            state.snap_keys.reset();
-            state.auto_tile_keys.reset();
-            state.tile_swap_keys.reset();
-            state.keyboard_window_cycle.reset();
+            // Unlike filtering later handle_input() callbacks, suspending the
+            // shared libinput context actually closes the revoked seat's
+            // input stream. No resume until a fresh DRM/GBM acquisition.
+            udev_input_context.suspend();
             eprintln!("MELANIA_NATIVE_DRM_TOPOLOGY_REVOKED={reason:?}");
         }
     })?;
