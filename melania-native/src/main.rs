@@ -314,6 +314,9 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
     // The physical VT proof must restore *every* initially active output,
     // not merely render whatever subset is still active after the switch.
     let mut baseline_output_topology:Option<melania_native::native_output_topology::NativeOutputTopology>=None;
+    // Preserve every initial CRTC's *complete* kernel mode and origin, not
+    // only width/height, across the genuine libseat VT handoff.
+    let mut baseline_output_timings:Option<Vec<melania_native::native_output_topology::ActiveOutputTiming<drm::control::Mode>>>=None;
     // Keep the original selected path while the seat-owned descriptor is
     // alive. Re-check the kernel identity at every dispatch, not only during
     // GBM/EGL allocation: udev notification may lag a device replacement.
@@ -393,7 +396,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // DMA-BUF allocations and GPU fences are dropped completely
             // BEFORE libseat closes the original FD. On ANY error, close
             // the owned seat descriptor rather than escaping via '?'.
-            let acquired=(|| -> Result<(usize,Vec<melania_native::native_output_probe_plan::OutputBufferProbe>,Option<melania_native::native_output_topology::NativeOutputTopology>),Box<dyn Error>> {
+            let acquired=(|| -> Result<(usize,Vec<melania_native::native_output_probe_plan::OutputBufferProbe>,Option<(melania_native::native_output_topology::NativeOutputTopology,Vec<melania_native::native_output_topology::ActiveOutputTiming<drm::control::Mode>>)>),Box<dyn Error>> {
                 let card=DrmDeviceFd::new(DeviceFd::from(fd.try_clone()?));
                 let mut verified_output_topology=None;
                 let crtcs=card.resource_handles()?.crtcs().len();
@@ -405,7 +408,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                     // mapping, rather than rendering a guessed 640x480 surface.
                     // Every independently active CRTC must be renderable;
                     // one failed output rejects the entire reacquisition.
-                    let before=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
+                    let (before,before_timings)=melania_native::native_output_topology::inspect_stable_active_outputs_with_timings(&card)?;
                     let plan=melania_native::native_output_probe_plan::plan_active_output_probes(&before)?;
                     // A physical VT resume cannot be accepted if no active
                     // CRTC has produced a real output-sized GBM/DMA-BUF.
@@ -425,12 +428,12 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                     // Do not count allocations if an external modeset,
                     // hotplug or replaced original FB happened while the
                     // EGL/GBM resources were being rebuilt.
-                    let after=melania_native::native_output_topology::inspect_stable_active_outputs(&card)?;
-                    if before!=after {
-                        return Err("Active DRM CRTC/connector/framebuffer changed during GPU reacquisition".into());
+                    let (after,after_timings)=melania_native::native_output_topology::inspect_stable_active_outputs_with_timings(&card)?;
+                    if before!=after || before_timings!=after_timings {
+                        return Err("Active DRM route, full CRTC timing or position changed during GPU reacquisition".into());
                     }
                     if physical_vt_proof {
-                        verified_output_topology=Some(after);
+                        verified_output_topology=Some((after,after_timings));
                     }
                     plan
                 } else { Vec::new() };
@@ -447,7 +450,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             // original connector/encoder/CRTC set and dimensions. A new FB_ID
             // is allowed: a different VT may have used its own framebuffer.
             // Rejection closes the libseat-owned descriptor before returning.
-            if let Some(topology)=reacquired_topology {
+            if let Some((topology,timings))=reacquired_topology {
                 if let Some(baseline)=baseline_output_topology.as_ref() {
                     if let Err(error)=melania_native::native_output_probe_plan::verify_vt_output_restore(
                         baseline,&topology
@@ -455,9 +458,19 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                         session.close(fd)?;
                         return Err(format!("Physical VT multi-output restore refused: {error}").into());
                     }
+                    let initial_timings=baseline_output_timings.as_ref()
+                        .ok_or("Physical VT lacks the original output timing baseline")?;
+                    if let Err(error)=melania_native::native_output_topology::verify_restored_output_timings(
+                        initial_timings,&timings
+                    ) {
+                        session.close(fd)?;
+                        return Err(format!("Physical VT CRTC scanout timing restore refused: {error}").into());
+                    }
                     println!("MELANIA_NATIVE_VT_ALL_ORIGINAL_OUTPUTS_RESTORED=true count={}",topology.active.len());
+                    println!("MELANIA_NATIVE_VT_FULL_CRTC_TIMINGS_RESTORED=true count={}",timings.len());
                 } else {
                     baseline_output_topology=Some(topology);
+                    baseline_output_timings=Some(timings);
                 }
             }
             // A notifier/udev polling error must also release the actual
