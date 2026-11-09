@@ -63,7 +63,7 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
         self.assertIn(".map_err(|e|format!", helper)
         self.assertIn("let first=snapshot(", helper)
         self.assertIn("let second=snapshot(", helper)
-        self.assertIn("Ok(first==second)", helper)
+        self.assertIn("if first!=second {return Ok(false);}", helper)
         self.assertIn("if first.is_none() {return Ok(false);}", helper)
         self.assertIn("output.state()!=connector::State::Connected", helper)
         self.assertIn("!owned_fbs.contains(&fb)", helper)
@@ -99,6 +99,35 @@ class NativeConnectorRestoreStage93(unittest.TestCase):
                 "if self.submitted && !self.restored && !self.ownership_lost",
                 drop,
             )
+
+    def test_rollback_rejects_inactive_original_mode_before_kernel_route(self):
+        helper = kernel_rollback_helper()
+        # Both real CPU and GBM restore paths call this shared helper before
+        # issuing set_crtc. A stale original FB_ID with an inactive mode is
+        # not proof of a restorable output after VT/hotplug changes.
+        self.assertIn("let Some(original_mode)=original.mode() else {return Ok(false);};", helper)
+        self.assertIn("original_size.0==0 || original_size.1==0", helper)
+        self.assertIn("original_mode.vrefresh()==0", helper)
+        self.assertLess(helper.index("original_mode.vrefresh()==0"),
+                        helper.index("fn snapshot("))
+        self.assertEqual(helper.count("let first=snapshot("), 1)
+        for source in (RECEIVER, GPU):
+            self.assertEqual(restore_block(source).count("verify_rollback_route("), 2)
+
+    def test_rollback_final_kernel_crtc_follows_last_encoder_read(self):
+        helper = kernel_rollback_helper()
+        # Real drm-rs ioctls in the shared CPU/GBM pre/post rollback route,
+        # never a simulated framebuffer success flag.
+        self.assertIn('let final_crtc=card.get_crtc(original.handle())', helper)
+        self.assertIn('DRM rollback final get_crtc failed:', helper)
+        self.assertIn('final_crtc.framebuffer()==first', helper)
+        self.assertIn('final_crtc.mode()==original.mode()', helper)
+        self.assertIn('final_crtc.position()==original.position()', helper)
+        self.assertLess(helper.index('let second=snapshot('),
+                        helper.index('let final_crtc=card.get_crtc('))
+        self.assertLess(helper.index('if first!=second {return Ok(false);}'),
+                        helper.index('let final_crtc=card.get_crtc('))
+        self.assertNotIn('Ok(first==second)', helper)
 
     def test_real_qemu_proves_both_gpu_and_cpu_original_encoder_restore(self):
         self.assertIn(
