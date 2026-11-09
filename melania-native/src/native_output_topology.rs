@@ -242,24 +242,74 @@ fn read_active_crtc_readbacks(
     Ok(readbacks)
 }
 
-/// Read the same kernel topology twice before rendering; reject a hotplug
-/// or external modeset that moves a connector, changes mode or replaces
-/// the baseline framebuffer between scans. The output owner must still
-/// monitor libseat/udev and verify the kernel's state after each frame.
-pub fn inspect_stable_active_outputs(
+/// Per-CRTC scanout timing captured from real kernel readbacks. Unlike
+/// ActiveOutputRoute (which stores only width/height and original FB_ID),
+/// this preserves the *complete* drm-rs mode and CRTC origin across a VT
+/// pause. It is read-only evidence, never a KMS ownership or login permit.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct ActiveOutputTiming<M> {
+    pub crtc:crtc::Handle,
+    pub mode:M,
+    pub position:(u32,u32),
+}
+
+/// A physical VT reacquisition cannot be certified if a previously active
+/// output resumes with the same pixel dimensions but a different refresh
+/// rate, pixel clock, sync timings, or screen origin. Compare the complete
+/// mode, not merely mode.size(). The framebuffer ID is intentionally absent:
+/// another seat owner may legitimately replace FB_ID during VT handoff.
+pub fn verify_restored_output_timings<M:PartialEq>(
+    before:&[ActiveOutputTiming<M>],
+    after:&[ActiveOutputTiming<M>],
+)->Result<(),String> {
+    if before.is_empty() || before.len()!=after.len() ||
+       before.len()>MAX_ACTIVE_DRM_OUTPUTS {
+        return Err("Physical VT output timing set changed or is empty".into());
+    }
+    for (index,original) in before.iter().enumerate() {
+        if before[..index].iter().any(|entry|entry.crtc==original.crtc) {
+            return Err("Physical VT baseline has duplicate CRTC timing".into());
+        }
+        let mut matches=after.iter().filter(|entry|entry.crtc==original.crtc);
+        let restored=matches.next()
+            .ok_or("Physical VT lost the original CRTC timing")?;
+        if matches.next().is_some() {
+            return Err("Physical VT restored duplicate CRTC timings".into());
+        }
+        if restored.mode!=original.mode || restored.position!=original.position {
+            return Err("Physical VT changed original CRTC mode timing or position".into());
+        }
+    }
+    Ok(())
+}
+
+/// Inspect every active route and the full kernel CRTC scanout timing in the
+/// same two-pass stability transaction. Never combine a timing from one
+/// topology epoch with connector/encoder IDs from another epoch.
+pub fn inspect_stable_active_outputs_with_timings(
     card:&impl ControlDevice,
-)->Result<NativeOutputTopology,String> {
+)->Result<(NativeOutputTopology,Vec<ActiveOutputTiming<drm::control::Mode>>),String> {
     let before=inspect_active_outputs(card)?;
     let before_crtcs=read_active_crtc_readbacks(card,&before)?;
     let after=inspect_active_outputs(card)?;
     let after_crtcs=read_active_crtc_readbacks(card,&after)?;
-    // This includes exact display timings, not just the dimensions stored
-    // in ActiveOutputRoute. A same-size refresh-rate change or translated
-    // CRTC cannot silently pass the two complete topology scans.
     if before!=after || before_crtcs!=after_crtcs {
         return Err("DRM route, CRTC timing or position changed while capturing scanout baseline".into());
     }
-    Ok(after)
+    let timings=after_crtcs.into_iter().map(|readback|ActiveOutputTiming {
+        crtc:readback.crtc,
+        mode:readback.mode,
+        position:readback.position,
+    }).collect();
+    Ok((after,timings))
+}
+
+/// Retain the existing stable-topology API for all existing KMS presenters,
+/// which continue to use the exact same two-pass kernel validation.
+pub fn inspect_stable_active_outputs(
+    card:&impl ControlDevice,
+)->Result<NativeOutputTopology,String> {
+    inspect_stable_active_outputs_with_timings(card).map(|(topology,_)|topology)
 }
 
 #[cfg(test)]
@@ -307,6 +357,26 @@ mod tests {
         let distinct:Vec<encoder::Handle>=[17u32,18].into_iter()
             .map(|id|control::from_u32(id).unwrap()).collect();
         assert!(same_resource_handles(&distinct,&distinct));
+    }
+    #[test]
+    fn real_vt_timing_gate_rejects_same_resolution_refresh_and_position_changes() {
+        let crtc1=control::from_u32(21).unwrap();
+        let crtc2=control::from_u32(22).unwrap();
+        // u32 values represent the distinct full drm::control::Mode
+        // signatures. Production passes drm-rs Mode, not an integer rate.
+        let first=ActiveOutputTiming {crtc:crtc1,mode:60_000u32,position:(0,0)};
+        let second=ActiveOutputTiming {crtc:crtc2,mode:60_000u32,position:(1920,0)};
+        let baseline=[first,second];
+        assert!(verify_restored_output_timings(&baseline,&[second,first]).is_ok());
+        assert!(verify_restored_output_timings(&baseline,
+            &[first,ActiveOutputTiming{mode:75_000,..second}]).is_err());
+        assert!(verify_restored_output_timings(&baseline,
+            &[first,ActiveOutputTiming{position:(0,1080),..second}]).is_err());
+        assert!(verify_restored_output_timings(&baseline,&[first]).is_err());
+        assert!(verify_restored_output_timings(&baseline,&[first,first]).is_err());
+        let third=ActiveOutputTiming{crtc:control::from_u32(23).unwrap(),..second};
+        assert!(verify_restored_output_timings(&baseline,&[first,third]).is_err());
+        assert!(verify_restored_output_timings::<u32>(&[],&[]).is_err());
     }
     #[test]
     fn active_crtc_readbacks_reject_same_size_mode_timing_position_and_fb_changes() {
