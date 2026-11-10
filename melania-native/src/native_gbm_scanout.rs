@@ -229,7 +229,7 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
             // Revoke the pending event epoch before propagating the error.
             let owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,prior_fb,(w,h),
-            ,mode,original.position()).map_err(|error| {
+            mode,original.position()).map_err(|error| {
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
@@ -256,7 +256,7 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                     // next attempt into a page flip on somebody else's CRTC.
                     let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                         &card,crtc,connector,original_encoder,prior_fb,(w,h),
-                    ,mode,original.position()).map_err(|error|{
+                    mode,original.position()).map_err(|error|{
                         event_router.revoke();
                         rollback.ownership_lost=true;
                         error
@@ -293,7 +293,7 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
             // original connector encoder has changed on this live CRTC.
             let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,handles[index as usize%2],(w,h),
-            ,mode,original.position()).map_err(|error|{
+            mode,original.position()).map_err(|error|{
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
@@ -440,7 +440,7 @@ pub fn qemu_wayland_gpu_scene_stream(
                 let owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                     &card,crtc,connector,original_encoder,expected_read_fb,
                     (W as u16,H as u16),
-                ,mode,original.position());
+                mode,original.position());
                 match owned {
                     Ok(true)=>Ok(()),
                     Ok(false) | Err(_) => {
@@ -522,7 +522,7 @@ pub fn qemu_wayland_gpu_scene_stream(
                 else {handles[(index-1) as usize%2]};
             let owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,previous_fb,(W as u16,H as u16),
-            ,mode,original.position()).map_err(|error| {
+            mode,original.position()).map_err(|error| {
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
@@ -548,7 +548,7 @@ pub fn qemu_wayland_gpu_scene_stream(
                     let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                         &card,crtc,connector,original_encoder,previous_fb,
                         (W as u16,H as u16),
-                    ,mode,original.position()).map_err(|error|{
+                    mode,original.position()).map_err(|error|{
                         event_router.revoke();
                         rollback.ownership_lost=true;
                         error
@@ -581,7 +581,7 @@ pub fn qemu_wayland_gpu_scene_stream(
             wait_for_scanout(&card,crtc,connector,framebuffer)?;
             let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,framebuffer,(W as u16,H as u16),
-            ,mode,original.position()).map_err(|error|{
+            mode,original.position()).map_err(|error|{
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
