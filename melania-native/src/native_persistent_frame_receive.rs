@@ -20,6 +20,52 @@ pub const MAX_PARTIAL_FRAME_TIME:Duration=Duration::from_secs(30);
 /// revalidate its live kernel CRTC even when no Wayland frame arrives.
 pub const IDLE_OWNERSHIP_POLL:Duration=Duration::from_millis(250);
 
+/// Finite Wayland scene socket reader: the entire header+pixel transfer
+/// must finish within one original absolute deadline. Unlike a blocking
+/// read_exact, poll the caller's real DRM CRTC ownership at most every 250ms
+/// even while waiting for QMP-injected input or fragmented client pixels.
+/// EINTR/EAGAIN are retryable only until the deadline. No frame ACK on EOF,
+/// timeout or lost ownership. The preexisting read timeout is restored.
+pub fn read_finite_exact_guarded(
+    stream:&mut UnixStream,
+    mut destination:&mut [u8],
+    deadline:Instant,
+    mut guard:impl FnMut()->io::Result<()>,
+)->io::Result<()> {
+    let original_timeout=stream.read_timeout()?;
+    let result=(||->io::Result<()> {
+        while !destination.is_empty() {
+            guard()?;
+            let remaining=deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::new(ErrorKind::TimedOut,
+                    "finite KMS frame exceeded its original absolute deadline"));
+            }
+            stream.set_read_timeout(Some(remaining.min(IDLE_OWNERSHIP_POLL)))?;
+            match stream.read(destination) {
+                Ok(0)=>return Err(Error::new(ErrorKind::UnexpectedEof,
+                    "finite KMS frame truncated before completion")),
+                Ok(count)=>{
+                    if Instant::now()>deadline {
+                        return Err(Error::new(ErrorKind::TimedOut,
+                            "finite KMS scene completed after its deadline"));
+                    }
+                    destination=&mut destination[count..];
+                },
+                Err(error) if error.kind()==ErrorKind::Interrupted=>continue,
+                Err(error) if matches!(error.kind(),ErrorKind::TimedOut|ErrorKind::WouldBlock)=>continue,
+                Err(error)=>return Err(error),
+            }
+        }
+        Ok(())
+    })();
+    let restored=stream.set_read_timeout(original_timeout);
+    match result {
+        Err(error)=>Err(error),
+        Ok(())=>restored,
+    }
+}
+
 pub struct PersistentFrameRead {
     deadline:Instant,
 }
@@ -372,4 +418,71 @@ mod tests {
         assert_eq!(error.kind(),ErrorKind::TimedOut);
         assert!(checks>=1);
     }
+    #[test]
+    fn finite_guarded_socket_revokes_stolen_drm_during_silent_peer() {
+        let (mut reader,_writer)=UnixStream::pair().unwrap();
+        reader.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut checks=0;
+        let error=read_finite_exact_guarded(
+            &mut reader,&mut [0u8;32],
+            Instant::now()+Duration::from_secs(2),||{
+                checks+=1;
+                if checks==3 {
+                    Err(Error::new(ErrorKind::PermissionDenied,"stolen DRM CRTC"))
+                } else {Ok(())}
+            }
+        ).unwrap_err();
+        assert_eq!(error.kind(),ErrorKind::PermissionDenied);
+        assert_eq!(checks,3);
+        assert_eq!(reader.read_timeout().unwrap(),Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn finite_fragmented_header_and_pixels_share_one_hard_deadline() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(&header()).unwrap();
+        writer.write_all(&[7u8;2]).unwrap();
+        let deadline=Instant::now()+Duration::from_millis(120);
+        let mut h=[0u8;32];
+        read_finite_exact_guarded(&mut reader,&mut h,deadline,||Ok(())).unwrap();
+        assert_eq!(h,header());
+        let error=read_finite_exact_guarded(
+            &mut reader,&mut [0u8;16],deadline,||Ok(())
+        ).unwrap_err();
+        assert_eq!(error.kind(),ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn finite_socket_complete_frame_restores_original_timeout() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        reader.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        let sender=thread::spawn(move||{
+            writer.write_all(&header()[..5]).unwrap();
+            thread::sleep(Duration::from_millis(5));
+            writer.write_all(&header()[5..]).unwrap();
+            writer.write_all(&[0x33u8;16]).unwrap();
+        });
+        let deadline=Instant::now()+Duration::from_secs(2);
+        let mut h=[0u8;32];
+        let mut pixels=[0u8;16];
+        read_finite_exact_guarded(&mut reader,&mut h,deadline,||Ok(())).unwrap();
+        read_finite_exact_guarded(&mut reader,&mut pixels,deadline,||Ok(())).unwrap();
+        assert_eq!(h,header());
+        assert_eq!(pixels,[0x33u8;16]);
+        assert_eq!(reader.read_timeout().unwrap(),Some(Duration::from_secs(4)));
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn finite_socket_partial_eof_is_always_error() {
+        let (mut reader,mut writer)=UnixStream::pair().unwrap();
+        writer.write_all(b"ML").unwrap();
+        drop(writer);
+        let error=read_finite_exact_guarded(
+            &mut reader,&mut [0u8;32],
+            Instant::now()+Duration::from_secs(1),||Ok(())
+        ).unwrap_err();
+        assert_eq!(error.kind(),ErrorKind::UnexpectedEof);
+    }
+
 }
