@@ -2420,6 +2420,9 @@ impl CompositorHandler for BridgeState {
                     }
                     let Some(renderer)=self.client_dmabuf_renderer.as_mut() else {
                         eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_RENDERER_MISSING=true");
+                        // A revoked/absent EGL renderer cannot retain a
+                        // previously imported client BO after wl_buffer.release.
+                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                         buffer.release();
                         return;
                     };
