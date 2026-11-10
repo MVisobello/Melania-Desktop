@@ -19,7 +19,7 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
             stream=presenter[presenter.index("let pending_read=if persistent {"):]
             self.assertIn("PersistentFrameRead::begin_with_idle_guard(",stream)
             self.assertIn("MAX_PARTIAL_FRAME_TIME",stream)
-            self.assertIn("verify_original_encoder_frame(",stream)
+            self.assertIn("verify_original_encoder_frame_at_baseline(",stream)
             self.assertIn("ownership_lost=true;",stream)
             self.assertIn("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;",stream)
             self.assertLess(stream.index("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;"),
