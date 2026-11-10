@@ -57,6 +57,7 @@ struct State {
     deletion_received: Option<(u32, u32)>,
     surrounding_received: Option<(String, u32, u32)>,
     text_done: u32,
+    payload_done: bool,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
     fn event(
@@ -188,6 +189,15 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for State {
             }
             zwp_text_input_v3::Event::Done { .. } => {
                 state.text_done = state.text_done.saturating_add(1);
+                // Wayland text-input-v3 events are double-buffered. Only an
+                // actual server Done AFTER all three payload events proves
+                // that this complete transaction was dispatched atomically.
+                if state.text_received.is_some()
+                    && state.preedit_received.is_some()
+                    && state.deletion_received.is_some()
+                    && state.text_entered && !state.unexpected_text_focus {
+                    state.payload_done = true;
+                }
             }
             _ => {}
         }
@@ -320,7 +330,7 @@ fn run_editor(mut queue: wayland_client::EventQueue<State>, mut state: State) ->
         s.text_received.is_some()
         && s.preedit_received.is_some()
         && s.deletion_received.is_some()
-        && s.text_done > 0)?;
+        && s.payload_done)?;
     if !state.text_entered || state.unexpected_text_focus {
         return Err("IME text delivered without active actual editor focus".into());
     }
@@ -337,6 +347,7 @@ fn run_editor(mut queue: wayland_client::EventQueue<State>, mut state: State) ->
     }
     println!("MELANIA_QEMU_REAL_EDITOR_IME_UTF8_ROUNDTRIP=true");
     println!("MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true");
+    println!("MELANIA_QEMU_REAL_EDITOR_IME_ATOMIC_DONE=true");
     std::io::stdout().flush()?;
     text.disable();
     text.commit();
