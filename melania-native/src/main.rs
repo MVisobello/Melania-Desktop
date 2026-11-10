@@ -424,6 +424,15 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
                             "Fresh libseat DRM FD failed GBM/EGL/DMA-BUF output {:?} ({}x{}): {error}",
                             probe.crtc,probe.width,probe.height
                         ))?;
+                        // A newly acquired DRM FD must also import a genuinely
+                        // exported DMA-BUF through EGL, not only allocate its
+                        // own GBM BOs. This runs again after actual VT resume.
+                        melania_native::renderer::smoke_import_exported_dmabuf(
+                            card.clone(),probe.width,probe.height
+                        ).map_err(|error|format!(
+                            "Fresh libseat DRM FD failed external DMA-BUF texture import on {:?} ({}x{}): {error}",
+                            probe.crtc,probe.width,probe.height
+                        ))?;
                     }
                     // Do not count allocations if an external modeset,
                     // hotplug or replaced original FB happened while the
@@ -568,6 +577,7 @@ fn experimental_vt_reacquire() -> Result<(),Box<dyn Error>> {
             println!("MELANIA_NATIVE_VT_READONLY_DRM_OPEN={} crtcs={crtcs}",opened);
             if render_gbm_each_acquire {
                 println!("MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT={opened} frames=2");
+                println!("MELANIA_NATIVE_VT_DUPLICATED_DMABUF_IMPORT_VERIFIED={opened} count={}",probes.len());
                 println!("MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT={opened} count={}",probes.len());
                 for probe in &probes {
                     println!("MELANIA_NATIVE_VT_REAL_OUTPUT_GBM crtc={:?} {}x{} frames=2",

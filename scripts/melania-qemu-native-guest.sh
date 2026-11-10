@@ -111,6 +111,8 @@ if ! grep -Eq '^MELANIA_NATIVE_VT_READONLY_DRM_OPEN=1 crtcs=[1-9][0-9]*$' "$read
    ! grep -Eq '^MELANIA_NATIVE_VT_DRM_FD_NODE_VERIFIED=2 rdev=[1-9][0-9]*$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=1 frames=2$' "$readonly_reopen_log" ||
    ! grep -q '^MELANIA_NATIVE_VT_GBM_EGL_DMA_BUF_REBUILT=2 frames=2$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_DUPLICATED_DMABUF_IMPORT_VERIFIED=1 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
+   ! grep -Eq '^MELANIA_NATIVE_VT_DUPLICATED_DMABUF_IMPORT_VERIFIED=2 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
    ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=1 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
    ! grep -Eq '^MELANIA_NATIVE_VT_REAL_OUTPUTS_REBUILT=2 count=[1-9][0-9]*$' "$readonly_reopen_log" ||
    [[ "$(grep -Ec '^MELANIA_NATIVE_VT_REAL_OUTPUT_GBM crtc=.+ [0-9]+x[0-9]+ frames=2$' "$readonly_reopen_log")" -lt 2 ]]; then
