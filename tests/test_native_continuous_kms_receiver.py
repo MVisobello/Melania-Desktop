@@ -23,13 +23,22 @@ class NativeContinuousReceiverSafety(unittest.TestCase):
         self.assertIn('/run/melania-native-qemu/continuous-frame-stream.sock', NEW)
 
     def test_versioned_ack_only_after_real_crtc_and_restore(self):
-        for expected in ('b"MLF1"', 'b"MLA1"', 'read_exact(&mut header)',
+        for expected in ('b"MLF1"', 'b"MLA1"', 'read_finite_exact_guarded(',
                          'wait_for_fb(&card,crtc_handle,framebuffer)?',
                          'stream.write_all(&ack)?',
                          'native_frame_order::FrameIdentity::new(',
                          '!identity.accepted_after(previous_identity,persistent)',
                          'rollback.restore()?', 'MELANIA_RUST_CONTINUOUS_FRAMES_PASS={total}'):
             self.assertIn(expected, NEW)
+        # Finite CPU header and pixels are real guarded UnixStream reads.
+        # The same original deadline and the kernel DRM ownership closure
+        # must apply to both halves, before any visible CRTC/Wayland ACK.
+        self.assertIn("&mut stream,&mut header,", NEW)
+        self.assertIn("&mut stream,&mut pixels,", NEW)
+        self.assertIn("finite_deadline.ok_or(", NEW)
+        self.assertIn("&mut verify_read_drm,", NEW)
+        self.assertLess(NEW.index("read_finite_exact_guarded("),
+                        NEW.index("wait_for_fb(&card,crtc_handle,framebuffer)?"))
         self.assertLess(NEW.index('wait_for_fb(&card,crtc_handle,framebuffer)?'),
                         NEW.index('stream.write_all(&ack)?'))
         self.assertLess(NEW.index('let restored=rollback.restore();'),
