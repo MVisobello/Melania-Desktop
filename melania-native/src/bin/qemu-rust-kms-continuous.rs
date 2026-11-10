@@ -434,6 +434,26 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if !persistent && have_previous_pixels && previous_pixels==pixels {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
             }
+            // Prove the exact distinctive GPU-drawn client color survived
+            // the other PROCESS' GBM/EGL texture import, GPU readback,
+            // Smithay scene composition, and the MLF1 transport. Sampling
+            // the physical display's intended client rectangle forbids a
+            // false all-background or synthetic frame passing as GPU input.
+            let dmabuf_kms=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+                .as_deref()==Ok("YES_QEMU_VM");
+            if dmabuf_kms && index==0 {
+                let center=((120+112)*W+(160+180))*4;
+                let [blue,green,red]=pixels[center..center+3]
+                    .try_into().map_err(|_|"GPU client KMS sample truncated")?;
+                if !(160..=211).contains(&blue) ||
+                   !(25..=76).contains(&green) ||
+                   !(60..=113).contains(&red) {
+                    return Err(format!(
+                        "GPU client pixel did not reach DRM framebuffer: B={blue} G={green} R={red}"
+                    ).into());
+                }
+                println!("MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true");
+            }
             // Verify the previously ACKed kernel scanout is STILL ours.
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
@@ -644,6 +664,11 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_ACKED={} generation={}",index+1,generation);
+            if dmabuf_kms && index==0 {
+                // This marker follows the actual CRTC/connector/vblank
+                // verification and MLA1 write, never the pre-KMS GPU import.
+                println!("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=1");
+            }
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("persistent DRM frame counter exhausted")?;
             // Recycle the owned frame storage ONLY after the real kernel
