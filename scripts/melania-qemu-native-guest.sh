@@ -2935,6 +2935,102 @@ report 'MELANIA_QEMU_EXTERNAL_CLIENT_GPU_DMA_BUF_TO_REAL_KMS_12_FRAMES_PASS=true
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 
+# P0 text-input-v3 + input-method-v2: TWO real client processes,
+# kernel PID-gated privileged Wayland global, UTF-8 commit to an XDG editor.
+# This is protocol acceptance only; NO KMS IME candidate popup is advertised.
+ime_probe=/mnt/melania-native/melania-ime-roundtrip
+[[ -x "$ime_probe" ]] || fatal 'real_separate_process_IME_probe_missing'
+ime_target=/run/melania-native-qemu/ime-socket-name
+rm -f "$ime_target"
+ime_server_log="$(mktemp -t melania-ime-server-XXXXXX)"
+ime_client_log="$(mktemp -t melania-ime-client-XXXXXX)"
+ime_editor_log="$(mktemp -t melania-ime-editor-XXXXXX)"
+ime_intruder_log="$(mktemp -t melania-ime-intruder-XXXXXX)"
+# The background process' actual kernel PID, not the PID of 'timeout',
+# must be used for the Wayland SO_PEERCRED access-control decision.
+MELANIA_QEMU_IME_ROUNDTRIP=YES_QEMU_VM \
+  "$ime_probe" ime "$ime_target" > "$ime_client_log" 2>&1 &
+ime_client_pid=$!
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_TEXT_INPUT_IME=YES_QEMU_VM \
+MELANIA_NATIVE_TRUSTED_IME_PID="$ime_client_pid" \
+  timeout --signal=TERM --kill-after=3s 38s \
+  "$binary" --experimental-wayland-seat < /dev/tty1 \
+  > "$ime_server_log" 2>&1 &
+ime_server_pid=$!
+ime_socket=''
+for attempt in $(seq 1 140); do
+  ime_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$ime_server_log" | head -n 1)"
+  [[ -n "$ime_socket" ]] && break
+  kill -0 "$ime_server_pid" 2>/dev/null || break
+  sleep .05
+done
+if [[ -z "$ime_socket" ]] ||
+   ! grep -Fqx 'MELANIA_NATIVE_QEMU_TEXT_INPUT_V3_AND_PID_GATED_IME_READY=true' "$ime_server_log"; then
+  cat "$ime_server_log" "$ime_client_log"
+  kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
+  fatal 'real_IME_manager_pair_or_kernel_PIDs_not_initialized'
+fi
+# The IME has already been forked; permit its OWN socket connection only
+# after the server has advertised its actual Wayland socket name.
+(umask 077; printf '%s\n' "$ime_socket" > "$ime_target")
+for attempt in $(seq 1 140); do
+  grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log" && break
+  kill -0 "$ime_client_pid" 2>/dev/null || break
+  sleep .05
+done
+if ! grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log"; then
+  cat "$ime_server_log" "$ime_client_log"
+  kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
+  fatal 'real_IME_kernel_PID_global_denied_to_trusted_process'
+fi
+# An unrelated PID must NOT even see the privileged manager global.
+if ! MELANIA_QEMU_IME_ROUNDTRIP=YES_QEMU_VM WAYLAND_DISPLAY="$ime_socket" \
+  timeout --signal=TERM --kill-after=2s 8s \
+  "$ime_probe" intruder > "$ime_intruder_log" 2>&1; then
+  cat "$ime_intruder_log" "$ime_server_log"
+  kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
+  fatal 'untrusted_client_gained_IM_protocol_global'
+fi
+grep -Fqx 'MELANIA_QEMU_UNTRUSTED_IME_GLOBAL_REJECTED=true' "$ime_intruder_log" ||
+  fatal 'untrusted_client_global_filter_not_verified'
+# This is a second actual Wayland connection. XDG wl_shm editor receives
+# the IME's UTF-8 commit via text-input-v3 and *only* after proper focus.
+if ! MELANIA_QEMU_IME_ROUNDTRIP=YES_QEMU_VM WAYLAND_DISPLAY="$ime_socket" \
+  timeout --signal=TERM --kill-after=2s 19s \
+  "$ime_probe" editor > "$ime_editor_log" 2>&1; then
+  cat "$ime_editor_log" "$ime_client_log" "$ime_server_log"
+  kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
+  fatal 'real_IME_editor_cross_process_utf8_failed'
+fi
+if ! wait "$ime_client_pid"; then
+  cat "$ime_client_log" "$ime_editor_log" "$ime_server_log"
+  kill "$ime_server_pid" 2>/dev/null || true
+  fatal 'real_IME_client_activated_but_no_true_text_input_commit'
+fi
+if ! wait "$ime_server_pid"; then
+  cat "$ime_server_log"
+  fatal 'real_IME_Rust_Smithay_seat_or_global_failed'
+fi
+for marker in \
+  'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' \
+  'MELANIA_QEMU_REAL_IME_ACTIVATED=true' \
+  'MELANIA_QEMU_REAL_IME_UTF8_COMMIT_SENT=true' \
+  'MELANIA_QEMU_REAL_IME_DEACTIVATED=true'; do
+  grep -Fqx "$marker" "$ime_client_log" || fatal "IME_real_client_missing_$marker"
+done
+for marker in \
+  'MELANIA_QEMU_REAL_TEXT_INPUT_ENTERED=true' \
+  'MELANIA_QEMU_REAL_EDITOR_NO_PRIVILEGED_IME_GLOBAL=true' \
+  'MELANIA_QEMU_REAL_EDITOR_IME_UTF8_ROUNDTRIP=true'; do
+  grep -Fqx "$marker" "$ime_editor_log" || fatal "IME_real_editor_missing_$marker"
+done
+grep -Fqx 'MELANIA_NATIVE_WAYLAND_RENDER_READY=false' "$ime_server_log" ||
+  fatal 'IME_protocol_only_server_must_not_claim_rendering'
+rm -f "$ime_target" "$ime_client_log" "$ime_editor_log" "$ime_intruder_log" "$ime_server_log"
+report 'MELANIA_QEMU_REAL_IM_V2_TO_TI_V3_UTF8_WIRE_ROUNDTRIP_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
 report 'MELANIA_NATIVE_SESSION_READY=false'
 report 'MELANIA_NATIVE_VISIBLE_SCANOUT=false'
 report 'MELANIA_NATIVE_KMS_ROLLBACK_TESTED=false'
