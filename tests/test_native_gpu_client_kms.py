@@ -23,7 +23,8 @@ class RealClientDmabufToKms(unittest.TestCase):
             "while !state.buffer_released ||",
             "(gpu_kms && state.frame_done_count!=1)",
             "MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true",
-            "for index in (if gpu_first {2} else {1})..=total",
+            "for index in 1..=total",
+            "if gpu_first && index==1 {continue;}",
             "MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1",
         ):
             self.assertIn(marker,CLIENT)
