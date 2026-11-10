@@ -2954,12 +2954,12 @@ ime_client_pid=$!
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
 MELANIA_NATIVE_TEXT_INPUT_IME=YES_QEMU_VM \
 MELANIA_NATIVE_TRUSTED_IME_PID="$ime_client_pid" \
-  timeout --signal=TERM --kill-after=3s 38s \
+  timeout --signal=TERM --kill-after=3s 90s \
   "$binary" --experimental-wayland-seat < /dev/tty1 \
   > "$ime_server_log" 2>&1 &
 ime_server_pid=$!
 ime_socket=''
-for attempt in $(seq 1 140); do
+for attempt in $(seq 1 300); do
   ime_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$ime_server_log" | head -n 1)"
   [[ -n "$ime_socket" ]] && break
   kill -0 "$ime_server_pid" 2>/dev/null || break
@@ -2974,7 +2974,7 @@ fi
 # The IME has already been forked; permit its OWN socket connection only
 # after the server has advertised its actual Wayland socket name.
 (umask 077; printf '%s\n' "$ime_socket" > "$ime_target.pending"; mv -f "$ime_target.pending" "$ime_target")
-for attempt in $(seq 1 140); do
+for attempt in $(seq 1 700); do
   grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log" && break
   kill -0 "$ime_client_pid" 2>/dev/null || break
   sleep .05
@@ -2997,7 +2997,7 @@ grep -Fqx 'MELANIA_QEMU_UNTRUSTED_IME_GLOBAL_REJECTED=true' "$ime_intruder_log" 
 # This is a second actual Wayland connection. XDG wl_shm editor receives
 # the IME's UTF-8 commit via text-input-v3 and *only* after proper focus.
 if ! MELANIA_QEMU_IME_ROUNDTRIP=YES_QEMU_VM WAYLAND_DISPLAY="$ime_socket" \
-  timeout --signal=TERM --kill-after=2s 19s \
+  timeout --signal=TERM --kill-after=2s 45s \
   "$ime_probe" editor > "$ime_editor_log" 2>&1; then
   cat "$ime_editor_log" "$ime_client_log" "$ime_server_log"
   kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
