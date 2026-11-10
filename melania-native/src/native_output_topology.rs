@@ -283,6 +283,52 @@ pub fn verify_restored_output_timings<M:PartialEq>(
     Ok(())
 }
 
+/// The bounded X/Y desktop canvas is independent of each CRTC's mode.
+/// Kernel CRTC positions are read from actual libseat-owned DRM descriptors;
+/// two distinct scanouts must not silently cover the same output rectangle.
+/// This is a fail-closed preflight until atomic multi-output scene routing
+/// supports mirroring, virtual coordinates and independent scale factors.
+pub const MAX_DESKTOP_SIDE:u32=32768;
+
+/// Refuse overlapping, missing, duplicated or out-of-bounds live CRTC
+/// rectangles. Touching boundaries are valid for side-by-side or stacked
+/// monitors. Mirroring two CRTCs at (0,0) is deliberately unsupported.
+/// This does NOT create atomic scanout owners or certify physical hotplug.
+pub fn validate_crtc_output_geometry<M>(
+    topology:&NativeOutputTopology,
+    timings:&[ActiveOutputTiming<M>],
+)->Result<(),String> {
+    validate_active_routes(&topology.active)?;
+    if timings.len()!=topology.active.len() {
+        return Err("DRM output geometry has missing or extra CRTC positions".into());
+    }
+    let mut rectangles:Vec<(u32,u32,u32,u32)>=Vec::with_capacity(topology.active.len());
+    for route in &topology.active {
+        let mut matches=timings.iter().filter(|timing|timing.crtc==route.crtc);
+        let position=matches.next()
+            .ok_or("DRM output geometry is missing a live CRTC position")?.position;
+        if matches.next().is_some() {
+            return Err("DRM output geometry has duplicate CRTC positions".into());
+        }
+        let (x,y)=position;
+        let right=x.checked_add(u32::from(route.width))
+            .ok_or("DRM output geometry X overflow")?;
+        let bottom=y.checked_add(u32::from(route.height))
+            .ok_or("DRM output geometry Y overflow")?;
+        if right>MAX_DESKTOP_SIDE || bottom>MAX_DESKTOP_SIDE {
+            return Err("DRM output geometry exceeds bounded desktop canvas".into());
+        }
+        for &(left,top,previous_right,previous_bottom) in &rectangles {
+            if x<previous_right && left<right &&
+               y<previous_bottom && top<bottom {
+                return Err("DRM active CRTCs overlap without explicit mirror support".into());
+            }
+        }
+        rectangles.push((x,y,right,bottom));
+    }
+    Ok(())
+}
+
 /// The completed GBM rebuild is NOT proof if a queued libseat/udev event or an
 /// external modeset changes scanout before the final VT acceptance marker.
 /// Unlike a comparison across two VT owners, FB_ID must remain the same
@@ -295,7 +341,9 @@ pub fn verify_unchanged_scanout_epoch<M:PartialEq>(
     after_timings:&[ActiveOutputTiming<M>],
 )->Result<(),String> {
     for (routes,timings) in [(before_routes,before_timings),(after_routes,after_timings)] {
-        validate_active_routes(&routes.active)?;
+        // The same real KMS/CRTC geometry must be safe both before and
+        // after event dispatch; preserve this gate through VT reacquisition.
+        validate_crtc_output_geometry(routes,timings)?;
         if routes.active.len()!=timings.len() {
             return Err("DRM scanout timing count no longer matches active outputs".into());
         }
@@ -329,6 +377,10 @@ pub fn inspect_stable_active_outputs_with_timings(
         mode:readback.mode,
         position:readback.position,
     }).collect();
+    // This scan uses actual DRM CRTC positions and modes, not assumed
+    // horizontal layouts. Refuse overlap/malformed monitors before ever
+    // offering the topology to any renderer or VT resume path.
+    validate_crtc_output_geometry(&after,&timings)?;
     Ok((after,timings))
 }
 
@@ -353,6 +405,61 @@ mod tests {
             width:w,height:hgt,
         }
     }
+    #[test]
+    fn physical_two_crtc_layout_accepts_touching_edges_and_vertical_stack() {
+        let a=route(11,21,31,1920,1080);
+        let b=route(12,22,32,2560,1440);
+        let t1=ActiveOutputTiming{crtc:a.crtc,mode:60_000u32,position:(0,0)};
+        let t2=ActiveOutputTiming{crtc:b.crtc,mode:60_000u32,position:(1920,0)};
+        let topology=NativeOutputTopology{active:vec![a,b]};
+        assert!(validate_crtc_output_geometry(&topology,&[t1,t2]).is_ok());
+        assert!(validate_crtc_output_geometry(&topology,&[t2,t1]).is_ok());
+        let vertical=ActiveOutputTiming{position:(0,1080),..t2};
+        assert!(validate_crtc_output_geometry(&topology,&[vertical,t1]).is_ok());
+        let exactly_one=NativeOutputTopology{active:vec![a]};
+        assert!(validate_crtc_output_geometry(&exactly_one,&[t1]).is_ok());
+    }
+
+    #[test]
+    fn physical_multi_crtc_preflight_refuses_overlap_and_unmodeled_mirror() {
+        let a=route(11,21,31,1920,1080);
+        let b=route(12,22,32,1280,720);
+        let topology=NativeOutputTopology{active:vec![a,b]};
+        let first=ActiveOutputTiming{crtc:a.crtc,mode:60_000u32,position:(0,0)};
+        let mirror=ActiveOutputTiming{crtc:b.crtc,mode:60_000u32,position:(0,0)};
+        let partial=ActiveOutputTiming{position:(1919,1079),..mirror};
+        assert!(validate_crtc_output_geometry(&topology,&[first,mirror]).is_err());
+        assert!(validate_crtc_output_geometry(&topology,&[first,partial]).is_err());
+        // Diagonal touching has no shared pixel and remains valid.
+        let touching=ActiveOutputTiming{position:(1920,1080),..mirror};
+        assert!(validate_crtc_output_geometry(&topology,&[first,touching]).is_ok());
+        assert!(verify_unchanged_scanout_epoch(
+            &topology,&[first,mirror],&topology,&[first,mirror]
+        ).is_err());
+    }
+
+    #[test]
+    fn physical_multi_crtc_preflight_rejects_missing_foreign_duplicate_and_overflow() {
+        let a=route(11,21,31,1920,1080);
+        let b=route(12,22,32,1280,720);
+        let topology=NativeOutputTopology{active:vec![a,b]};
+        let first=ActiveOutputTiming{crtc:a.crtc,mode:60_000u32,position:(0,0)};
+        let second=ActiveOutputTiming{crtc:b.crtc,mode:60_000u32,position:(1920,0)};
+        assert!(validate_crtc_output_geometry(&topology,&[first]).is_err());
+        assert!(validate_crtc_output_geometry(&topology,&[first,first]).is_err());
+        let foreign=ActiveOutputTiming{crtc:control::from_u32(99).unwrap(),..second};
+        assert!(validate_crtc_output_geometry(&topology,&[first,foreign]).is_err());
+        let beyond=ActiveOutputTiming{position:(MAX_DESKTOP_SIDE-1279,0),..second};
+        assert!(validate_crtc_output_geometry(&topology,&[first,beyond]).is_err());
+        let overflow=ActiveOutputTiming{position:(u32::MAX,0),..second};
+        assert!(validate_crtc_output_geometry(&topology,&[first,overflow]).is_err());
+        let y_overflow=ActiveOutputTiming{position:(1920,u32::MAX),..second};
+        assert!(validate_crtc_output_geometry(&topology,&[first,y_overflow]).is_err());
+        assert!(validate_crtc_output_geometry(
+            &NativeOutputTopology{active:vec![]},&[] as &[ActiveOutputTiming<u32>]
+        ).is_err());
+    }
+
     #[test]
     fn kernel_resource_inventory_rejects_hotplug_and_duplicate_ids() {
         assert!(same_resource_handles(&[3u32,1,2],&[2,3,1]));
