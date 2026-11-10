@@ -31,6 +31,7 @@ use smithay::{
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
     delegate_dmabuf,
     delegate_data_device, delegate_primary_selection,
+    delegate_text_input_manager, delegate_input_method_manager,
     input::{keyboard::FilterResult, pointer::{AxisFrame, ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
     reexports::{
@@ -53,6 +54,9 @@ use smithay::{
             primary_selection::{PrimarySelectionHandler,PrimarySelectionState,
                 set_primary_focus,clear_primary_selection}},
         output::{OutputHandler,OutputManagerState},
+        text_input::TextInputManagerState,
+        input_method::{InputMethodHandler,InputMethodManagerState,
+            PopupSurface as InputMethodPopupSurface},
         shell::{xdg::{XdgShellState,XdgShellHandler,ToplevelSurface,PopupSurface,PositionerState,XdgToplevelSurfaceData,XdgPopupSurfaceData,Configure},
                 wlr_layer::{WlrLayerShellState,WlrLayerShellHandler,
                            LayerSurface as WlrLayerSurface,Layer as WlrLayer,
@@ -3363,6 +3367,26 @@ impl DataDeviceHandler for BridgeState {
 impl PrimarySelectionHandler for BridgeState {
     fn primary_selection_state(&self)->&PrimarySelectionState {&self.primary_selection}
 }
+// Both IME and text input managers are wired to the real Wayland seat.
+ // Globals remain disabled unless the isolated QEMU-only switch is explicit.
+ // A PID-filtered IME cannot be claimed by an arbitrary connected client.
+impl InputMethodHandler for BridgeState {
+    fn new_popup(&mut self,_surface:InputMethodPopupSurface) {
+        // Popup rendering is NOT yet implemented. Never claim a native
+        // input-method candidate panel has been KMS-presented.
+        eprintln!("MELANIA_NATIVE_IME_POPUP_NOT_RENDERED=true");
+    }
+    fn dismiss_popup(&mut self,_surface:InputMethodPopupSurface) {}
+    fn popup_repositioned(&mut self,_surface:InputMethodPopupSurface) {}
+    fn parent_geometry(&self,_parent:&WlSurface)->Rectangle<i32,Logical> {
+        // The current guest supports one 360x224 editor window; do not
+        // advertise arbitrary physical monitor positions before real KMS
+        // popup composition/output geometry are supported.
+        Rectangle::from_size((360,224).into())
+    }
+}
+delegate_text_input_manager!(BridgeState);
+delegate_input_method_manager!(BridgeState);
 delegate_data_device!(BridgeState);
 delegate_primary_selection!(BridgeState);
 delegate_compositor!(BridgeState);
@@ -4301,6 +4325,39 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         qemu_start_super_down:None,delivered_buttons:0,delivered_motions:0,
         delivered_scroll_frames:0,
     };
+    // Enabling a text_input_v3 global without a real input-method endpoint
+    // would silently drop client commits. Pair both protocol globals and
+    // restrict the privileged IME bind to an explicitly trusted guest PID.
+    // No IME is exposed by default, and this alone is NOT keyboard/IME parity.
+    let ime_probe=std::env::var("MELANIA_NATIVE_TEXT_INPUT_IME")
+        .as_deref()==Ok("YES_QEMU_VM");
+    let trusted_ime_pid=if ime_probe {
+        if std::env::var("MELANIA_NATIVE_WAYLAND_EXPERIMENT")
+            .as_deref()!=Ok("YES_QEMU_VM") {
+            return Err("text input+IME probe may only run in disposable QEMU VM".into());
+        }
+        let pid=std::env::var("MELANIA_NATIVE_TRUSTED_IME_PID")
+            .ok().and_then(|text|text.parse::<u32>().ok())
+            .filter(|pid|*pid>1)
+            .ok_or("QEMU IME requires actual trusted client process PID")?;
+        Some(pid)
+    } else {None};
+    let _text_input_global=if trusted_ime_pid.is_some() {
+        Some(TextInputManagerState::new::<BridgeState>(&handle))
+    } else {None};
+    let _input_method_global=if let Some(pid)=trusted_ime_pid {
+        let identity_handle=handle.clone();
+        Some(InputMethodManagerState::new::<BridgeState,_>(&handle,
+            move|client|{
+                // Credentials originate from the kernel-owned Wayland
+                // transport socket; don't trust a client-provided app ID.
+                client.get_credentials(&identity_handle)
+                    .is_ok_and(|credentials|credentials.pid as u32==pid)
+            }))
+    } else {None};
+    if trusted_ime_pid.is_some() {
+        println!("MELANIA_NATIVE_QEMU_TEXT_INPUT_V3_AND_PID_GATED_IME_READY=true");
+    }
     // Never pretend an inactive libseat owns the first KMS presentation.
     state.native_presentation_guard.arm_initial(session.is_active())
         .map_err(|_|"isolated native bridge requires initially active libseat")?;
