@@ -28,7 +28,7 @@ class PersistentCpuKmsStaging(unittest.TestCase):
             stream.index("std::mem::swap(&mut pixels,&mut previous_pixels);"),
         )
         self.assertLess(
-            stream.index("verify_original_encoder_frame("),
+            stream.index("verify_original_encoder_frame_at_baseline("),
             stream.index("stream.write_all(&ack)?;"),
         )
 
