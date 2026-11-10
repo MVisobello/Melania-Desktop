@@ -78,6 +78,12 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(callback,release)
         self.assertLess(release,marker)
         self.assertIn("any(|(known,_)|known==&completed.resource)",ack)
+        self.assertIn("let required_gpu_client=self.continuous_frame_count==1",ack)
+        self.assertIn("if required_gpu_client && !is_gpu_client",ack)
+        self.assertLess(
+            ack.index("if required_gpu_client && !is_gpu_client"),
+            ack.index("complete_presented_frame(",drop)
+        )
 
     def test_kernel_checks_actual_gpu_color_and_fb_id_before_ack(self):
         for marker in (
