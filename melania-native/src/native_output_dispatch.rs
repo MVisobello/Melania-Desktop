@@ -117,12 +117,12 @@ impl NativeOutputDispatch {
     }
 
     /// Confirm a frame only while the original connector encoder remains
-    /// assigned to this CRTC, at the exact expected mode size and framebuffer.
+    /// assigned to this CRTC, at the acquired full DRM mode, CRTC origin and framebuffer.
     /// Checking only an encoder -> CRTC route is insufficient: another encoder
     /// may take ownership of the same CRTC between Wayland client commits.
     ///
     /// This calls real drm-rs CRTC/connector/encoder kernel ioctls through
-    /// verify_original_encoder_frame, as the CPU and GPU KMS presenters do.
+    /// verify_original_encoder_frame_at_baseline, as the CPU and GPU KMS presenters do.
     /// A mismatched original encoder, mode, CRTC position or FB_ID revokes
     /// the generation; no frame callback or wl_buffer release is authorized.
     ///
@@ -130,6 +130,9 @@ impl NativeOutputDispatch {
     /// not call after a VT pause or GPU hotplug. This is not an atomic kernel
     /// snapshot or proof of native login readiness.
     ///
+    /// A physical backend must supply the *saved acquisition baseline* for
+    /// mode and position, not read a new baseline from the potentially stolen
+    /// CRTC at ACK time. Equal width/height alone cannot prove ownership.
     /// Stale submissions are discarded without probing the kernel or
     /// cancelling another generation's current in-flight frame.
     pub fn verify_and_present(
@@ -140,6 +143,8 @@ impl NativeOutputDispatch {
         original_encoder: encoder::Handle,
         expected_fb: framebuffer::Handle,
         expected_size: (u16, u16),
+        expected_mode: drm::control::Mode,
+        expected_position: (u32, u32),
         submission: OutputSubmission,
         now_ms: u64,
     ) -> Result<bool, String> {
@@ -149,8 +154,9 @@ impl NativeOutputDispatch {
         }
         // A generic scanout check can accept an external encoder routed to
         // the same CRTC; require the exact original encoder before ACK.
-        let verified = crate::native_kms_scanout::verify_original_encoder_frame(
+        let verified = crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
             card, crtc, connector, original_encoder, expected_fb, expected_size,
+            expected_mode, expected_position,
         );
         match verified {
             Ok(kernel_presented) => Ok(self.presented(
