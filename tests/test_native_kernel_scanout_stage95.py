@@ -29,8 +29,11 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         # can drive the same CRTC. Preserve the current final-read checks.
         self.assertIn("original_encoder: encoder::Handle", block)
         self.assertIn("expected_size: (u16, u16)", block)
-        self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame(", block)
-        self.assertLess(block.index("verify_original_encoder_frame("),
+        self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(", block)
+        self.assertIn("expected_mode: drm::control::Mode", block)
+        self.assertIn("expected_position: (u32, u32)", block)
+        self.assertIn("expected_mode, expected_position,", block)
+        self.assertLess(block.index("verify_original_encoder_frame_at_baseline("),
                         block.index("self.presented("))
         original_route = PROBE[PROBE.index("pub fn verify_original_encoder_frame("):
                                PROBE.index("pub fn verify_rollback_route(")]
@@ -97,7 +100,7 @@ class NativeKernelScanoutVerifierStage95(unittest.TestCase):
         block = SOURCE[SOURCE.index("pub fn verify_and_present("):SOURCE.index("fn presented(")]
         self.assertIn("self.inflight != Some(submission)", block)
         self.assertLess(block.index("self.inflight != Some(submission)"),
-                        block.index("verify_original_encoder_frame("))
+                        block.index("verify_original_encoder_frame_at_baseline("))
         self.assertIn("return Ok(false);", block)
 
     def test_drm_read_errors_and_missing_route_fail_closed(self):
