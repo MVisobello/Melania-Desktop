@@ -307,7 +307,11 @@ fn main()->Result<(),Box<dyn Error>> {
     ) {
         return Err("GPU client scanout proof requires exact 12-frame QEMU DMA-BUF mode".into());
     }
-    for index in (if gpu_first {2} else {1})..=total {
+    for index in 1..=total {
+        // Preserve the historic 1..=total contract for every normal
+        // Wayland session. Only the isolated DMA-BUF test has already
+        // presented index 1 with a real kernel KMS ACK.
+        if gpu_first && index==1 {continue;}
         // Only the opt-in frame 25 repeats frame 24 exactly; all other
         // frames change the client's *real* owned wl_shm buffer.
         let color_index=if replay_same && index==25 {24} else {index};
