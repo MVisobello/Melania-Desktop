@@ -46,8 +46,8 @@ class PersistentKmsStage105(unittest.TestCase):
         self.assertIn("guard()?;",READER)
 
         self.assertIn("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;",RECEIVER)
-        self.assertIn("stream.read_exact(&mut header)?;",RECEIVER)
-        self.assertIn("stream.read_exact(&mut pixels)?;",RECEIVER)
+        self.assertIn("stream.read_exact(&mut header).map_err(",RECEIVER)
+        self.assertIn("stream.read_exact(&mut pixels).map_err(",RECEIVER)
         self.assertIn("Ok(0)=> {",READER)
         self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("read_exact_before_deadline_guarded(stream,&mut header[1..],&mut guard)?;",READER)
