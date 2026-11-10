@@ -2980,7 +2980,26 @@ for attempt in $(seq 1 700); do
   sleep .05
 done
 if ! grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log"; then
-  cat "$ime_server_log" "$ime_client_log"
+  # Preserve actual guest process diagnostics: a missing marker alone
+  # cannot distinguish an early exit, socket failure or bind denial.
+  report "MELANIA_QEMU_IME_DIAGNOSTIC_EXPECTED_PID=$ime_client_pid"
+  report "MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_PID=$ime_server_pid"
+  if kill -0 "$ime_client_pid" 2>/dev/null; then
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_ALIVE=true'
+  else
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_ALIVE=false'
+  fi
+  if kill -0 "$ime_server_pid" 2>/dev/null; then
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_ALIVE=true'
+  else
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_ALIVE=false'
+  fi
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_LOG_BEGIN=true'
+  cat "$ime_client_log"
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_LOG_END=true'
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_LOG_BEGIN=true'
+  cat "$ime_server_log"
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_LOG_END=true'
   kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
   fatal 'real_IME_kernel_PID_global_denied_to_trusted_process'
 fi
