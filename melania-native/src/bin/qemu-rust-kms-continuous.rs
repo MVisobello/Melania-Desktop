@@ -350,6 +350,17 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         loop {
             if total.is_some_and(|limit|frames_seen>=limit) {break;}
             let index=frames_seen;
+            // One absolute deadline covers BOTH finite header and pixel
+            // reads; neither transient EAGAIN nor trickled bytes reset it.
+            // The QMP pointer scenario retains its explicitly bounded 45s,
+            // while all other finite VM proofs retain 12s.
+            let finite_deadline=if persistent {None} else {
+                Some(Instant::now().checked_add(if qmp_pointer_input {
+                    Duration::from_secs(45)
+                } else {
+                    Duration::from_secs(12)
+                }).ok_or("finite KMS deadline overflow")?)
+            };
             let mut header=[0u8;32];
             // Keep checking this exact kernel CRTC, encoder and last ACKed
             // framebuffer during idle AND fragmented header/pixel reads.
@@ -385,8 +396,12 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 };
                 Some(read)
             } else {
-                stream.read_exact(&mut header).map_err(|error|format!(
-                    "finite CPU KMS frame {} header receive failed: {error}",index+1
+                melania_native::native_persistent_frame_receive::read_finite_exact_guarded(
+                    &mut stream,&mut header,
+                    finite_deadline.ok_or("finite KMS header deadline missing")?,
+                    &mut verify_read_drm,
+                ).map_err(|error|format!(
+                    "finite CPU KMS frame {} header/DRM receive failed: {error}",index+1
                 ))?;
                 None
             };
@@ -408,8 +423,12 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if let Some(read)=pending_read {
                 read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
             } else {
-                stream.read_exact(&mut pixels).map_err(|error|format!(
-                    "finite CPU KMS frame {} pixel receive failed: {error}",index+1
+                melania_native::native_persistent_frame_receive::read_finite_exact_guarded(
+                    &mut stream,&mut pixels,
+                    finite_deadline.ok_or("finite KMS pixels deadline missing")?,
+                    &mut verify_read_drm,
+                ).map_err(|error|format!(
+                    "finite CPU KMS frame {} pixel/DRM receive failed: {error}",index+1
                 ))?;
             }
             if !persistent && have_previous_pixels && previous_pixels==pixels {
