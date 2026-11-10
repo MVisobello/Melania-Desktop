@@ -37,7 +37,7 @@ class DynamicPointerObserverBudget(unittest.TestCase):
             'qmp-dynamic-pointer-input.log',
             'qmp-dynamic-pointer-frame13.log',
             'MELANIA_QEMU_DYNAMIC_LIBINPUT_DRAG_FRAME13=true',
-            'MELANIA_QEMU_DYNAMIC_POINTER_FRAME13_CRTC_PIXELS=true',
+            'MELANIA_QEMU_DYNAMIC_POINTER_FRAME13_PIXELS=true',
             'dynamic-pointer-frame13.ppm',
         ):
             self.assertIn(marker,HOST)
