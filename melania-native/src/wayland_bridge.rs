@@ -590,6 +590,7 @@ impl BridgeState {
         // Each surface is independently eligible for a callback. Newer
         // commits of A must not starve an already presented B.
         for completed in self.continuous_client_ledger.acknowledged(clients) {
+            let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
             let is_live=(1..=MAX_PENDING_CLIENTS as u64)
                 .any(|slot|self.known_window_surfaces.get(slot)==Some(&completed.key));
             if completed.notify_frame && is_live {
@@ -598,7 +599,16 @@ impl BridgeState {
                 );
                 self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
             }
+            // Never drop the GPU texture or release a client DMA-BUF until
+            // the real kernel CRTC/vblank receipt and the exact epoch ticket
+            // have passed every existing check above.
             completed.resource.release();
+            if is_gpu_client {
+                self.client_dmabuf_imports.retain(|(known,_)|
+                    known!=&completed.resource);
+                println!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",
+                         self.continuous_frame_count);
+            }
         }
         println!("MELANIA_NATIVE_CONTINUOUS_KMS_ACK={} generation={}",
                  self.continuous_frame_count,planned.generation);
@@ -2365,12 +2375,53 @@ impl CompositorHandler for BridgeState {
                 // This QEMU path still composites wl_shm on the CPU. A
                 // successful EGL DMA-BUF *creation* is not yet a kernel
                 // presentation: refuse it without a fake frame receipt.
-                if smithay::wayland::dmabuf::get_dmabuf(&buffer).is_ok() {
+                let dma_buffer=smithay::wayland::dmabuf::get_dmabuf(&buffer).is_ok();
+                let gpu_client_kms=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+                    .as_deref()==Ok("YES_QEMU_VM");
+                if dma_buffer && !gpu_client_kms {
                     self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                     eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_NOT_PRESENTED=true");
                     buffer.release();
                     return;
                 }
+                // Opt-in QEMU transitional path: a real imported client GPU
+                // texture is read back into *owned* pixels. The existing
+                // scene and DRM worker will present it with a real FB_ID ACK,
+                // not an invented Wayland presentation.
+                let client_gpu_snapshot=if dma_buffer && gpu_client_kms {
+                    if self.dynamic_window_mode || self.multi_window_mode ||
+                       self.continuous_frame_count!=0 ||
+                       self.client_dmabuf_imports.len()!=1 {
+                        eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_SCENE_REFUSED=true");
+                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                        buffer.release();
+                        return;
+                    }
+                    let Some(renderer)=self.client_dmabuf_renderer.as_mut() else {
+                        eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_RENDERER_MISSING=true");
+                        buffer.release();
+                        return;
+                    };
+                    let Some((_,texture))=self.client_dmabuf_imports.iter()
+                        .find(|(known,_)|known==&buffer) else {
+                        eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_TEXTURE_MISSING=true");
+                        buffer.release();
+                        return;
+                    };
+                    match melania_native::native_client_dmabuf::
+                        readback_qemu_client_bgra(renderer,texture) {
+                        Ok(pixels)=>{
+                            println!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=360x224");
+                            Some(pixels)
+                        },
+                        Err(error)=>{
+                            eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_READBACK_FAILED={error}");
+                            self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                            buffer.release();
+                            return;
+                        }
+                    }
+                } else {None};
                 let mut tab_resize_deferred=false;
                 // The importer owns the snapshot before the Smithay pool
                 // access callback returns. Fixed QEMU uses its original
@@ -2551,14 +2602,19 @@ impl CompositorHandler for BridgeState {
                         println!("MELANIA_NATIVE_XDG_POPUP_CLIENT_BUFFER_ACCEPTED={}x{}",width,height);
                     }
                 } else {
-                    let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
-                        native_client_frame::copy_client_shm(ptr,len,metadata)
-                    });
-                    let pixels=match imported {
-                        Ok(Ok(pixels))=>pixels,
-                        _=>{
-                            eprintln!("continuous QEMU client submitted invalid wl_shm");
-                            return;
+                    let pixels=if let Some(pixels)=client_gpu_snapshot {
+                        pixels
+                    } else {
+                        let imported=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                            native_client_frame::copy_client_shm(ptr,len,metadata)
+                        });
+                        match imported {
+                            Ok(Ok(pixels))=>pixels,
+                            _=>{
+                                eprintln!("continuous QEMU client submitted invalid wl_shm");
+                                buffer.release();
+                                return;
+                            }
                         }
                     };
                     let key=match self.known_window_surfaces.register(surface.clone()) {
@@ -4481,6 +4537,17 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         !state.live_stream || state.async_kms_mode
     ) {
         return Err("QEMU client DMA-BUF protocol requires the integrated continuous KMS bridge".into());
+    }
+    let gpu_client_kms=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if gpu_client_kms && (
+        !client_dmabuf_probe || !integrated_kms ||
+        state.dynamic_window_mode || state.multi_window_mode ||
+        state.continuous_frame_target!=12 || state.layer_pixels_mode ||
+        state.gtk_layer_mode || persistent_kms ||
+        !state.frame_callbacks_probe
+    ) {
+        return Err("QEMU client DMA-BUF KMS requires the exact single-output 12-frame isolated experiment".into());
     }
     if persistent_kms && (
         !integrated_kms || state.continuous_reopen_mode ||
