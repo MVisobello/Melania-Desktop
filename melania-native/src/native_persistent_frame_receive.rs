@@ -28,13 +28,14 @@ pub const IDLE_OWNERSHIP_POLL:Duration=Duration::from_millis(250);
 /// timeout or lost ownership. The preexisting read timeout is restored.
 pub fn read_finite_exact_guarded(
     stream:&mut UnixStream,
-    mut destination:&mut [u8],
+    destination:&mut [u8],
     deadline:Instant,
     mut guard:impl FnMut()->io::Result<()>,
 )->io::Result<()> {
     let original_timeout=stream.read_timeout()?;
     let result=(||->io::Result<()> {
-        while !destination.is_empty() {
+        let mut offset=0usize;
+        while offset<destination.len() {
             guard()?;
             let remaining=deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -42,7 +43,7 @@ pub fn read_finite_exact_guarded(
                     "finite KMS frame exceeded its original absolute deadline"));
             }
             stream.set_read_timeout(Some(remaining.min(IDLE_OWNERSHIP_POLL)))?;
-            match stream.read(destination) {
+            match stream.read(&mut destination[offset..]) {
                 Ok(0)=>return Err(Error::new(ErrorKind::UnexpectedEof,
                     "finite KMS frame truncated before completion")),
                 Ok(count)=>{
@@ -50,7 +51,7 @@ pub fn read_finite_exact_guarded(
                         return Err(Error::new(ErrorKind::TimedOut,
                             "finite KMS scene completed after its deadline"));
                     }
-                    destination=&mut destination[count..];
+                    offset+=count;
                 },
                 Err(error) if error.kind()==ErrorKind::Interrupted=>continue,
                 Err(error) if matches!(error.kind(),ErrorKind::TimedOut|ErrorKind::WouldBlock)=>continue,
