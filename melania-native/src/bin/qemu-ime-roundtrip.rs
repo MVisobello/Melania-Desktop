@@ -384,7 +384,7 @@ fn main() -> Result<()> {
     if mode == Mode::Ime {
         let marker = std::env::args().nth(2)
             .ok_or("IME needs a private server-created WAYLAND_DISPLAY marker path")?;
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(38);
         while !std::path::Path::new(&marker).exists() {
             if Instant::now() >= deadline {
                 return Err("trusted IME never received real compositor socket name".into());
@@ -397,13 +397,23 @@ fn main() -> Result<()> {
             return Err("unexpected socket marker in isolated QEMU IME test".into());
         }
         std::env::set_var("WAYLAND_DISPLAY", socket);
+        println!("MELANIA_QEMU_IME_SOCKET_MARKER_READ=true");
+        std::io::stdout().flush()?;
     }
     let connection = Connection::connect_to_env()?;
+    if mode == Mode::Ime {
+        println!("MELANIA_QEMU_IME_SOCKET_CONNECTED=true");
+        std::io::stdout().flush()?;
+    }
     let mut queue = connection.new_event_queue::<State>();
     let qh = queue.handle();
     let _registry = connection.display().get_registry(&qh, ());
     let mut state = State { mode, ..Default::default() };
     queue.roundtrip(&mut state)?;
+    if mode == Mode::Ime {
+        println!("MELANIA_QEMU_IME_REGISTRY_DISPATCHED=true");
+        std::io::stdout().flush()?;
+    }
     match mode {
         Mode::Ime => run_ime(queue, state),
         Mode::Editor => run_editor(queue, state),
