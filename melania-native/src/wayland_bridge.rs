@@ -2164,8 +2164,53 @@ impl BridgeState {
     }
 }
 
+/// Destroy all GPU client textures BEFORE libseat closes its owned DRM FD.
+/// No old EGL import may outlive VT pause or GPU hotplug, even if a Wayland
+/// client never explicitly destroys its protocol buffer.
+fn revoke_client_dmabuf_gpu(state:&mut BridgeState) {
+    state.client_dmabuf_imports.clear();
+    state.client_dmabuf_renderer.take();
+}
+
 impl BufferHandler for BridgeState {
-    fn buffer_destroyed(&mut self,_:&wl_buffer::WlBuffer) {}
+    fn buffer_destroyed(&mut self,buffer:&wl_buffer::WlBuffer) {
+        self.client_dmabuf_imports.retain(|(known,_)|known!=buffer);
+    }
+}
+impl DmabufHandler for BridgeState {
+    fn dmabuf_state(&mut self)->&mut DmabufState {&mut self.dmabuf}
+
+    fn dmabuf_imported(
+        &mut self,_global:&DmabufGlobal,dmabuf:Dmabuf,notifier:ImportNotifier
+    ) {
+        // A client requesting a wl_buffer is NOT permission to render or
+        // release it. Only the real live EGL device of this libseat epoch
+        // can import a texture. No source-buffer/KMS frame callback here.
+        if !self.lifecycle.seat_active() ||
+           self.native_presentation_guard.ticket(true).is_none() ||
+           self.client_dmabuf_imports.len()>=melania_native::native_client_dmabuf::MAX_CLIENT_IMPORTS {
+            notifier.failed();
+            return;
+        }
+        let Some(renderer)=self.client_dmabuf_renderer.as_mut() else {
+            notifier.failed();
+            return;
+        };
+        match melania_native::native_client_dmabuf::import_client_dmabuf(renderer,&dmabuf) {
+            Ok(texture)=>{
+                // Only acknowledge buffer CREATION after an actual GLES
+                // import. This does NOT imply scanout, frame or release.
+                if let Ok(buffer)=notifier.successful::<BridgeState>() {
+                    self.client_dmabuf_imports.push((buffer,texture));
+                    println!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true");
+                }
+            }
+            Err(error)=>{
+                eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED={error}");
+                notifier.failed();
+            }
+        }
+    }
 }
 impl CompositorHandler for BridgeState {
     fn compositor_state(&mut self)->&mut CompositorState {&mut self.compositor}
@@ -3260,6 +3305,7 @@ delegate_seat!(BridgeState);
 delegate_xdg_shell!(BridgeState);
 delegate_layer_shell!(BridgeState);
 delegate_shm!(BridgeState);
+delegate_dmabuf!(BridgeState);
 delegate_output!(BridgeState);
 
 fn register(state:&mut BridgeState,device:libinput::Device) {
