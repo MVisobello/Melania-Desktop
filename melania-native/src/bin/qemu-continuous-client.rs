@@ -1,10 +1,26 @@
 //! Stage 46: real Wayland wl_shm updates beyond the old sixth frame.
 //! VM-only scenario; every buffer release and callback requires a KMS ACK.
-use std::{error::Error,fs::OpenOptions,io::Write,os::fd::AsFd,thread,time::{Duration,Instant}};
+use std::{error::Error,fs::OpenOptions,io::Write,os::fd::{AsFd,OwnedFd},thread,time::{Duration,Instant}};
 use melania_native::native_frame_budget::frame_budget;
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
     protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
+};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{
+    zwp_linux_dmabuf_v1,zwp_linux_buffer_params_v1,
+};
+use smithay::{
+    backend::{
+        allocator::{
+            gbm::{GbmDevice,GbmAllocator,GbmBufferFlags},
+            dmabuf::DmabufAllocator,
+            Allocator,Fourcc,Modifier,
+        },
+        drm::DrmDeviceFd,
+        egl::{EGLContext,EGLDisplay},
+        renderer::{gles::GlesRenderer,Bind,Color32F,Frame,Renderer},
+    },
+    utils::{DeviceFd,Rectangle,Transform},
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_wm_base,xdg_surface,xdg_toplevel,
@@ -18,6 +34,8 @@ struct Client {
     compositor:Option<wl_compositor::WlCompositor>,
     wm:Option<xdg_wm_base::XdgWmBase>,
     shm:Option<wl_shm::WlShm>,
+    dmabuf:Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    dmabuf_formats:Vec<(u32,u64)>,
     output:Option<wl_output::WlOutput>,
     output_mode_received:bool,
     xdg_acked:bool,
@@ -34,10 +52,34 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "xdg_wm_base"=>state.wm=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_shm"=>state.shm=Some(registry.bind(name,version.min(1),qh,())),
                 "wl_output"=>state.output=Some(registry.bind(name,version.min(3),qh,())),
+                "zwp_linux_dmabuf_v1" if
+                    std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
+                        .as_deref()==Ok("YES_QEMU_VM") =>
+                    state.dmabuf=Some(registry.bind(name,version.min(3),qh,())),
                 _=>{}
             }
         }
     }
+}
+impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,()> for Client {
+    fn event(state:&mut Self,_:&zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+             event:zwp_linux_dmabuf_v1::Event,_:&(),_:&Connection,
+             _:&QueueHandle<Self>) {
+        match event {
+            zwp_linux_dmabuf_v1::Event::Modifier{format,modifier_hi,modifier_lo}=>{
+                state.dmabuf_formats.push((
+                    format,(u64::from(modifier_hi)<<32)|u64::from(modifier_lo),
+                ));
+            },
+            zwp_linux_dmabuf_v1::Event::Format{..}=>{},
+            _=>{},
+        }
+    }
+}
+impl Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,()> for Client {
+    fn event(_:&mut Self,_:&zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,
+             _:zwp_linux_buffer_params_v1::Event,_:&(),_:&Connection,
+             _:&QueueHandle<Self>){}
 }
 impl Dispatch<xdg_wm_base::XdgWmBase,()> for Client {
     fn event(_: &mut Self,wm:&xdg_wm_base::XdgWmBase,
@@ -101,6 +143,93 @@ impl Dispatch<wl_buffer::WlBuffer,()> for Client {
     }
 }
 
+/// A *different Wayland process* allocates and draws real GBM GPU pixels,
+/// sends its live kernel DMA-BUF plane FDs over zwp_linux_dmabuf_v1, then
+/// attaches the buffer to a role-less wl_surface. The Smithay compositor
+/// must import it via EGL, reject it for KMS presentation (still unimplemented),
+/// and send wl_buffer.release WITHOUT producing any wl_surface.frame ACK.
+/// This avoids claiming native DMA-BUF scanout before it exists.
+fn exercise_real_client_dmabuf(
+    state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
+    qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
+)->Result<(),Box<dyn Error>> {
+    let dmabuf=state.dmabuf.take()
+        .ok_or("QEMU Smithay server did not advertise zwp_linux_dmabuf_v1")?;
+    let modifier:u64=Modifier::Linear.into();
+    let format=Fourcc::Argb8888;
+    if !state.dmabuf_formats.contains(&(format as u32,modifier)) {
+        return Err("QEMU Wayland compositor did not advertise ARGB8888+LINEAR".into());
+    }
+
+    // The client, NOT Melania's KMS presenter, opens its own GPU FD.
+    // VirtIO render node is preferred; card0 may be used on tiny QEMU guests
+    // that do not expose a separate render node.
+    let file=OpenOptions::new().read(true).write(true)
+        .open("/dev/dri/renderD128").or_else(|_|{
+            OpenOptions::new().read(true).write(true).open("/dev/dri/card0")
+        })?;
+    let gbm=GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file))))?;
+    let mut allocator=DmabufAllocator(GbmAllocator::new(
+        gbm.clone(),GbmBufferFlags::RENDERING,
+    ));
+    let mut image=allocator.create_buffer(
+        W as u32,H as u32,format,&[Modifier::Linear],
+    )?;
+    // Supply real nontrivial content and wait on the GPU before giving the
+    // cross-process FD to the compositor. This is not a synthetic wl_shm pool.
+    let display=unsafe {EGLDisplay::new(gbm)}?;
+    let context=EGLContext::new(&display)?;
+    let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    {
+        let mut target=renderer.bind(&mut image)?;
+        let mut frame=renderer.render(
+            &mut target,(W as i32,H as i32).into(),Transform::Normal
+        )?;
+        frame.clear(
+            Color32F::new(0.33,0.18,0.73,1.0),
+            &[Rectangle::from_size((W as i32,H as i32).into())],
+        )?;
+        frame.finish()?.wait()?;
+    }
+
+    let params=dmabuf.create_params(qh,());
+    let mut plane_count=0usize;
+    for ((fd,offset),stride) in image.handles().zip(image.offsets()).zip(image.strides()) {
+        params.add(fd,plane_count as u32,offset,stride,
+                   (modifier>>32) as u32,modifier as u32);
+        plane_count+=1;
+    }
+    if plane_count!=1 {
+        return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
+    }
+    let imported=params.create_immed(
+        W as i32,H as i32,format as u32,
+        zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
+    );
+    let probe=compositor.create_surface(qh,());
+    state.buffer_released=false;
+    probe.attach(Some(&imported),0,0);
+    probe.damage_buffer(0,0,W as i32,H as i32);
+    probe.commit();
+    let deadline=Instant::now()+Duration::from_secs(10);
+    while !state.buffer_released {
+        queue.roundtrip(state)?;
+        if Instant::now()>=deadline {
+            return Err("real client DMA-BUF was not released by unpresented compositor".into());
+        }
+    }
+    if state.frame_done_count!=0 {
+        return Err("client DMA-BUF received a fabricated KMS frame callback".into());
+    }
+    println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
+    std::io::stdout().flush()?;
+    imported.destroy();
+    probe.destroy();
+    params.destroy();
+    dmabuf.destroy();
+    Ok(())
+}
+
 fn main()->Result<(),Box<dyn Error>> {
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT").as_deref()!=Ok("YES_QEMU_VM") {
         return Err("QEMU continuous Wayland client opt-in required".into());
@@ -128,6 +257,10 @@ fn main()->Result<(),Box<dyn Error>> {
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("continuous client xdg configure missing".into());}
+    if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
+        .as_deref()==Ok("YES_QEMU_VM") {
+        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor)?;
+    }
     let total=frame_budget(
         std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES").ok().as_deref(),12
     )? as u32;
