@@ -235,8 +235,17 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_DISPOSABLE_QEMU") &&
         std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
+    // The finite dynamic-pointer QMP scenario deliberately pauses after
+    // frame 12 while the host captures the CRTC and injects real USB input.
+    // That external input is not a stalled compositor: keep a bounded 45s
+    // receive deadline only for this explicitly opted-in disposable VM case.
+    // Other finite probes retain the original 12s fail-closed timeout.
+    let qmp_pointer_input=std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC_POINTER")
+        .as_deref()==Ok("YES_QEMU_VM") && !idle_persistent;
     stream.set_read_timeout(if idle_persistent {
         None
+    } else if qmp_pointer_input {
+        Some(Duration::from_secs(45))
     } else {
         Some(Duration::from_secs(12))
     })?;
@@ -376,7 +385,9 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 };
                 Some(read)
             } else {
-                stream.read_exact(&mut header)?;
+                stream.read_exact(&mut header).map_err(|error|format!(
+                    "finite CPU KMS frame {} header receive failed: {error}",index+1
+                ))?;
                 None
             };
             if &header[..4]!=b"MLF1" {
@@ -397,7 +408,9 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if let Some(read)=pending_read {
                 read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
             } else {
-                stream.read_exact(&mut pixels)?;
+                stream.read_exact(&mut pixels).map_err(|error|format!(
+                    "finite CPU KMS frame {} pixel receive failed: {error}",index+1
+                ))?;
             }
             if !persistent && have_previous_pixels && previous_pixels==pixels {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
