@@ -21,10 +21,15 @@ use smithay::{
         input::{InputEvent, ButtonState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
                 AbsolutePositionEvent, PointerAxisEvent, Axis, AxisSource, Event, KeyState},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
+        allocator::{gbm::GbmDevice,dmabuf::Dmabuf},
+        drm::DrmDeviceFd,
+        egl::{EGLContext,EGLDisplay},
+        renderer::gles::{GlesRenderer,GlesTexture},
         session::{libseat::LibSeatSession, Session, Event as SessionEvent},
         udev::{UdevBackend,UdevEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
+    delegate_dmabuf,
     delegate_data_device, delegate_primary_selection,
     input::{keyboard::FilterResult, pointer::{AxisFrame, ButtonEvent, CursorImageStatus,
            MotionEvent}, Seat, SeatHandler, SeatState},
@@ -36,10 +41,11 @@ use smithay::{
             Client, Display, DisplayHandle, Resource, ListeningSocket,
         },
     },
-    utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
+    utils::{DeviceFd,Logical, Point, Serial, Transform, SERIAL_COUNTER},
     output::{Mode, Output, PhysicalProperties, Subpixel},
     wayland::{
         buffer::BufferHandler,
+        dmabuf::{DmabufState,DmabufGlobal,DmabufHandler,ImportNotifier},
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
@@ -112,6 +118,13 @@ impl ClientData for BridgeClientState {
 struct BridgeState {
     compositor: CompositorState,
     shm:ShmState,
+    // No linux-dmabuf global exists unless the isolated QEMU bridge has
+    // independently acquired a real, active libseat-owned GBM/EGL renderer.
+    dmabuf:DmabufState,
+    client_dmabuf_renderer:Option<GlesRenderer>,
+    // Hold wl_buffer + imported texture together until client destruction
+    // or *permanent* seat revocation; never leave EGL image FDs after close.
+    client_dmabuf_imports:Vec<(wl_buffer::WlBuffer,GlesTexture)>,
     // GTK4's GDK Wayland backend requires wl_data_device_manager even
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
@@ -4000,6 +4013,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let mut state=BridgeState{
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
+        dmabuf:DmabufState::new(),
+        client_dmabuf_renderer:None,
+        client_dmabuf_imports:Vec::new(),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
         primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
