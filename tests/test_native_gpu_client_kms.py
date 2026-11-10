@@ -12,6 +12,8 @@ GPU=(ROOT/"melania-native/src/native_client_dmabuf.rs").read_text()
 CLIENT=(ROOT/"melania-native/src/bin/qemu-continuous-client.rs").read_text()
 DRM=(ROOT/"melania-native/src/bin/qemu-rust-kms-continuous.rs").read_text()
 GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
+HOST=(ROOT/"scripts/run-qemu-melania-native.sh").read_text()
+CI=(ROOT/".github/workflows/qemu-melania-native.yml").read_text()
 
 class RealClientDmabufToKms(unittest.TestCase):
     def test_client_produces_gpu_image_and_waits_for_real_kms(self):
@@ -93,6 +95,19 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
         self.assertEqual(GUEST.count("# ONE-PROCESS native integration proof:"),1)
         self.assertEqual(GUEST.count("# Stage48:"),1)
+        # Authenticate the historical QMP-driven windows *first*.
+        # Moving this extra DRM test ahead of those observers can silently
+        # exhaust their deadlines before the real tablet press arrives.
+        self.assertGreater(
+            GUEST.index("# P0: NEW independent QEMU DRM session."),
+            GUEST.index("report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'"),
+        )
+        # Allow the separate GPU session a bounded time budget, while keeping
+        # the original QMP observer assertions and screenshot requirements.
+        self.assertIn("timeout --signal=TERM --kill-after=10s 2050s",HOST)
+        self.assertIn("timeout-minutes: 50",CI)
+        self.assertIn("qmp-authenticated-resize.log",HOST)
+        self.assertIn("authenticated-resize-frame2.ppm",HOST)
 
 
 if __name__=="__main__":
