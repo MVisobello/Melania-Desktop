@@ -2973,7 +2973,7 @@ if [[ -z "$ime_socket" ]] ||
 fi
 # The IME has already been forked; permit its OWN socket connection only
 # after the server has advertised its actual Wayland socket name.
-(umask 077; printf '%s\n' "$ime_socket" > "$ime_target")
+(umask 077; printf '%s\n' "$ime_socket" > "$ime_target.pending"; mv -f "$ime_target.pending" "$ime_target")
 for attempt in $(seq 1 140); do
   grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log" && break
   kill -0 "$ime_client_pid" 2>/dev/null || break
