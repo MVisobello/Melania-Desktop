@@ -191,7 +191,9 @@ jobs:
   native-kms:
     name: Rust melania-native KMS TEST_ONLY in isolated VirtIO GPU guest
     runs-on: ubuntu-24.04
-    timeout-minutes: 38
+    # Compiler+isolated guest now runs an extra GPU-client KMS session after
+    # all historical QMP checks; protect the full run against CI truncation.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
