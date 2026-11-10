@@ -24,7 +24,7 @@ class ReusableGpuNativeStage108(unittest.TestCase):
         # header/payload I/O now requires a bounded absolute deadline.
         self.assertIn("PersistentFrameRead::begin_with_idle_guard(",RECEIVER)
         self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
-        self.assertIn("verify_original_encoder_frame(",RECEIVER)
+        self.assertIn("verify_original_encoder_frame_at_baseline(",RECEIVER)
         # The real CPU and GBM receivers now poll kernel scanout ownership
         # during unlimited idle; this is not an artificial timeout.
         self.assertIn("IDLE_OWNERSHIP_POLL",READER)
