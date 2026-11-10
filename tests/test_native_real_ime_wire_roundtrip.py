@@ -64,12 +64,15 @@ class RealImeWireRoundtrip(unittest.TestCase):
             'zwp_text_input_v3::Event::DeleteSurroundingText',
             'state.preedit_received.as_ref()',
             'state.deletion_received != Some((5,0))',
+            's.payload_done',
             'MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true',
+            'MELANIA_QEMU_REAL_EDITOR_IME_ATOMIC_DONE=true',
         ):
             self.assertIn(marker,RUST)
         for marker in (
             'MELANIA_QEMU_REAL_IME_SURROUNDING_TEXT_RECEIVED=true',
             'MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true',
+            'MELANIA_QEMU_REAL_EDITOR_IME_ATOMIC_DONE=true',
             'MELANIA_QEMU_REAL_IME_PREEDIT_AND_DELETE_WIRE_PASS=true',
         ):
             self.assertIn(marker,GUEST)
