@@ -85,6 +85,59 @@ pub fn import_client_dmabuf(
         .map_err(|error|format!("client DMA-BUF GLES texture import failed: {error}"))
 }
 
+/// QEMU-only transitional compositor path: import happened on the
+/// libseat-owned EGL renderer, then download the GLES texture into one
+/// *owned* bounded BGRA image for the existing verified Rust DRM worker.
+/// This is a GPU -> CPU readback, NOT a zero-copy GPU composition engine.
+/// The snapshot may be submitted to KMS only via the existing frame ticket
+/// and DRM FB_ID/vblank ACK; no wl_buffer.release occurs here.
+pub fn readback_qemu_client_bgra(
+    renderer:&mut GlesRenderer,texture:&GlesTexture,
+)->Result<Vec<u8>,String> {
+    use smithay::{
+        backend::renderer::{ExportMem,Texture,TextureMapping},
+        utils::Rectangle,
+    };
+    let width=texture.width() as usize;
+    let height=texture.height() as usize;
+    if width!=360 || height!=224 {
+        return Err("QEMU GPU client readback must match verified 360x224 scene".into());
+    }
+    let region=Rectangle::from_size((width as i32,height as i32).into());
+    // GLES readback in ABGR8888 gives byte order RGBA (little endian).
+    // Convert to the CPU/KMS scene's opaque XRGB8888 / BGRA byte order.
+    let mapping=renderer.copy_texture(texture,region,Fourcc::Abgr8888)
+        .map_err(|error|format!("QEMU GPU client texture download failed: {error}"))?;
+    let flipped=mapping.flipped();
+    let mapped=renderer.map_texture(&mapping)
+        .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
+    convert_rgba_readback_to_bgra(mapped,width,height,flipped)
+}
+
+fn convert_rgba_readback_to_bgra(
+    rgba:&[u8],width:usize,height:usize,flipped:bool,
+)->Result<Vec<u8>,String> {
+    let row=width.checked_mul(4).ok_or("client readback row overflow")?;
+    let len=row.checked_mul(height).ok_or("client readback allocation overflow")?;
+    if width==0 || height==0 || width>MAX_CLIENT_SURFACE_EDGE ||
+       height>MAX_CLIENT_SURFACE_EDGE || len>MAX_CLIENT_BUFFER_BYTES ||
+       rgba.len()!=len {
+        return Err("client GPU readback dimensions or size invalid".into());
+    }
+    let mut pixels=vec![0;len];
+    for y in 0..height {
+        let source_y=if flipped {height-1-y} else {y};
+        let src=&rgba[source_y*row..(source_y+1)*row];
+        let dst=&mut pixels[y*row..(y+1)*row];
+        for (src,dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+            // Client emits opaque/premultiplied RGBA; alpha must not
+            // convert into an accidental transparency in the XRGB scene.
+            dst.copy_from_slice(&[src[2],src[1],src[0],0]);
+        }
+    }
+    Ok(pixels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +176,23 @@ mod tests {
         let rgb565=buffer(360,224,720,0,Fourcc::Rgb565,1);
         assert!(validate_client_dmabuf(&two).is_err());
         assert!(validate_client_dmabuf(&rgb565).is_err());
+    }
+    #[test]
+    fn readback_swizzles_rgba_into_opaque_bgra_and_flips_bottom_up() {
+        // Two rows: top RED/GREEN, bottom BLUE/WHITE.
+        let data=[
+            0,0,255,255, 255,255,255,255,
+            255,0,0,255, 0,255,0,255,
+        ];
+        let pixels=convert_rgba_readback_to_bgra(&data,2,2,true).unwrap();
+        assert_eq!(&pixels[..8],[0,0,255,0,0,255,0,0]);
+        assert_eq!(&pixels[8..],[255,0,0,0,255,255,255,0]);
+    }
+    #[test]
+    fn readback_rejects_wrong_stride_length_and_zero_dimensions() {
+        assert!(convert_rgba_readback_to_bgra(&[0;4],2,1,false).is_err());
+        assert!(convert_rgba_readback_to_bgra(&[],0,2,false).is_err());
+        assert!(convert_rgba_readback_to_bgra(&[0;4],1,1,false).is_ok());
     }
     #[test]
     fn imported_textures_remain_bounded_even_with_multiple_clients() {

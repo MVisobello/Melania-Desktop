@@ -340,7 +340,10 @@ python3 "$root/scripts/inject-qemu-real-gtk-super-start.py" \
   > "$report/qmp-real-gtk-super-input.log" 2>&1 &
 gtk_super_input_pid=$!
 set +e
-timeout --signal=TERM --kill-after=10s 1750s \
+# Extra *independent* GPU-client/DRM KMS session now runs LAST, after all
+# legacy live QMP observers. Give the guest a bounded +300s for that extra
+# real 12-frame acceptance; no bypass of any CRTC/pixel/rollback assertion.
+timeout --signal=TERM --kill-after=10s 2050s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \
