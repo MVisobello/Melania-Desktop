@@ -26,12 +26,20 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
                             stream.index("stream.write_all(&ack)?;"))
             # Finite 24-frame KMS proof keeps its previous real read path.
             if presenter is CPU:
-                self.assertIn("stream.read_exact(&mut header).map_err(",presenter)
-                self.assertIn("stream.read_exact(&mut pixels).map_err(",presenter)
+                self.assertIn("read_finite_exact_guarded(",presenter)
+                self.assertIn("finite_deadline.ok_or(",presenter)
+                self.assertIn("&mut verify_read_drm,",presenter)
+                self.assertIn("header/DRM receive failed",presenter)
+                self.assertIn("pixel/DRM receive failed",presenter)
             else:
                 self.assertIn("stream.read_exact(&mut header)?;",presenter)
                 self.assertIn("stream.read_exact(&mut pixels)?;",presenter)
         self.assertIn("let restored=rollback.restore();",CPU)
+        self.assertIn("pub fn read_finite_exact_guarded(",READER)
+        self.assertIn("original_timeout=stream.read_timeout()?",READER)
+        self.assertIn("stream.set_read_timeout(Some(remaining.min(IDLE_OWNERSHIP_POLL)))?",READER)
+        self.assertIn("finite_guarded_socket_revokes_stolen_drm_during_silent_peer",READER)
+        self.assertIn("finite_fragmented_header_and_pixels_share_one_hard_deadline",READER)
         self.assertIn("let restored=rollback.restore();",GPU)
 
     def test_idle_time_unlimited_but_partial_frame_has_one_deadline(self):
