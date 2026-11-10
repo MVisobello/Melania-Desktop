@@ -4299,6 +4299,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 }
                 if context.resume().is_err() {
                     state.native_presentation_guard.revoke();
+                    revoke_client_dmabuf_gpu(state);
                     // A partially resumed device must not retain clipboard,
                     // pointer serials or keyboard focus from its old VT epoch.
                     revoke_wayland_input_for_lost_seat(state);
@@ -4694,6 +4695,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             if let Err(error)=owner.verify_identity() {
                 state.native_presentation_guard.revoke();
                 revoke_wayland_input_for_lost_seat(&mut state);
+                revoke_client_dmabuf_gpu(&mut state);
                 return Err(format!("native KMS DRM identity revoked: {error}").into());
             }
         }
@@ -4805,6 +4807,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                     // Verify the actual kernel node once more AFTER the
                     // presenter has restored CRTC/FB_ID. Always release the
                     // libseat FD even if the identity changed during rollback.
+                    // Any client-imported EGL image must be released before
+                    // libseat.close, after all KMS workers have rolled back.
+                    revoke_client_dmabuf_gpu(&mut state);
                     let identity_result=owner.verify_identity();
                     let release_result=owner.release();
                     release_result.map_err(|error|format!("{error}"))?;
@@ -4933,6 +4938,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         // A clean persistent shutdown must retain the same DRM primary
         // node identity even after the kernel CRTC rollback completed.
         // Run libseat.close regardless of identity verification outcome.
+        revoke_client_dmabuf_gpu(&mut state);
         let identity_result=owner.verify_identity();
         let release_result=owner.release();
         release_result.map_err(|error|format!("{error}"))?;
@@ -4949,6 +4955,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     ).into())
     })();
     if integrated_kms && run_result.is_err() {
+        // Release client DMA-BUF EGL images and imported textures before
+        // teardown of their libseat kernel GPU; never reuse the VT epoch.
+        revoke_client_dmabuf_gpu(&mut state);
         // Close the pending-job producer first, allowing the KMS receiver
         // to observe EOF. Its normal error/Drop path attempts CRTC rollback.
         // Never release the libseat descriptor before this thread ends.
