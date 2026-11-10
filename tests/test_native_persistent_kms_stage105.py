@@ -38,7 +38,7 @@ class PersistentKmsStage105(unittest.TestCase):
         self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
         self.assertIn("read_payload_guarded(",READER)
         self.assertIn("read_exact_before_deadline_guarded(",READER)
-        self.assertIn("verify_original_encoder_frame(",RECEIVER)
+        self.assertIn("verify_original_encoder_frame_at_baseline(",RECEIVER)
         self.assertIn("rollback.ownership_lost=true;",RECEIVER)
         # The real CPU and GBM receivers now poll kernel scanout ownership
         # during unlimited idle; this is not an artificial timeout.
@@ -46,8 +46,11 @@ class PersistentKmsStage105(unittest.TestCase):
         self.assertIn("guard()?;",READER)
 
         self.assertIn("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;",RECEIVER)
-        self.assertIn("stream.read_exact(&mut header)?;",RECEIVER)
-        self.assertIn("stream.read_exact(&mut pixels)?;",RECEIVER)
+        self.assertIn("read_finite_exact_guarded(",RECEIVER)
+        self.assertIn("&mut stream,&mut header,",RECEIVER)
+        self.assertIn("&mut stream,&mut pixels,",RECEIVER)
+        self.assertIn("&mut verify_read_drm,",RECEIVER)
+        self.assertIn("finite_deadline.ok_or(",RECEIVER)
         self.assertIn("Ok(0)=> {",READER)
         self.assertIn("stream.set_read_timeout(None)?;",READER)
         self.assertIn("read_exact_before_deadline_guarded(stream,&mut header[1..],&mut guard)?;",READER)

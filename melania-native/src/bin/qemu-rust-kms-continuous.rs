@@ -235,8 +235,17 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_DISPOSABLE_QEMU") &&
         std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
+    // The finite dynamic-pointer QMP scenario deliberately pauses after
+    // frame 12 while the host captures the CRTC and injects real USB input.
+    // That external input is not a stalled compositor: keep a bounded 45s
+    // receive deadline only for this explicitly opted-in disposable VM case.
+    // Other finite probes retain the original 12s fail-closed timeout.
+    let qmp_pointer_input=std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC_POINTER")
+        .as_deref()==Ok("YES_QEMU_VM") && !idle_persistent;
     stream.set_read_timeout(if idle_persistent {
         None
+    } else if qmp_pointer_input {
+        Some(Duration::from_secs(45))
     } else {
         Some(Duration::from_secs(12))
     })?;
@@ -341,6 +350,17 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
         loop {
             if total.is_some_and(|limit|frames_seen>=limit) {break;}
             let index=frames_seen;
+            // One absolute deadline covers BOTH finite header and pixel
+            // reads; neither transient EAGAIN nor trickled bytes reset it.
+            // The QMP pointer scenario retains its explicitly bounded 45s,
+            // while all other finite VM proofs retain 12s.
+            let finite_deadline=if persistent {None} else {
+                Some(Instant::now().checked_add(if qmp_pointer_input {
+                    Duration::from_secs(45)
+                } else {
+                    Duration::from_secs(12)
+                }).ok_or("finite KMS deadline overflow")?)
+            };
             let mut header=[0u8;32];
             // Keep checking this exact kernel CRTC, encoder and last ACKed
             // framebuffer during idle AND fragmented header/pixel reads.
@@ -348,10 +368,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             let expected_read_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
             let mut verify_read_drm=||{
-                let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                let owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                     &card,crtc_handle,connected[0],original_encoder,
                     expected_read_fb,(W as u16,H as u16),
-                );
+                mode,original.position());
                 match owned {
                     Ok(true)=>Ok(()),
                     Ok(false) | Err(_) => {
@@ -376,7 +396,13 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 };
                 Some(read)
             } else {
-                stream.read_exact(&mut header)?;
+                melania_native::native_persistent_frame_receive::read_finite_exact_guarded(
+                    &mut stream,&mut header,
+                    finite_deadline.ok_or("finite KMS header deadline missing")?,
+                    &mut verify_read_drm,
+                ).map_err(|error|format!(
+                    "finite CPU KMS frame {} header/DRM receive failed: {error}",index+1
+                ))?;
                 None
             };
             if &header[..4]!=b"MLF1" {
@@ -397,7 +423,13 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             if let Some(read)=pending_read {
                 read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
             } else {
-                stream.read_exact(&mut pixels)?;
+                melania_native::native_persistent_frame_receive::read_finite_exact_guarded(
+                    &mut stream,&mut pixels,
+                    finite_deadline.ok_or("finite KMS pixels deadline missing")?,
+                    &mut verify_read_drm,
+                ).map_err(|error|format!(
+                    "finite CPU KMS frame {} pixel/DRM receive failed: {error}",index+1
+                ))?;
             }
             if !persistent && have_previous_pixels && previous_pixels==pixels {
                 return Err("QEMU continuous KMS received identical consecutive pixels".into());
@@ -406,9 +438,9 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
                 else if index%2==0 {fb2} else {fb1};
-            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+            let owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc_handle,connected[0],original_encoder,previous_fb,(W as u16,H as u16),
-            ).map_err(|error| {
+            mode,original.position()).map_err(|error| {
                 // EIO/ENODEV during VT loss is not a harmless read failure.
                 // Never reuse the event router after this acquisition fails.
                 event_router.revoke();
@@ -458,10 +490,10 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                     // Verify the exact current kernel encoder/CRTC/FB_ID
                     // before EVERY retry, and permanently revoke rollback
                     // if this seat no longer owns that scanout.
-                    let retry_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+                    let retry_owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                         &card,crtc_handle,connected[0],original_encoder,
                         previous_fb,(W as u16,H as u16),
-                    ).map_err(|error|{
+                    mode,original.position()).map_err(|error|{
                         event_router.revoke();
                         rollback.ownership_lost=true;
                         error
@@ -512,9 +544,9 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             // The original encoder identity must survive the KMS flip,
             // not merely the eventual restoration at compositor shutdown.
             // Never send a Wayland callback if another encoder took over.
-            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame(
+            let ack_owned=melania_native::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc_handle,connected[0],original_encoder,framebuffer,(W as u16,H as u16),
-            ).map_err(|error|{
+            mode,original.position()).map_err(|error|{
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error

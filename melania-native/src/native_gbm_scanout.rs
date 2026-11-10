@@ -227,9 +227,9 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                 else {handles[(index-1) as usize%2]};
             // Even a failed DRM ioctl read is loss of trusted ownership.
             // Revoke the pending event epoch before propagating the error.
-            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+            let owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,prior_fb,(w,h),
-            ).map_err(|error| {
+            mode,original.position()).map_err(|error| {
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
@@ -254,9 +254,9 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
                     // Verify the real encoder/CRTC/FB before EVERY ioctl.
                     // EAGAIN followed by a VT change must never turn the
                     // next attempt into a page flip on somebody else's CRTC.
-                    let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                    let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                         &card,crtc,connector,original_encoder,prior_fb,(w,h),
-                    ).map_err(|error|{
+                    mode,original.position()).map_err(|error|{
                         event_router.revoke();
                         rollback.ownership_lost=true;
                         error
@@ -291,9 +291,9 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
             wait_for_scanout(&card,crtc,connector,handles[index as usize%2])?;
             // A DRM vblank and FB_ID do not authorize a frame ACK if the
             // original connector encoder has changed on this live CRTC.
-            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,handles[index as usize%2],(w,h),
-            ).map_err(|error|{
+            mode,original.position()).map_err(|error|{
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
@@ -437,10 +437,10 @@ pub fn qemu_wayland_gpu_scene_stream(
             let expected_read_fb=if index==0 {route.original_fb}
                 else {handles[((index-1)%2) as usize]};
             let mut verify_read_drm=||{
-                let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                let owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                     &card,crtc,connector,original_encoder,expected_read_fb,
                     (W as u16,H as u16),
-                );
+                mode,original.position());
                 match owned {
                     Ok(true)=>Ok(()),
                     Ok(false) | Err(_) => {
@@ -520,9 +520,9 @@ pub fn qemu_wayland_gpu_scene_stream(
             // between frames. Never render/submit into a lost DRM route.
             let previous_fb=if index==0 {route.original_fb}
                 else {handles[(index-1) as usize%2]};
-            let owned=crate::native_kms_scanout::verify_original_encoder_frame(
+            let owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,previous_fb,(W as u16,H as u16),
-            ).map_err(|error| {
+            mode,original.position()).map_err(|error| {
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error
@@ -545,10 +545,10 @@ pub fn qemu_wayland_gpu_scene_stream(
                     // The frame was rendered before this ioctl, but EAGAIN
                     // can sleep through a VT pause or foreign modeset. Check
                     // the actual kernel route before each subsequent retry.
-                    let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+                    let retry_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                         &card,crtc,connector,original_encoder,previous_fb,
                         (W as u16,H as u16),
-                    ).map_err(|error|{
+                    mode,original.position()).map_err(|error|{
                         event_router.revoke();
                         rollback.ownership_lost=true;
                         error
@@ -579,9 +579,9 @@ pub fn qemu_wayland_gpu_scene_stream(
             // A kernel page flip event alone is NOT evidence that the desired
             // framebuffer was routed to this physical CRTC/connector.
             wait_for_scanout(&card,crtc,connector,framebuffer)?;
-            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame(
+            let ack_owned=crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(
                 &card,crtc,connector,original_encoder,framebuffer,(W as u16,H as u16),
-            ).map_err(|error|{
+            mode,original.position()).map_err(|error|{
                 event_router.revoke();
                 rollback.ownership_lost=true;
                 error

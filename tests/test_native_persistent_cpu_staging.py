@@ -20,7 +20,9 @@ class PersistentCpuKmsStaging(unittest.TestCase):
         self.assertIn("let mut pixels=vec![0u8;W*H*4];", stream)
         self.assertIn("let mut previous_pixels=vec![0u8;W*H*4];", stream)
         self.assertEqual(stream.count("vec![0u8;W*H*4]"), 2)
-        self.assertIn("stream.read_exact(&mut pixels)?;", stream)
+        self.assertIn("read_finite_exact_guarded(", stream)
+        self.assertIn("&mut stream,&mut pixels,", stream)
+        self.assertIn("&mut verify_read_drm,", stream)
         self.assertIn("std::mem::swap(&mut pixels,&mut previous_pixels);", stream)
         self.assertNotIn("previous=Some(pixels)", stream)
         self.assertLess(
@@ -28,7 +30,7 @@ class PersistentCpuKmsStaging(unittest.TestCase):
             stream.index("std::mem::swap(&mut pixels,&mut previous_pixels);"),
         )
         self.assertLess(
-            stream.index("verify_original_encoder_frame("),
+            stream.index("verify_original_encoder_frame_at_baseline("),
             stream.index("stream.write_all(&ack)?;"),
         )
 
