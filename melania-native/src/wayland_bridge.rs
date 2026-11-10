@@ -590,7 +590,17 @@ impl BridgeState {
         // Each surface is independently eligible for a callback. Newer
         // commits of A must not starve an already presented B.
         for completed in self.continuous_client_ledger.acknowledged(clients) {
+            // Frame 1 of this exact VM experiment is REQUIRED to originate
+            // from a real DMA-BUF. If a client destroys the protocol buffer
+            // before KMS completion, get_dmabuf() may no longer resolve it:
+            // never silently downgrade that frame into a wl_shm ACK.
+            let required_gpu_client=self.continuous_frame_count==1 &&
+                std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+                    .as_deref()==Ok("YES_QEMU_VM");
             let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
+            if required_gpu_client && !is_gpu_client {
+                return Err("required GPU DMA-BUF disappeared before KMS frame1 completion".into());
+            }
             // A previously imported Wayland DMA-BUF must remain owned by
             // THIS EGL/libseat epoch through the real kernel CRTC ACK.
             // Destruction/seat-revocation during an in-flight KMS flip must
