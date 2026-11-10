@@ -207,21 +207,37 @@ fn exercise_real_client_dmabuf(
         zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
     );
     let probe=compositor.create_surface(qh,());
+    let gpu_kms=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if gpu_kms {
+        // Frame callback is delivered ONLY after the matching real CRTC
+        // FB_ID/vblank ACK, never after the compositor's EGL texture import.
+        let _callback=probe.frame(qh,());
+    }
     state.buffer_released=false;
     probe.attach(Some(&imported),0,0);
     probe.damage_buffer(0,0,W as i32,H as i32);
     probe.commit();
     let deadline=Instant::now()+Duration::from_secs(10);
-    while !state.buffer_released {
+    while !state.buffer_released ||
+          (gpu_kms && state.frame_done_count!=1) {
         queue.roundtrip(state)?;
         if Instant::now()>=deadline {
-            return Err("real client DMA-BUF was not released by unpresented compositor".into());
+            return Err("real client DMA-BUF missing verified GPU-to-KMS release or callback".into());
         }
     }
-    if state.frame_done_count!=0 {
-        return Err("client DMA-BUF received a fabricated KMS frame callback".into());
+    if gpu_kms {
+        if state.frame_done_count!=1 {
+            return Err("GPU DMA-BUF callback not paired with verified KMS ACK".into());
+        }
+        println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true");
+        println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
+    } else {
+        if state.frame_done_count!=0 {
+            return Err("client DMA-BUF received a fabricated KMS frame callback".into());
+        }
+        println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
     }
-    println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
     std::io::stdout().flush()?;
     imported.destroy();
     probe.destroy();
@@ -283,7 +299,15 @@ fn main()->Result<(),Box<dyn Error>> {
         Some("24") if pause_for_gpu=>true,
         Some(_)=>return Err("identical Wayland replay requires persistent QEMU GPU idle proof".into()),
     };
-    for index in 1..=total {
+    let gpu_first=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if gpu_first && (
+        std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
+            .as_deref()!=Ok("YES_QEMU_VM") || total!=12
+    ) {
+        return Err("GPU client scanout proof requires exact 12-frame QEMU DMA-BUF mode".into());
+    }
+    for index in (if gpu_first {2} else {1})..=total {
         // Only the opt-in frame 25 repeats frame 24 exactly; all other
         // frames change the client's *real* owned wl_shm buffer.
         let color_index=if replay_same && index==25 {24} else {index};
