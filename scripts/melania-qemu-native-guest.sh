@@ -3015,6 +3015,7 @@ fi
 for marker in \
   'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' \
   'MELANIA_QEMU_REAL_IME_ACTIVATED=true' \
+  'MELANIA_QEMU_REAL_IME_SURROUNDING_TEXT_RECEIVED=true' \
   'MELANIA_QEMU_REAL_IME_UTF8_COMMIT_SENT=true' \
   'MELANIA_QEMU_REAL_IME_DEACTIVATED=true'; do
   grep -Fqx "$marker" "$ime_client_log" || fatal "IME_real_client_missing_$marker"
@@ -3022,13 +3023,15 @@ done
 for marker in \
   'MELANIA_QEMU_REAL_TEXT_INPUT_ENTERED=true' \
   'MELANIA_QEMU_REAL_EDITOR_NO_PRIVILEGED_IME_GLOBAL=true' \
-  'MELANIA_QEMU_REAL_EDITOR_IME_UTF8_ROUNDTRIP=true'; do
+  'MELANIA_QEMU_REAL_EDITOR_IME_UTF8_ROUNDTRIP=true' \
+  'MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true'; do
   grep -Fqx "$marker" "$ime_editor_log" || fatal "IME_real_editor_missing_$marker"
 done
 grep -Fqx 'MELANIA_NATIVE_WAYLAND_RENDER_READY=false' "$ime_server_log" ||
   fatal 'IME_protocol_only_server_must_not_claim_rendering'
 rm -f "$ime_target" "$ime_client_log" "$ime_editor_log" "$ime_intruder_log" "$ime_server_log"
 report 'MELANIA_QEMU_REAL_IM_V2_TO_TI_V3_UTF8_WIRE_ROUNDTRIP_PASS=true'
+report 'MELANIA_QEMU_REAL_IME_PREEDIT_AND_DELETE_WIRE_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 report 'MELANIA_NATIVE_SESSION_READY=false'
