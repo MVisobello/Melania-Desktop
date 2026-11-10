@@ -250,18 +250,22 @@ python3 "$root/scripts/capture-qemu-continuous-reopen.py" \
   --reopen "$report/continuous-reopen-frame14.ppm" --timeout 1350 \
   > "$report/qmp-continuous-reopen.log" 2>&1 &
 continuous_reopen_capture_pid=$!
+# The 12th real KMS pageflip of this stage can occur after 1350s in TCG
+# with 2026 GPU/GTK integrations. Keep the independent QMP tablet and both
+# framebuffer observers alive until frame13, within the 2050s guest limit;
+# do NOT replace real USB input with synthetic scene damage/ACK markers.
 python3 "$root/scripts/capture-qemu-continuous-dynamic.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-window-frame12.ppm" --timeout 1350 \
+  --output "$report/dynamic-window-frame12.ppm" --timeout 1900 \
   > "$report/qmp-continuous-dynamic.log" 2>&1 &
 dynamic_capture_pid=$!
 python3 "$root/scripts/inject-qemu-dynamic-pointer.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1900 \
   > "$report/qmp-dynamic-pointer-input.log" 2>&1 &
 dynamic_pointer_input_pid=$!
 python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1350 \
+  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1900 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-xdg-popup.py" \
