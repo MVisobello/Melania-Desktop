@@ -192,6 +192,15 @@ fn exercise_real_client_dmabuf(
             Color32F::new(0.33,0.18,0.73,1.0),
             &[Rectangle::from_size((W as i32,H as i32).into())],
         )?;
+        // The real imported ARGB8888 buffer contains a second,
+        // PREMULTIPLIED 50%-alpha region. Distinctive center remains
+        // opaque to preserve existing KMS frame-1 evidence; the QEMU
+        // kernel presenter separately samples the translucent region.
+        // Pixel (40,40) is inside the 48x36 patch at client (20,20).
+        frame.clear(
+            Color32F::new(0.165,0.09,0.365,0.5),
+            &[Rectangle::from_loc_and_size((20,20),(48,36))],
+        )?;
         frame.finish()?.wait()?;
     }
 

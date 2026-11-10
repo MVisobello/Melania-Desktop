@@ -452,6 +452,22 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                         "GPU client pixel did not reach DRM framebuffer: B={blue} G={green} R={red}"
                     ).into());
                 }
+                // The *same real client DMA-BUF* contains a partially
+                // transparent GPU tile at local (40,40). Verify source-over
+                // compositing with the actual opaque scene background
+                // survived EGL import, GPU->CPU readback and KMS transport.
+                // Old alpha-dropping code produces B~93 instead of B~122.
+                let alpha_sample=((120+40)*W+(160+40))*4;
+                let [alpha_b,alpha_g,alpha_r]=pixels[alpha_sample..alpha_sample+3]
+                    .try_into().map_err(|_|"GPU alpha KMS sample truncated")?;
+                if !(112..=135).contains(&alpha_b) ||
+                   !(28..=51).contains(&alpha_g) ||
+                   !(42..=70).contains(&alpha_r) {
+                    return Err(format!(
+                        "GPU client premultiplied alpha did not blend into DRM scanout: B={alpha_b} G={alpha_g} R={alpha_r}"
+                    ).into());
+                }
+                println!("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true");
                 println!("MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true");
             }
             // Verify the previously ACKed kernel scanout is STILL ours.
