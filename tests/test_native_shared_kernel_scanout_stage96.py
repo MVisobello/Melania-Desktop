@@ -22,10 +22,14 @@ class SharedKernelScanoutStage96(unittest.TestCase):
         self.assertIn("routed.crtc() == Some(crtc)", HELPER)
 
     def test_dispatch_uses_stronger_original_encoder_guard_and_qemu_rechecks_route(self):
-        # QEMU continues to use the actual legacy kernel FB_ID+encoder-route
-        # verifier, while the public dispatch ACK now requires exact startup
-        # encoder identity and full-size CRTC ownership in addition.
-        self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame(", DISPATCH)
+        # QEMU exercises a real DRM CRTC/encoder verifier; the public
+        # dispatch ACK now additionally pins the saved full DRM mode and
+        # CRTC origin across the original encoder route checks.
+        self.assertIn("crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(", DISPATCH)
+        self.assertIn("expected_mode: drm::control::Mode", DISPATCH)
+        self.assertIn("expected_position: (u32, u32)", DISPATCH)
+        self.assertIn("expected_mode, expected_position,", DISPATCH)
+        self.assertIn("pub fn verify_original_encoder_frame_at_baseline(", HELPER)
         self.assertIn("pub fn verify_original_encoder_frame(", HELPER)
         self.assertIn("verify_presenter_ownership(", HELPER)
         self.assertIn("melania_native::native_kms_scanout::verify_kernel_scanout(", QEMU)

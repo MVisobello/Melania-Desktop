@@ -1,4 +1,4 @@
-"""Native dispatch must require original DRM encoder ownership for Wayland ACKs.
+"""Native dispatch must pin the original encoder, full mode and CRTC origin for ACKs.
 
 This checks the production Rust ioctl call path and stale-submission guard;
 it does not claim physical VT/hotplug acceptance or replace real QEMU tests.
@@ -19,22 +19,25 @@ class DispatchOriginalEncoderFrameAck(unittest.TestCase):
         self.assertIn("original_encoder: encoder::Handle", verify)
         self.assertIn("expected_size: (u16, u16)", verify)
         self.assertIn("expected_fb: framebuffer::Handle", verify)
+        self.assertIn("expected_mode: drm::control::Mode", verify)
+        self.assertIn("expected_position: (u32, u32)", verify)
         self.assertIn("self.inflight != Some(submission)", verify)
         self.assertIn("self.resources.phase() != RecoveryPhase::Active", verify)
         self.assertIn(
-            "crate::native_kms_scanout::verify_original_encoder_frame(", verify
+            "crate::native_kms_scanout::verify_original_encoder_frame_at_baseline(", verify
         )
         self.assertIn(
             "card, crtc, connector, original_encoder, expected_fb, expected_size,",
             verify,
         )
+        self.assertIn("expected_mode, expected_position,", verify)
         self.assertNotIn("verify_kernel_scanout(", verify)
         self.assertLess(
             verify.index("self.inflight != Some(submission)"),
-            verify.index("verify_original_encoder_frame("),
+            verify.index("verify_original_encoder_frame_at_baseline("),
         )
         self.assertLess(
-            verify.index("verify_original_encoder_frame("),
+            verify.index("verify_original_encoder_frame_at_baseline("),
             verify.index("self.presented("),
         )
         self.assertIn("self.fail_closed();", verify)
@@ -49,6 +52,24 @@ class DispatchOriginalEncoderFrameAck(unittest.TestCase):
         self.assertIn("routed.crtc()==Some(crtc)", verifier)
         self.assertIn("verify_presenter_ownership(", verifier)
         self.assertIn("original_route(card,crtc,connector,original_encoder)", verifier)
+
+    def test_full_kernel_mode_and_origin_are_bracketed_around_encoder_verification(self):
+        baseline = KMS.split(
+            "pub fn verify_original_encoder_frame_at_baseline(", 1
+        )[1].split("pub fn verify_rollback_route(", 1)[0]
+        self.assertIn("let before=card.get_crtc(crtc)", baseline)
+        self.assertIn("before.mode()!=Some(expected_mode)", baseline)
+        self.assertIn("before.position()!=expected_position", baseline)
+        self.assertIn("before.framebuffer()!=Some(expected_fb)", baseline)
+        self.assertIn("verify_original_encoder_frame(", baseline)
+        self.assertIn("let after=card.get_crtc(crtc)", baseline)
+        self.assertIn("after.mode()==Some(expected_mode)", baseline)
+        self.assertIn("after.position()==expected_position", baseline)
+        self.assertIn("after.framebuffer()==Some(expected_fb)", baseline)
+        self.assertLess(baseline.index("let before=card.get_crtc(crtc)"),
+                        baseline.index("verify_original_encoder_frame("))
+        self.assertLess(baseline.index("verify_original_encoder_frame("),
+                        baseline.index("let after=card.get_crtc(crtc)"))
 
     def test_no_premature_wayland_success_or_native_login(self):
         block = DISPATCH.split("fn presented(", 1)[1].split("pub fn rejected(", 1)[0]
