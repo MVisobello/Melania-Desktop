@@ -80,6 +80,13 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("any(|(known,_)|known==&completed.resource)",ack)
         self.assertIn("let required_gpu_client=self.continuous_frame_count==1",ack)
         self.assertIn("if required_gpu_client && !is_gpu_client",ack)
+        missing=BRIDGE.split(
+            'eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_RENDERER_MISSING=true");',1
+        )[1].split("return;",1)[0]
+        self.assertLess(
+            missing.index("self.client_dmabuf_imports.retain("),
+            missing.index("buffer.release();")
+        )
         self.assertLess(
             ack.index("if required_gpu_client && !is_gpu_client"),
             ack.index("complete_presented_frame(",drop)
