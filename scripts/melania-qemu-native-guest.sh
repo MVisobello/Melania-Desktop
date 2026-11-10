@@ -1132,6 +1132,7 @@ MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
 MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
 MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
   timeout --signal=TERM --kill-after=3s 72s \
@@ -1151,7 +1152,9 @@ if [[ -z "$integrated_socket" ]] ||
   kill "$integrated_server_pid" 2>/dev/null || true
   fatal 'integrated_Smithay_KMS_process_never_started'
 fi
-if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM WAYLAND_DISPLAY="$integrated_socket" \
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
+  WAYLAND_DISPLAY="$integrated_socket" \
   timeout --signal=TERM --kill-after=3s 62s \
   "$continuous_client" > "$integrated_client_log" 2>&1; then
   cat "$integrated_server_log" "$integrated_client_log"
@@ -1164,6 +1167,18 @@ if ! wait "$integrated_server_pid"; then
 fi
 kill "$integrated_tail_pid" 2>/dev/null || true
 wait "$integrated_tail_pid" 2>/dev/null || true
+# Actual second-process DRM/GBM/GLES producer sends kernel DMA-BUF FDs
+# through the Wayland protocol. This importer rejects presentation until
+# the native compositor has a real GPU scene and KMS lifetime integration.
+for marker in \
+  'MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_NOT_PRESENTED=true'; do
+  grep -Fqx "$marker" "$integrated_server_log" ||
+    fatal "integrated_real_client_DMA_BUF_import_or_fail_closed_presentation_missing"
+done
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true' "$integrated_client_log" ||
+  fatal 'external_wayland_gpu_dma_buf_did_not_complete_release'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$integrated_server_log" ||
     fatal "integrated_kernel_frame_$index_not_acknowledged"
