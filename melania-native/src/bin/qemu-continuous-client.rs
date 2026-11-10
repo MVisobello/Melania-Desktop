@@ -152,6 +152,7 @@ impl Dispatch<wl_buffer::WlBuffer,()> for Client {
 fn exercise_real_client_dmabuf(
     state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
     qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
+    xdg_surface:&wl_surface::WlSurface,
 )->Result<(),Box<dyn Error>> {
     let dmabuf=state.dmabuf.take()
         .ok_or("QEMU Smithay server did not advertise zwp_linux_dmabuf_v1")?;
@@ -206,9 +207,13 @@ fn exercise_real_client_dmabuf(
         W as i32,H as i32,format as u32,
         zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
     );
-    let probe=compositor.create_surface(qh,());
     let gpu_kms=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
+    // One real XDG client keeps the *same* scene slot for frame 1 GPU and
+    // frames 2..12 wl_shm. The negative non-KMS import test continues to
+    // use a separate role-less surface, with no fake callback.
+    let probe=if gpu_kms {xdg_surface.clone()}
+        else {compositor.create_surface(qh,())};
     if gpu_kms {
         // Frame callback is delivered ONLY after the matching real CRTC
         // FB_ID/vblank ACK, never after the compositor's EGL texture import.
@@ -240,7 +245,7 @@ fn exercise_real_client_dmabuf(
     }
     std::io::stdout().flush()?;
     imported.destroy();
-    probe.destroy();
+    if !gpu_kms {probe.destroy();}
     params.destroy();
     dmabuf.destroy();
     Ok(())
@@ -275,7 +280,7 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.xdg_acked {return Err("continuous client xdg configure missing".into());}
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
         .as_deref()==Ok("YES_QEMU_VM") {
-        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor)?;
+        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface)?;
     }
     let total=frame_budget(
         std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES").ok().as_deref(),12
