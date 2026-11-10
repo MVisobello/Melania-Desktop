@@ -4765,7 +4765,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let continuous_deadline_secs=state.continuous_frame_target
         .saturating_mul(3).clamp(70,240);
     let deadline=Instant::now()+Duration::from_secs(
-        if state.continuous_kms_mode {continuous_deadline_secs}
+        // This isolated 3-process Wayland IME handshake waits for actual
+        // kernel-PID-filtered registry, editor focus and deactivate events.
+        // Unlike the 27s historical QEMU role smoke, it requires an
+        // explicitly bounded protocol window; NEVER enable in login.
+        if trusted_ime_pid.is_some() {105}
+        else if state.continuous_kms_mode {continuous_deadline_secs}
         else if state.reopen_redraw_mode {68}
         else if state.close_redraw_mode {55}
         else if state.drag_redraw_mode {45} else {27}
