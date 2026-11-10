@@ -2362,6 +2362,15 @@ impl CompositorHandler for BridgeState {
                 states.cached_state.get::<SurfaceAttributes>().current().buffer.take()
             });
             if let Some(BufferAssignment::NewBuffer(buffer))=assignment {
+                // This QEMU path still composites wl_shm on the CPU. A
+                // successful EGL DMA-BUF *creation* is not yet a kernel
+                // presentation: refuse it without a fake frame receipt.
+                if smithay::wayland::dmabuf::get_dmabuf(&buffer).is_ok() {
+                    self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                    eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_NOT_PRESENTED=true");
+                    buffer.release();
+                    return;
+                }
                 let mut tab_resize_deferred=false;
                 // The importer owns the snapshot before the Smithay pool
                 // access callback returns. Fixed QEMU uses its original
@@ -4259,6 +4268,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             SessionEvent::PauseSession=>{
                 // Poison rendering BEFORE any Wayland focus/selection change.
                 state.native_presentation_guard.revoke();
+                revoke_client_dmabuf_gpu(state);
                 revoke_wayland_input_for_lost_seat(state);
                 // Revoke *before* suspending input. Outstanding DRM worker
                 // completions are no longer eligible for Wayland callbacks.
@@ -4340,6 +4350,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // close() on the original device FD; no Wayland callback is sent.
             state.native_presentation_guard.revoke();
             revoke_wayland_input_for_lost_seat(state);
+            revoke_client_dmabuf_gpu(state);
             state.continuous_worker.take();
             state.continuous_inflight.take();
             state.continuous_presentation_token.take();
@@ -4459,6 +4470,17 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let integrated_kms=std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
     let persistent_kms=state.persistent_kms_mode;
+    // The server may announce zwp_linux_dmabuf_v1 ONLY in this explicit
+    // disposable VM GPU-import experiment, never on a generic shell probe
+    // or a physical host that still falls back to labwc.
+    let client_dmabuf_probe=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if client_dmabuf_probe && (
+        !integrated_kms || !state.continuous_kms_mode ||
+        !state.live_stream || state.async_kms_mode
+    ) {
+        return Err("QEMU client DMA-BUF protocol requires the integrated continuous KMS bridge".into());
+    }
     if persistent_kms && (
         !integrated_kms || state.continuous_reopen_mode ||
         state.dynamic_pointer_proof_mode || state.dynamic_xdg_resize_mode ||
@@ -4537,6 +4559,24 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_INITIAL=true");
         println!("MELANIA_NATIVE_SEAT_DRM_CARD={}",card_path.display());
         let presenter_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
+        if client_dmabuf_probe {
+            // No bogus protocol advertisement: create the actual libseat-
+            // owned GBM/EGL/GLES importer FIRST, filter the live GPU format/
+            // modifier table, and only then publish the Wayland global.
+            let gpu_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
+            let card=DrmDeviceFd::new(DeviceFd::from(gpu_fd));
+            let gbm=GbmDevice::new(card)?;
+            let display=unsafe {EGLDisplay::new(gbm)}?;
+            let context=EGLContext::new(&display)?;
+            let renderer=unsafe {GlesRenderer::new(context)}?;
+            let formats=melania_native::native_client_dmabuf::client_import_formats(&renderer);
+            if formats.is_empty() {
+                return Err("real libseat GPU advertises no supported packed-RGB DMA-BUF import formats".into());
+            }
+            state.dmabuf.create_global::<BridgeState>(&handle,formats);
+            state.client_dmabuf_renderer=Some(renderer);
+            println!("MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true");
+        }
         let (sender,receiver)=UnixStream::pair()?;
         sender.set_read_timeout(Some(Duration::from_secs(8)))?;
         sender.set_write_timeout(Some(Duration::from_secs(7)))?;
