@@ -19,7 +19,6 @@ class RealWaylandDmabufClient(unittest.TestCase):
             '"zwp_linux_dmabuf_v1"',
             "zwp_linux_dmabuf_v1::Event::Modifier",
             "state.dmabuf_formats.contains(&(format as u32,modifier))",
-            'open("/dev/dri/renderD128")',
             'open("/dev/dri/card0")',
             "GbmAllocator::new(",
             "GbmBufferFlags::RENDERING",
@@ -40,6 +39,11 @@ class RealWaylandDmabufClient(unittest.TestCase):
             "MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true",
         ):
             self.assertIn(marker,CLIENT)
+        # VirtIO's dumb BO allocation ioctl is not allowed on render
+        # nodes. Require a second-process primary FD, never a renderD128
+        # fallback or a client DRM master/modeset request.
+        self.assertNotIn('open("/dev/dri/renderD128")',CLIENT)
+        self.assertNotIn("set_master(",CLIENT)
         imp=CLIENT.split("fn exercise_real_client_dmabuf(",1)[1].split(
             "fn main()->Result",1)[0]
         self.assertLess(imp.index("frame.finish()?.wait()?"),
