@@ -23,6 +23,8 @@ use wayland_protocols_misc::zwp_input_method_v2::client::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const TEXT: &str = "Procida è già connessa";
+// Non-ASCII preedit: offsets in the Wayland protocol are UTF-8 bytes.
+const PREEDIT: &str = "città";
 const W: usize = 360;
 const H: usize = 224;
 
@@ -51,6 +53,9 @@ struct State {
     ime_deactivated: bool,
     ime_done: u32,
     text_received: Option<String>,
+    preedit_received: Option<(String, i32, i32)>,
+    deletion_received: Option<(u32, u32)>,
+    surrounding_received: Option<(String, u32, u32)>,
     text_done: u32,
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -152,6 +157,26 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for State {
                     state.text_entered = false;
                 }
             }
+            zwp_text_input_v3::Event::PreeditString {
+                text, cursor_begin, cursor_end,
+            } => {
+                if state.text_entered && !state.unexpected_text_focus {
+                    if let Some(text) = text {
+                        state.preedit_received = Some((text, cursor_begin, cursor_end));
+                    }
+                } else {
+                    state.unexpected_text_focus = true;
+                }
+            }
+            zwp_text_input_v3::Event::DeleteSurroundingText {
+                before_length, after_length,
+            } => {
+                if state.text_entered && !state.unexpected_text_focus {
+                    state.deletion_received = Some((before_length, after_length));
+                } else {
+                    state.unexpected_text_focus = true;
+                }
+            }
             zwp_text_input_v3::Event::CommitString { text } => {
                 // text-input-v3 carries a nullable UTF-8 commit string.
                 // None is not a real committed character sequence.
@@ -187,6 +212,9 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for State {
                 state.ime_deactivated = true;
                 println!("MELANIA_QEMU_REAL_IME_DEACTIVATED=true");
                 let _ = std::io::stdout().flush();
+            }
+            zwp_input_method_v2::Event::SurroundingText { text, cursor, anchor } => {
+                state.surrounding_received = Some((text, cursor, anchor));
             }
             zwp_input_method_v2::Event::Done => {
                 state.ime_done = state.ime_done.saturating_add(1);
@@ -224,11 +252,19 @@ fn run_ime(mut queue: wayland_client::EventQueue<State>, mut state: State) -> Re
     queue.roundtrip(&mut state)?;
     println!("MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true");
     std::io::stdout().flush()?;
-    roundtrip_until(&mut queue, &mut state, 20, |s| s.ime_activated && s.ime_done > 0)?;
+    // Send deletion only after genuine surrounding text arrives over Wayland.
+    roundtrip_until(&mut queue, &mut state, 20, |s|
+        s.ime_activated && s.ime_done > 0
+        && s.surrounding_received.as_ref().is_some_and(|(t,c,a)|
+            t == "prova" && *c == 5 && *a == 5))?;
+    println!("MELANIA_QEMU_REAL_IME_SURROUNDING_TEXT_RECEIVED=true");
     // Smithay emits a Done event for activation and again for each editor
     // state commit. Use the latest REAL serial, never a fabricated constant.
     let serial = state.ime_done;
+    // One atomic input-method-v2 commit, not an in-process injection.
+    method.delete_surrounding_text(5, 0);
     method.commit_string(TEXT.into());
+    method.set_preedit_string(PREEDIT.into(), PREEDIT.len() as i32, PREEDIT.len() as i32);
     method.commit(serial);
     queue.roundtrip(&mut state)?;
     println!("MELANIA_QEMU_REAL_IME_UTF8_COMMIT_SENT=true");
@@ -281,14 +317,26 @@ fn run_editor(mut queue: wayland_client::EventQueue<State>, mut state: State) ->
     // A genuine second client must have sent the UTF-8 string and
     // Smithay must have committed it into this focused text-input-v3.
     roundtrip_until(&mut queue, &mut state, 12, |s|
-        s.text_received.is_some() && s.text_done > 0)?;
+        s.text_received.is_some()
+        && s.preedit_received.is_some()
+        && s.deletion_received.is_some()
+        && s.text_done > 0)?;
     if !state.text_entered || state.unexpected_text_focus {
         return Err("IME text delivered without active actual editor focus".into());
     }
     if state.text_received.as_deref() != Some(TEXT) {
         return Err(format!("IME sent wrong actual UTF8: {:?}",state.text_received).into());
     }
+    // Cursor 6 is a byte offset: the final non-ASCII character is two bytes.
+    if state.preedit_received.as_ref().is_none_or(|(t,c,a)|
+        t != PREEDIT || *c != PREEDIT.len() as i32 || *a != PREEDIT.len() as i32) {
+        return Err(format!("bad real preedit UTF8 byte cursor: {:?}",state.preedit_received).into());
+    }
+    if state.deletion_received != Some((5,0)) {
+        return Err(format!("bad real surrounding-text deletion: {:?}",state.deletion_received).into());
+    }
     println!("MELANIA_QEMU_REAL_EDITOR_IME_UTF8_ROUNDTRIP=true");
+    println!("MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true");
     std::io::stdout().flush()?;
     text.disable();
     text.commit();
