@@ -23,7 +23,7 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn("MAX_PARTIAL_FRAME_TIME",body)
         self.assertIn("read_payload_guarded(",READER)
         self.assertIn("read_exact_before_deadline_guarded(",READER)
-        self.assertIn("verify_original_encoder_frame(",body)
+        self.assertIn("verify_original_encoder_frame_at_baseline(",body)
         self.assertIn("rollback.ownership_lost=true;",body)
         # The real CPU and GBM receivers now poll kernel scanout ownership
         # during unlimited idle; this is not an artificial timeout.
