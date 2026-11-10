@@ -2954,7 +2954,7 @@ ime_client_pid=$!
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
 MELANIA_NATIVE_TEXT_INPUT_IME=YES_QEMU_VM \
 MELANIA_NATIVE_TRUSTED_IME_PID="$ime_client_pid" \
-  timeout --signal=TERM --kill-after=3s 90s \
+  timeout --signal=TERM --kill-after=3s 120s \
   "$binary" --experimental-wayland-seat < /dev/tty1 \
   > "$ime_server_log" 2>&1 &
 ime_server_pid=$!
