@@ -38,7 +38,7 @@ class PersistentKmsStage105(unittest.TestCase):
         self.assertIn("MAX_PARTIAL_FRAME_TIME",RECEIVER)
         self.assertIn("read_payload_guarded(",READER)
         self.assertIn("read_exact_before_deadline_guarded(",READER)
-        self.assertIn("verify_original_encoder_frame(",RECEIVER)
+        self.assertIn("verify_original_encoder_frame_at_baseline(",RECEIVER)
         self.assertIn("rollback.ownership_lost=true;",RECEIVER)
         # The real CPU and GBM receivers now poll kernel scanout ownership
         # during unlimited idle; this is not an artificial timeout.
