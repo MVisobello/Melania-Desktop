@@ -17,7 +17,11 @@ class ReusableGpuNativeStage108(unittest.TestCase):
     def test_persistent_receiver_cannot_idle_timeout_on_a_healthy_gpu(self):
         self.assertIn("let idle_persistent=std::env::var(\"MELANIA_NATIVE_PERSISTENT_KMS\")",RECEIVER)
         self.assertIn("stream.set_read_timeout(if idle_persistent {",RECEIVER)
-        self.assertIn("None\\n    } else if qmp_pointer_input {\\n        Some(Duration::from_secs(45))\\n    } else {\\n        Some(Duration::from_secs(12))",RECEIVER)
+        self.assertIn("""None
+    } else if qmp_pointer_input {
+        Some(Duration::from_secs(45))
+    } else {
+        Some(Duration::from_secs(12))""",RECEIVER)
         self.assertIn('let qmp_pointer_input=std::env::var("MELANIA_QEMU_CONTINUOUS_DYNAMIC_POINTER")',RECEIVER)
         self.assertIn("&& !idle_persistent;",RECEIVER)
         self.assertIn("stream.set_write_timeout(Some(Duration::from_secs(7)))?",RECEIVER)
