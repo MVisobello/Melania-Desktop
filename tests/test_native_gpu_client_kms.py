@@ -63,6 +63,22 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(ack.index("completed.resource.release();"),
                         ack.index("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}"))
 
+    def test_client_gpu_texture_is_owned_through_kms_ack_then_dropped_before_release(self):
+        ack=BRIDGE.split("fn poll_continuous_kms(&mut self)",1)[1].split(
+            "fn begin_generation_proof(",1)[0]
+        before=ack.index("if !self.native_presentation_guard.accepts(")
+        checked=ack.index('return Err("GPU DMA-BUF KMS ACK has no retained EGL client import"')
+        drop=ack.index("self.client_dmabuf_imports.retain(|(known,_)|")
+        callback=ack.index("complete_presented_frame(",drop)
+        release=ack.index("completed.resource.release();",callback)
+        marker=ack.index("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",release)
+        self.assertLess(before,checked)
+        self.assertLess(checked,drop)
+        self.assertLess(drop,callback)
+        self.assertLess(callback,release)
+        self.assertLess(release,marker)
+        self.assertIn("any(|(known,_)|known==&completed.resource)",ack)
+
     def test_kernel_checks_actual_gpu_color_and_fb_id_before_ack(self):
         for marker in (
             "MELANIA_NATIVE_CLIENT_DMABUF_KMS",
