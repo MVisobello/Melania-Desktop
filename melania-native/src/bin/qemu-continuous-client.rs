@@ -162,13 +162,15 @@ fn exercise_real_client_dmabuf(
         return Err("QEMU Wayland compositor did not advertise ARGB8888+LINEAR".into());
     }
 
-    // The client, NOT Melania's KMS presenter, opens its own GPU FD.
-    // VirtIO render node is preferred; card0 may be used on tiny QEMU guests
-    // that do not expose a separate render node.
+    // This disposable QEMU VirtIO GPU allocates BOs through
+    // DRM_IOCTL_MODE_CREATE_DUMB, a KMS allocation ioctl which is explicitly
+    // NOT permitted on renderD128. The SECOND process opens its own
+    // unprivileged primary FD; CREATE_DUMB does not require DRM_MASTER.
+    // Never request/set KMS master or perform modesets from the client.
+    // Do not silently fall back to the render node: that cannot allocate
+    // this VM's dumb-backed GBM buffers.
     let file=OpenOptions::new().read(true).write(true)
-        .open("/dev/dri/renderD128").or_else(|_|{
-            OpenOptions::new().read(true).write(true).open("/dev/dri/card0")
-        })?;
+        .open("/dev/dri/card0")?;
     let gbm=GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file))))?;
     let mut allocator=DmabufAllocator(GbmAllocator::new(
         gbm.clone(),GbmBufferFlags::RENDERING,
