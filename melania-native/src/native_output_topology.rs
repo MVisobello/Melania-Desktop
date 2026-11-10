@@ -232,6 +232,14 @@ fn read_active_crtc_readbacks(
            mode.size()!=(route.width,route.height) {
             return Err("DRM CRTC framebuffer or mode dimensions changed during timing readback".into());
         }
+        // GETCRTC x/y are viewport offsets inside THIS framebuffer.
+        // Read its actual kernel dimensions; never confuse these offsets
+        // with global monitor coordinates or assume two (0,0) CRTCs mirror.
+        let fb_info=card.get_framebuffer(framebuffer)
+            .map_err(|e|format!("DRM active framebuffer dimensions unreadable: {e}"))?;
+        validate_crtc_framebuffer_viewport(
+            mode.size(),info.position(),fb_info.size(),
+        )?;
         readbacks.push(ActiveCrtcReadback {
             crtc:route.crtc,
             framebuffer,
@@ -283,48 +291,36 @@ pub fn verify_restored_output_timings<M:PartialEq>(
     Ok(())
 }
 
-/// The bounded X/Y desktop canvas is independent of each CRTC's mode.
-/// Kernel CRTC positions are read from actual libseat-owned DRM descriptors;
-/// two distinct scanouts must not silently cover the same output rectangle.
-/// This is a fail-closed preflight until atomic multi-output scene routing
-/// supports mirroring, virtual coordinates and independent scale factors.
-pub const MAX_DESKTOP_SIDE:u32=32768;
-
-/// Refuse overlapping, missing, duplicated or out-of-bounds live CRTC
-/// rectangles. Touching boundaries are valid for side-by-side or stacked
-/// monitors. Mirroring two CRTCs at (0,0) is deliberately unsupported.
-/// This does NOT create atomic scanout owners or certify physical hotplug.
-pub fn validate_crtc_output_geometry<M>(
-    topology:&NativeOutputTopology,
-    timings:&[ActiveOutputTiming<M>],
+/// Legacy DRM GETCRTC x/y identify the viewport offset *into that
+/// CRTC's framebuffer*, NOT the output's position in a desktop-wide layout.
+/// Two independent physical outputs may validly both report (0,0).
+/// Never interpret these offsets as proof of global monitor geometry.
+///
+/// Fail closed when a live CRTC tries to scan outside its own kernel FB.
+/// This is a read-only, actual drm-rs GETFB preflight, not an atomic modeset,
+/// a hardware-proven layout manager, or a DRM lease. Multi-output scene
+/// placement needs a separate compositor-owned logical-output coordinate.
+pub const MAX_SCANOUT_FRAMEBUFFER_SIDE:u32=32768;
+pub fn validate_crtc_framebuffer_viewport(
+    mode_size:(u16,u16),
+    framebuffer_offset:(u32,u32),
+    framebuffer_size:(u32,u32),
 )->Result<(),String> {
-    validate_active_routes(&topology.active)?;
-    if timings.len()!=topology.active.len() {
-        return Err("DRM output geometry has missing or extra CRTC positions".into());
+    let (width,height)=(u32::from(mode_size.0),u32::from(mode_size.1));
+    let (fb_width,fb_height)=framebuffer_size;
+    if width==0 || height==0 ||
+       width>u32::from(MAX_OUTPUT_SIDE) || height>u32::from(MAX_OUTPUT_SIDE) ||
+       fb_width==0 || fb_height==0 ||
+       fb_width>MAX_SCANOUT_FRAMEBUFFER_SIDE ||
+       fb_height>MAX_SCANOUT_FRAMEBUFFER_SIDE {
+        return Err("DRM CRTC or backing framebuffer has invalid dimensions".into());
     }
-    let mut rectangles:Vec<(u32,u32,u32,u32)>=Vec::with_capacity(topology.active.len());
-    for route in &topology.active {
-        let mut matches=timings.iter().filter(|timing|timing.crtc==route.crtc);
-        let position=matches.next()
-            .ok_or("DRM output geometry is missing a live CRTC position")?.position;
-        if matches.next().is_some() {
-            return Err("DRM output geometry has duplicate CRTC positions".into());
-        }
-        let (x,y)=position;
-        let right=x.checked_add(u32::from(route.width))
-            .ok_or("DRM output geometry X overflow")?;
-        let bottom=y.checked_add(u32::from(route.height))
-            .ok_or("DRM output geometry Y overflow")?;
-        if right>MAX_DESKTOP_SIDE || bottom>MAX_DESKTOP_SIDE {
-            return Err("DRM output geometry exceeds bounded desktop canvas".into());
-        }
-        for &(left,top,previous_right,previous_bottom) in &rectangles {
-            if x<previous_right && left<right &&
-               y<previous_bottom && top<bottom {
-                return Err("DRM active CRTCs overlap without explicit mirror support".into());
-            }
-        }
-        rectangles.push((x,y,right,bottom));
+    let right=framebuffer_offset.0.checked_add(width)
+        .ok_or("DRM CRTC framebuffer source X overflow")?;
+    let bottom=framebuffer_offset.1.checked_add(height)
+        .ok_or("DRM CRTC framebuffer source Y overflow")?;
+    if right>fb_width || bottom>fb_height {
+        return Err("DRM CRTC viewport exceeds the real kernel framebuffer dimensions".into());
     }
     Ok(())
 }
@@ -341,9 +337,10 @@ pub fn verify_unchanged_scanout_epoch<M:PartialEq>(
     after_timings:&[ActiveOutputTiming<M>],
 )->Result<(),String> {
     for (routes,timings) in [(before_routes,before_timings),(after_routes,after_timings)] {
-        // The same real KMS/CRTC geometry must be safe both before and
-        // after event dispatch; preserve this gate through VT reacquisition.
-        validate_crtc_output_geometry(routes,timings)?;
+        // Each live CRTC source viewport has already been checked
+        // against its actual framebuffer during the two kernel scans.
+        // Positions here remain FB-relative, not global monitor origins.
+        validate_active_routes(&routes.active)?;
         if routes.active.len()!=timings.len() {
             return Err("DRM scanout timing count no longer matches active outputs".into());
         }
@@ -377,10 +374,8 @@ pub fn inspect_stable_active_outputs_with_timings(
         mode:readback.mode,
         position:readback.position,
     }).collect();
-    // This scan uses actual DRM CRTC positions and modes, not assumed
-    // horizontal layouts. Refuse overlap/malformed monitors before ever
-    // offering the topology to any renderer or VT resume path.
-    validate_crtc_output_geometry(&after,&timings)?;
+    // Each pass validated real per-CRTC viewport bounds via GETFB;
+    // two independent CRTCs at framebuffer offset (0,0) remain valid.
     Ok((after,timings))
 }
 
@@ -406,58 +401,47 @@ mod tests {
         }
     }
     #[test]
-    fn physical_two_crtc_layout_accepts_touching_edges_and_vertical_stack() {
-        let a=route(11,21,31,1920,1080);
-        let b=route(12,22,32,2560,1440);
-        let t1=ActiveOutputTiming{crtc:a.crtc,mode:60_000u32,position:(0,0)};
-        let t2=ActiveOutputTiming{crtc:b.crtc,mode:60_000u32,position:(1920,0)};
-        let topology=NativeOutputTopology{active:vec![a,b]};
-        assert!(validate_crtc_output_geometry(&topology,&[t1,t2]).is_ok());
-        assert!(validate_crtc_output_geometry(&topology,&[t2,t1]).is_ok());
-        let vertical=ActiveOutputTiming{position:(0,1080),..t2};
-        assert!(validate_crtc_output_geometry(&topology,&[vertical,t1]).is_ok());
-        let exactly_one=NativeOutputTopology{active:vec![a]};
-        assert!(validate_crtc_output_geometry(&exactly_one,&[t1]).is_ok());
-    }
-
-    #[test]
-    fn physical_multi_crtc_preflight_refuses_overlap_and_unmodeled_mirror() {
-        let a=route(11,21,31,1920,1080);
-        let b=route(12,22,32,1280,720);
-        let topology=NativeOutputTopology{active:vec![a,b]};
-        let first=ActiveOutputTiming{crtc:a.crtc,mode:60_000u32,position:(0,0)};
-        let mirror=ActiveOutputTiming{crtc:b.crtc,mode:60_000u32,position:(0,0)};
-        let partial=ActiveOutputTiming{position:(1919,1079),..mirror};
-        assert!(validate_crtc_output_geometry(&topology,&[first,mirror]).is_err());
-        assert!(validate_crtc_output_geometry(&topology,&[first,partial]).is_err());
-        // Diagonal touching has no shared pixel and remains valid.
-        let touching=ActiveOutputTiming{position:(1920,1080),..mirror};
-        assert!(validate_crtc_output_geometry(&topology,&[first,touching]).is_ok());
+    fn independent_real_crtcs_can_both_scan_out_at_framebuffer_origin_zero() {
+        // On separate framebuffer IDs each CRTC's (0,0) means pixel zero
+        // in ITS FB, not two physical outputs occupying one global area.
+        let first=route(11,21,31,1920,1080);
+        let second=route(12,22,32,2560,1440);
+        let routes=NativeOutputTopology{active:vec![first,second]};
+        let t1=ActiveOutputTiming{crtc:first.crtc,mode:60_000u32,position:(0,0)};
+        let t2=ActiveOutputTiming{crtc:second.crtc,mode:60_000u32,position:(0,0)};
+        assert!(validate_active_routes(&routes.active).is_ok());
         assert!(verify_unchanged_scanout_epoch(
-            &topology,&[first,mirror],&topology,&[first,mirror]
+            &routes,&[t1,t2],&routes,&[t2,t1]
+        ).is_err()); // Order is still a separate epoch identity contract.
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,0),(1920,1080)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((2560,1440),(0,0),(2560,1440)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(1920,0),(4480,1440)).is_ok());
+    }
+
+    #[test]
+    fn real_fb_viewport_rejects_scanout_past_edge_or_illegal_dimensions() {
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(1,0),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,1),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(500,400),(2200,1400)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(280,320),(2200,1400)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((0,1080),(0,0),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,0),(0,0),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,0),(0,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,0),(1920,0)).is_err());
+        assert!(validate_crtc_framebuffer_viewport(
+            (1920,1080),(0,0),(MAX_SCANOUT_FRAMEBUFFER_SIDE+1,1080)
         ).is_err());
     }
 
     #[test]
-    fn physical_multi_crtc_preflight_rejects_missing_foreign_duplicate_and_overflow() {
-        let a=route(11,21,31,1920,1080);
-        let b=route(12,22,32,1280,720);
-        let topology=NativeOutputTopology{active:vec![a,b]};
-        let first=ActiveOutputTiming{crtc:a.crtc,mode:60_000u32,position:(0,0)};
-        let second=ActiveOutputTiming{crtc:b.crtc,mode:60_000u32,position:(1920,0)};
-        assert!(validate_crtc_output_geometry(&topology,&[first]).is_err());
-        assert!(validate_crtc_output_geometry(&topology,&[first,first]).is_err());
-        let foreign=ActiveOutputTiming{crtc:control::from_u32(99).unwrap(),..second};
-        assert!(validate_crtc_output_geometry(&topology,&[first,foreign]).is_err());
-        let beyond=ActiveOutputTiming{position:(MAX_DESKTOP_SIDE-1279,0),..second};
-        assert!(validate_crtc_output_geometry(&topology,&[first,beyond]).is_err());
-        let overflow=ActiveOutputTiming{position:(u32::MAX,0),..second};
-        assert!(validate_crtc_output_geometry(&topology,&[first,overflow]).is_err());
-        let y_overflow=ActiveOutputTiming{position:(1920,u32::MAX),..second};
-        assert!(validate_crtc_output_geometry(&topology,&[first,y_overflow]).is_err());
-        assert!(validate_crtc_output_geometry(
-            &NativeOutputTopology{active:vec![]},&[] as &[ActiveOutputTiming<u32>]
-        ).is_err());
+    fn real_fb_viewport_refuses_untrusted_overflow_and_allows_shared_fb_panning() {
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(u32::MAX,0),(1280,720)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(0,u32::MAX),(1280,720)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(1920,0),(3200,1080)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(1921,0),(3200,1080)).is_err());
+        // This is NOT a desktop origin: a framebuffer source offset may
+        // be nonzero even when a physical monitor is positioned at (0,0).
+        assert!(validate_crtc_framebuffer_viewport((800,600),(32,16),(1024,768)).is_ok());
     }
 
     #[test]
