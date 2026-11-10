@@ -25,8 +25,12 @@ class PersistentPartialFrameDeadline(unittest.TestCase):
             self.assertLess(stream.index("read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;"),
                             stream.index("stream.write_all(&ack)?;"))
             # Finite 24-frame KMS proof keeps its previous real read path.
-            self.assertIn("stream.read_exact(&mut header)?;",presenter)
-            self.assertIn("stream.read_exact(&mut pixels)?;",presenter)
+            if presenter is CPU:
+                self.assertIn("stream.read_exact(&mut header).map_err(",presenter)
+                self.assertIn("stream.read_exact(&mut pixels).map_err(",presenter)
+            else:
+                self.assertIn("stream.read_exact(&mut header)?;",presenter)
+                self.assertIn("stream.read_exact(&mut pixels)?;",presenter)
         self.assertIn("let restored=rollback.restore();",CPU)
         self.assertIn("let restored=rollback.restore();",GPU)
 
