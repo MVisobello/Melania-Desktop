@@ -591,21 +591,32 @@ impl BridgeState {
         // commits of A must not starve an already presented B.
         for completed in self.continuous_client_ledger.acknowledged(clients) {
             let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
+            // A previously imported Wayland DMA-BUF must remain owned by
+            // THIS EGL/libseat epoch through the real kernel CRTC ACK.
+            // Destruction/seat-revocation during an in-flight KMS flip must
+            // never be mistaken for a valid Wayland client completion.
+            if is_gpu_client &&
+               !self.client_dmabuf_imports.iter()
+                   .any(|(known,_)|known==&completed.resource) {
+                return Err("GPU DMA-BUF KMS ACK has no retained EGL client import".into());
+            }
             let is_live=(1..=MAX_PENDING_CLIENTS as u64)
                 .any(|slot|self.known_window_surfaces.get(slot)==Some(&completed.key));
+            // Drop the GPU texture BEFORE sending the wl_buffer.release.
+            // After the verified kernel ACK the owned CPU/KMS image is the
+            // only remaining scene owner, so the client may now reuse its BO.
+            if is_gpu_client {
+                self.client_dmabuf_imports.retain(|(known,_)|
+                    known!=&completed.resource);
+            }
             if completed.notify_frame && is_live {
                 let delivered=complete_presented_frame(
                     &completed.key,(self.continuous_frame_count as u32).saturating_mul(16)
                 );
                 self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
             }
-            // Never drop the GPU texture or release a client DMA-BUF until
-            // the real kernel CRTC/vblank receipt and the exact epoch ticket
-            // have passed every existing check above.
             completed.resource.release();
             if is_gpu_client {
-                self.client_dmabuf_imports.retain(|(known,_)|
-                    known!=&completed.resource);
                 println!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",
                          self.continuous_frame_count);
             }
