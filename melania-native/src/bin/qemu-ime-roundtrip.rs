@@ -44,6 +44,8 @@ struct State {
     ime_manager: Option<zwp_input_method_manager_v2::ZwpInputMethodManagerV2>,
     unexpected_privileged_ime_global: bool,
     configured: bool,
+    editor_surface: Option<wl_surface::WlSurface>,
+    unexpected_text_focus: bool,
     text_entered: bool,
     ime_activated: bool,
     ime_deactivated: bool,
@@ -134,15 +136,30 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for State {
              event: zwp_text_input_v3::Event, _: &(), _: &Connection,
              _: &QueueHandle<Self>) {
         match event {
-            zwp_text_input_v3::Event::Enter { .. } => {
+            zwp_text_input_v3::Event::Enter { surface } => {
+                // The compositor must route focus to THIS genuine XDG editor,
+                // not just to some same-client or roleless Wayland object.
+                if state.editor_surface.as_ref() != Some(&surface) {
+                    state.unexpected_text_focus = true;
+                    return;
+                }
                 state.text_entered = true;
                 println!("MELANIA_QEMU_REAL_TEXT_INPUT_ENTERED=true");
                 let _ = std::io::stdout().flush();
             }
+            zwp_text_input_v3::Event::Leave { surface } => {
+                if state.editor_surface.as_ref() == Some(&surface) {
+                    state.text_entered = false;
+                }
+            }
             zwp_text_input_v3::Event::CommitString { text } => {
                 // text-input-v3 carries a nullable UTF-8 commit string.
                 // None is not a real committed character sequence.
-                state.text_received = text;
+                if state.text_entered && !state.unexpected_text_focus {
+                    state.text_received = text;
+                } else {
+                    state.unexpected_text_focus = true;
+                }
             }
             zwp_text_input_v3::Event::Done { .. } => {
                 state.text_done = state.text_done.saturating_add(1);
@@ -233,6 +250,7 @@ fn run_editor(mut queue: wayland_client::EventQueue<State>, mut state: State) ->
     let shm = state.shm.take().ok_or("wl_shm missing")?;
     let text = mgr.get_text_input(&seat, &qh, ());
     let surface = compositor.create_surface(&qh, ());
+    state.editor_surface = Some(surface.clone());
     let role = wm.get_xdg_surface(&surface, &qh, ());
     let top = role.get_toplevel(&qh, ());
     top.set_title("Melania real IME UTF8 editor".into());
@@ -252,6 +270,9 @@ fn run_editor(mut queue: wayland_client::EventQueue<State>, mut state: State) ->
     surface.damage_buffer(0, 0, W as i32, H as i32);
     surface.commit();
     roundtrip_until(&mut queue, &mut state, 8, |s| s.text_entered)?;
+    if state.unexpected_text_focus {
+        return Err("text-input-v3 entered a different Wayland XDG surface".into());
+    }
     println!("MELANIA_QEMU_REAL_EDITOR_NO_PRIVILEGED_IME_GLOBAL=true");
     text.enable();
     text.set_surrounding_text("prova".into(), 5, 5);
@@ -261,6 +282,9 @@ fn run_editor(mut queue: wayland_client::EventQueue<State>, mut state: State) ->
     // Smithay must have committed it into this focused text-input-v3.
     roundtrip_until(&mut queue, &mut state, 12, |s|
         s.text_received.is_some() && s.text_done > 0)?;
+    if !state.text_entered || state.unexpected_text_focus {
+        return Err("IME text delivered without active actual editor focus".into());
+    }
     if state.text_received.as_deref() != Some(TEXT) {
         return Err(format!("IME sent wrong actual UTF8: {:?}",state.text_received).into());
     }
