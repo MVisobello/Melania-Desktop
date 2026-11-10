@@ -140,7 +140,9 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for State {
                 let _ = std::io::stdout().flush();
             }
             zwp_text_input_v3::Event::CommitString { text } => {
-                state.text_received = Some(text);
+                // text-input-v3 carries a nullable UTF-8 commit string.
+                // None is not a real committed character sequence.
+                state.text_received = text;
             }
             zwp_text_input_v3::Event::Done { .. } => {
                 state.text_done = state.text_done.saturating_add(1);
