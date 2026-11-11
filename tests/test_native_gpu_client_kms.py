@@ -52,7 +52,8 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
         self.assertIn("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true",DRM)
         self.assertIn("QEMU_SCENE_BGRA:[u8;3]=[58,33,27]",GPU)
-        self.assertIn("let alpha_sample=((120+40)*W+(160+40))*4;",DRM)
+        self.assertIn("let alpha_sample=((120+(224-1-40))*W+(160+40))*4;",DRM)
+        self.assertIn("let opaque_sample=((120+40)*W+(160+40))*4;",DRM)
         self.assertLess(
             DRM.index("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true"),
             DRM.index("card.set_crtc(crtc_handle,Some(framebuffer)")
