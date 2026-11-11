@@ -632,16 +632,19 @@ impl BridgeState {
         // Each surface is independently eligible for a callback. Newer
         // commits of A must not starve an already presented B.
         for completed in self.continuous_client_ledger.acknowledged(clients) {
-            // Frame 1 of this exact VM experiment is REQUIRED to originate
-            // from a real DMA-BUF. If a client destroys the protocol buffer
-            // before KMS completion, get_dmabuf() may no longer resolve it:
-            // never silently downgrade that frame into a wl_shm ACK.
-            let required_gpu_client=self.continuous_frame_count==1 &&
-                std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+            // The first (and in the double-GPU VM proof, second) KMS
+            // frame must be a real Wayland client DMA-BUF. A destroyed
+            // buffer cannot silently downgrade into a wl_shm ACK.
+            let double_gpu=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                .as_deref()==Ok("YES_QEMU_VM");
+            let required_gpu_client=
+                melania_native::native_client_dmabuf::qemu_gpu_frame_required(
+                    self.continuous_frame_count,double_gpu
+                ) && std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
                     .as_deref()==Ok("YES_QEMU_VM");
             let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
             if required_gpu_client && !is_gpu_client {
-                return Err("required GPU DMA-BUF disappeared before KMS frame1 completion".into());
+                return Err("required GPU DMA-BUF disappeared before KMS frame completion".into());
             }
             // A previously imported Wayland DMA-BUF must remain owned by
             // THIS EGL/libseat epoch through the real kernel CRTC ACK.
@@ -2452,9 +2455,15 @@ impl CompositorHandler for BridgeState {
                 // scene and DRM worker will present it with a real FB_ID ACK,
                 // not an invented Wayland presentation.
                 let client_gpu_snapshot=if dma_buffer && gpu_client_kms {
+                    let double_gpu=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                        .as_deref()==Ok("YES_QEMU_VM");
+                    // Frame 2 is allowed only after the first actual KMS
+                    // callback released the previous EGL import; never
+                    // accumulate two unpresented textures or accept frame 3.
                     if self.dynamic_window_mode || self.multi_window_mode ||
-                       self.continuous_frame_count!=0 ||
-                       self.client_dmabuf_imports.len()!=1 {
+                       !melania_native::native_client_dmabuf::qemu_gpu_frame_allowed(
+                           self.continuous_frame_count,double_gpu
+                       ) || self.client_dmabuf_imports.len()!=1 {
                         eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_SCENE_REFUSED=true");
                         self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                         buffer.release();
@@ -2478,6 +2487,9 @@ impl CompositorHandler for BridgeState {
                         readback_qemu_client_bgra(renderer,texture) {
                         Ok(pixels)=>{
                             println!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=360x224");
+                            if self.continuous_frame_count==1 {
+                                println!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_FRAME2_PIXELS_READBACK=360x224");
+                            }
                             Some(pixels)
                         },
                         Err(error)=>{

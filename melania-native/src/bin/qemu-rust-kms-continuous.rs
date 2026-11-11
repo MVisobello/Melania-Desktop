@@ -487,6 +487,24 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 println!("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true");
                 println!("MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true");
             }
+            if dmabuf_kms && index==1 &&
+                std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                    .as_deref()==Ok("YES_QEMU_VM") {
+                // Frame 2 came from a separately allocated and imported
+                // genuine Wayland GPU BO, not a replay of the first frame
+                // or the first fallback wl_shm snapshot.
+                let second_sample=((120+112)*W+(160+180))*4;
+                let [blue,green,red]=pixels[second_sample..second_sample+3]
+                    .try_into().map_err(|_|"second GPU KMS sample truncated")?;
+                if !(51..=85).contains(&blue) ||
+                   !(145..=181).contains(&green) ||
+                   !(17..=49).contains(&red) {
+                    return Err(format!(
+                        "second client GPU DMA-BUF did not reach DRM: B={blue} G={green} R={red}"
+                    ).into());
+                }
+                println!("MELANIA_RUST_GPU_CLIENT_FRAME2_PIXELS_IN_DRM=true");
+            }
             // Verify the previously ACKed kernel scanout is STILL ours.
             // A VT pause, external modeset or hotplug must fail closed.
             let previous_fb=if index==0 {route.original_fb}
@@ -697,10 +715,15 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_ACKED={} generation={}",index+1,generation);
+            // Only an actual DRM FB_ID verification + MLA1 ACK can
+            // produce the literal frame-specific GPU client receipt.
             if dmabuf_kms && index==0 {
-                // This marker follows the actual CRTC/connector/vblank
-                // verification and MLA1 write, never the pre-KMS GPU import.
                 println!("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=1");
+            }
+            if dmabuf_kms && index==1 &&
+                std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                    .as_deref()==Ok("YES_QEMU_VM") {
+                println!("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=2");
             }
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("persistent DRM frame counter exhausted")?;

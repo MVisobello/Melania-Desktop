@@ -23,10 +23,12 @@ class RealClientDmabufToKms(unittest.TestCase):
             "params.create_immed(",
             "probe.frame(qh,())",
             "while !state.buffer_released ||",
-            "(gpu_kms && state.frame_done_count!=1)",
+            "(gpu_kms && state.frame_done_count!=gpu_index)",
             "MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true",
             "for index in 1..=total",
             "if gpu_first && index==1 {continue;}",
+            "if gpu_second && index==2 {continue;}",
+            "MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true",
             "MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1",
         ):
             self.assertIn(marker,CLIENT)
@@ -62,7 +64,8 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_gpu_buffer_released_only_after_real_drm_ack_and_ticket(self):
         for marker in (
             "MELANIA_NATIVE_CLIENT_DMABUF_KMS",
-            "self.continuous_frame_count!=0",
+            "qemu_gpu_frame_allowed(",
+            "MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU",
             "readback_qemu_client_bgra(renderer,texture)",
             "self.multi_scene.upsert(key,pixels)",
             "self.continuous_client_ledger.stage(surface.clone(),buffer)",
@@ -80,6 +83,22 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(ack.index("completed.resource.release();"),
                         ack.index("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}"))
 
+    def test_two_different_gpu_dmabufs_present_before_ten_shm_frames(self):
+        self.assertIn("for gpu_index in 1..=gpu_frames",CLIENT)
+        self.assertIn("let mut image=allocator.create_buffer(",CLIENT)
+        self.assertLess(
+            CLIENT.index("for gpu_index in 1..=gpu_frames"),
+            CLIENT.index("let mut image=allocator.create_buffer(")
+        )
+        self.assertIn("Color32F::new(0.12,0.64,0.27,1.0)",CLIENT)
+        self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_GPU_FRAME2_PIXELS_READBACK=360x224",BRIDGE)
+        self.assertIn("self.client_dmabuf_imports.retain(|(known,_)|",BRIDGE)
+        self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",BRIDGE)
+        self.assertIn("MELANIA_RUST_GPU_CLIENT_FRAME2_PIXELS_IN_DRM=true",DRM)
+        self.assertIn("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=2",DRM)
+        self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=2",GUEST)
+        self.assertIn("if gpu_second && index==2 {continue;}",CLIENT)
+
     def test_client_gpu_texture_is_owned_through_kms_ack_then_dropped_before_release(self):
         ack=BRIDGE.split("fn poll_continuous_kms(&mut self)",1)[1].split(
             "fn begin_generation_proof(",1)[0]
@@ -95,7 +114,8 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(callback,release)
         self.assertLess(release,marker)
         self.assertIn("any(|(known,_)|known==&completed.resource)",ack)
-        self.assertIn("let required_gpu_client=self.continuous_frame_count==1",ack)
+        self.assertIn("qemu_gpu_frame_required(",ack)
+        self.assertIn("self.continuous_frame_count,double_gpu",ack)
         self.assertIn("if required_gpu_client && !is_gpu_client",ack)
         missing=BRIDGE.split(
             'eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_RENDERER_MISSING=true");',1
@@ -114,6 +134,8 @@ class RealClientDmabufToKms(unittest.TestCase):
             "MELANIA_NATIVE_CLIENT_DMABUF_KMS",
             "let center=((120+112)*W+(160+180))*4;",
             "MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true",
+            "MELANIA_RUST_GPU_CLIENT_FRAME2_PIXELS_IN_DRM=true",
+            "MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=2",
             "MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true",
             # GLES scissor uses bottom-origin coordinates; after readback
             # the alpha patch is at y=224-1-40, not the opaque y=40.
@@ -148,6 +170,10 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_NOT_PRESENTED=true",GUEST)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true",GUEST)
         self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_KMS=YES_QEMU_VM",GUEST)
+        self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU=YES_QEMU_VM",GUEST)
+        self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM",GUEST)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true",GUEST)
+        self.assertIn("MELANIA_RUST_GPU_CLIENT_FRAME2_PIXELS_IN_DRM=true",GUEST)
         self.assertIn("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM",GUEST)
         self.assertIn(
             "MELANIA_QEMU_EXTERNAL_CLIENT_GPU_DMA_BUF_TO_REAL_KMS_12_FRAMES_PASS=true",GUEST)
