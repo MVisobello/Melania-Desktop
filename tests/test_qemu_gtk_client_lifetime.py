@@ -49,7 +49,7 @@ class GtkUsbInputLifetime(unittest.TestCase):
         # environment assignment. Check every physical continuation line.
         lines = launch.splitlines()
         for index, line in enumerate(lines[:-1]):
-            if line.rstrip().endswith("\\\\"):
+            if line.rstrip().endswith("\\"):
                 self.assertTrue(lines[index + 1].strip(), "empty continued line")
                 self.assertFalse(lines[index + 1].lstrip().startswith("#"),
                                  "comment detached GTK environment")
