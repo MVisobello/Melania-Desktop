@@ -107,13 +107,51 @@ class RealImeWireRoundtrip(unittest.TestCase):
         for marker in (
             "MELANIA_NATIVE_TEXT_INPUT_IME",
             "MELANIA_NATIVE_TRUSTED_IME_PID",
-            "client.get_credentials(&identity_handle)",
-            "credentials.pid as u32==pid",
+            "libc::SO_PEERCRED",
+            "kernel_peer_pid=u32::try_from(credentials.pid).ok()",
+            "client.get_data::<BridgeClientState>()",
+            "trusted_ime_peer(data.kernel_peer_pid,pid)",
+            "kernel_peer_pid,",
+            "fn trusted_ime_peer(kernel_peer_pid:Option<u32>,allowed_pid:u32)->bool",
             'MELANIA_NATIVE_SESSION_READY=false',
         ):
             self.assertIn(marker,BRIDGE)
         self.assertIn("MELANIA_NATIVE_WAYLAND_RENDER_READY=false",GUEST)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
+        self.assertNotIn("client.get_credentials(&identity_handle)",BRIDGE)
+        self.assertIn("fn only_exact_kernel_socket_pid_is_privileged()",BRIDGE)
+
+    def test_server_finishes_only_after_real_kernel_peer_disconnects(self):
+        # Only Linux SO_PEERCRED can designate the trusted input method.
+        # The Rust lifecycle receipt alone is never a fake text commit.
+        for marker in (
+            "struct ImeGuestLifecycle",
+            "trusted_disconnects: AtomicU32",
+            "ordinary_disconnects: AtomicU32",
+            "fn disconnected(&self,_:ClientId,_:DisconnectReason)",
+            "tracker.all_three_disconnected(",
+            "ime_trusted_connections,ime_untrusted_connections",
+            "MELANIA_NATIVE_QEMU_IME_THREE_PEER_DISCONNECTS_VERIFIED=true",
+            "trusted_ime_pid.is_none() && !shell_probe",
+            "mod ime_guest_lifecycle_tests",
+        ):
+            self.assertIn(marker, BRIDGE)
+        self.assertIn(
+            "grep -Fqx 'MELANIA_NATIVE_QEMU_IME_THREE_PEER_DISCONNECTS_VERIFIED=true' \"$ime_server_log\"",
+            GUEST,
+        )
+        self.assertIn(
+            "fatal 'real_IME_three_authenticated_socket_lifecycles_not_verified'",
+            GUEST,
+        )
+        # The guest still requires independently observed real protocol events:
+        # no success based only on the server lifecycle and no bypass of UTF-8.
+        self.assertLess(
+            GUEST.index("MELANIA_NATIVE_QEMU_IME_THREE_PEER_DISCONNECTS_VERIFIED=true"),
+            GUEST.index("'MELANIA_QEMU_REAL_IME_UTF8_COMMIT_SENT=true'"),
+        )
+        self.assertIn("MELANIA_QEMU_REAL_EDITOR_IME_UTF8_ROUNDTRIP=true", GUEST)
+        self.assertIn("MELANIA_QEMU_REAL_IM_V2_TO_TI_V3_UTF8_WIRE_ROUNDTRIP_PASS=true", GUEST)
 
 if __name__ == "__main__":
     unittest.main()

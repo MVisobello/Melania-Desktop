@@ -15,6 +15,17 @@ pub const MAX_CLIENT_BUFFER_BYTES:usize=16*1024*1024;
 pub const MAX_CLIENT_SURFACE_EDGE:usize=2048;
 pub const MAX_CLIENT_IMPORTS:usize=4;
 
+/// VM-only two successive genuine client GPU frames on one XDG surface.
+/// The second DMA-BUF is admissible ONLY after the first confirmed KMS
+/// presentation; a third cannot pass by reusing the first ticket.
+/// This does not authorize native/physical import or direct GPU scanout.
+pub fn qemu_gpu_frame_allowed(acknowledged:u64,two_gpu:bool)->bool {
+    acknowledged==0 || (two_gpu && acknowledged==1)
+}
+pub fn qemu_gpu_frame_required(frame:u64,two_gpu:bool)->bool {
+    frame==1 || (two_gpu && frame==2)
+}
+
 /// Keep format advertisements restricted to the single-plane 32-bit layouts
 /// this experimental bridge can validate, rather than mirroring the whole EGL
 /// modifier table (including formats the compositor could never use).
@@ -114,6 +125,19 @@ pub fn readback_qemu_client_bgra(
     convert_rgba_readback_to_bgra(mapped,width,height,flipped)
 }
 
+// The existing QEMU retained CPU scene is opaque XRGB over this BGRA
+// background. Its GPU client has real ARGB8888 alpha; dropping alpha would
+// wrongly turn translucent and fully transparent client texels into solid
+// foreground pixels. This is an explicitly bounded CPU composition step,
+// NOT direct GPU scanout or proof of production DMA-BUF fencing.
+const QEMU_SCENE_BGRA:[u8;3]=[58,33,27];
+
+fn over_opaque_background(premultiplied:u8,background:u8,alpha:u8)->u8 {
+    let remaining=255u16-u16::from(alpha);
+    let background_part=(u16::from(background)*remaining+127)/255;
+    (u16::from(premultiplied)+background_part).min(255) as u8
+}
+
 fn convert_rgba_readback_to_bgra(
     rgba:&[u8],width:usize,height:usize,flipped:bool,
 )->Result<Vec<u8>,String> {
@@ -130,9 +154,17 @@ fn convert_rgba_readback_to_bgra(
         let src=&rgba[source_y*row..(source_y+1)*row];
         let dst=&mut pixels[y*row..(y+1)*row];
         for (src,dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
-            // Client emits opaque/premultiplied RGBA; alpha must not
-            // convert into an accidental transparency in the XRGB scene.
-            dst.copy_from_slice(&[src[2],src[1],src[0],0]);
+            // Imported ARGB8888 client colors are premultiplied. Match
+            // the opaque real QEMU scene background before XRGB scanout,
+            // otherwise partial alpha becomes an incorrectly solid color.
+            // Preserve the B,G,R byte order and discard alpha only AFTER
+            // the per-channel source-over operation.
+            dst.copy_from_slice(&[
+                over_opaque_background(src[2],QEMU_SCENE_BGRA[0],src[3]),
+                over_opaque_background(src[1],QEMU_SCENE_BGRA[1],src[3]),
+                over_opaque_background(src[0],QEMU_SCENE_BGRA[2],src[3]),
+                0,
+            ]);
         }
     }
     Ok(pixels)
@@ -189,10 +221,42 @@ mod tests {
         assert_eq!(&pixels[8..],[255,0,0,0,255,255,255,0]);
     }
     #[test]
+    fn imported_argb_premultiplied_alpha_blends_over_real_kms_background() {
+        // First texel: premultiplied ARGB at 50% alpha. The second is
+        // fully transparent, third opaque; no alpha escapes XRGB scanout.
+        let rgba=[
+            42,23,93,128,
+            0,0,0,0,
+            84,46,186,255,
+        ];
+        let pixels=convert_rgba_readback_to_bgra(&rgba,3,1,false).unwrap();
+        assert_eq!(&pixels[0..4],&[122,39,55,0]);
+        assert_eq!(&pixels[4..8],&[58,33,27,0]);
+        assert_eq!(&pixels[8..12],&[186,46,84,0]);
+        // A non-premultiplied, overly bright channel cannot wrap.
+        assert_eq!(over_opaque_background(250,58,128),255);
+    }
+    #[test]
     fn readback_rejects_wrong_stride_length_and_zero_dimensions() {
         assert!(convert_rgba_readback_to_bgra(&[0;4],2,1,false).is_err());
         assert!(convert_rgba_readback_to_bgra(&[],0,2,false).is_err());
         assert!(convert_rgba_readback_to_bgra(&[0;4],1,1,false).is_ok());
+    }
+    #[test]
+    fn second_real_client_gpu_frame_needs_explicit_mode_and_first_kms_ack() {
+        assert!(qemu_gpu_frame_allowed(0,false));
+        assert!(!qemu_gpu_frame_allowed(1,false));
+        assert!(!qemu_gpu_frame_allowed(2,false));
+        assert!(qemu_gpu_frame_allowed(0,true));
+        assert!(qemu_gpu_frame_allowed(1,true));
+        assert!(!qemu_gpu_frame_allowed(2,true));
+        assert!(!qemu_gpu_frame_allowed(u64::MAX,true));
+        assert!(qemu_gpu_frame_required(1,false));
+        assert!(!qemu_gpu_frame_required(2,false));
+        assert!(qemu_gpu_frame_required(1,true));
+        assert!(qemu_gpu_frame_required(2,true));
+        assert!(!qemu_gpu_frame_required(3,true));
+        assert!(!qemu_gpu_frame_required(0,true));
     }
     #[test]
     fn imported_textures_remain_bounded_even_with_multiple_clients() {

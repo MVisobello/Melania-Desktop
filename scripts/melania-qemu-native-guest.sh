@@ -2858,8 +2858,9 @@ report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'
 # earlier placement moved these stages past their bounded live-input
 # deadlines and caused a false timeout in authenticated pointer resize.
 # P0: NEW independent QEMU DRM session. The first of exactly 12 real
-# framebuffer presentations must be a GPU-drawn DMA-BUF sent from a *different*
-# Wayland process; subsequent 11 frames remain genuine wl_shm client commits.
+# framebuffer presentations must start with TWO distinct GPU-drawn DMA-BUFs
+# from the same separate Wayland process; the final ten frames are genuine
+# wl_shm client commits, each with its own real KMS ACK.
 # Existing historical reject-without-fake-ACK case ABOVE stays unchanged.
 gpu_client_server_log="$(mktemp -t melania-gpu-client-kms-server-XXXXXX)"
 gpu_client_client_log="$(mktemp -t melania-gpu-client-kms-client-XXXXXX)"
@@ -2871,6 +2872,7 @@ MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_DMABUF=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
   timeout --signal=TERM --kill-after=3s 76s \
@@ -2893,6 +2895,7 @@ fi
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM \
   WAYLAND_DISPLAY="$gpu_client_socket" \
   timeout --signal=TERM --kill-after=3s 65s \
   "$continuous_client" > "$gpu_client_client_log" 2>&1; then
@@ -2908,9 +2911,13 @@ for marker in \
   'MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true' \
   'MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true' \
   'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=360x224' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_GPU_FRAME2_PIXELS_READBACK=360x224' \
   'MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true' \
+  'MELANIA_RUST_GPU_CLIENT_FRAME2_PIXELS_IN_DRM=true' \
   'MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=1' \
+  'MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=2' \
   'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=1' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=2' \
   'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' \
   'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
@@ -2920,6 +2927,8 @@ for marker in \
 done
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true' "$gpu_client_client_log" ||
   fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame1_callback'
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true' "$gpu_client_client_log" ||
+  fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame2_callback'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$gpu_client_server_log" ||
     fatal "gpu_client_missing_actual_kernel_KMS_ACK_$index"
@@ -2980,10 +2989,41 @@ for attempt in $(seq 1 700); do
   sleep .05
 done
 if ! grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log"; then
-  cat "$ime_server_log" "$ime_client_log"
+  # Preserve actual guest process diagnostics: a missing marker alone
+  # cannot distinguish an early exit, socket failure or bind denial.
+  report "MELANIA_QEMU_IME_DIAGNOSTIC_EXPECTED_PID=$ime_client_pid"
+  report "MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_PID=$ime_server_pid"
+  if kill -0 "$ime_client_pid" 2>/dev/null; then
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_ALIVE=true'
+  else
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_ALIVE=false'
+  fi
+  if kill -0 "$ime_server_pid" 2>/dev/null; then
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_ALIVE=true'
+  else
+    report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_ALIVE=false'
+  fi
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_LOG_BEGIN=true'
+  cat "$ime_client_log"
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_LOG_END=true'
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_LOG_BEGIN=true'
+  # A client may have connected at the Unix layer without ever being
+  # accepted by the Smithay event loop. Preserve actual kernel PID proof
+  # from SO_PEERCRED; never fabricate a successful Wayland registry bind.
+  grep -F 'MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID=' "$ime_server_log" || true
+  grep -F 'MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID=' "$ime_server_log" || true
+  cat "$ime_server_log"
+  report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_LOG_END=true'
   kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
   fatal 'real_IME_kernel_PID_global_denied_to_trusted_process'
 fi
+# The trusted IME must be the kernel-authenticated peer of the real
+# accepted Wayland socket. A connected but unaccepted client or a different
+# PID must never count as a valid privileged manager binding.
+grep -Fqx "MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID=$ime_client_pid" "$ime_server_log" ||
+  fatal 'real_IME_manager_bound_without_kernel_authenticated_socket_peer'
+grep -Fqx 'MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID=true' "$ime_server_log" ||
+  fatal 'real_IME_manager_bound_without_matching_trusted_kernel_PID'
 # An unrelated PID must NOT even see the privileged manager global.
 if ! MELANIA_QEMU_IME_ROUNDTRIP=YES_QEMU_VM WAYLAND_DISPLAY="$ime_socket" \
   timeout --signal=TERM --kill-after=2s 8s \
@@ -3012,6 +3052,12 @@ if ! wait "$ime_server_pid"; then
   cat "$ime_server_log"
   fatal 'real_IME_Rust_Smithay_seat_or_global_failed'
 fi
+# Server completion alone cannot prove the IME delivered text. This receipt
+# means only that all three kernel-identified peer sockets disconnected.
+grep -Fqx 'MELANIA_NATIVE_QEMU_IME_THREE_PEER_DISCONNECTS_VERIFIED=true' "$ime_server_log" || {
+  cat "$ime_server_log"
+  fatal 'real_IME_three_authenticated_socket_lifecycles_not_verified'
+}
 for marker in \
   'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' \
   'MELANIA_QEMU_REAL_IME_ACTIVATED=true' \

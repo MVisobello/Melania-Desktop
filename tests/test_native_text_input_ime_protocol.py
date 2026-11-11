@@ -24,8 +24,10 @@ class NativeTextInputImeGate(unittest.TestCase):
             'return Err("text input+IME probe may only run in disposable QEMU VM".into())',
             'Some(TextInputManagerState::new::<BridgeState>(&handle))',
             'Some(InputMethodManagerState::new::<BridgeState,_>(&handle,',
-            'client.get_credentials(&identity_handle)',
-            'credentials.pid as u32==pid',
+            'client.get_data::<BridgeClientState>()',
+            'trusted_ime_peer(data.kernel_peer_pid,pid)',
+            'libc::SO_PEERCRED',
+            'kernel_peer_pid=u32::try_from(credentials.pid).ok().filter(|pid|*pid>1)',
             "MELANIA_NATIVE_QEMU_TEXT_INPUT_V3_AND_PID_GATED_IME_READY=true",
         ):
             self.assertIn(expected,BRIDGE)
@@ -34,6 +36,14 @@ class NativeTextInputImeGate(unittest.TestCase):
         self.assertLess(gate,globals_)
         self.assertLess(BRIDGE.index("let trusted_ime_pid=if ime_probe"),globals_)
         self.assertIn("if trusted_ime_pid.is_some()",BRIDGE)
+        # The global filter MUST use the immutable kernel peer captured
+        # at accept(), not a self-reported app PID or a compositor PID.
+        self.assertIn("handle.insert_client(stream,Arc::new(BridgeClientState{",BRIDGE)
+        self.assertIn("kernel_peer_pid,",BRIDGE)
+        self.assertIn("client.get_data::<BridgeClientState>()",BRIDGE)
+        self.assertIn("trusted_ime_peer(data.kernel_peer_pid,pid)",BRIDGE)
+        self.assertNotIn("client.get_credentials(&identity_handle)",BRIDGE)
+        self.assertNotIn("credentials.pid as u32==pid",BRIDGE)
     def test_candidate_panel_is_not_falsely_declared_rendered(self):
         self.assertIn("MELANIA_NATIVE_IME_POPUP_NOT_RENDERED=true",BRIDGE)
         self.assertIn("fn new_popup(&mut self,_surface:InputMethodPopupSurface)",BRIDGE)

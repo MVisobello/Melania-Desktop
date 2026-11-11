@@ -13,7 +13,7 @@ use std::{
     io::{Read,Write},
     os::unix::{fs::PermissionsExt,net::{UnixDatagram,UnixListener,UnixStream}},
     path::{Path,PathBuf},
-    sync::{Arc,atomic::{AtomicBool,Ordering}},
+    sync::{Arc,atomic::{AtomicBool,AtomicU32,Ordering}},
     time::{Duration,Instant},
 };
 use smithay::{
@@ -110,13 +110,51 @@ impl Drop for NativeControlSocket {
     fn drop(&mut self){let _=fs::remove_file(&self.0);}
 }
 
+/// QEMU-only: peer socket completion is not proof of a UTF-8 commit.
+/// The guest independently validates the actual text-input-v3 events and
+/// input-method-v2 deactivation before allowing an end-to-end pass.
+#[derive(Default)]
+struct ImeGuestLifecycle {
+    trusted_disconnects: AtomicU32,
+    ordinary_disconnects: AtomicU32,
+}
+impl ImeGuestLifecycle {
+    fn all_three_disconnected(&self, trusted_accepts:u32, ordinary_accepts:u32)->bool {
+        trusted_accepts==1 && ordinary_accepts==2 &&
+        self.trusted_disconnects.load(Ordering::Acquire)==1 &&
+        self.ordinary_disconnects.load(Ordering::Acquire)==2
+    }
+}
+
 #[derive(Default)]
 struct BridgeClientState {
     compositor: CompositorClientState,
+    // Only the kernel can assign this value. The per-client state is
+    // attached at accept() and cannot be forged via a Wayland request.
+    // None for clients outside the isolated IME probe; fail closed.
+    kernel_peer_pid: Option<u32>,
+    // Only present in the explicitly disposable, three-process IME probe.
+    ime_guest_lifecycle: Option<(Arc<ImeGuestLifecycle>,bool)>,
+}
+
+/// A Wayland registry global is filtered using immutable SO_PEERCRED
+/// captured at accept(), never an app-supplied PID or the compositor PID.
+/// A missing/invalid credential cannot grant the privileged IME global.
+fn trusted_ime_peer(kernel_peer_pid:Option<u32>,allowed_pid:u32)->bool {
+    allowed_pid>1 && kernel_peer_pid==Some(allowed_pid)
 }
 impl ClientData for BridgeClientState {
     fn initialized(&self,_:ClientId) {}
-    fn disconnected(&self,_:ClientId,_:DisconnectReason) {}
+    fn disconnected(&self,_:ClientId,_:DisconnectReason) {
+        if let Some((lifecycle,trusted))=&self.ime_guest_lifecycle {
+            let counter=if *trusted {
+                &lifecycle.trusted_disconnects
+            } else {
+                &lifecycle.ordinary_disconnects
+            };
+            counter.fetch_add(1,Ordering::AcqRel);
+        }
+    }
 }
 
 struct BridgeState {
@@ -594,22 +632,46 @@ impl BridgeState {
         // Each surface is independently eligible for a callback. Newer
         // commits of A must not starve an already presented B.
         for completed in self.continuous_client_ledger.acknowledged(clients) {
+            // The first (and in the double-GPU VM proof, second) KMS
+            // frame must be a real Wayland client DMA-BUF. A destroyed
+            // buffer cannot silently downgrade into a wl_shm ACK.
+            let double_gpu=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                .as_deref()==Ok("YES_QEMU_VM");
+            let required_gpu_client=
+                melania_native::native_client_dmabuf::qemu_gpu_frame_required(
+                    self.continuous_frame_count,double_gpu
+                ) && std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+                    .as_deref()==Ok("YES_QEMU_VM");
             let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
+            if required_gpu_client && !is_gpu_client {
+                return Err("required GPU DMA-BUF disappeared before KMS frame completion".into());
+            }
+            // A previously imported Wayland DMA-BUF must remain owned by
+            // THIS EGL/libseat epoch through the real kernel CRTC ACK.
+            // Destruction/seat-revocation during an in-flight KMS flip must
+            // never be mistaken for a valid Wayland client completion.
+            if is_gpu_client &&
+               !self.client_dmabuf_imports.iter()
+                   .any(|(known,_)|known==&completed.resource) {
+                return Err("GPU DMA-BUF KMS ACK has no retained EGL client import".into());
+            }
             let is_live=(1..=MAX_PENDING_CLIENTS as u64)
                 .any(|slot|self.known_window_surfaces.get(slot)==Some(&completed.key));
+            // Drop the GPU texture BEFORE sending the wl_buffer.release.
+            // After the verified kernel ACK the owned CPU/KMS image is the
+            // only remaining scene owner, so the client may now reuse its BO.
+            if is_gpu_client {
+                self.client_dmabuf_imports.retain(|(known,_)|
+                    known!=&completed.resource);
+            }
             if completed.notify_frame && is_live {
                 let delivered=complete_presented_frame(
                     &completed.key,(self.continuous_frame_count as u32).saturating_mul(16)
                 );
                 self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
             }
-            // Never drop the GPU texture or release a client DMA-BUF until
-            // the real kernel CRTC/vblank receipt and the exact epoch ticket
-            // have passed every existing check above.
             completed.resource.release();
             if is_gpu_client {
-                self.client_dmabuf_imports.retain(|(known,_)|
-                    known!=&completed.resource);
                 println!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",
                          self.continuous_frame_count);
             }
@@ -2393,9 +2455,15 @@ impl CompositorHandler for BridgeState {
                 // scene and DRM worker will present it with a real FB_ID ACK,
                 // not an invented Wayland presentation.
                 let client_gpu_snapshot=if dma_buffer && gpu_client_kms {
+                    let double_gpu=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                        .as_deref()==Ok("YES_QEMU_VM");
+                    // Frame 2 is allowed only after the first actual KMS
+                    // callback released the previous EGL import; never
+                    // accumulate two unpresented textures or accept frame 3.
                     if self.dynamic_window_mode || self.multi_window_mode ||
-                       self.continuous_frame_count!=0 ||
-                       self.client_dmabuf_imports.len()!=1 {
+                       !melania_native::native_client_dmabuf::qemu_gpu_frame_allowed(
+                           self.continuous_frame_count,double_gpu
+                       ) || self.client_dmabuf_imports.len()!=1 {
                         eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_SCENE_REFUSED=true");
                         self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                         buffer.release();
@@ -2403,6 +2471,9 @@ impl CompositorHandler for BridgeState {
                     }
                     let Some(renderer)=self.client_dmabuf_renderer.as_mut() else {
                         eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_RENDERER_MISSING=true");
+                        // A revoked/absent EGL renderer cannot retain a
+                        // previously imported client BO after wl_buffer.release.
+                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                         buffer.release();
                         return;
                     };
@@ -2416,6 +2487,9 @@ impl CompositorHandler for BridgeState {
                         readback_qemu_client_bgra(renderer,texture) {
                         Ok(pixels)=>{
                             println!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=360x224");
+                            if self.continuous_frame_count==1 {
+                                println!("MELANIA_NATIVE_CLIENT_DMABUF_GPU_FRAME2_PIXELS_READBACK=360x224");
+                            }
                             Some(pixels)
                         },
                         Err(error)=>{
@@ -4346,13 +4420,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         Some(TextInputManagerState::new::<BridgeState>(&handle))
     } else {None};
     let _input_method_global=if let Some(pid)=trusted_ime_pid {
-        let identity_handle=handle.clone();
         Some(InputMethodManagerState::new::<BridgeState,_>(&handle,
             move|client|{
-                // Credentials originate from the kernel-owned Wayland
-                // transport socket; don't trust a client-provided app ID.
-                client.get_credentials(&identity_handle)
-                    .is_ok_and(|credentials|credentials.pid as u32==pid)
+                // The actual SO_PEERCRED is captured at accept() before
+                // Smithay creates the client. get_credentials() on a
+                // freshly registered backend can be unavailable; do not
+                // silently hide the trusted global on that failure.
+                // Never authorize by a self-reported application identity.
+                client.get_data::<BridgeClientState>()
+                    .is_some_and(|data|trusted_ime_peer(data.kernel_peer_pid,pid))
             }))
     } else {None};
     if trusted_ime_pid.is_some() {
@@ -4775,6 +4851,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         else if state.close_redraw_mode {55}
         else if state.drag_redraw_mode {45} else {27}
     );
+    // Accepted kernel peer PIDs do not prove an IME global bind or UTF-8 commit.
+    // After all peers have disconnected the independent QEMU guest must still
+    // validate both protocol clients' true events, not mere server uptime.
+    let ime_guest_lifecycle=trusted_ime_pid.map(|_|Arc::new(ImeGuestLifecycle::default()));
+    let mut ime_trusted_connections:u32=0;
+    let mut ime_untrusted_connections:u32=0;
     let mut both_shell_roles_seen_at=None;
     let mut real_gtk_seen_since=None;
     let mut pixel_ready_since=None;
@@ -4828,10 +4910,59 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Err(format!("native KMS DRM identity revoked: {error}").into());
             }
         }
+        // Actual Unix socket acceptance is separate from the Wayland
+        // registry roundtrip. Keep PID-gated IME diagnostics anchored to
+        // kernel SO_PEERCRED, never an app-supplied name or declared PID.
         while let Some(stream)=listener.accept()? {
-            handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
+            let mut kernel_peer_pid=None;
+            let mut trusted_ime_socket=false;
+            if trusted_ime_pid.is_some() {
+                use std::os::fd::AsRawFd;
+                let mut credentials=libc::ucred{pid:0,uid:0,gid:0};
+                let mut length=std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+                let result=unsafe {
+                    libc::getsockopt(stream.as_raw_fd(),libc::SOL_SOCKET,
+                        libc::SO_PEERCRED,
+                        (&mut credentials as *mut libc::ucred).cast(),
+                        &mut length)
+                };
+                if result!=0 || length as usize!=std::mem::size_of::<libc::ucred>() {
+                    return Err("Wayland IME guest socket peer credentials unavailable".into());
+                }
+                kernel_peer_pid=u32::try_from(credentials.pid).ok().filter(|pid|*pid>1);
+                println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID={}",credentials.pid);
+                let allowed=kernel_peer_pid.is_some() && kernel_peer_pid==trusted_ime_pid;
+                trusted_ime_socket=allowed;
+                if allowed {
+                    ime_trusted_connections=ime_trusted_connections.saturating_add(1);
+                } else {
+                    ime_untrusted_connections=ime_untrusted_connections.saturating_add(1);
+                }
+                println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID={}",allowed);
+                let _=std::io::stdout().flush();
+            }
+            handle.insert_client(stream,Arc::new(BridgeClientState{
+                kernel_peer_pid,
+                ime_guest_lifecycle:ime_guest_lifecycle.as_ref()
+                    .map(|tracker|(Arc::clone(tracker),trusted_ime_socket)),
+                ..BridgeClientState::default()
+            }))?;
         }
         display.dispatch_clients(&mut state)?;
+        // The old USB keyboard/pointer smoke exit predicate does not apply to
+        // this real IME probe. Wait for the single kernel-authenticated IME
+        // connection and two distinct untrusted peers (editor, intruder) to
+        // actually disconnect. This is a lifecycle receipt, NOT text success:
+        // the guest also requires real Activate/Done/CommitString/Deactivate
+        // and UTF-8 payload markers from the separate Wayland clients.
+        if ime_guest_lifecycle.as_ref().is_some_and(|tracker|
+            tracker.all_three_disconnected(
+                ime_trusted_connections,ime_untrusted_connections
+            )) {
+            println!("MELANIA_NATIVE_QEMU_IME_THREE_PEER_DISCONNECTS_VERIFIED=true");
+            println!("MELANIA_NATIVE_SESSION_READY=false");
+            return Ok(());
+        }
         // Fail closed if any grouped client withholds XDG ACK or pixels.
         // The previously confirmed retained scene is not repositioned.
         if state.tab_resize_started_at.is_some_and(|start|
@@ -5025,7 +5156,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Ok(());
             }
         }
-        if !shell_probe && !state.pixel_probe && state.delivered_keys>=2 && state.delivered_buttons>=2 && state.focused.is_some() {
+        if trusted_ime_pid.is_none() && !shell_probe && !state.pixel_probe &&
+           state.delivered_keys>=2 && state.delivered_buttons>=2 &&
+           state.focused.is_some() {
             println!("MELANIA_NATIVE_WAYLAND_KEYBOARD_EVENTS={}",state.delivered_keys);
             println!("MELANIA_NATIVE_WAYLAND_POINTER_BUTTON_EVENTS={}",state.delivered_buttons);
             println!("MELANIA_NATIVE_WAYLAND_INPUT_FORWARDED=true");
@@ -5077,6 +5210,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true");
         println!("NATIVE_SESSION_READY=false");
         return Ok(());
+    }
+    if trusted_ime_pid.is_some() {
+        // No synthetic PASS: only real separate clients may certify the
+        // input-method-v2 -> text-input-v3 UTF-8 commit/done handshake.
+        return Err(format!(
+            "QEMU real IME protocol roundtrip incomplete: trusted_kernel_peers={} untrusted_kernel_peers={} editor_focused={} (no UTF-8 commit/done proof; legacy keys={} buttons={} are NOT IME evidence)",
+            ime_trusted_connections,ime_untrusted_connections,
+            state.focused.is_some(),state.delivered_keys,state.delivered_buttons
+        ).into());
     }
     Err(format!(
         "QEMU Wayland input bridge incomplete: focused={} keys={} buttons={}",
@@ -5198,5 +5340,42 @@ mod native_scroll_stage90_tests {
         assert_eq!(bounded_v120(Some(f64::NAN)),None);
         assert_eq!(bounded_v120(Some(f64::INFINITY)),None);
         assert_eq!(bounded_v120(Some(1e30)),None);
+    }
+}
+
+#[cfg(test)]
+mod trusted_ime_peer_tests {
+    use super::trusted_ime_peer;
+    #[test]
+    fn only_exact_kernel_socket_pid_is_privileged() {
+        assert!(trusted_ime_peer(Some(1201),1201));
+        assert!(!trusted_ime_peer(Some(1202),1201));
+        assert!(!trusted_ime_peer(None,1201));
+        assert!(!trusted_ime_peer(Some(1),1));
+        assert!(!trusted_ime_peer(Some(0),1201));
+        assert!(!trusted_ime_peer(Some(1201),0));
+        assert!(!trusted_ime_peer(Some(1201),1));
+    }
+}
+
+
+#[cfg(test)]
+mod ime_guest_lifecycle_tests {
+    use super::{ImeGuestLifecycle,Ordering};
+    #[test]
+    fn requires_exactly_three_authenticated_socket_lifecycles() {
+        let tracker=ImeGuestLifecycle::default();
+        assert!(!tracker.all_three_disconnected(1,2));
+        tracker.trusted_disconnects.store(1,Ordering::Release);
+        assert!(!tracker.all_three_disconnected(1,2));
+        tracker.ordinary_disconnects.store(1,Ordering::Release);
+        assert!(!tracker.all_three_disconnected(1,2));
+        tracker.ordinary_disconnects.store(2,Ordering::Release);
+        assert!(tracker.all_three_disconnected(1,2));
+        // A different client count or a reconnect fails closed.
+        assert!(!tracker.all_three_disconnected(2,2));
+        assert!(!tracker.all_three_disconnected(1,3));
+        tracker.trusted_disconnects.store(2,Ordering::Release);
+        assert!(!tracker.all_three_disconnected(1,2));
     }
 }
