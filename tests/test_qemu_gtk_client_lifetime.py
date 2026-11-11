@@ -47,8 +47,12 @@ class GtkUsbInputLifetime(unittest.TestCase):
         self.assertIn('timeout --signal=TERM --kill-after=3s 52s "$gtk_panel"', launch)
         # No comments or blank commands may interrupt any continued
         # environment assignment. Check every physical continuation line.
+        # The slice stops before the output redirection; the final
+        # timeout command legitimately continues into that redirection.
+        # Validate the complete environment-assignment lines only.
         lines = launch.splitlines()
-        for index, line in enumerate(lines[:-1]):
+        self.assertTrue(lines[-1].strip().startswith("timeout --signal=TERM"))
+        for index, line in enumerate(lines[:-2]):
             if line.rstrip().endswith("\\"):
                 self.assertTrue(lines[index + 1].strip(), "empty continued line")
                 self.assertFalse(lines[index + 1].lstrip().startswith("#"),
