@@ -13,13 +13,6 @@ GUEST = (Path(__file__).resolve().parents[1] /
 
 class GtkUsbInputLifetime(unittest.TestCase):
     def test_real_gtk_client_outlives_drm_verifier_but_not_smithay(self):
-        def timeout_for(command):
-            match = re.search(
-                r'timeout --signal=TERM --kill-after=3s (\d+)s\s+(?:\\\s+)?'
-                + re.escape(command), GUEST)
-            self.assertIsNotNone(match, command)
-            return int(match.group(1))
-
         # Earlier GTK smoke sessions intentionally use shorter timeouts.
         # Inspect only the real second-frame USB-search session, so this
         # contract checks the processes that actually share a lifetime.
@@ -28,7 +21,7 @@ class GtkUsbInputLifetime(unittest.TestCase):
         session = GUEST[start:end]
         def session_timeout(command):
             match = re.search(
-                r'timeout --signal=TERM --kill-after=3s (\\d+)s\\s+(?:\\\\\\s+)?'
+                r'timeout --signal=TERM --kill-after=3s (\d+)s\s+(?:\\\s+)?'
                 + re.escape(command), session)
             self.assertIsNotNone(match, command)
             return int(match.group(1))
