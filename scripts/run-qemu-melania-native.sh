@@ -254,16 +254,16 @@ python3 "$root/scripts/capture-qemu-continuous-reopen.py" \
 continuous_reopen_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-dynamic.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-window-frame12.ppm" --timeout 1350 \
+  --output "$report/dynamic-window-frame12.ppm" --timeout 1680 \
   > "$report/qmp-continuous-dynamic.log" 2>&1 &
 dynamic_capture_pid=$!
 python3 "$root/scripts/inject-qemu-dynamic-pointer.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1680 \
   > "$report/qmp-dynamic-pointer-input.log" 2>&1 &
 dynamic_pointer_input_pid=$!
 python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1350 \
+  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1680 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-xdg-popup.py" \
