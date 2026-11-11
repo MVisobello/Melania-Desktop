@@ -2998,11 +2998,23 @@ if ! grep -Fqx 'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' "$ime_client_log"; 
   cat "$ime_client_log"
   report 'MELANIA_QEMU_IME_DIAGNOSTIC_CLIENT_LOG_END=true'
   report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_LOG_BEGIN=true'
+  # A client may have connected at the Unix layer without ever being
+  # accepted by the Smithay event loop. Preserve actual kernel PID proof
+  # from SO_PEERCRED; never fabricate a successful Wayland registry bind.
+  grep -F 'MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID=' "$ime_server_log" || true
+  grep -F 'MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID=' "$ime_server_log" || true
   cat "$ime_server_log"
   report 'MELANIA_QEMU_IME_DIAGNOSTIC_SERVER_LOG_END=true'
   kill "$ime_server_pid" "$ime_client_pid" 2>/dev/null || true
   fatal 'real_IME_kernel_PID_global_denied_to_trusted_process'
 fi
+# The trusted IME must be the kernel-authenticated peer of the real
+# accepted Wayland socket. A connected but unaccepted client or a different
+# PID must never count as a valid privileged manager binding.
+grep -Fqx "MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID=$ime_client_pid" "$ime_server_log" ||
+  fatal 'real_IME_manager_bound_without_kernel_authenticated_socket_peer'
+grep -Fqx 'MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID=true' "$ime_server_log" ||
+  fatal 'real_IME_manager_bound_without_matching_trusted_kernel_PID'
 # An unrelated PID must NOT even see the privileged manager global.
 if ! MELANIA_QEMU_IME_ROUNDTRIP=YES_QEMU_VM WAYLAND_DISPLAY="$ime_socket" \
   timeout --signal=TERM --kill-after=2s 8s \
