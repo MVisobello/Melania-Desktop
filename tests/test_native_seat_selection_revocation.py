@@ -43,5 +43,20 @@ class SeatSelectionRevocation(unittest.TestCase):
         self.assertIn("set_primary_focus(", body)
 
 
+    def test_gtk_start_real_focus_respects_same_seat_epoch(self):
+        # QEMU's special GTK Start keyboard-focus path must not bypass the
+        # normal SeatHandler epoch guard after VT pause or fatal GPU loss.
+        start = BRIDGE.index("fn refresh_qemu_gtk_start_focus(")
+        end = BRIDGE.index("fn note_scene_change(", start) if "fn note_scene_change(" in BRIDGE[start:] else BRIDGE.index("fn submit_continuous_frame(", start)
+        body = BRIDGE[start:end]
+        self.assertIn("!self.lifecycle.seat_active()", body)
+        self.assertIn("self.native_presentation_guard.permanently_revoked()", body)
+        self.assertIn("keyboard.set_focus(self,Some(surface.clone())", body)
+        self.assertLess(body.index("!self.lifecycle.seat_active()"),
+                        body.index("keyboard.set_focus(self,Some(surface.clone())"))
+        self.assertLess(body.index("self.native_presentation_guard.permanently_revoked()"),
+                        body.index("keyboard.set_focus(self,Some(surface.clone())"))
+
+
 if __name__ == "__main__":
     unittest.main()
