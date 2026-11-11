@@ -4852,7 +4852,28 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 return Err(format!("native KMS DRM identity revoked: {error}").into());
             }
         }
+        // Actual Unix socket acceptance is separate from the Wayland
+        // registry roundtrip. Keep PID-gated IME diagnostics anchored to
+        // kernel SO_PEERCRED, never an app-supplied name or declared PID.
         while let Some(stream)=listener.accept()? {
+            if trusted_ime_pid.is_some() {
+                use std::os::fd::AsRawFd;
+                let mut credentials=libc::ucred{pid:0,uid:0,gid:0};
+                let mut length=std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+                let result=unsafe {
+                    libc::getsockopt(stream.as_raw_fd(),libc::SOL_SOCKET,
+                        libc::SO_PEERCRED,
+                        (&mut credentials as *mut libc::ucred).cast(),
+                        &mut length)
+                };
+                if result!=0 || length as usize!=std::mem::size_of::<libc::ucred>() {
+                    return Err("Wayland IME guest socket peer credentials unavailable".into());
+                }
+                println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID={}",credentials.pid);
+                println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID={}",
+                         credentials.pid>1 && Some(credentials.pid as u32)==trusted_ime_pid);
+                let _=std::io::stdout().flush();
+            }
             handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
         }
         display.dispatch_clients(&mut state)?;
