@@ -24,7 +24,16 @@ class NativePrimarySelectionFocus(unittest.TestCase):
         hook = SOURCE.split("impl SeatHandler for BridgeState {", 1)[1].split(
             "fn cursor_image(", 1
         )[0]
-        self.assertIn("let client=focused.and_then(|surface|surface.client());", hook)
+        # Both selections must share the *same* client, and never expose
+        # an old source once libseat ownership is lost or the DRM epoch revoked.
+        self.assertIn("let client=if self.lifecycle.seat_active() &&",hook)
+        self.assertIn("!self.native_presentation_guard.permanently_revoked()",hook)
+        self.assertIn("focused.and_then(|surface|surface.client())",hook)
+        self.assertIn("} else {None};",hook)
+        self.assertLess(hook.index("!self.native_presentation_guard.permanently_revoked()"),
+                        hook.index("focused.and_then(|surface|surface.client())"))
+        self.assertLess(hook.index("} else {None};"),
+                        hook.index("set_data_device_focus("))
         self.assertIn(
             "set_data_device_focus(&self.display_handle,seat,client.clone());", hook
         )
