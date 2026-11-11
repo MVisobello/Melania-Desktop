@@ -257,7 +257,11 @@ fn exercise_real_client_dmabuf(
             } else {
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true");
             }
-            println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED={gpu_index}");
+            if gpu_index==1 {
+                println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
+            } else {
+                println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=2");
+            }
         } else {
             if state.frame_done_count!=0 {
                 return Err("client DMA-BUF received a fabricated KMS frame callback".into());

@@ -715,12 +715,15 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_RUST_CONTINUOUS_FRAME_ACKED={} generation={}",index+1,generation);
-            if dmabuf_kms && (index==0 ||
-                (index==1 && std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
-                    .as_deref()==Ok("YES_QEMU_VM"))) {
-                // Each marker follows the actual CRTC/connector/vblank
-                // verification and MLA1 write for its OWN kernel frame.
-                println!("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK={}",index+1);
+            // Only an actual DRM FB_ID verification + MLA1 ACK can
+            // produce the literal frame-specific GPU client receipt.
+            if dmabuf_kms && index==0 {
+                println!("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=1");
+            }
+            if dmabuf_kms && index==1 &&
+                std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU")
+                    .as_deref()==Ok("YES_QEMU_VM") {
+                println!("MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=2");
             }
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("persistent DRM frame counter exhausted")?;
