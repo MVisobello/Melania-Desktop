@@ -4812,6 +4812,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         else if state.close_redraw_mode {55}
         else if state.drag_redraw_mode {45} else {27}
     );
+    // Accepted kernel peer PIDs do not prove an IME global bind or UTF-8 commit.
+    let mut ime_trusted_connections:u32=0;
+    let mut ime_untrusted_connections:u32=0;
     let mut both_shell_roles_seen_at=None;
     let mut real_gtk_seen_since=None;
     let mut pixel_ready_since=None;
@@ -4885,8 +4888,13 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 }
                 kernel_peer_pid=u32::try_from(credentials.pid).ok().filter(|pid|*pid>1);
                 println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID={}",credentials.pid);
-                println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID={}",
-                         kernel_peer_pid.is_some() && kernel_peer_pid==trusted_ime_pid);
+                let allowed=kernel_peer_pid.is_some() && kernel_peer_pid==trusted_ime_pid;
+                if allowed {
+                    ime_trusted_connections=ime_trusted_connections.saturating_add(1);
+                } else {
+                    ime_untrusted_connections=ime_untrusted_connections.saturating_add(1);
+                }
+                println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID={}",allowed);
                 let _=std::io::stdout().flush();
             }
             handle.insert_client(stream,Arc::new(BridgeClientState{
@@ -5140,6 +5148,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         println!("MELANIA_NATIVE_PERSISTENT_KMS_SHUTDOWN_OK=true");
         println!("NATIVE_SESSION_READY=false");
         return Ok(());
+    }
+    if trusted_ime_pid.is_some() {
+        // No synthetic PASS: only real separate clients may certify the
+        // input-method-v2 -> text-input-v3 UTF-8 commit/done handshake.
+        return Err(format!(
+            "QEMU real IME protocol roundtrip incomplete: trusted_kernel_peers={} untrusted_kernel_peers={} editor_focused={} (no UTF-8 commit/done proof; legacy keys={} buttons={} are NOT IME evidence)",
+            ime_trusted_connections,ime_untrusted_connections,
+            state.focused.is_some(),state.delivered_keys,state.delivered_buttons
+        ).into());
     }
     Err(format!(
         "QEMU Wayland input bridge incomplete: focused={} keys={} buttons={}",
