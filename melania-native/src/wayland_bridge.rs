@@ -50,7 +50,8 @@ use smithay::{
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
-            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus},
+            ClientDndGrabHandler,ServerDndGrabHandler,set_data_device_focus,
+            clear_data_device_selection},
             primary_selection::{PrimarySelectionHandler,PrimarySelectionState,
                 set_primary_focus,clear_primary_selection}},
         output::{OutputHandler,OutputManagerState},
@@ -388,6 +389,14 @@ impl BridgeState {
             return;
         }
         if on_screen {
+            // A new GTK Start wl_shm commit may arrive after a libseat pause
+            // or a fatal DRM epoch. Never resurrect keyboard focus then:
+            // this is the same epoch boundary enforced by SeatHandler.
+            if !self.lifecycle.seat_active() ||
+                self.native_presentation_guard.permanently_revoked() {
+                eprintln!("MELANIA_NATIVE_GTK_START_FOCUS_DENIED_INACTIVE_EPOCH=true");
+                return;
+            }
             if self.focused.as_ref()==Some(surface) {return;}
             let keyboard=self.seat.get_keyboard().expect("keyboard");
             keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
@@ -2950,9 +2959,15 @@ impl SeatHandler for BridgeState {
     type TouchFocus=WlSurface;
     fn seat_state(&mut self)->&mut SeatState<Self> {&mut self.seats}
     fn focus_changed(&mut self,seat:&Seat<Self>,focused:Option<&WlSurface>){
-        // A focus transition transfers wl_data_device offers only to the actual client.
-        // Unmapped or destroyed surfaces revoke the offer instead of keeping stale focus.
-        let client=focused.and_then(|surface|surface.client());
+        // A focus transition transfers clipboard and primary-selection offers
+        // only to a real focused client while this libseat epoch still owns
+        // input. A delayed Wayland focus notification after a VT pause, GPU
+        // removal or fatal DRM loss must NOT resurrect an old client's
+        // clipboard/primary offer on a new surface.
+        let client=if self.lifecycle.seat_active() &&
+            !self.native_presentation_guard.permanently_revoked() {
+            focused.and_then(|surface|surface.client())
+        } else {None};
         set_data_device_focus(&self.display_handle,seat,client.clone());
         set_primary_focus(&self.display_handle,seat,client);
     }
@@ -4126,7 +4141,14 @@ fn revoke_wayland_input_for_lost_seat(state:&mut BridgeState) {
     state.tab_resize_transaction.revoke();
     state.tab_resize_images.clear();
     state.tab_resize_started_at=None;
+    // Dropping focus alone is NOT revoking a selection: Smithay retains
+    // the existing clipboard source until a new owner replaces it. On an
+    // unrecoverable libseat epoch do both operations explicitly, so a later
+    // unrelated client cannot receive offers from the old VT's provider.
+    // clear_data_device_selection cancels the original wl_data_source;
+    // clear_primary_selection does the equivalent for middle-click paste.
     set_data_device_focus(&state.display_handle,&state.seat,None);
+    clear_data_device_selection(&state.display_handle,&state.seat);
     set_primary_focus(&state.display_handle,&state.seat,None);
     clear_primary_selection(&state.display_handle,&state.seat);
     state.pointer_buttons_held.clear();
