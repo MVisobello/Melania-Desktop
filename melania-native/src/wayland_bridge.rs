@@ -594,22 +594,43 @@ impl BridgeState {
         // Each surface is independently eligible for a callback. Newer
         // commits of A must not starve an already presented B.
         for completed in self.continuous_client_ledger.acknowledged(clients) {
+            // Frame 1 of this exact VM experiment is REQUIRED to originate
+            // from a real DMA-BUF. If a client destroys the protocol buffer
+            // before KMS completion, get_dmabuf() may no longer resolve it:
+            // never silently downgrade that frame into a wl_shm ACK.
+            let required_gpu_client=self.continuous_frame_count==1 &&
+                std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
+                    .as_deref()==Ok("YES_QEMU_VM");
             let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
+            if required_gpu_client && !is_gpu_client {
+                return Err("required GPU DMA-BUF disappeared before KMS frame1 completion".into());
+            }
+            // A previously imported Wayland DMA-BUF must remain owned by
+            // THIS EGL/libseat epoch through the real kernel CRTC ACK.
+            // Destruction/seat-revocation during an in-flight KMS flip must
+            // never be mistaken for a valid Wayland client completion.
+            if is_gpu_client &&
+               !self.client_dmabuf_imports.iter()
+                   .any(|(known,_)|known==&completed.resource) {
+                return Err("GPU DMA-BUF KMS ACK has no retained EGL client import".into());
+            }
             let is_live=(1..=MAX_PENDING_CLIENTS as u64)
                 .any(|slot|self.known_window_surfaces.get(slot)==Some(&completed.key));
+            // Drop the GPU texture BEFORE sending the wl_buffer.release.
+            // After the verified kernel ACK the owned CPU/KMS image is the
+            // only remaining scene owner, so the client may now reuse its BO.
+            if is_gpu_client {
+                self.client_dmabuf_imports.retain(|(known,_)|
+                    known!=&completed.resource);
+            }
             if completed.notify_frame && is_live {
                 let delivered=complete_presented_frame(
                     &completed.key,(self.continuous_frame_count as u32).saturating_mul(16)
                 );
                 self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
             }
-            // Never drop the GPU texture or release a client DMA-BUF until
-            // the real kernel CRTC/vblank receipt and the exact epoch ticket
-            // have passed every existing check above.
             completed.resource.release();
             if is_gpu_client {
-                self.client_dmabuf_imports.retain(|(known,_)|
-                    known!=&completed.resource);
                 println!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",
                          self.continuous_frame_count);
             }
@@ -2403,6 +2424,9 @@ impl CompositorHandler for BridgeState {
                     }
                     let Some(renderer)=self.client_dmabuf_renderer.as_mut() else {
                         eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_RENDERER_MISSING=true");
+                        // A revoked/absent EGL renderer cannot retain a
+                        // previously imported client BO after wl_buffer.release.
+                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                         buffer.release();
                         return;
                     };
