@@ -115,6 +115,50 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
     Ok(())
 }
 
+/// A single-plane LINEAR DMA-BUF has an exact minimum byte extent:
+/// offset + (height - 1) * stride + width * 4. Validate that extent against
+/// the actual kernel-reported DMA-BUF FD length, not just metadata that an
+/// untrusted Wayland client provided. Kernel DMA-BUF supports SEEK_END to
+/// report its allocation size; refusal or an unknown size fails closed.
+///
+/// Non-linear/tiled modifiers may have vendor-specific compression/headers:
+/// their logical stride is NOT necessarily a minimum physical file extent.
+/// Leave those to active EGL format negotiation/import rather than falsely
+/// rejecting compressed layouts. This function provides neither an acquire
+/// fence nor permission for wl_buffer.release/Wayland frame callbacks.
+fn validate_linear_plane_backing(buffer:&Dmabuf)->Result<(),String> {
+    use std::os::fd::AsRawFd;
+    use smithay::backend::allocator::Modifier;
+    if buffer.format().modifier != Modifier::Linear {
+        return Ok(());
+    }
+    let size=buffer.size();
+    let width=usize::try_from(size.w).map_err(|_|"negative DMA-BUF backing width")?;
+    let height=usize::try_from(size.h).map_err(|_|"negative DMA-BUF backing height")?;
+    let row=width.checked_mul(4).ok_or("DMA-BUF backing row overflow")?;
+    let stride=buffer.strides().next()
+        .ok_or("LINEAR DMA-BUF backing stride missing")? as usize;
+    let offset=buffer.offsets().next()
+        .ok_or("LINEAR DMA-BUF backing offset missing")? as usize;
+    let required=height.checked_sub(1)
+        .and_then(|rows|rows.checked_mul(stride))
+        .and_then(|bytes|bytes.checked_add(offset))
+        .and_then(|bytes|bytes.checked_add(row))
+        .ok_or("LINEAR DMA-BUF backing extent overflow")?;
+    let fd=buffer.handles().next().ok_or("LINEAR DMA-BUF plane FD missing")?;
+    // lseek(0, SEEK_END) on DMA-BUF returns the true allocation size on
+    // supported Linux kernels. Do not use stat.st_size, a guessed GBM pitch,
+    // or an untrusted client-provided file length as a substitute.
+    let actual=unsafe {libc::lseek(fd.as_raw_fd(),0,libc::SEEK_END)};
+    if actual < 0 {
+        return Err("LINEAR DMA-BUF kernel backing size unavailable".into());
+    }
+    if (actual as u64) < required as u64 {
+        return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
+    }
+    Ok(())
+}
+
 /// Import a *client-supplied* DMA-BUF on the renderer that belongs to the
 /// currently active libseat DRM device. The caller must retain both the
 /// returned GlesTexture and the wl_buffer until the import's lifetime ends,
@@ -124,6 +168,7 @@ pub fn import_client_dmabuf(
     renderer:&mut GlesRenderer,buffer:&Dmabuf,
 )->Result<GlesTexture,String> {
     validate_client_dmabuf(buffer)?;
+    validate_linear_plane_backing(buffer)?;
     if !renderer.has_dmabuf_format(buffer.format()) {
         return Err("client DMA-BUF format/modifier not advertised by active GLES GPU".into());
     }
@@ -254,6 +299,48 @@ mod tests {
             Format{code:Fourcc::Rgb565,modifier:Modifier::Linear}
         ]).is_empty());
         assert_eq!(ordered_advertised_formats(vec![linear]),vec![linear]);
+    }
+
+    fn linear_memfd(len:u64,offset:u32,stride:u32)->Dmabuf {
+        use std::os::fd::FromRawFd;
+        let name=std::ffi::CString::new("melania-linear-plane-fixture").unwrap();
+        let raw=unsafe {libc::memfd_create(name.as_ptr(),libc::MFD_CLOEXEC)};
+        assert!(raw>=0,"test memfd_create failed");
+        let file=unsafe {std::fs::File::from_raw_fd(raw)};
+        file.set_len(len).unwrap();
+        let mut buffer=Dmabuf::builder(
+            (360,224),Fourcc::Argb8888,Modifier::Linear,DmabufFlags::empty(),
+        );
+        assert!(buffer.add_plane(file.into(),0,offset,stride));
+        buffer.build().unwrap()
+    }
+
+    #[test]
+    fn linear_dma_buf_fd_must_back_the_actual_last_row() {
+        let stride=1536u32;
+        let offset=4096u32;
+        let needed=usize::try_from(offset).unwrap()
+            + 223*usize::try_from(stride).unwrap() + 360*4;
+        let exact=linear_memfd(needed as u64,offset,stride);
+        assert!(validate_client_dmabuf(&exact).is_ok());
+        assert_eq!(validate_linear_plane_backing(&exact),Ok(()));
+        let short=linear_memfd(needed as u64-1,offset,stride);
+        assert!(validate_client_dmabuf(&short).is_ok());
+        assert_eq!(validate_linear_plane_backing(&short),
+                   Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into()));
+        let zero=linear_memfd(0,offset,stride);
+        assert!(validate_linear_plane_backing(&zero).is_err());
+    }
+
+    #[test]
+    fn linear_dma_buf_unseekable_or_truncated_import_is_fail_closed() {
+        // A typed Dmabuf carrying a readable but unbacked /dev/null FD
+        // can have superficially valid dimensions. It cannot reach EGL.
+        let empty=buffer(360,224,360*4,0,Fourcc::Xrgb8888,1);
+        assert!(validate_client_dmabuf(&empty).is_ok());
+        assert!(validate_linear_plane_backing(&empty).is_err());
+        let valid=linear_memfd((360*224*4) as u64,0,360*4);
+        assert_eq!(validate_linear_plane_backing(&valid),Ok(()));
     }
 
     #[test]
