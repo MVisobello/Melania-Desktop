@@ -20,9 +20,22 @@ class GtkUsbInputLifetime(unittest.TestCase):
             self.assertIsNotNone(match, command)
             return int(match.group(1))
 
-        client = timeout_for('"$gtk_panel"')
-        drm = timeout_for('"$continuous_kms"')
-        server = timeout_for('"$binary" --experimental-wayland-seat')
+        # Earlier GTK smoke sessions intentionally use shorter timeouts.
+        # Inspect only the real second-frame USB-search session, so this
+        # contract checks the processes that actually share a lifetime.
+        start = GUEST.index('MELANIA_NATIVE_REAL_GTK_START_INPUT=YES_QEMU_VM')
+        end = GUEST.index("grep -Fqx 'MELANIA_QEMU_GTK_SECOND_REAL_FRAME_REQUESTED=true'", start)
+        session = GUEST[start:end]
+        def session_timeout(command):
+            match = re.search(
+                r'timeout --signal=TERM --kill-after=3s (\\d+)s\\s+(?:\\\\\\s+)?'
+                + re.escape(command), session)
+            self.assertIsNotNone(match, command)
+            return int(match.group(1))
+
+        client = session_timeout('"$gtk_panel"')
+        drm = session_timeout('"$continuous_kms"')
+        server = session_timeout('"$binary" --experimental-wayland-seat')
         self.assertLess(drm, client, "GTK4 USB recipient must outlive DRM")
         self.assertLess(client, server, "Smithay must own GTK client lifecycle")
         self.assertLessEqual(server, 60, "keep the test bounded")
