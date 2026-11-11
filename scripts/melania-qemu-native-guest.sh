@@ -674,7 +674,12 @@ MELANIA_CONTROL_SOCKET=/run/melania-native-qemu/gtk-panel-control.sock \
 GDK_BACKEND=wayland GSK_RENDERER=cairo GSETTINGS_BACKEND=memory \
 GTK_A11Y=none XDG_CONFIG_HOME=/run/melania-native-qemu/config \
 WAYLAND_DISPLAY="$gtk2_socket" MELANIA_PROFILE_START=1 \
-  timeout --signal=TERM --kill-after=3s 44s "$gtk_panel" \
+  # The independent DRM verifier is allowed 48s. The real GTK4 client
+  # must remain alive through that verifier's final presentation/ACK; a
+  # shorter 44s client deadline could kill the input recipient before the
+  # USB search-text roundtrip completes. Keep the 55s Smithay supervisor
+  # deadline above both, and keep every pixel/input assertion below.
+  timeout --signal=TERM --kill-after=3s 52s "$gtk_panel" \
   > "$gtk2_client_log" 2>&1 &
 gtk2_client_pid=$!
 if ! wait "$gtk2_drm_pid"; then
