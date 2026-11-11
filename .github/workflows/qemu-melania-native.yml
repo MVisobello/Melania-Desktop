@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - scripts/melania-qemu-native-guest.sh
+      - tests/test_native_real_ime_wire_roundtrip.py
       - scripts/run-qemu-melania-native.sh
       - tests/test_qemu_native_stage17.py
       - tests/test_native_rollback_stage19.py
@@ -92,6 +93,7 @@ on:
     branches: [main]
     paths:
       - scripts/melania-qemu-native-guest.sh
+      - tests/test_native_real_ime_wire_roundtrip.py
       - scripts/run-qemu-melania-native.sh
       - tests/test_qemu_native_stage17.py
       - tests/test_native_rollback_stage19.py
@@ -204,6 +206,7 @@ jobs:
           bash -n scripts/melania-qemu-native-guest.sh
           bash -n scripts/run-qemu-melania-native.sh
           bash -n scripts/melania-native-physical-preflight.sh
+          python3 -m unittest discover -s tests -p 'test_native_real_ime_wire_roundtrip.py' -v
           python3 -m unittest discover -s tests -p 'test_qemu_native_stage17.py' -v
           python3 -m unittest discover -s tests -p 'test_native_rollback_stage19.py' -v
           python3 -m unittest discover -s tests -p 'test_native_fb2_stage21.py' -v
@@ -329,6 +332,7 @@ jobs:
           install -m 0644 "$layer_soname" target/debug/melania-gtk4-layer-shell.so.0
           test -s target/debug/melania-gtk4-layer-shell.so.0
           cargo build -p melania-native --bins
+          test -x target/debug/qemu-ime-roundtrip
           test -x target/debug/qemu-layer-panel-client
           test -x target/debug/qemu-gtk-five-roles
           test -x target/debug/qemu-xdg-popup-client
