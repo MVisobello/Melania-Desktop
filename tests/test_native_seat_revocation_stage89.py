@@ -39,6 +39,38 @@ class NativeSeatRevocation(unittest.TestCase):
         self.assertIn("pub fn native_login_authorized(&self)->bool {false}",guard)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",bridge)
 
+    def test_seat_loss_cancels_both_real_wayland_clipboard_sources(self):
+        bridge=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
+        self.assertIn("clear_data_device_selection",bridge)
+        self.assertIn("clear_primary_selection",bridge)
+        revoke=bridge.split("fn revoke_wayland_input_for_lost_seat(",1)[1].split(
+            "fn ",1)[0]
+        # A stale focus offer must be removed BEFORE its source is cancelled,
+        # for both wl_data_device and primary-selection managers.
+        markers=(
+            "revoke_wayland_focus_for_lost_seat(state);",
+            "set_data_device_focus(&state.display_handle,&state.seat,None);",
+            "clear_data_device_selection(&state.display_handle,&state.seat);",
+            "set_primary_focus(&state.display_handle,&state.seat,None);",
+            "clear_primary_selection(&state.display_handle,&state.seat);",
+        )
+        positions=[revoke.index(marker) for marker in markers]
+        self.assertEqual(positions,sorted(positions))
+        # This function must be called by the real libseat/udev error paths.
+        self.assertGreaterEqual(
+            bridge.count("revoke_wayland_input_for_lost_seat("),4)
+        focus=bridge.split("fn focus_changed(&mut self,seat:&Seat<Self>,focused:Option<&WlSurface>)",1)[1].split(
+            "fn cursor_image(",1)[0]
+        self.assertIn("self.lifecycle.seat_active()",focus)
+        self.assertIn("!self.native_presentation_guard.permanently_revoked()",focus)
+        self.assertIn("focused.and_then(|surface|surface.client())",focus)
+        self.assertIn("} else {None};",focus)
+        self.assertLess(focus.index("} else {None};"),
+                        focus.index("set_data_device_focus("))
+        self.assertLess(focus.index("} else {None};"),
+                        focus.index("set_primary_focus("))
+        self.assertIn("MELANIA_NATIVE_SESSION_READY=false",bridge)
+
     def test_real_drms_and_vm_safety_remain_required(self):
         entry=(ROOT/"melania-native/src/main.rs").read_text()
         self.assertIn("assert_dedicated_console();",entry)
