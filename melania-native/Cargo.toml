@@ -14,10 +14,15 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "wayland_frontend"
 ] }
 calloop = "0.14"
+# Kernel SO_PEERCRED on accepted Wayland sockets in isolated IME guest.
+libc = "0.2"
 # Use the same protocol crates as the nested compositor: native role callbacks
 # are exposed but rendering client buffers is deliberately still disabled.
 wayland-protocols = { version = "0.32", features = ["client", "server"] }
 wayland-client = "0.31"
+# The input-method-v2 protocol is published by wayland-protocols-misc.
+# This is a real separate-process Wayland CLIENT in the disposable QEMU VM.
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # Read-only KMS connector/mode inventory; same drm-rs version as Smithay 0.7.

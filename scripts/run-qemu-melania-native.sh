@@ -27,6 +27,8 @@ stream_kms="$root/target/debug/qemu-rust-kms-stream"
 continuous_kms="$root/target/debug/qemu-rust-kms-continuous"
 continuous_client="$root/target/debug/qemu-continuous-client"
 two_continuous_client="$root/target/debug/qemu-continuous-two-windows"
+ime_probe="$root/target/debug/qemu-ime-roundtrip"
+[[ -x "$ime_probe" ]] || deny 'actual separate-process IME-v2 client ELF missing'
 real_popup_client="$root/target/debug/qemu-xdg-popup-client"
 [[ -x "$real_popup_client" ]] || deny 'build real xdg_popup Wayland QEMU client'
 [[ -f "$root/scripts/capture-qemu-real-xdg-popup.py" ]] ||
@@ -140,7 +142,7 @@ fluent_icons="${MELANIA_QEMU_FLUENT_ICONS_DIR:-$root/target/melania-qemu-fluent-
    -f "$fluent_icons/Melania-Fluent-Light/apps/scalable/org.melaniadesktop.Files.svg" ]] ||
   deny 'genuine Melania Fluent theme must be built before assembling VM ISO'
 genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
-  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-auth-resize-client=$auth_resize_client" "melania-real-popup-client=$real_popup_client" "melania-super-snap-client=$snap_client" "melania-edge-drop-client=$edge_client" "melania-layer-panel-client=$layer_client" "melania-gtk-five-roles=$gtk_five_client" "melania-panel=$gtk_panel" "libgtk4-layer-shell.so.0=$gtk_layer_lib" "icons=$fluent_icons"
+  -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-ime-roundtrip=$ime_probe" "melania-auth-resize-client=$auth_resize_client" "melania-real-popup-client=$real_popup_client" "melania-super-snap-client=$snap_client" "melania-edge-drop-client=$edge_client" "melania-layer-panel-client=$layer_client" "melania-gtk-five-roles=$gtk_five_client" "melania-panel=$gtk_panel" "libgtk4-layer-shell.so.0=$gtk_layer_lib" "icons=$fluent_icons"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
@@ -250,22 +252,18 @@ python3 "$root/scripts/capture-qemu-continuous-reopen.py" \
   --reopen "$report/continuous-reopen-frame14.ppm" --timeout 1350 \
   > "$report/qmp-continuous-reopen.log" 2>&1 &
 continuous_reopen_capture_pid=$!
-# The 12th real KMS pageflip of this stage can occur after 1350s in TCG
-# with 2026 GPU/GTK integrations. Keep the independent QMP tablet and both
-# framebuffer observers alive until frame13, within the 2050s guest limit;
-# do NOT replace real USB input with synthetic scene damage/ACK markers.
 python3 "$root/scripts/capture-qemu-continuous-dynamic.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-window-frame12.ppm" --timeout 1900 \
+  --output "$report/dynamic-window-frame12.ppm" --timeout 1680 \
   > "$report/qmp-continuous-dynamic.log" 2>&1 &
 dynamic_capture_pid=$!
 python3 "$root/scripts/inject-qemu-dynamic-pointer.py" \
-  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1900 \
+  --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1680 \
   > "$report/qmp-dynamic-pointer-input.log" 2>&1 &
 dynamic_pointer_input_pid=$!
 python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
-  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1900 \
+  --output "$report/dynamic-pointer-frame13.ppm" --timeout 1680 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
 python3 "$root/scripts/capture-qemu-real-xdg-popup.py" \
