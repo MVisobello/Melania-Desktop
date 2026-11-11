@@ -11,6 +11,9 @@ use smithay::backend::{
     renderer::{gles::{GlesRenderer,GlesTexture},ImportDma},
 };
 
+// Applies to the visible pixels and, for LINEAR buffers, the entire
+// advertised byte span including row padding and plane offset. A small
+// logical image must not bypass the import budget with enormous strides.
 pub const MAX_CLIENT_BUFFER_BYTES:usize=16*1024*1024;
 pub const MAX_CLIENT_SURFACE_EDGE:usize=2048;
 pub const MAX_CLIENT_IMPORTS:usize=4;
@@ -111,6 +114,16 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
         .ok_or("client DMA-BUF plane address overflow")?;
     if last>64*1024*1024 {
         return Err("client DMA-BUF unbounded plane offset or backing extent".into());
+    }
+    // A LINEAR packed-RGB plane's last visible byte is the true minimum
+    // backing extent. Its padding and offset must consume the same 16 MiB
+    // quota as its visible pixels. Without this check a 360x1024 client
+    // could reserve >32 MiB through stride while nominal pixels use 1.4 MiB.
+    // Tiled/compressed modifiers have opaque physical layout, so do not
+    // invent a minimum allocation extent for those layouts here.
+    if buffer.format().modifier==smithay::backend::allocator::Modifier::Linear &&
+       last>MAX_CLIENT_BUFFER_BYTES {
+        return Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into());
     }
     Ok(())
 }
@@ -301,7 +314,9 @@ mod tests {
         assert_eq!(ordered_advertised_formats(vec![linear]),vec![linear]);
     }
 
-    fn linear_memfd(len:u64,offset:u32,stride:u32)->Dmabuf {
+    fn linear_memfd_geometry(
+        len:u64,offset:u32,stride:u32,width:i32,height:i32,
+    )->Dmabuf {
         use std::os::fd::FromRawFd;
         let name=std::ffi::CString::new("melania-linear-plane-fixture").unwrap();
         let raw=unsafe {libc::memfd_create(name.as_ptr(),libc::MFD_CLOEXEC)};
@@ -309,10 +324,13 @@ mod tests {
         let file=unsafe {std::fs::File::from_raw_fd(raw)};
         file.set_len(len).unwrap();
         let mut buffer=Dmabuf::builder(
-            (360,224),Fourcc::Argb8888,Modifier::Linear,DmabufFlags::empty(),
+            (width,height),Fourcc::Argb8888,Modifier::Linear,DmabufFlags::empty(),
         );
         assert!(buffer.add_plane(file.into(),0,offset,stride));
         buffer.build().unwrap()
+    }
+    fn linear_memfd(len:u64,offset:u32,stride:u32)->Dmabuf {
+        linear_memfd_geometry(len,offset,stride,360,224)
     }
 
     #[test]
@@ -330,6 +348,34 @@ mod tests {
                    Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into()));
         let zero=linear_memfd(0,offset,stride);
         assert!(validate_linear_plane_backing(&zero).is_err());
+    }
+
+    #[test]
+    fn linear_plane_budget_counts_real_stride_padding_not_only_visible_pixels() {
+        // Both buffers advertise the same small visible 360x1024 content.
+        // Their real, kernel-backed memfd extents differ only in stride.
+        // The generous padding in the second buffer would bypass a quota
+        // computed from width * height * 4 alone.
+        let height=1024i32;
+        let valid_stride=16384u32;
+        let valid_extent=1023u64*u64::from(valid_stride)+360*4;
+        let valid=linear_memfd_geometry(valid_extent,0,valid_stride,360,height);
+        assert!(valid_extent<=MAX_CLIENT_BUFFER_BYTES as u64);
+        assert_eq!(validate_client_dmabuf(&valid),Ok(()));
+        assert_eq!(validate_linear_plane_backing(&valid),Ok(()));
+
+        let excessive_stride=32768u32;
+        let excessive_extent=1023u64*u64::from(excessive_stride)+360*4;
+        let excessive=linear_memfd_geometry(excessive_extent,0,excessive_stride,360,height);
+        assert!(excessive_extent>MAX_CLIENT_BUFFER_BYTES as u64);
+        assert!(excessive_extent<64*1024*1024);
+        assert_eq!(
+            validate_client_dmabuf(&excessive),
+            Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into())
+        );
+        // The FD genuinely backs the advertised extent: only the import
+        // memory budget (not a fabricated undersize check) rejects it.
+        assert_eq!(validate_linear_plane_backing(&excessive),Ok(()));
     }
 
     #[test]
