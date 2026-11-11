@@ -196,7 +196,10 @@ fn exercise_real_client_dmabuf(
         // PREMULTIPLIED 50%-alpha region. Distinctive center remains
         // opaque to preserve existing KMS frame-1 evidence; the QEMU
         // kernel presenter separately samples the translucent region.
-        // Pixel (40,40) is inside the 48x36 patch at client (20,20).
+        // GLES scissor uses bottom-origin coordinates. The alpha patch
+        // occupies y=20..56 in GL, i.e. y=168..204 after the real
+        // EGL top-origin readback. The DRM presenter samples (40,183)
+        // and checks (40,40) remains opaque as an orientation guard.
         frame.clear(
             Color32F::new(0.165,0.09,0.365,0.5),
             &[Rectangle::from_loc_and_size((20,20),(48,36))],
