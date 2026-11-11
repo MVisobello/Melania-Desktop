@@ -33,6 +33,32 @@ class GtkUsbInputLifetime(unittest.TestCase):
         self.assertLess(client, server, "Smithay must own GTK client lifecycle")
         self.assertLessEqual(server, 60, "keep the test bounded")
 
+    def test_real_gtk_process_receives_its_loader_and_wayland_environment(self):
+        # The earlier QEMU failure was a shell continuation broken by a
+        # comment between the final assignment and 'timeout'. The GTK
+        # executable then ran WITHOUT LD_LIBRARY_PATH and failed to load
+        # libgtk4-layer-shell.so.0, before any pixel/USB assertions.
+        start = GUEST.index("LD_LIBRARY_PATH=/mnt/melania-native \\\n"
+                            "MELANIA_BUNDLE_DATA_DIR=/mnt/melania-native", 
+                            GUEST.index("MELANIA_NATIVE_REAL_GTK_START_INPUT=YES_QEMU_VM"))
+        end = GUEST.index('> "$gtk2_client_log" 2>&1 &', start)
+        launch = GUEST[start:end]
+        self.assertIn('WAYLAND_DISPLAY="$gtk2_socket" MELANIA_PROFILE_START=1', launch)
+        self.assertIn('timeout --signal=TERM --kill-after=3s 52s "$gtk_panel"', launch)
+        # No comments or blank commands may interrupt any continued
+        # environment assignment. Check every physical continuation line.
+        lines = launch.splitlines()
+        for index, line in enumerate(lines[:-1]):
+            if line.rstrip().endswith("\\\\"):
+                self.assertTrue(lines[index + 1].strip(), "empty continued line")
+                self.assertFalse(lines[index + 1].lstrip().startswith("#"),
+                                 "comment detached GTK environment")
+        self.assertRegex(
+            launch,
+            r'WAYLAND_DISPLAY="\$gtk2_socket" MELANIA_PROFILE_START=1 \\\n'
+            r'\s*timeout --signal=TERM --kill-after=3s 52s "\$gtk_panel"',
+        )
+
     def test_real_usb_search_and_crtc_assertions_are_not_bypassed(self):
         for marker in (
             "MELANIA_QEMU_GTK_START_REAL_SEARCH_TYPED=true",
