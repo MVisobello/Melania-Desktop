@@ -15,6 +15,17 @@ pub const MAX_CLIENT_BUFFER_BYTES:usize=16*1024*1024;
 pub const MAX_CLIENT_SURFACE_EDGE:usize=2048;
 pub const MAX_CLIENT_IMPORTS:usize=4;
 
+/// VM-only two successive genuine client GPU frames on one XDG surface.
+/// The second DMA-BUF is admissible ONLY after the first confirmed KMS
+/// presentation; a third cannot pass by reusing the first ticket.
+/// This does not authorize native/physical import or direct GPU scanout.
+pub fn qemu_gpu_frame_allowed(acknowledged:u64,two_gpu:bool)->bool {
+    acknowledged==0 || (two_gpu && acknowledged==1)
+}
+pub fn qemu_gpu_frame_required(frame:u64,two_gpu:bool)->bool {
+    frame==1 || (two_gpu && frame==2)
+}
+
 /// Keep format advertisements restricted to the single-plane 32-bit layouts
 /// this experimental bridge can validate, rather than mirroring the whole EGL
 /// modifier table (including formats the compositor could never use).
@@ -230,6 +241,22 @@ mod tests {
         assert!(convert_rgba_readback_to_bgra(&[0;4],2,1,false).is_err());
         assert!(convert_rgba_readback_to_bgra(&[],0,2,false).is_err());
         assert!(convert_rgba_readback_to_bgra(&[0;4],1,1,false).is_ok());
+    }
+    #[test]
+    fn second_real_client_gpu_frame_needs_explicit_mode_and_first_kms_ack() {
+        assert!(qemu_gpu_frame_allowed(0,false));
+        assert!(!qemu_gpu_frame_allowed(1,false));
+        assert!(!qemu_gpu_frame_allowed(2,false));
+        assert!(qemu_gpu_frame_allowed(0,true));
+        assert!(qemu_gpu_frame_allowed(1,true));
+        assert!(!qemu_gpu_frame_allowed(2,true));
+        assert!(!qemu_gpu_frame_allowed(u64::MAX,true));
+        assert!(qemu_gpu_frame_required(1,false));
+        assert!(!qemu_gpu_frame_required(2,false));
+        assert!(qemu_gpu_frame_required(1,true));
+        assert!(qemu_gpu_frame_required(2,true));
+        assert!(!qemu_gpu_frame_required(3,true));
+        assert!(!qemu_gpu_frame_required(0,true));
     }
     #[test]
     fn imported_textures_remain_bounded_even_with_multiple_clients() {

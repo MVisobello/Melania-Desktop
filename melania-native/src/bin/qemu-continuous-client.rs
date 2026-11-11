@@ -143,12 +143,13 @@ impl Dispatch<wl_buffer::WlBuffer,()> for Client {
     }
 }
 
-/// A *different Wayland process* allocates and draws real GBM GPU pixels,
-/// sends its live kernel DMA-BUF plane FDs over zwp_linux_dmabuf_v1, then
-/// attaches the buffer to a role-less wl_surface. The Smithay compositor
-/// must import it via EGL, reject it for KMS presentation (still unimplemented),
-/// and send wl_buffer.release WITHOUT producing any wl_surface.frame ACK.
-/// This avoids claiming native DMA-BUF scanout before it exists.
+/// The real second Wayland process allocates successive GPU/GBM buffers
+/// and sends their actual kernel DMA-BUF FDs over zwp_linux_dmabuf_v1.
+/// In the double-GPU disposable VM case, frame 2 uses a DIFFERENT buffer
+/// and distinctive GPU-drawn content on the SAME XDG surface. Each buffer
+/// must receive both the matching verified DRM/KMS frame callback and its
+/// own wl_buffer.release before the client can submit another frame.
+/// The separate negative role-less test never claims a KMS presentation.
 fn exercise_real_client_dmabuf(
     state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
     qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
@@ -161,106 +162,119 @@ fn exercise_real_client_dmabuf(
     if !state.dmabuf_formats.contains(&(format as u32,modifier)) {
         return Err("QEMU Wayland compositor did not advertise ARGB8888+LINEAR".into());
     }
+    let gpu_kms=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
+        .as_deref()==Ok("YES_QEMU_VM");
+    let double_gpu=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if double_gpu && !gpu_kms {
+        return Err("two DMA-BUF frames require the dedicated QEMU KMS experiment".into());
+    }
+    let gpu_frames:u32=if double_gpu {2} else {1};
 
-    // This disposable QEMU VirtIO GPU allocates BOs through
-    // DRM_IOCTL_MODE_CREATE_DUMB, a KMS allocation ioctl which is explicitly
-    // NOT permitted on renderD128. The SECOND process opens its own
-    // unprivileged primary FD; CREATE_DUMB does not require DRM_MASTER.
-    // Never request/set KMS master or perform modesets from the client.
-    // Do not silently fall back to the render node: that cannot allocate
-    // this VM's dumb-backed GBM buffers.
+    // VirtIO's GBM allocator uses DRM_IOCTL_MODE_CREATE_DUMB on the
+    // unprivileged primary device. It never acquires DRM_MASTER; only the
+    // compositor's separate libseat-owned DRM FD can perform KMS modesets.
     let file=OpenOptions::new().read(true).write(true)
         .open("/dev/dri/card0")?;
     let gbm=GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file))))?;
     let mut allocator=DmabufAllocator(GbmAllocator::new(
         gbm.clone(),GbmBufferFlags::RENDERING,
     ));
-    let mut image=allocator.create_buffer(
-        W as u32,H as u32,format,&[Modifier::Linear],
-    )?;
-    // Supply real nontrivial content and wait on the GPU before giving the
-    // cross-process FD to the compositor. This is not a synthetic wl_shm pool.
     let display=unsafe {EGLDisplay::new(gbm)}?;
     let context=EGLContext::new(&display)?;
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
-    {
-        let mut target=renderer.bind(&mut image)?;
-        let mut frame=renderer.render(
-            &mut target,(W as i32,H as i32).into(),Transform::Normal
+    for gpu_index in 1..=gpu_frames {
+        // Real fresh GBM BO and live FD for each independent frame.
+        // Frame 1 retains historical opaque+alpha probe; frame 2 has a
+        // visibly different opaque pixel (R,G,B)=(0.12,0.64,0.27).
+        let mut image=allocator.create_buffer(
+            W as u32,H as u32,format,&[Modifier::Linear],
         )?;
-        frame.clear(
-            Color32F::new(0.33,0.18,0.73,1.0),
-            &[Rectangle::from_size((W as i32,H as i32).into())],
-        )?;
-        // The real imported ARGB8888 buffer contains a second,
-        // PREMULTIPLIED 50%-alpha region. Distinctive center remains
-        // opaque to preserve existing KMS frame-1 evidence; the QEMU
-        // kernel presenter separately samples the translucent region.
-        // GLES scissor uses bottom-origin coordinates. The alpha patch
-        // occupies y=20..56 in GL, i.e. y=168..204 after the real
-        // EGL top-origin readback. The DRM presenter samples (40,183)
-        // and checks (40,40) remains opaque as an orientation guard.
-        frame.clear(
-            Color32F::new(0.165,0.09,0.365,0.5),
-            &[Rectangle::from_loc_and_size((20,20),(48,36))],
-        )?;
-        frame.finish()?.wait()?;
-    }
-
-    let params=dmabuf.create_params(qh,());
-    let mut plane_count=0usize;
-    for ((fd,offset),stride) in image.handles().zip(image.offsets()).zip(image.strides()) {
-        params.add(fd,plane_count as u32,offset,stride,
-                   (modifier>>32) as u32,modifier as u32);
-        plane_count+=1;
-    }
-    if plane_count!=1 {
-        return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
-    }
-    let imported=params.create_immed(
-        W as i32,H as i32,format as u32,
-        zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
-    );
-    let gpu_kms=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
-        .as_deref()==Ok("YES_QEMU_VM");
-    // One real XDG client keeps the *same* scene slot for frame 1 GPU and
-    // frames 2..12 wl_shm. The negative non-KMS import test continues to
-    // use a separate role-less surface, with no fake callback.
-    let probe=if gpu_kms {xdg_surface.clone()}
-        else {compositor.create_surface(qh,())};
-    if gpu_kms {
-        // Frame callback is delivered ONLY after the matching real CRTC
-        // FB_ID/vblank ACK, never after the compositor's EGL texture import.
-        let _callback=probe.frame(qh,());
-    }
-    state.buffer_released=false;
-    probe.attach(Some(&imported),0,0);
-    probe.damage_buffer(0,0,W as i32,H as i32);
-    probe.commit();
-    let deadline=Instant::now()+Duration::from_secs(10);
-    while !state.buffer_released ||
-          (gpu_kms && state.frame_done_count!=1) {
-        queue.roundtrip(state)?;
-        if Instant::now()>=deadline {
-            return Err("real client DMA-BUF missing verified GPU-to-KMS release or callback".into());
+        {
+            let mut target=renderer.bind(&mut image)?;
+            let mut frame=renderer.render(
+                &mut target,(W as i32,H as i32).into(),Transform::Normal
+            )?;
+            let color=if gpu_index==1 {
+                Color32F::new(0.33,0.18,0.73,1.0)
+            } else {
+                Color32F::new(0.12,0.64,0.27,1.0)
+            };
+            frame.clear(
+                color,
+                &[Rectangle::from_size((W as i32,H as i32).into())],
+            )?;
+            if gpu_index==1 {
+                // Keep the original genuine premultiplied alpha patch and
+                // top/bottom-origin control sample in the first GPU frame.
+                frame.clear(
+                    Color32F::new(0.165,0.09,0.365,0.5),
+                    &[Rectangle::from_loc_and_size((20,20),(48,36))],
+                )?;
+            }
+            // Wait for real GLES completion, not a fabricated client fence.
+            frame.finish()?.wait()?;
         }
-    }
-    if gpu_kms {
-        if state.frame_done_count!=1 {
-            return Err("GPU DMA-BUF callback not paired with verified KMS ACK".into());
+        let params=dmabuf.create_params(qh,());
+        let mut plane_count=0usize;
+        for ((fd,offset),stride) in image.handles().zip(image.offsets()).zip(image.strides()) {
+            params.add(fd,plane_count as u32,offset,stride,
+                       (modifier>>32) as u32,modifier as u32);
+            plane_count+=1;
         }
-        println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true");
-        println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
-    } else {
-        if state.frame_done_count!=0 {
-            return Err("client DMA-BUF received a fabricated KMS frame callback".into());
+        if plane_count!=1 {
+            return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
         }
-        println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
+        let imported=params.create_immed(
+            W as i32,H as i32,format as u32,
+            zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
+        );
+        let probe=if gpu_kms {xdg_surface.clone()}
+            else {compositor.create_surface(qh,())};
+        if gpu_kms {
+            // Each callback is tied to its own real wl_surface.commit,
+            // never merely to successful import/zwp_linux_buffer creation.
+            let _callback=probe.frame(qh,());
+        }
+        state.buffer_released=false;
+        probe.attach(Some(&imported),0,0);
+        probe.damage_buffer(0,0,W as i32,H as i32);
+        probe.commit();
+        let deadline=Instant::now()+Duration::from_secs(10);
+        while !state.buffer_released ||
+              (gpu_kms && state.frame_done_count!=gpu_index) {
+            queue.roundtrip(state)?;
+            if Instant::now()>=deadline {
+                return Err("real client DMA-BUF missing verified GPU-to-KMS release or callback".into());
+            }
+        }
+        if gpu_kms {
+            if state.frame_done_count!=gpu_index {
+                return Err("GPU DMA-BUF callback not paired with verified KMS ACK".into());
+            }
+            if gpu_index==1 {
+                println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true");
+            } else {
+                println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true");
+            }
+            if gpu_index==1 {
+                println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
+            } else {
+                println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=2");
+            }
+        } else {
+            if state.frame_done_count!=0 {
+                return Err("client DMA-BUF received a fabricated KMS frame callback".into());
+            }
+            println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
+        }
+        std::io::stdout().flush()?;
+        imported.destroy();
+        if !gpu_kms {probe.destroy();}
+        params.destroy();
+        // The BO and its associated import may only be reused/dropped
+        // AFTER this exact client's KMS-verified wl_buffer.release.
     }
-    std::io::stdout().flush()?;
-    imported.destroy();
-    if !gpu_kms {probe.destroy();}
-    params.destroy();
     dmabuf.destroy();
     Ok(())
 }
@@ -326,11 +340,14 @@ fn main()->Result<(),Box<dyn Error>> {
     ) {
         return Err("GPU client scanout proof requires exact 12-frame QEMU DMA-BUF mode".into());
     }
+    let gpu_second=std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU")
+        .as_deref()==Ok("YES_QEMU_VM");
     for index in 1..=total {
-        // Preserve the historic 1..=total contract for every normal
-        // Wayland session. Only the isolated DMA-BUF test has already
-        // presented index 1 with a real kernel KMS ACK.
+        // Preserve 1..=total for normal sessions. The two-buffer QEMU
+        // probe presents GPU frames 1 and 2 with independent actual KMS
+        // ACKs, then falls back to ten genuine wl_shm client updates.
         if gpu_first && index==1 {continue;}
+        if gpu_second && index==2 {continue;}
         // Only the opt-in frame 25 repeats frame 24 exactly; all other
         // frames change the client's *real* owned wl_shm buffer.
         let color_index=if replay_same && index==25 {24} else {index};

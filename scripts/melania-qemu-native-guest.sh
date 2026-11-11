@@ -2858,8 +2858,9 @@ report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'
 # earlier placement moved these stages past their bounded live-input
 # deadlines and caused a false timeout in authenticated pointer resize.
 # P0: NEW independent QEMU DRM session. The first of exactly 12 real
-# framebuffer presentations must be a GPU-drawn DMA-BUF sent from a *different*
-# Wayland process; subsequent 11 frames remain genuine wl_shm client commits.
+# framebuffer presentations must start with TWO distinct GPU-drawn DMA-BUFs
+# from the same separate Wayland process; the final ten frames are genuine
+# wl_shm client commits, each with its own real KMS ACK.
 # Existing historical reject-without-fake-ACK case ABOVE stays unchanged.
 gpu_client_server_log="$(mktemp -t melania-gpu-client-kms-server-XXXXXX)"
 gpu_client_client_log="$(mktemp -t melania-gpu-client-kms-client-XXXXXX)"
@@ -2871,6 +2872,7 @@ MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_DMABUF=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
   timeout --signal=TERM --kill-after=3s 76s \
@@ -2893,6 +2895,7 @@ fi
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM \
   WAYLAND_DISPLAY="$gpu_client_socket" \
   timeout --signal=TERM --kill-after=3s 65s \
   "$continuous_client" > "$gpu_client_client_log" 2>&1; then
@@ -2908,9 +2911,13 @@ for marker in \
   'MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true' \
   'MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true' \
   'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=360x224' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_GPU_FRAME2_PIXELS_READBACK=360x224' \
   'MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true' \
+  'MELANIA_RUST_GPU_CLIENT_FRAME2_PIXELS_IN_DRM=true' \
   'MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=1' \
+  'MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=2' \
   'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=1' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=2' \
   'MELANIA_RUST_KMS_RESTORE_VERIFIED=true' \
   'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
@@ -2920,6 +2927,8 @@ for marker in \
 done
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true' "$gpu_client_client_log" ||
   fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame1_callback'
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true' "$gpu_client_client_log" ||
+  fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame2_callback'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$gpu_client_server_log" ||
     fatal "gpu_client_missing_actual_kernel_KMS_ACK_$index"
