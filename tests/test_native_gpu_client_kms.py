@@ -39,10 +39,25 @@ class RealClientDmabufToKms(unittest.TestCase):
             "mapping.flipped()",
             "convert_rgba_readback_to_bgra",
             "let mut pixels=vec![0;len]",
-            "dst.copy_from_slice(&[src[2],src[1],src[0],0]);",
+            "over_opaque_background(src[2],QEMU_SCENE_BGRA[0],src[3])",
+            "over_opaque_background(src[1],QEMU_SCENE_BGRA[1],src[3])",
+            "over_opaque_background(src[0],QEMU_SCENE_BGRA[2],src[3])",
+            "fn imported_argb_premultiplied_alpha_blends_over_real_kms_background()",
             "fn readback_swizzles_rgba_into_opaque_bgra_and_flips_bottom_up()",
         ):
             self.assertIn(marker,GPU)
+
+    def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
+        self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
+        self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
+        self.assertIn("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true",DRM)
+        self.assertIn("QEMU_SCENE_BGRA:[u8;3]=[58,33,27]",GPU)
+        self.assertIn("let alpha_sample=((120+(224-1-40))*W+(160+40))*4;",DRM)
+        self.assertIn("let opaque_sample=((120+40)*W+(160+40))*4;",DRM)
+        self.assertLess(
+            DRM.index("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true"),
+            DRM.index("card.set_crtc(crtc_handle,Some(framebuffer)")
+        )
 
     def test_gpu_buffer_released_only_after_real_drm_ack_and_ticket(self):
         for marker in (
@@ -99,10 +114,27 @@ class RealClientDmabufToKms(unittest.TestCase):
             "MELANIA_NATIVE_CLIENT_DMABUF_KMS",
             "let center=((120+112)*W+(160+180))*4;",
             "MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true",
+            "MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true",
+            # GLES scissor uses bottom-origin coordinates; after readback
+            # the alpha patch is at y=224-1-40, not the opaque y=40.
+            "let alpha_sample=((120+(224-1-40))*W+(160+40))*4;",
+            "let opaque_sample=((120+40)*W+(160+40))*4;",
+            "GPU alpha orientation control was not opaque",
+            "GPU client premultiplied alpha did not blend into DRM scanout",
             "MELANIA_RUST_GPU_CLIENT_DMABUF_KMS_FB_ID_ACK=1",
             "card.set_crtc(crtc_handle,Some(framebuffer)",
         ):
             self.assertIn(marker,DRM)
+        # Both the transparent patch and the independent opaque control
+        # must be checked before declaring GPU pixels verified in real KMS.
+        self.assertLess(
+            DRM.index("let opaque_sample=((120+40)*W+(160+40))*4;"),
+            DRM.index("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true")
+        )
+        self.assertLess(
+            DRM.index("let alpha_sample=((120+(224-1-40))*W+(160+40))*4;"),
+            DRM.index("MELANIA_RUST_GPU_CLIENT_ALPHA_BLENDED_IN_DRM=true")
+        )
         self.assertLess(
             DRM.index("MELANIA_RUST_GPU_CLIENT_FRAME1_PIXELS_IN_DRM=true"),
             DRM.index("card.set_crtc(crtc_handle,Some(framebuffer)")
