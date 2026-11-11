@@ -15,7 +15,7 @@ class GtkUsbInputLifetime(unittest.TestCase):
     def test_real_gtk_client_outlives_drm_verifier_but_not_smithay(self):
         def timeout_for(command):
             match = re.search(
-                r'timeout --signal=TERM --kill-after=3s (\d+)s\s+'
+                r'timeout --signal=TERM --kill-after=3s (\d+)s\s+\\\s+'
                 + re.escape(command), GUEST)
             self.assertIsNotNone(match, command)
             return int(match.group(1))
