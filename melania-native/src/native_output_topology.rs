@@ -232,6 +232,14 @@ fn read_active_crtc_readbacks(
            mode.size()!=(route.width,route.height) {
             return Err("DRM CRTC framebuffer or mode dimensions changed during timing readback".into());
         }
+        // GETCRTC x/y are viewport offsets inside THIS framebuffer.
+        // Read its actual kernel dimensions; never confuse these offsets
+        // with global monitor coordinates or assume two (0,0) CRTCs mirror.
+        let fb_info=card.get_framebuffer(framebuffer)
+            .map_err(|e|format!("DRM active framebuffer dimensions unreadable: {e}"))?;
+        validate_crtc_framebuffer_viewport(
+            mode.size(),info.position(),fb_info.size(),
+        )?;
         readbacks.push(ActiveCrtcReadback {
             crtc:route.crtc,
             framebuffer,
@@ -283,6 +291,40 @@ pub fn verify_restored_output_timings<M:PartialEq>(
     Ok(())
 }
 
+/// Legacy DRM GETCRTC x/y identify the viewport offset *into that
+/// CRTC's framebuffer*, NOT the output's position in a desktop-wide layout.
+/// Two independent physical outputs may validly both report (0,0).
+/// Never interpret these offsets as proof of global monitor geometry.
+///
+/// Fail closed when a live CRTC tries to scan outside its own kernel FB.
+/// This is a read-only, actual drm-rs GETFB preflight, not an atomic modeset,
+/// a hardware-proven layout manager, or a DRM lease. Multi-output scene
+/// placement needs a separate compositor-owned logical-output coordinate.
+pub const MAX_SCANOUT_FRAMEBUFFER_SIDE:u32=32768;
+pub fn validate_crtc_framebuffer_viewport(
+    mode_size:(u16,u16),
+    framebuffer_offset:(u32,u32),
+    framebuffer_size:(u32,u32),
+)->Result<(),String> {
+    let (width,height)=(u32::from(mode_size.0),u32::from(mode_size.1));
+    let (fb_width,fb_height)=framebuffer_size;
+    if width==0 || height==0 ||
+       width>u32::from(MAX_OUTPUT_SIDE) || height>u32::from(MAX_OUTPUT_SIDE) ||
+       fb_width==0 || fb_height==0 ||
+       fb_width>MAX_SCANOUT_FRAMEBUFFER_SIDE ||
+       fb_height>MAX_SCANOUT_FRAMEBUFFER_SIDE {
+        return Err("DRM CRTC or backing framebuffer has invalid dimensions".into());
+    }
+    let right=framebuffer_offset.0.checked_add(width)
+        .ok_or("DRM CRTC framebuffer source X overflow")?;
+    let bottom=framebuffer_offset.1.checked_add(height)
+        .ok_or("DRM CRTC framebuffer source Y overflow")?;
+    if right>fb_width || bottom>fb_height {
+        return Err("DRM CRTC viewport exceeds the real kernel framebuffer dimensions".into());
+    }
+    Ok(())
+}
+
 /// The completed GBM rebuild is NOT proof if a queued libseat/udev event or an
 /// external modeset changes scanout before the final VT acceptance marker.
 /// Unlike a comparison across two VT owners, FB_ID must remain the same
@@ -295,6 +337,9 @@ pub fn verify_unchanged_scanout_epoch<M:PartialEq>(
     after_timings:&[ActiveOutputTiming<M>],
 )->Result<(),String> {
     for (routes,timings) in [(before_routes,before_timings),(after_routes,after_timings)] {
+        // Each live CRTC source viewport has already been checked
+        // against its actual framebuffer during the two kernel scans.
+        // Positions here remain FB-relative, not global monitor origins.
         validate_active_routes(&routes.active)?;
         if routes.active.len()!=timings.len() {
             return Err("DRM scanout timing count no longer matches active outputs".into());
@@ -329,6 +374,8 @@ pub fn inspect_stable_active_outputs_with_timings(
         mode:readback.mode,
         position:readback.position,
     }).collect();
+    // Each pass validated real per-CRTC viewport bounds via GETFB;
+    // two independent CRTCs at framebuffer offset (0,0) remain valid.
     Ok((after,timings))
 }
 
@@ -353,6 +400,50 @@ mod tests {
             width:w,height:hgt,
         }
     }
+    #[test]
+    fn independent_real_crtcs_can_both_scan_out_at_framebuffer_origin_zero() {
+        // On separate framebuffer IDs each CRTC's (0,0) means pixel zero
+        // in ITS FB, not two physical outputs occupying one global area.
+        let first=route(11,21,31,1920,1080);
+        let second=route(12,22,32,2560,1440);
+        let routes=NativeOutputTopology{active:vec![first,second]};
+        let t1=ActiveOutputTiming{crtc:first.crtc,mode:60_000u32,position:(0,0)};
+        let t2=ActiveOutputTiming{crtc:second.crtc,mode:60_000u32,position:(0,0)};
+        assert!(validate_active_routes(&routes.active).is_ok());
+        assert!(verify_unchanged_scanout_epoch(
+            &routes,&[t1,t2],&routes,&[t2,t1]
+        ).is_err()); // Order is still a separate epoch identity contract.
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,0),(1920,1080)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((2560,1440),(0,0),(2560,1440)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(1920,0),(4480,1440)).is_ok());
+    }
+
+    #[test]
+    fn real_fb_viewport_rejects_scanout_past_edge_or_illegal_dimensions() {
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(1,0),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,1),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(500,400),(2200,1400)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(280,320),(2200,1400)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((0,1080),(0,0),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,0),(0,0),(1920,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,0),(0,1080)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1920,1080),(0,0),(1920,0)).is_err());
+        assert!(validate_crtc_framebuffer_viewport(
+            (1920,1080),(0,0),(MAX_SCANOUT_FRAMEBUFFER_SIDE+1,1080)
+        ).is_err());
+    }
+
+    #[test]
+    fn real_fb_viewport_refuses_untrusted_overflow_and_allows_shared_fb_panning() {
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(u32::MAX,0),(1280,720)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(0,u32::MAX),(1280,720)).is_err());
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(1920,0),(3200,1080)).is_ok());
+        assert!(validate_crtc_framebuffer_viewport((1280,720),(1921,0),(3200,1080)).is_err());
+        // This is NOT a desktop origin: a framebuffer source offset may
+        // be nonzero even when a physical monitor is positioned at (0,0).
+        assert!(validate_crtc_framebuffer_viewport((800,600),(32,16),(1024,768)).is_ok());
+    }
+
     #[test]
     fn kernel_resource_inventory_rejects_hotplug_and_duplicate_ids() {
         assert!(same_resource_handles(&[3u32,1,2],&[2,3,1]));
