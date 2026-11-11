@@ -53,6 +53,34 @@ class RealImeWireRoundtrip(unittest.TestCase):
             self.assertIn(marker,RUST)
         self.assertLess(RUST.index("method.commit_string(TEXT.into())"),
                         RUST.index("method.commit(serial)"))
+    def test_preedit_and_surrounding_deletion_use_real_utf8_wayland_events(self):
+        for marker in (
+            'const PREEDIT: &str = "città";',
+            'zwp_input_method_v2::Event::SurroundingText',
+            't == "prova" && *c == 5 && *a == 5',
+            'method.delete_surrounding_text(5, 0)',
+            'method.set_preedit_string(PREEDIT.into(), PREEDIT.len() as i32',
+            'zwp_text_input_v3::Event::PreeditString',
+            'zwp_text_input_v3::Event::DeleteSurroundingText',
+            'state.preedit_received.as_ref()',
+            'state.deletion_received != Some((5,0))',
+            's.payload_done',
+            'MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true',
+            'MELANIA_QEMU_REAL_EDITOR_IME_ATOMIC_DONE=true',
+        ):
+            self.assertIn(marker,RUST)
+        for marker in (
+            'MELANIA_QEMU_REAL_IME_SURROUNDING_TEXT_RECEIVED=true',
+            'MELANIA_QEMU_REAL_EDITOR_IME_PREEDIT_DELETE_ROUNDTRIP=true',
+            'MELANIA_QEMU_REAL_EDITOR_IME_ATOMIC_DONE=true',
+            'MELANIA_QEMU_REAL_IME_PREEDIT_AND_DELETE_WIRE_PASS=true',
+        ):
+            self.assertIn(marker,GUEST)
+        self.assertLess(RUST.index('method.delete_surrounding_text(5, 0)'),
+                        RUST.index('method.commit(serial)'))
+        self.assertLess(RUST.index('method.set_preedit_string('),
+                        RUST.index('method.commit(serial)'))
+
     def test_guest_pass_requires_real_own_pid_and_both_connections(self):
         for marker in (
             'ime_client_pid=$!',
