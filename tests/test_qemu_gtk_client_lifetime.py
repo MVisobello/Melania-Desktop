@@ -50,7 +50,7 @@ class GtkUsbInputLifetime(unittest.TestCase):
         # The slice stops before the output redirection; the final
         # timeout command legitimately continues into that redirection.
         # Validate the complete environment-assignment lines only.
-        lines = launch.splitlines()
+        lines = launch.rstrip().splitlines()
         self.assertTrue(lines[-1].strip().startswith("timeout --signal=TERM"))
         for index, line in enumerate(lines[:-2]):
             if line.rstrip().endswith("\\"):
