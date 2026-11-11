@@ -33,6 +33,28 @@ class RealClientDmabufToKms(unittest.TestCase):
         ):
             self.assertIn(marker,CLIENT)
 
+    def test_driver_advertised_modifiers_are_bounded_and_deterministic(self):
+        # The actual Smithay GPU registry must invoke the prioritized,
+        # bounded format list: Rust unit tests test order/dedup, while
+        # the full guest proves its ARGB8888 LINEAR client can bind and
+        # present two different buffers through actual DRM/KMS.
+        for marker in (
+            "MAX_ADVERTISED_CLIENT_FORMATS:usize=64",
+            "fn ordered_advertised_formats(",
+            "candidates.sort_by_cached_key(",
+            "format.modifier!=Modifier::Linear",
+            "candidates.dedup();",
+            "candidates.truncate(MAX_ADVERTISED_CLIENT_FORMATS);",
+            "ordered_advertised_formats(renderer.dmabuf_formats().iter().copied())",
+            "renderer.has_dmabuf_format(buffer.format())",
+            "fn advertised_linear_modifiers_are_deterministic_and_not_dropped()",
+            "fn advertised_modifier_priority_never_fabricates_gpu_support()",
+        ):
+            self.assertIn(marker,GPU)
+        self.assertIn("client_import_formats(&renderer)",BRIDGE)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true",GUEST)
+        self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
+
     def test_egl_readback_converts_bottom_up_rgba_with_owned_bytes(self):
         for marker in (
             "readback_qemu_client_bgra",

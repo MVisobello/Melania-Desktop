@@ -35,10 +35,45 @@ fn supported_format(code:Fourcc)->bool {
         Fourcc::Xbgr8888 | Fourcc::Abgr8888)
 }
 
-pub fn client_import_formats(renderer:&GlesRenderer)->Vec<Format> {
-    renderer.dmabuf_formats().iter().copied()
+/// The registry is a finite, ordered promise to clients, not the raw EGL
+/// driver's (potentially unordered) modifier set. In particular, even when
+/// the active driver reports more than 64 combinations, never omit the linear
+/// ARGB/XRGB formats that the real QEMU buffer path actually imports.
+/// This changes only the advertised capabilities; imported buffers must
+/// still pass the same GPU-specific has_dmabuf_format and size checks.
+pub const MAX_ADVERTISED_CLIENT_FORMATS:usize=64;
+
+fn client_format_priority(code:Fourcc)->u8 {
+    match code {
+        Fourcc::Argb8888=>0,
+        Fourcc::Xrgb8888=>1,
+        Fourcc::Abgr8888=>2,
+        Fourcc::Xbgr8888=>3,
+        _=>4,
+    }
+}
+
+fn ordered_advertised_formats(formats:impl IntoIterator<Item=Format>)->Vec<Format> {
+    use smithay::backend::allocator::Modifier;
+    let mut candidates:Vec<_>=formats.into_iter()
         .filter(|format|supported_format(format.code))
-        .take(64).collect()
+        .collect();
+    // Format order from EGL driver iteration is not part of the protocol.
+    // Sort linear first, then packed-RGB preference, then the modifier's
+    // stable diagnostic representation, before the bounded registry cap.
+    // This is only a deterministic order, NOT a synthetic import capability.
+    candidates.sort_by_cached_key(|format|(
+        format.modifier!=Modifier::Linear,
+        client_format_priority(format.code),
+        format!("{:?}",format.modifier),
+    ));
+    candidates.dedup();
+    candidates.truncate(MAX_ADVERTISED_CLIENT_FORMATS);
+    candidates
+}
+
+pub fn client_import_formats(renderer:&GlesRenderer)->Vec<Format> {
+    ordered_advertised_formats(renderer.dmabuf_formats().iter().copied())
 }
 
 /// Check untrusted Wayland metadata before sending any FD to EGL. For now,
@@ -185,6 +220,42 @@ mod tests {
         }
         b.build().unwrap()
     }
+    #[test]
+    fn advertised_linear_modifiers_are_deterministic_and_not_dropped() {
+        use smithay::backend::allocator::Modifier;
+        let linear=|code|Format{code,modifier:Modifier::Linear};
+        let formats=[
+            linear(Fourcc::Xbgr8888),
+            linear(Fourcc::Rgb565), // must never be promised to clients
+            linear(Fourcc::Xrgb8888),
+            linear(Fourcc::Argb8888),
+            linear(Fourcc::Abgr8888),
+            linear(Fourcc::Argb8888), // a duplicate EGL entry
+        ];
+        let first=ordered_advertised_formats(formats);
+        let reversed=ordered_advertised_formats(formats.into_iter().rev());
+        assert_eq!(first,reversed);
+        assert_eq!(first,vec![
+            linear(Fourcc::Argb8888),
+            linear(Fourcc::Xrgb8888),
+            linear(Fourcc::Abgr8888),
+            linear(Fourcc::Xbgr8888),
+        ]);
+        assert!(first.len()<=MAX_ADVERTISED_CLIENT_FORMATS);
+    }
+
+    #[test]
+    fn advertised_modifier_priority_never_fabricates_gpu_support() {
+        use smithay::backend::allocator::Modifier;
+        let linear=Format{code:Fourcc::Argb8888,modifier:Modifier::Linear};
+        // No new formats may be inserted into an empty/unrelated driver set.
+        assert!(ordered_advertised_formats(Vec::<Format>::new()).is_empty());
+        assert!(ordered_advertised_formats(vec![
+            Format{code:Fourcc::Rgb565,modifier:Modifier::Linear}
+        ]).is_empty());
+        assert_eq!(ordered_advertised_formats(vec![linear]),vec![linear]);
+    }
+
     #[test]
     fn accepts_one_bounded_packed_rgb_plane() {
         let b=buffer(360,224,360*4,0,Fourcc::Xrgb8888,1);
