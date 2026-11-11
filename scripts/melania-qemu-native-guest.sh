@@ -3043,6 +3043,12 @@ if ! wait "$ime_server_pid"; then
   cat "$ime_server_log"
   fatal 'real_IME_Rust_Smithay_seat_or_global_failed'
 fi
+# Server completion alone cannot prove the IME delivered text. This receipt
+# means only that all three kernel-identified peer sockets disconnected.
+grep -Fqx 'MELANIA_NATIVE_QEMU_IME_THREE_PEER_DISCONNECTS_VERIFIED=true' "$ime_server_log" || {
+  cat "$ime_server_log"
+  fatal 'real_IME_three_authenticated_socket_lifecycles_not_verified'
+}
 for marker in \
   'MELANIA_QEMU_TRUSTED_IME_MANAGER_BOUND=true' \
   'MELANIA_QEMU_REAL_IME_ACTIVATED=true' \
