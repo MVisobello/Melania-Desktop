@@ -113,6 +113,17 @@ impl Drop for NativeControlSocket {
 #[derive(Default)]
 struct BridgeClientState {
     compositor: CompositorClientState,
+    // Only the kernel can assign this value. The per-client state is
+    // attached at accept() and cannot be forged via a Wayland request.
+    // None for clients outside the isolated IME probe; fail closed.
+    kernel_peer_pid: Option<u32>,
+}
+
+/// A Wayland registry global is filtered using immutable SO_PEERCRED
+/// captured at accept(), never an app-supplied PID or the compositor PID.
+/// A missing/invalid credential cannot grant the privileged IME global.
+fn trusted_ime_peer(kernel_peer_pid:Option<u32>,allowed_pid:u32)->bool {
+    allowed_pid>1 && kernel_peer_pid==Some(allowed_pid)
 }
 impl ClientData for BridgeClientState {
     fn initialized(&self,_:ClientId) {}
@@ -4370,13 +4381,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         Some(TextInputManagerState::new::<BridgeState>(&handle))
     } else {None};
     let _input_method_global=if let Some(pid)=trusted_ime_pid {
-        let identity_handle=handle.clone();
         Some(InputMethodManagerState::new::<BridgeState,_>(&handle,
             move|client|{
-                // Credentials originate from the kernel-owned Wayland
-                // transport socket; don't trust a client-provided app ID.
-                client.get_credentials(&identity_handle)
-                    .is_ok_and(|credentials|credentials.pid as u32==pid)
+                // The actual SO_PEERCRED is captured at accept() before
+                // Smithay creates the client. get_credentials() on a
+                // freshly registered backend can be unavailable; do not
+                // silently hide the trusted global on that failure.
+                // Never authorize by a self-reported application identity.
+                client.get_data::<BridgeClientState>()
+                    .is_some_and(|data|trusted_ime_peer(data.kernel_peer_pid,pid))
             }))
     } else {None};
     if trusted_ime_pid.is_some() {
@@ -4856,6 +4869,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         // registry roundtrip. Keep PID-gated IME diagnostics anchored to
         // kernel SO_PEERCRED, never an app-supplied name or declared PID.
         while let Some(stream)=listener.accept()? {
+            let mut kernel_peer_pid=None;
             if trusted_ime_pid.is_some() {
                 use std::os::fd::AsRawFd;
                 let mut credentials=libc::ucred{pid:0,uid:0,gid:0};
@@ -4869,12 +4883,16 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 if result!=0 || length as usize!=std::mem::size_of::<libc::ucred>() {
                     return Err("Wayland IME guest socket peer credentials unavailable".into());
                 }
+                kernel_peer_pid=u32::try_from(credentials.pid).ok().filter(|pid|*pid>1);
                 println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_KERNEL_PID={}",credentials.pid);
                 println!("MELANIA_NATIVE_IME_WAYLAND_ACCEPTED_TRUSTED_PID={}",
-                         credentials.pid>1 && Some(credentials.pid as u32)==trusted_ime_pid);
+                         kernel_peer_pid.is_some() && kernel_peer_pid==trusted_ime_pid);
                 let _=std::io::stdout().flush();
             }
-            handle.insert_client(stream,Arc::new(BridgeClientState::default()))?;
+            handle.insert_client(stream,Arc::new(BridgeClientState{
+                kernel_peer_pid,
+                ..BridgeClientState::default()
+            }))?;
         }
         display.dispatch_clients(&mut state)?;
         // Fail closed if any grouped client withholds XDG ACK or pixels.
@@ -5245,3 +5263,19 @@ mod native_scroll_stage90_tests {
         assert_eq!(bounded_v120(Some(1e30)),None);
     }
 }
+
+#[cfg(test)]
+mod trusted_ime_peer_tests {
+    use super::trusted_ime_peer;
+    #[test]
+    fn only_exact_kernel_socket_pid_is_privileged() {
+        assert!(trusted_ime_peer(Some(1201),1201));
+        assert!(!trusted_ime_peer(Some(1202),1201));
+        assert!(!trusted_ime_peer(None,1201));
+        assert!(!trusted_ime_peer(Some(1),1));
+        assert!(!trusted_ime_peer(Some(0),1201));
+        assert!(!trusted_ime_peer(Some(1201),0));
+        assert!(!trusted_ime_peer(Some(1201),1));
+    }
+}
+
