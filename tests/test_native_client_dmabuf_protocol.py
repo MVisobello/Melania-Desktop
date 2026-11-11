@@ -69,6 +69,30 @@ class QemuClientDmabufProtocol(unittest.TestCase):
         self.assertIn("fn rejects_unhandled_multiplane_and_yuv_layouts()",IMPORTER)
         self.assertIn("fn rejects_bad_geometry_large_stride_and_backing_offsets()",IMPORTER)
 
+    def test_linear_dma_buf_fd_extent_checked_before_active_egl_import(self):
+        # Actual DMA-BUF FDs are checked using Linux SEEK_END, not the
+        # client's untrusted offset/stride alone. Rust tests include a real
+        # memfd shortened by one byte; QEMU exercises real GBM DMA-BUFs.
+        markers=(
+            "fn validate_linear_plane_backing(buffer:&Dmabuf)",
+            "buffer.handles().next()",
+            "libc::lseek(fd.as_raw_fd(),0,libc::SEEK_END)",
+            "LINEAR DMA-BUF FD shorter than advertised plane extent",
+            "LINEAR DMA-BUF kernel backing size unavailable",
+            "buffer.format().modifier != Modifier::Linear",
+            "validate_linear_plane_backing(buffer)?;",
+            "fn linear_dma_buf_fd_must_back_the_actual_last_row()",
+            "fn linear_dma_buf_unseekable_or_truncated_import_is_fail_closed()",
+        )
+        for marker in markers:
+            self.assertIn(marker,IMPORTER)
+        importer=IMPORTER[IMPORTER.index("pub fn import_client_dmabuf("):]
+        self.assertLess(importer.index("validate_client_dmabuf(buffer)?;"),
+                        importer.index("validate_linear_plane_backing(buffer)?;"))
+        self.assertLess(importer.index("validate_linear_plane_backing(buffer)?;"),
+                        importer.index("renderer.import_dmabuf(buffer,None)"))
+        self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true",BRIDGE)
+
     def test_no_fake_wayland_presentation_and_gpu_discard_on_each_loss_path(self):
         start=BRIDGE.index("impl DmabufHandler for BridgeState")
         end=BRIDGE.index("impl CompositorHandler for BridgeState",start)
