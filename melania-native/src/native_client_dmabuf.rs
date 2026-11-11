@@ -131,7 +131,9 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
 /// A single-plane LINEAR DMA-BUF has an exact minimum byte extent:
 /// offset + (height - 1) * stride + width * 4. Validate that extent against
 /// the actual kernel-reported DMA-BUF FD length, not just metadata that an
-/// untrusted Wayland client provided. Kernel DMA-BUF supports SEEK_END to
+/// untrusted Wayland client provided. Also bound the *whole* kernel-backed
+/// allocation: a tiny visible rectangle must not pin an arbitrarily large
+/// DMA-BUF merely by specifying a small stride and plane offset. Kernel DMA-BUF supports SEEK_END to
 /// report its allocation size; refusal or an unknown size fails closed.
 ///
 /// Non-linear/tiled modifiers may have vendor-specific compression/headers:
@@ -168,6 +170,13 @@ fn validate_linear_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     }
     if (actual as u64) < required as u64 {
         return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
+    }
+    // The earlier visible-byte check bounds the minimum addressed pixels.
+    // Without checking the *actual* allocation, a client could import a
+    // multi-gigabyte BO as a nominal 360x224 wl_buffer and bypass the four-
+    // import (64 MiB total) residency budget before EGL sees the FD.
+    if (actual as u64) > MAX_CLIENT_BUFFER_BYTES as u64 {
+        return Err("LINEAR DMA-BUF FD exceeds 16 MiB allocation budget".into());
     }
     Ok(())
 }
@@ -373,9 +382,31 @@ mod tests {
             validate_client_dmabuf(&excessive),
             Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into())
         );
-        // The FD genuinely backs the advertised extent: only the import
-        // memory budget (not a fabricated undersize check) rejects it.
-        assert_eq!(validate_linear_plane_backing(&excessive),Ok(()));
+        // The FD genuinely backs the advertised extent: both the logical
+        // stride/offset budget and the whole-FD residency check reject it.
+        assert_eq!(validate_linear_plane_backing(&excessive),
+                   Err("LINEAR DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+    }
+
+    #[test]
+    fn linear_fd_allocation_budget_cannot_hide_behind_tiny_visible_image() {
+        // Real kernel memfds: identical client-visible 360x224 geometry and
+        // 1440-byte row stride, but radically different backing lengths.
+        // All metadata checks pass; the oversized BO must fail *before* EGL.
+        let minimum=(360*224*4) as u64;
+        let exact=linear_memfd(minimum,0,360*4);
+        let at_limit=linear_memfd(MAX_CLIENT_BUFFER_BYTES as u64,0,360*4);
+        let over_limit=linear_memfd(MAX_CLIENT_BUFFER_BYTES as u64+1,0,360*4);
+        let huge=linear_memfd(128*1024*1024,0,360*4);
+        for b in [&exact,&at_limit,&over_limit,&huge] {
+            assert_eq!(validate_client_dmabuf(b),Ok(()));
+        }
+        assert_eq!(validate_linear_plane_backing(&exact),Ok(()));
+        assert_eq!(validate_linear_plane_backing(&at_limit),Ok(()));
+        for b in [&over_limit,&huge] {
+            assert_eq!(validate_linear_plane_backing(b),
+                       Err("LINEAR DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+        }
     }
 
     #[test]
