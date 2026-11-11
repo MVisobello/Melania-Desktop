@@ -457,7 +457,24 @@ fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
                 // compositing with the actual opaque scene background
                 // survived EGL import, GPU->CPU readback and KMS transport.
                 // Old alpha-dropping code produces B~93 instead of B~122.
-                let alpha_sample=((120+40)*W+(160+40))*4;
+                // GLES scissor uses bottom-origin coordinates. A client
+                // patch at GL y=20..56 appears at top-origin y=168..204
+                // after the real EGL readback (height 224).
+                // QEMU previously observed B=186,G=46,R=84 at y=40:
+                // that is the opaque base tile, not the alpha patch.
+                let alpha_sample=((120+(224-1-40))*W+(160+40))*4;
+                // An independent control sample detects a double flip:
+                // the original y=40 must still contain the opaque tile.
+                let opaque_sample=((120+40)*W+(160+40))*4;
+                let [opaque_b,opaque_g,opaque_r]=pixels[opaque_sample..opaque_sample+3]
+                    .try_into().map_err(|_|"GPU opaque KMS control sample truncated")?;
+                if !(160..=211).contains(&opaque_b) ||
+                   !(25..=76).contains(&opaque_g) ||
+                   !(60..=113).contains(&opaque_r) {
+                    return Err(format!(
+                        "GPU alpha orientation control was not opaque: B={opaque_b} G={opaque_g} R={opaque_r}"
+                    ).into());
+                }
                 let [alpha_b,alpha_g,alpha_r]=pixels[alpha_sample..alpha_sample+3]
                     .try_into().map_err(|_|"GPU alpha KMS sample truncated")?;
                 if !(112..=135).contains(&alpha_b) ||
