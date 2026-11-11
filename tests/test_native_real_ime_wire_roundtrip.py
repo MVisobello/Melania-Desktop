@@ -79,13 +79,19 @@ class RealImeWireRoundtrip(unittest.TestCase):
         for marker in (
             "MELANIA_NATIVE_TEXT_INPUT_IME",
             "MELANIA_NATIVE_TRUSTED_IME_PID",
-            "client.get_credentials(&identity_handle)",
-            "credentials.pid as u32==pid",
+            "libc::SO_PEERCRED",
+            "kernel_peer_pid=u32::try_from(credentials.pid).ok()",
+            "client.get_data::<BridgeClientState>()",
+            "trusted_ime_peer(data.kernel_peer_pid,pid)",
+            "kernel_peer_pid,",
+            "fn trusted_ime_peer(kernel_peer_pid:Option<u32>,allowed_pid:u32)->bool",
             'MELANIA_NATIVE_SESSION_READY=false',
         ):
             self.assertIn(marker,BRIDGE)
         self.assertIn("MELANIA_NATIVE_WAYLAND_RENDER_READY=false",GUEST)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
+        self.assertNotIn("client.get_credentials(&identity_handle)",BRIDGE)
+        self.assertIn("fn only_exact_kernel_socket_pid_is_privileged()",BRIDGE)
 
 if __name__ == "__main__":
     unittest.main()
