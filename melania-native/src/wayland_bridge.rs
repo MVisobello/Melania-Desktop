@@ -389,6 +389,14 @@ impl BridgeState {
             return;
         }
         if on_screen {
+            // A new GTK Start wl_shm commit may arrive after a libseat pause
+            // or a fatal DRM epoch. Never resurrect keyboard focus then:
+            // this is the same epoch boundary enforced by SeatHandler.
+            if !self.lifecycle.seat_active() ||
+                self.native_presentation_guard.permanently_revoked() {
+                eprintln!("MELANIA_NATIVE_GTK_START_FOCUS_DENIED_INACTIVE_EPOCH=true");
+                return;
+            }
             if self.focused.as_ref()==Some(surface) {return;}
             let keyboard=self.seat.get_keyboard().expect("keyboard");
             keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
