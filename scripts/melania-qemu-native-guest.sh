@@ -1161,6 +1161,7 @@ if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
   MELANIA_QEMU_CLIENT_REJECT_Y_INVERT=YES_QEMU_VM \
   MELANIA_QEMU_CLIENT_REJECT_SHORT_STRIDE=YES_QEMU_VM \
+  MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET=YES_QEMU_VM \
   WAYLAND_DISPLAY="$integrated_socket" \
   timeout --signal=TERM --kill-after=3s 62s \
   "$continuous_client" > "$integrated_client_log" 2>&1; then
@@ -1197,6 +1198,12 @@ grep -Fqx 'MELANIA_QEMU_REAL_CLIENT_SHORT_STRIDE_REJECTED=true' "$integrated_cli
   fatal 'real_wayland_short_stride_dma_buf_rejection_not_observed'
 grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF stride outside bounded packed-RGB layout' "$integrated_server_log" ||
   fatal 'gpu_import_did_not_reject_real_short_stride'
+# Independent real GBM plane FD, malicious u32::MAX offset, actual
+# asynchronous Wayland Failed event. This does not assert GPU presentation.
+grep -Fqx 'MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_REJECTED=true' "$integrated_client_log" ||
+  fatal 'real_wayland_out_of_bounds_offset_rejection_not_observed'
+grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF unbounded plane offset or backing extent' "$integrated_server_log" ||
+  fatal 'gpu_import_did_not_reject_real_out_of_bounds_offset'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$integrated_server_log" ||
     fatal "integrated_kernel_frame_$index_not_acknowledged"
