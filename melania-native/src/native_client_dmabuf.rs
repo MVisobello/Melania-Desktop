@@ -71,8 +71,33 @@ fn ordered_advertised_formats(formats:impl IntoIterator<Item=Format>)->Vec<Forma
         format!("{:?}",format.modifier),
     ));
     candidates.dedup();
-    candidates.truncate(MAX_ADVERTISED_CLIENT_FORMATS);
-    candidates
+    // Never let a driver with dozens of ARGB vendor modifiers consume the
+    // entire finite Wayland registry before XRGB/ABGR/XBGR are considered.
+    // Reserve every genuinely advertised LINEAR entry first; then choose
+    // opaque modifiers fairly by format, one per round. No capabilities are
+    // synthesized: every selected entry is copied from the EGL driver set.
+    let mut selected:Vec<Format>=candidates.iter().copied()
+        .filter(|format|format.modifier==Modifier::Linear)
+        .take(MAX_ADVERTISED_CLIENT_FORMATS).collect();
+    let mut non_linear:Vec<Vec<Format>>=(0..4).map(|priority|{
+        candidates.iter().copied()
+            .filter(|format|format.modifier!=Modifier::Linear &&
+                    client_format_priority(format.code)==priority)
+            .collect()
+    }).collect();
+    let mut round=0;
+    while selected.len()<MAX_ADVERTISED_CLIENT_FORMATS {
+        let mut added=false;
+        for bucket in &mut non_linear {
+            if round<bucket.len() && selected.len()<MAX_ADVERTISED_CLIENT_FORMATS {
+                selected.push(bucket[round]);
+                added=true;
+            }
+        }
+        if !added {break;}
+        round+=1;
+    }
+    selected
 }
 
 pub fn client_import_formats(renderer:&GlesRenderer)->Vec<Format> {
@@ -341,6 +366,29 @@ mod tests {
             linear(Fourcc::Xbgr8888),
         ]);
         assert!(first.len()<=MAX_ADVERTISED_CLIENT_FORMATS);
+    }
+
+    #[test]
+    fn crowded_egl_modifiers_preserve_each_supported_rgb_format() {
+        use smithay::backend::allocator::Modifier;
+        // 96 actual-looking distinct vendor modifier IDs for ARGB alone
+        // must not evict XRGB, ABGR and XBGR from a 64-entry registry.
+        let mut formats:Vec<Format>=(1u64..=96).map(|id|Format{
+            code:Fourcc::Argb8888,modifier:Modifier::from(id),
+        }).collect();
+        for code in [Fourcc::Xrgb8888,Fourcc::Abgr8888,Fourcc::Xbgr8888] {
+            formats.push(Format{code,modifier:Modifier::from(1000u64+code as u32 as u64)});
+        }
+        let selected=ordered_advertised_formats(formats.clone());
+        assert_eq!(selected.len(),MAX_ADVERTISED_CLIENT_FORMATS);
+        for code in [Fourcc::Argb8888,Fourcc::Xrgb8888,
+                     Fourcc::Abgr8888,Fourcc::Xbgr8888] {
+            assert!(selected.iter().any(|format|format.code==code),
+                "supported EGL RGB format starved by vendor modifiers: {code:?}");
+        }
+        assert!(selected.iter().all(|format|formats.contains(format)));
+        formats.reverse();
+        assert_eq!(selected,ordered_advertised_formats(formats));
     }
 
     #[test]
