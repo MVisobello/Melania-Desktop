@@ -249,7 +249,7 @@ two_continuous_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-reopen.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --close "$report/continuous-close-frame13.ppm" \
-  --reopen "$report/continuous-reopen-frame14.ppm" --timeout 1350 \
+  --reopen "$report/continuous-reopen-frame14.ppm" --timeout 1900 \
   > "$report/qmp-continuous-reopen.log" 2>&1 &
 continuous_reopen_capture_pid=$!
 python3 "$root/scripts/capture-qemu-continuous-dynamic.py" \

@@ -49,6 +49,25 @@ class ReopenAfterTwelveKmsFrames(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_CONTINUOUS_REOPEN_14_FRAMES_PASS=true",CLIENT)
         self.assertIn("MELANIA_NATIVE_CONTINUOUS_REOPEN_FRAME14_ACKED=true",CLIENT)
 
+    def test_real_qmp_observer_survives_slow_tcg_without_weaker_pixel_gate(self):
+        # Full guest artifact 13948798287 had real DRM frame13/14 ACKs
+        # while the historical 1350s host observer had already timed out.
+        # The QEMU watchdog remains bounded; extend only the observer.
+        import re
+        guest_timeout=re.search(r'timeout --signal=TERM --kill-after=10s (\d+)s',HOST)
+        self.assertIsNotNone(guest_timeout)
+        self.assertEqual(int(guest_timeout.group(1)),2050)
+        observer=re.search(
+            r'capture-qemu-continuous-reopen\.py.*?--reopen [^\n]+ --timeout (\d+)',
+            HOST,re.S)
+        self.assertIsNotNone(observer)
+        self.assertGreaterEqual(int(observer.group(1)),1900)
+        self.assertLess(int(observer.group(1)),int(guest_timeout.group(1)))
+        self.assertIn('MELANIA_QEMU_CONTINUOUS_FRAME{index}_PIXELS_VERIFIED=true',QMP)
+        self.assertIn('screendump(a.qmp,path)',QMP)
+        self.assertIn('observed=verify(path.read_bytes(),index)',QMP)
+        self.assertIn('continuous_reopen_capture_code',HOST)
+
     def test_qmp_must_show_disappeared_then_remapped_A_and_survivor_B(self):
         self.assertIn("MELANIA_RUST_CONTINUOUS_REOPEN_FRAME_VISIBLE=",KMS)
         self.assertIn("A_region",QMP)

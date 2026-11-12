@@ -84,6 +84,35 @@ class RealWaylandDmabufClient(unittest.TestCase):
             self.assertIn(marker,scenario)
         self.assertIn('MELANIA_NATIVE_SESSION_READY=false',GUEST)
 
+    def test_real_gpu_fd_short_stride_rejected_by_server_and_client(self):
+        source=CLIENT.split("fn exercise_real_client_dmabuf(",1)[1].split(
+            "fn main()->Result",1)[0]
+        for marker in (
+            'MELANIA_QEMU_CLIENT_REJECT_SHORT_STRIDE',
+            'image.handles().zip(image.offsets()).zip(image.strides())',
+            'invalid.add(fd,planes as u32,offset,4,',
+            'zwp_linux_buffer_params_v1::Flags::empty()',
+            'if !state.invalid_invert_failed || state.invalid_invert_created',
+            'state.frame_done_count!=old_callback_count',
+            'MELANIA_QEMU_REAL_CLIENT_SHORT_STRIDE_REJECTED=true',
+        ):
+            self.assertIn(marker,source)
+        start=source.index('MELANIA_QEMU_CLIENT_REJECT_SHORT_STRIDE')
+        end=source.index('MELANIA_QEMU_REAL_CLIENT_SHORT_STRIDE_REJECTED=true')
+        negative=source[start:end]
+        self.assertIn('invalid.create(',negative)
+        self.assertIn('queue.roundtrip(state)?;',negative)
+        self.assertNotIn('probe.attach(',negative)
+        self.assertNotIn('probe.commit()',negative)
+        scenario=GUEST[GUEST.index('# ONE-PROCESS native integration proof:'):
+                       GUEST.index('# Sustain 24 successive real Wayland/client buffer')]
+        for marker in (
+            'MELANIA_QEMU_CLIENT_REJECT_SHORT_STRIDE=YES_QEMU_VM',
+            'MELANIA_QEMU_REAL_CLIENT_SHORT_STRIDE_REJECTED=true',
+            'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF stride outside bounded packed-RGB layout',
+        ):
+            self.assertIn(marker,scenario)
+
     def test_qemu_guest_observes_real_import_but_forbids_fake_ack(self):
         begin=GUEST.index("# ONE-PROCESS native integration proof:")
         end=GUEST.index("# Sustain 24 successive real Wayland/client buffer",begin)
