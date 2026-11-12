@@ -88,6 +88,7 @@ class QemuClientDmabufProtocol(unittest.TestCase):
             "fn linear_dma_buf_fd_must_back_the_actual_last_row()",
             "fn linear_dma_buf_unseekable_or_truncated_import_is_fail_closed()",
             "fn linear_fd_allocation_budget_cannot_hide_behind_tiny_visible_image()",
+            "fn non_linear_modifier_still_has_real_kernel_allocation_budget()",
         )
         for marker in markers:
             self.assertIn(marker,IMPORTER)
