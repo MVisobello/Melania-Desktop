@@ -176,6 +176,11 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     if actual < 0 {
         return Err("DMA-BUF kernel backing size unavailable".into());
     }
+    // Even an opaque/tiled layout needs a real non-empty kernel allocation.
+    // A zero-length FD cannot back any image and must never reach EGL.
+    if actual == 0 {
+        return Err("DMA-BUF FD has zero-length kernel backing".into());
+    }
     if linear && (actual as u64) < required as u64 {
         return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
     }
@@ -438,9 +443,13 @@ mod tests {
     fn non_linear_modifier_still_has_real_kernel_allocation_budget() {
         // An opaque layout needs no invented LINEAR last-row extent,
         // but must not pin an oversized BO through an arbitrary modifier.
+        let zero=memfd_geometry(0,0,1440,360,224,Modifier::Invalid);
         let small=memfd_geometry(4096,0,1440,360,224,Modifier::Invalid);
         let oversized=memfd_geometry(
             MAX_CLIENT_BUFFER_BYTES as u64+1,0,1440,360,224,Modifier::Invalid);
+        assert_eq!(validate_client_dmabuf(&zero),Ok(()));
+        assert_eq!(validate_client_plane_backing(&zero),
+                   Err("DMA-BUF FD has zero-length kernel backing".into()));
         assert_eq!(validate_client_dmabuf(&small),Ok(()));
         assert_eq!(validate_client_plane_backing(&small),Ok(()));
         assert_eq!(validate_client_dmabuf(&oversized),Ok(()));
