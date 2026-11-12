@@ -181,6 +181,13 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     if actual == 0 {
         return Err("DMA-BUF FD has zero-length kernel backing".into());
     }
+    // Even with opaque/tiled modifiers the plane's byte offset identifies
+    // its first address in the allocation. It must refer to an existing
+    // byte, not an address beyond (or exactly at) EOF. Do not infer a
+    // vendor-specific row extent for these formats.
+    if (offset as u64) >= actual as u64 {
+        return Err("DMA-BUF plane offset outside kernel allocation".into());
+    }
     if linear && (actual as u64) < required as u64 {
         return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
     }
@@ -436,6 +443,23 @@ mod tests {
         for b in [&over_limit,&huge] {
             assert_eq!(validate_client_plane_backing(b),
                        Err("DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+        }
+    }
+
+    #[test]
+    fn opaque_modifier_plane_offset_must_point_inside_real_allocation() {
+        // The modifier is deliberately opaque: no fake row-size rule.
+        // The actual FD and byte offset, however, must be consistent.
+        let valid=memfd_geometry(4096,4095,1440,360,224,Modifier::Invalid);
+        let at_eof=memfd_geometry(4096,4096,1440,360,224,Modifier::Invalid);
+        let past_eof=memfd_geometry(4096,8192,1440,360,224,Modifier::Invalid);
+        for b in [&valid,&at_eof,&past_eof] {
+            assert_eq!(validate_client_dmabuf(b),Ok(()));
+        }
+        assert_eq!(validate_client_plane_backing(&valid),Ok(()));
+        for b in [&at_eof,&past_eof] {
+            assert_eq!(validate_client_plane_backing(b),
+                Err("DMA-BUF plane offset outside kernel allocation".into()));
         }
     }
 
