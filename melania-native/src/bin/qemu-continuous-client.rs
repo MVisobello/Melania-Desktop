@@ -41,6 +41,10 @@ struct Client {
     xdg_acked:bool,
     buffer_released:bool,
     frame_done_count:u32,
+    // Only a real asynchronous Wayland params.create failure proves that
+    // the server rejected an actual client-owned Y_INVERT DMA-BUF FD.
+    invalid_invert_failed:bool,
+    invalid_invert_created:bool,
 }
 
 impl Dispatch<wl_registry::WlRegistry,()> for Client {
@@ -77,9 +81,20 @@ impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,()> for Client {
     }
 }
 impl Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,()> for Client {
-    fn event(_:&mut Self,_:&zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,
-             _:zwp_linux_buffer_params_v1::Event,_:&(),_:&Connection,
-             _:&QueueHandle<Self>){}
+    fn event(state:&mut Self,_:&zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,
+             event:zwp_linux_buffer_params_v1::Event,_:&(),_:&Connection,
+             _:&QueueHandle<Self>) {
+        match event {
+            zwp_linux_buffer_params_v1::Event::Failed=>state.invalid_invert_failed=true,
+            zwp_linux_buffer_params_v1::Event::Created{buffer}=>{
+                // If the compositor incorrectly accepts the invalid buffer,
+                // free it before returning a hard failure from the probe.
+                state.invalid_invert_created=true;
+                buffer.destroy();
+            },
+            _=>{}
+        }
+    }
 }
 impl Dispatch<xdg_wm_base::XdgWmBase,()> for Client {
     fn event(_: &mut Self,wm:&xdg_wm_base::XdgWmBase,
@@ -272,6 +287,38 @@ fn exercise_real_client_dmabuf(
         imported.destroy();
         if !gpu_kms {probe.destroy();}
         params.destroy();
+        if gpu_index==1 &&
+           std::env::var("MELANIA_QEMU_CLIENT_REJECT_Y_INVERT")
+               .as_deref()==Ok("YES_QEMU_VM") {
+            // Unlike create_immed(), params.create() reports rejection as a
+            // genuine asynchronous Wayland 'failed' event (no client kill).
+            // Send the actual rendered GBM allocation's FDs, not a mock.
+            // No wl_surface.attach/commit/frame is permitted for this probe.
+            let invalid=dmabuf.create_params(qh,());
+            let mut planes=0usize;
+            for ((fd,offset),stride) in
+                image.handles().zip(image.offsets()).zip(image.strides()) {
+                invalid.add(fd,planes as u32,offset,stride,
+                            (modifier>>32) as u32,modifier as u32);
+                planes+=1;
+            }
+            if planes!=1 {return Err("Y_INVERT GPU probe has no packed RGB plane".into());}
+            state.invalid_invert_failed=false;
+            state.invalid_invert_created=false;
+            let old_callback_count=state.frame_done_count;
+            invalid.create(W as i32,H as i32,format as u32,
+                           zwp_linux_buffer_params_v1::Flags::YInvert);
+            queue.roundtrip(state)?;
+            if !state.invalid_invert_failed || state.invalid_invert_created {
+                return Err("real Y_INVERT GBM DMA-BUF was not rejected by Wayland".into());
+            }
+            if state.frame_done_count!=old_callback_count {
+                return Err("invalid Y_INVERT DMA-BUF triggered a fabricated KMS callback".into());
+            }
+            println!("MELANIA_QEMU_REAL_CLIENT_Y_INVERT_REJECTED=true");
+            std::io::stdout().flush()?;
+            invalid.destroy();
+        }
         // The BO and its associated import may only be reused/dropped
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
