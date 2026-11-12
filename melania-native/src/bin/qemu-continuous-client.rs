@@ -354,15 +354,16 @@ fn exercise_real_client_dmabuf(
         if gpu_index==1 &&
            std::env::var("MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET")
                .as_deref()==Ok("YES_QEMU_VM") {
-            // The actual GPU allocation is valid; the client lies about
-            // its plane's byte offset. No kernel backing can contain this
-            // offset within the 16 MiB per-import allocation limit.
-            // Test the real asynchronous Wayland protocol rejection.
+            // Use an aligned, protocol-valid offset (1 MiB), larger than
+            // this 360x224 packed-RGB GBM allocation. u32::MAX caused
+            // Smithay's protocol-level Size overflow error 6 and killed
+            // the client before our actual kernel-FD backing guard ran.
+            // This exercises the real importer and asynchronous Failed event.
             let invalid=dmabuf.create_params(qh,());
             let mut planes=0usize;
             for ((fd,_offset),stride) in
                 image.handles().zip(image.offsets()).zip(image.strides()) {
-                invalid.add(fd,planes as u32,u32::MAX,stride,
+                invalid.add(fd,planes as u32,1024*1024,stride,
                             (modifier>>32) as u32,modifier as u32);
                 planes+=1;
             }
