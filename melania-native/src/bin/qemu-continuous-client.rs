@@ -319,6 +319,38 @@ fn exercise_real_client_dmabuf(
             std::io::stdout().flush()?;
             invalid.destroy();
         }
+        if gpu_index==1 &&
+           std::env::var("MELANIA_QEMU_CLIENT_REJECT_SHORT_STRIDE")
+               .as_deref()==Ok("YES_QEMU_VM") {
+            // Independent *real* GPU allocation and Wayland protocol request:
+            // the FD is valid but the client advertises a row pitch smaller
+            // than its 360-pixel packed-RGB row. Smithay must not import it.
+            // Use create(), not create_immed(), to observe actual failed.
+            let invalid=dmabuf.create_params(qh,());
+            let mut planes=0usize;
+            for ((fd,offset),_stride) in
+                image.handles().zip(image.offsets()).zip(image.strides()) {
+                invalid.add(fd,planes as u32,offset,4,
+                            (modifier>>32) as u32,modifier as u32);
+                planes+=1;
+            }
+            if planes!=1 {return Err("short-stride GPU probe requires one RGB plane".into());}
+            state.invalid_invert_failed=false;
+            state.invalid_invert_created=false;
+            let old_callback_count=state.frame_done_count;
+            invalid.create(W as i32,H as i32,format as u32,
+                           zwp_linux_buffer_params_v1::Flags::empty());
+            queue.roundtrip(state)?;
+            if !state.invalid_invert_failed || state.invalid_invert_created {
+                return Err("real short-stride GBM DMA-BUF was not rejected by Wayland".into());
+            }
+            if state.frame_done_count!=old_callback_count {
+                return Err("invalid short-stride DMA-BUF triggered a fabricated KMS callback".into());
+            }
+            println!("MELANIA_QEMU_REAL_CLIENT_SHORT_STRIDE_REJECTED=true");
+            std::io::stdout().flush()?;
+            invalid.destroy();
+        }
         // The BO and its associated import may only be reused/dropped
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
