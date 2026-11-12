@@ -1159,6 +1159,7 @@ if [[ -z "$integrated_socket" ]] ||
 fi
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
+  MELANIA_QEMU_CLIENT_REJECT_Y_INVERT=YES_QEMU_VM \
   WAYLAND_DISPLAY="$integrated_socket" \
   timeout --signal=TERM --kill-after=3s 62s \
   "$continuous_client" > "$integrated_client_log" 2>&1; then
@@ -1184,6 +1185,13 @@ for marker in \
 done
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true' "$integrated_client_log" ||
   fatal 'external_wayland_gpu_dma_buf_did_not_complete_release'
+# A second real GBM plane from the same independent Wayland process must
+# receive zwp_linux_buffer_params_v1.failed for Y_INVERT. No wl_surface
+# commit, KMS receipt or fabricated callback is permitted for this probe.
+grep -Fqx 'MELANIA_QEMU_REAL_CLIENT_Y_INVERT_REJECTED=true' "$integrated_client_log" ||
+  fatal 'real_wayland_y_invert_dma_buf_rejection_not_observed'
+grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF requires progressive non-inverted flags' "$integrated_server_log" ||
+  fatal 'gpu_import_did_not_reject_real_y_invert_flag'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$integrated_server_log" ||
     fatal "integrated_kernel_frame_$index_not_acknowledged"
