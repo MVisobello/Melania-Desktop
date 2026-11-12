@@ -60,6 +60,24 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true",GUEST)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
 
+    def test_gpu_import_cannot_bypass_bounded_wayland_registry(self):
+        # The EGL driver's capability set can exceed the finite advertised
+        # registry. The import path must use both checks, with the registry
+        # check before GLES import. Rust unit tests exercise the overflow.
+        for marker in (
+            "fn admitted_client_format(advertised:&[Format],requested:Format)->bool",
+            "admitted_client_format(&client_import_formats(renderer),buffer.format())",
+            "fn real_import_admission_matches_bounded_wayland_modifier_registry()",
+            "client DMA-BUF format/modifier not in active bounded Wayland GPU registry",
+        ):
+            self.assertIn(marker,GPU)
+        path=GPU.split("pub fn import_client_dmabuf(",1)[1].split(
+            "pub fn readback_qemu_client_bgra(",1)[0]
+        self.assertLess(path.index("validate_client_plane_backing(buffer)?;"),
+                        path.index("admitted_client_format("))
+        self.assertLess(path.index("admitted_client_format("),
+                        path.index("renderer.import_dmabuf(buffer,None)"))
+
     def test_egl_readback_converts_bottom_up_rgba_with_owned_bytes(self):
         for marker in (
             "readback_qemu_client_bgra",
