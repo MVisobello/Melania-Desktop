@@ -1202,7 +1202,7 @@ grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF stride outs
 # asynchronous Wayland Failed event. This does not assert GPU presentation.
 grep -Fqx 'MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_REJECTED=true' "$integrated_client_log" ||
   fatal 'real_wayland_out_of_bounds_offset_rejection_not_observed'
-grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF unbounded plane offset or backing extent' "$integrated_server_log" ||
+grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=DMA-BUF plane offset outside kernel allocation' "$integrated_server_log" ||
   fatal 'gpu_import_did_not_reject_real_out_of_bounds_offset'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$integrated_server_log" ||
