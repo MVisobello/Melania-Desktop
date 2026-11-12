@@ -69,27 +69,38 @@ class QemuClientDmabufProtocol(unittest.TestCase):
         self.assertIn("fn rejects_unhandled_multiplane_and_yuv_layouts()",IMPORTER)
         self.assertIn("fn rejects_bad_geometry_large_stride_and_backing_offsets()",IMPORTER)
 
-    def test_linear_dma_buf_fd_extent_checked_before_active_egl_import(self):
-        # Actual DMA-BUF FDs are checked using Linux SEEK_END, not the
-        # client's untrusted offset/stride alone. Rust tests include a real
-        # memfd shortened by one byte; QEMU exercises real GBM DMA-BUFs.
+    def test_dma_buf_fd_extent_and_residency_checked_before_active_egl_import(self):
+        # Kernel SEEK_END bounds the whole FD allocation for every modifier.
+        # The minimum visible extent is enforced only for LINEAR, because
+        # compressed/tiled vendor layouts cannot use a LINEAR byte formula.
+        # Real memfd Rust tests cover both modifier classes and size edges.
         markers=(
-            "fn validate_linear_plane_backing(buffer:&Dmabuf)",
+            "fn validate_client_plane_backing(buffer:&Dmabuf)",
             "buffer.handles().next()",
             "libc::lseek(fd.as_raw_fd(),0,libc::SEEK_END)",
+            "let linear=buffer.format().modifier==Modifier::Linear;",
+            "if linear && (actual as u64) < required as u64",
             "LINEAR DMA-BUF FD shorter than advertised plane extent",
-            "LINEAR DMA-BUF kernel backing size unavailable",
-            "buffer.format().modifier != Modifier::Linear",
-            "validate_linear_plane_backing(buffer)?;",
+            "DMA-BUF kernel backing size unavailable",
+            "if (actual as u64) > MAX_CLIENT_BUFFER_BYTES as u64",
+            "DMA-BUF FD exceeds 16 MiB allocation budget",
+            "validate_client_plane_backing(buffer)?;",
             "fn linear_dma_buf_fd_must_back_the_actual_last_row()",
             "fn linear_dma_buf_unseekable_or_truncated_import_is_fail_closed()",
+            "fn linear_fd_allocation_budget_cannot_hide_behind_tiny_visible_image()",
         )
         for marker in markers:
             self.assertIn(marker,IMPORTER)
+        backing=IMPORTER[IMPORTER.index("fn validate_client_plane_backing("):
+                         IMPORTER.index("pub fn import_client_dmabuf(")]
+        self.assertLess(backing.index("if linear && (actual as u64) < required as u64"),
+                        backing.index("if (actual as u64) > MAX_CLIENT_BUFFER_BYTES as u64"))
         importer=IMPORTER[IMPORTER.index("pub fn import_client_dmabuf("):]
         self.assertLess(importer.index("validate_client_dmabuf(buffer)?;"),
-                        importer.index("validate_linear_plane_backing(buffer)?;"))
-        self.assertLess(importer.index("validate_linear_plane_backing(buffer)?;"),
+                        importer.index("validate_client_plane_backing(buffer)?;"))
+        self.assertLess(importer.index("validate_client_plane_backing(buffer)?;"),
+                        importer.index("renderer.has_dmabuf_format(buffer.format())"))
+        self.assertLess(importer.index("renderer.has_dmabuf_format(buffer.format())"),
                         importer.index("renderer.import_dmabuf(buffer,None)"))
         self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true",BRIDGE)
 
