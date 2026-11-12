@@ -351,6 +351,38 @@ fn exercise_real_client_dmabuf(
             std::io::stdout().flush()?;
             invalid.destroy();
         }
+        if gpu_index==1 &&
+           std::env::var("MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET")
+               .as_deref()==Ok("YES_QEMU_VM") {
+            // The actual GPU allocation is valid; the client lies about
+            // its plane's byte offset. No kernel backing can contain this
+            // offset within the 16 MiB per-import allocation limit.
+            // Test the real asynchronous Wayland protocol rejection.
+            let invalid=dmabuf.create_params(qh,());
+            let mut planes=0usize;
+            for ((fd,_offset),stride) in
+                image.handles().zip(image.offsets()).zip(image.strides()) {
+                invalid.add(fd,planes as u32,u32::MAX,stride,
+                            (modifier>>32) as u32,modifier as u32);
+                planes+=1;
+            }
+            if planes!=1 {return Err("out-of-bounds GPU probe requires one RGB plane".into());}
+            state.invalid_invert_failed=false;
+            state.invalid_invert_created=false;
+            let old_callback_count=state.frame_done_count;
+            invalid.create(W as i32,H as i32,format as u32,
+                           zwp_linux_buffer_params_v1::Flags::empty());
+            queue.roundtrip(state)?;
+            if !state.invalid_invert_failed || state.invalid_invert_created {
+                return Err("real out-of-bounds plane offset was not rejected by Wayland".into());
+            }
+            if state.frame_done_count!=old_callback_count {
+                return Err("invalid plane offset triggered a fabricated KMS callback".into());
+            }
+            println!("MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_REJECTED=true");
+            std::io::stdout().flush()?;
+            invalid.destroy();
+        }
         // The BO and its associated import may only be reused/dropped
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
