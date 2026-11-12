@@ -100,6 +100,18 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
     if !supported_format(buffer.format().code) || buffer.num_planes()!=1 {
         return Err("client DMA-BUF requires supported packed RGB and one plane".into());
     }
+    // The bounded QEMU path has no per-client orientation/interlace
+    // conversion. In particular, Y_INVERT must not silently present an
+    // upside-down surface, and INTERLACED/BOTTOM_FIRST cannot be interpreted
+    // as progressive RGB. Fail closed until the real GPU scene supports
+    // these protocol flags explicitly.
+    // Smithay 0.7.0 exposes only y_inverted(), not the full bitmask.
+    // Do not call the non-existent Dmabuf::flags API. This import guard
+    // rejects Y_INVERT on the actual client buffer; INTERLACED and
+    // BOTTOM_FIRST still need raw protocol flag admission in a later change.
+    if buffer.y_inverted() {
+        return Err("client DMA-BUF requires progressive non-inverted flags".into());
+    }
     let stride=buffer.strides().next()
         .ok_or("client DMA-BUF has no plane stride")? as usize;
     let offset=buffer.offsets().next()
@@ -363,6 +375,50 @@ mod tests {
     }
     fn linear_memfd(len:u64,offset:u32,stride:u32)->Dmabuf {
         linear_memfd_geometry(len,offset,stride,360,224)
+    }
+
+    // Validate the entire protocol bitfield for callers that still have it.
+    // Smithay 0.7.0's Dmabuf handle has no flags() accessor, so this is
+    // NOT yet wired into the imported client buffer path for field flags.
+    fn validate_client_protocol_flags(flags:smithay::backend::allocator::dmabuf::DmabufFlags)
+        ->Result<(),String> {
+        if flags.is_empty() {Ok(())}
+        else {Err("client DMA-BUF requires progressive non-inverted flags".into())}
+    }
+
+    #[test]
+    fn client_dmabuf_rejects_unimplemented_orientation_and_field_flags() {
+        // The bridge does not implement Y_INVERT or interlaced fields.
+        // Real kernel-backed descriptors are used, not metadata-only mocks.
+        use std::os::fd::FromRawFd;
+        for flags in [
+            DmabufFlags::Y_INVERT,
+            DmabufFlags::INTERLACED,
+            DmabufFlags::BOTTOM_FIRST,
+        ] {
+            let name=std::ffi::CString::new("melania-dmabuf-flags").unwrap();
+            let raw=unsafe {libc::memfd_create(name.as_ptr(),libc::MFD_CLOEXEC)};
+            assert!(raw>=0);
+            let file=unsafe {std::fs::File::from_raw_fd(raw)};
+            file.set_len((360*224*4) as u64).unwrap();
+            let mut builder=Dmabuf::builder(
+                (360,224),Fourcc::Argb8888,Modifier::Linear,flags);
+            assert!(builder.add_plane(file.into(),0,0,360*4));
+            let buffer=builder.build().unwrap();
+            // All three flags are rejected by the protocol admission
+            // predicate. Only Y_INVERT can currently be read back from a
+            // Smithay 0.7.0 Dmabuf instance; the remaining two flags must
+            // be intercepted before construction, and are NOT yet safe.
+            assert_eq!(validate_client_protocol_flags(flags),
+                Err("client DMA-BUF requires progressive non-inverted flags".into()));
+            if flags==DmabufFlags::Y_INVERT {
+                assert_eq!(validate_client_dmabuf(&buffer),
+                    Err("client DMA-BUF requires progressive non-inverted flags".into()));
+            }
+        }
+        let normal=linear_memfd((360*224*4) as u64,0,360*4);
+        assert_eq!(validate_client_dmabuf(&normal),Ok(()));
+        assert_eq!(validate_client_plane_backing(&normal),Ok(()));
     }
 
     #[test]
