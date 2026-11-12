@@ -121,7 +121,7 @@ class RealWaylandDmabufClient(unittest.TestCase):
         negative=source[begin:end]
         for marker in (
             'image.handles().zip(image.offsets()).zip(image.strides())',
-            'invalid.add(fd,planes as u32,u32::MAX,stride,',
+            'invalid.add(fd,planes as u32,1024*1024,stride,',
             'invalid.create(',
             'queue.roundtrip(state)?;',
             'if !state.invalid_invert_failed || state.invalid_invert_created',
@@ -135,7 +135,7 @@ class RealWaylandDmabufClient(unittest.TestCase):
         for marker in (
             'MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET=YES_QEMU_VM',
             'MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_REJECTED=true',
-            'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF unbounded plane offset or backing extent',
+            'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=DMA-BUF plane offset outside kernel allocation',
         ):
             self.assertIn(marker,scenario)
 
