@@ -351,6 +351,41 @@ fn exercise_real_client_dmabuf(
             std::io::stdout().flush()?;
             invalid.destroy();
         }
+        if gpu_index==1 &&
+           std::env::var("MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET")
+               .as_deref()==Ok("YES_QEMU_VM") {
+            // Smithay validates a plane's offset against its real FD extent
+            // at the protocol boundary, before DmabufHandler is invoked.
+            // A protocol error DISCONNECTS this deliberately disposable
+            // client; it cannot be followed by normal KMS frames on this
+            // connection. The QEMU harness launches it separately.
+            let invalid=dmabuf.create_params(qh,());
+            let mut planes=0usize;
+            for ((fd,_offset),stride) in
+                image.handles().zip(image.offsets()).zip(image.strides()) {
+                invalid.add(fd,planes as u32,1024*1024,stride,
+                            (modifier>>32) as u32,modifier as u32);
+                planes+=1;
+            }
+            if planes!=1 {return Err("out-of-bounds GPU probe requires one RGB plane".into());}
+            let old_callback_count=state.frame_done_count;
+            invalid.create(W as i32,H as i32,format as u32,
+                           zwp_linux_buffer_params_v1::Flags::empty());
+            let protocol_result=queue.roundtrip(state);
+            let protocol_error=match protocol_result {
+                Err(error)=>error.to_string(),
+                Ok(_)=>return Err("invalid plane offset unexpectedly accepted by Smithay".into()),
+            };
+            if !protocol_error.contains("Invalid offset 1048576 for plane 0.") {
+                return Err(format!("unexpected GPU protocol error: {protocol_error}").into());
+            }
+            if state.frame_done_count!=old_callback_count {
+                return Err("invalid plane offset triggered a fabricated KMS callback".into());
+            }
+            println!("MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_PROTOCOL_REJECTED=true");
+            std::io::stdout().flush()?;
+            return Ok(());
+        }
         // The BO and its associated import may only be reused/dropped
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
@@ -388,6 +423,12 @@ fn main()->Result<(),Box<dyn Error>> {
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
         .as_deref()==Ok("YES_QEMU_VM") {
         exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface)?;
+        if std::env::var("MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET")
+            .as_deref()==Ok("YES_QEMU_VM") {
+            // This isolated negative client has already received the genuine
+            // Smithay protocol disconnect. Never submit normal frames here.
+            return Ok(());
+        }
     }
     let total=frame_budget(
         std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_FRAMES").ok().as_deref(),12

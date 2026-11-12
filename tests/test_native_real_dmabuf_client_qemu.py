@@ -113,6 +113,35 @@ class RealWaylandDmabufClient(unittest.TestCase):
         ):
             self.assertIn(marker,scenario)
 
+    def test_real_gpu_fd_out_of_bounds_offset_protocol_disconnect_is_isolated(self):
+        source=CLIENT.split("fn exercise_real_client_dmabuf(",1)[1].split(
+            "fn main()->Result",1)[0]
+        begin=source.index('MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET')
+        end=source.index('MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_PROTOCOL_REJECTED=true')
+        negative=source[begin:end]
+        for marker in (
+            'image.handles().zip(image.offsets()).zip(image.strides())',
+            'invalid.add(fd,planes as u32,1024*1024,stride,',
+            'invalid.create(',
+            'let protocol_result=queue.roundtrip(state);',
+            'Invalid offset 1048576 for plane 0.',
+            'state.frame_done_count!=old_callback_count',
+        ):
+            self.assertIn(marker,negative)
+        self.assertNotIn('probe.attach(',negative)
+        self.assertNotIn('probe.commit()',negative)
+        self.assertIn('return Ok(());',CLIENT.split('fn main()->Result',1)[1].split('let total=frame_budget(',1)[0])
+        scenario=GUEST[GUEST.index('# ONE-PROCESS native integration proof:'):
+                       GUEST.index('# Sustain 24 successive real Wayland/client buffer')]
+        self.assertIn('integrated_oob_log="$(mktemp',scenario)
+        self.assertIn('MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_PROTOCOL_REJECTED=true',scenario)
+        self.assertIn('MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET=YES_QEMU_VM',scenario)
+        self.assertEqual(scenario.count('MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET=YES_QEMU_VM'),1)
+        self.assertLess(scenario.index('integrated_oob_log="$(mktemp'),
+                        scenario.index('MELANIA_QEMU_CLIENT_REJECT_Y_INVERT=YES_QEMU_VM'))
+        self.assertNotIn('MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=DMA-BUF plane offset outside kernel allocation',scenario)
+        self.assertIn('MELANIA_NATIVE_SESSION_READY=false',GUEST)
+
     def test_qemu_guest_observes_real_import_but_forbids_fake_ack(self):
         begin=GUEST.index("# ONE-PROCESS native integration proof:")
         end=GUEST.index("# Sustain 24 successive real Wayland/client buffer",begin)

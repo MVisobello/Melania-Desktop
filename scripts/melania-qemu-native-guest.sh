@@ -1157,6 +1157,23 @@ if [[ -z "$integrated_socket" ]] ||
   kill "$integrated_server_pid" 2>/dev/null || true
   fatal 'integrated_Smithay_KMS_process_never_started'
 fi
+# Smithay rejects an offset beyond the FD at the protocol boundary,
+# disconnecting that client. Run the actual GPU-FD negative client separately
+# so it cannot prevent the independent positive 12-frame KMS acceptance.
+integrated_oob_log="$(mktemp -t melania-integrated-oob-XXXXXX)"
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
+  MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET=YES_QEMU_VM \
+  WAYLAND_DISPLAY="$integrated_socket" \
+  timeout --signal=TERM --kill-after=3s 62s \
+  "$continuous_client" > "$integrated_oob_log" 2>&1; then
+  cat "$integrated_server_log" "$integrated_oob_log"
+  kill "$integrated_server_pid" 2>/dev/null || true
+  fatal 'isolated_real_GPU_offset_protocol_probe_failed'
+fi
+grep -Fqx 'MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_PROTOCOL_REJECTED=true' "$integrated_oob_log" ||
+  fatal 'real_wayland_offset_protocol_disconnect_not_observed'
+rm -f "$integrated_oob_log"
 if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
   MELANIA_QEMU_CLIENT_REJECT_Y_INVERT=YES_QEMU_VM \
@@ -1197,6 +1214,8 @@ grep -Fqx 'MELANIA_QEMU_REAL_CLIENT_SHORT_STRIDE_REJECTED=true' "$integrated_cli
   fatal 'real_wayland_short_stride_dma_buf_rejection_not_observed'
 grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF stride outside bounded packed-RGB layout' "$integrated_server_log" ||
   fatal 'gpu_import_did_not_reject_real_short_stride'
+# Out-of-bounds offset was checked in a separate real client before this
+# positive 12-frame KMS scenario; no fabricated importer log is asserted.
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$integrated_server_log" ||
     fatal "integrated_kernel_frame_$index_not_acknowledged"
