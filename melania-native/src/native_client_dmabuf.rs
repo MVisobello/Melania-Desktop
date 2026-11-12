@@ -107,6 +107,16 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
     if stride<row || stride>MAX_CLIENT_SURFACE_EDGE*16 {
         return Err("client DMA-BUF stride outside bounded packed-RGB layout".into());
     }
+    // The QEMU bridge handles 32-bit packed RGB only. A LINEAR row or
+    // first pixel beginning between four-byte texel boundaries is not a
+    // valid layout for its tightly packed GLES/readback contract. Reject
+    // untrusted metadata before passing the FD to the active EGL driver.
+    // Tiled/compressed modifiers have opaque vendor-specific layouts and
+    // must not be subjected to this LINEAR-only byte-alignment assumption.
+    if buffer.format().modifier==smithay::backend::allocator::Modifier::Linear &&
+       (stride%4!=0 || offset%4!=0) {
+        return Err("client LINEAR packed-RGB stride/offset must be 4-byte aligned".into());
+    }
     let last=height.checked_sub(1)
         .and_then(|rows|rows.checked_mul(stride))
         .and_then(|length|length.checked_add(offset))
@@ -340,6 +350,20 @@ mod tests {
     }
     fn linear_memfd(len:u64,offset:u32,stride:u32)->Dmabuf {
         linear_memfd_geometry(len,offset,stride,360,224)
+    }
+
+    #[test]
+    fn linear_packed_rgb_rejects_misaligned_stride_or_first_pixel() {
+        // Real memfds with enough bytes for their advertised plane: the
+        // failure is solely the 32-bit texel alignment, not FD truncation.
+        let aligned=linear_memfd(360*224*4+4096,4096,360*4);
+        let bad_offset=linear_memfd(360*224*4+4096,1,360*4);
+        let bad_stride=linear_memfd(360*224*4+4096,0,360*4+1);
+        assert_eq!(validate_client_dmabuf(&aligned),Ok(()));
+        for b in [&bad_offset,&bad_stride] {
+            assert_eq!(validate_client_dmabuf(b),
+                Err("client LINEAR packed-RGB stride/offset must be 4-byte aligned".into()));
+        }
     }
 
     #[test]
