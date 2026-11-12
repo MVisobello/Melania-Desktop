@@ -53,6 +53,37 @@ class RealWaylandDmabufClient(unittest.TestCase):
         self.assertLess(imp.index("probe.commit()"),
                         imp.index("imported.destroy()"))
 
+    def test_real_gpu_fd_y_invert_rejected_over_wayland_without_kms_ack(self):
+        # The negative case must use the real GBM allocation and the
+        # asynchronous params.create/failed event, not a local-only predicate.
+        source=CLIENT.split("fn exercise_real_client_dmabuf(",1)[1].split(
+            "fn main()->Result",1)[0]
+        for marker in (
+            'MELANIA_QEMU_CLIENT_REJECT_Y_INVERT',
+            'image.handles().zip(image.offsets()).zip(image.strides())',
+            'invalid.add(fd,planes as u32,offset,stride,',
+            'invalid.create(W as i32,H as i32,format as u32,',
+            'zwp_linux_buffer_params_v1::Flags::YInvert',
+            'queue.roundtrip(state)?;',
+            'if !state.invalid_invert_failed || state.invalid_invert_created',
+            'state.frame_done_count!=old_callback_count',
+            'MELANIA_QEMU_REAL_CLIENT_Y_INVERT_REJECTED=true',
+        ):
+            self.assertIn(marker,source)
+        self.assertLess(source.index('invalid.create('),
+                        source.index('queue.roundtrip(state)?;',source.index('invalid.create(')))
+        self.assertIn('zwp_linux_buffer_params_v1::Event::Failed=>state.invalid_invert_failed=true',CLIENT)
+        self.assertIn('zwp_linux_buffer_params_v1::Event::Created{buffer}',CLIENT)
+        scenario=GUEST[GUEST.index('# ONE-PROCESS native integration proof:'):
+                       GUEST.index('# Sustain 24 successive real Wayland/client buffer')]
+        for marker in (
+            'MELANIA_QEMU_CLIENT_REJECT_Y_INVERT=YES_QEMU_VM',
+            'MELANIA_QEMU_REAL_CLIENT_Y_INVERT_REJECTED=true',
+            'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF requires progressive non-inverted flags',
+        ):
+            self.assertIn(marker,scenario)
+        self.assertIn('MELANIA_NATIVE_SESSION_READY=false',GUEST)
+
     def test_qemu_guest_observes_real_import_but_forbids_fake_ack(self):
         begin=GUEST.index("# ONE-PROCESS native integration proof:")
         end=GUEST.index("# Sustain 24 successive real Wayland/client buffer",begin)
