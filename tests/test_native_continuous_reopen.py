@@ -54,11 +54,11 @@ class ReopenAfterTwelveKmsFrames(unittest.TestCase):
         # while the historical 1350s host observer had already timed out.
         # The QEMU watchdog remains bounded; extend only the observer.
         import re
-        guest_timeout=re.search(r'timeout --signal=TERM --kill-after=10s (\\d+)s',HOST)
+        guest_timeout=re.search(r'timeout --signal=TERM --kill-after=10s (\d+)s',HOST)
         self.assertIsNotNone(guest_timeout)
         self.assertEqual(int(guest_timeout.group(1)),2050)
         observer=re.search(
-            r'capture-qemu-continuous-reopen\\.py.*?--reopen [^\\n]+ --timeout (\\d+)',
+            r'capture-qemu-continuous-reopen\.py.*?--reopen [^\n]+ --timeout (\d+)',
             HOST,re.S)
         self.assertIsNotNone(observer)
         self.assertGreaterEqual(int(observer.group(1)),1900)
