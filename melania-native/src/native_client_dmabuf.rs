@@ -148,15 +148,13 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
 ///
 /// Non-linear/tiled modifiers may have vendor-specific compression/headers:
 /// their logical stride is NOT necessarily a minimum physical file extent.
-/// Leave those to active EGL format negotiation/import rather than falsely
-/// rejecting compressed layouts. This function provides neither an acquire
+/// Do not enforce a LINEAR minimum extent on those layouts, but the kernel
+/// allocation itself must still fit the import budget. This provides neither an acquire
 /// fence nor permission for wl_buffer.release/Wayland frame callbacks.
-fn validate_linear_plane_backing(buffer:&Dmabuf)->Result<(),String> {
+fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     use std::os::fd::AsRawFd;
     use smithay::backend::allocator::Modifier;
-    if buffer.format().modifier != Modifier::Linear {
-        return Ok(());
-    }
+    let linear=buffer.format().modifier==Modifier::Linear;
     let size=buffer.size();
     let width=usize::try_from(size.w).map_err(|_|"negative DMA-BUF backing width")?;
     let height=usize::try_from(size.h).map_err(|_|"negative DMA-BUF backing height")?;
@@ -176,9 +174,9 @@ fn validate_linear_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     // or an untrusted client-provided file length as a substitute.
     let actual=unsafe {libc::lseek(fd.as_raw_fd(),0,libc::SEEK_END)};
     if actual < 0 {
-        return Err("LINEAR DMA-BUF kernel backing size unavailable".into());
+        return Err("DMA-BUF kernel backing size unavailable".into());
     }
-    if (actual as u64) < required as u64 {
+    if linear && (actual as u64) < required as u64 {
         return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
     }
     // The earlier visible-byte check bounds the minimum addressed pixels.
@@ -186,7 +184,7 @@ fn validate_linear_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     // multi-gigabyte BO as a nominal 360x224 wl_buffer and bypass the four-
     // import (64 MiB total) residency budget before EGL sees the FD.
     if (actual as u64) > MAX_CLIENT_BUFFER_BYTES as u64 {
-        return Err("LINEAR DMA-BUF FD exceeds 16 MiB allocation budget".into());
+        return Err("DMA-BUF FD exceeds 16 MiB allocation budget".into());
     }
     Ok(())
 }
@@ -200,7 +198,7 @@ pub fn import_client_dmabuf(
     renderer:&mut GlesRenderer,buffer:&Dmabuf,
 )->Result<GlesTexture,String> {
     validate_client_dmabuf(buffer)?;
-    validate_linear_plane_backing(buffer)?;
+    validate_client_plane_backing(buffer)?;
     if !renderer.has_dmabuf_format(buffer.format()) {
         return Err("client DMA-BUF format/modifier not advertised by active GLES GPU".into());
     }
@@ -333,8 +331,8 @@ mod tests {
         assert_eq!(ordered_advertised_formats(vec![linear]),vec![linear]);
     }
 
-    fn linear_memfd_geometry(
-        len:u64,offset:u32,stride:u32,width:i32,height:i32,
+    fn memfd_geometry(
+        len:u64,offset:u32,stride:u32,width:i32,height:i32,modifier:Modifier,
     )->Dmabuf {
         use std::os::fd::FromRawFd;
         let name=std::ffi::CString::new("melania-linear-plane-fixture").unwrap();
@@ -343,10 +341,13 @@ mod tests {
         let file=unsafe {std::fs::File::from_raw_fd(raw)};
         file.set_len(len).unwrap();
         let mut buffer=Dmabuf::builder(
-            (width,height),Fourcc::Argb8888,Modifier::Linear,DmabufFlags::empty(),
+            (width,height),Fourcc::Argb8888,modifier,DmabufFlags::empty(),
         );
         assert!(buffer.add_plane(file.into(),0,offset,stride));
         buffer.build().unwrap()
+    }
+    fn linear_memfd_geometry(len:u64,offset:u32,stride:u32,width:i32,height:i32)->Dmabuf {
+        memfd_geometry(len,offset,stride,width,height,Modifier::Linear)
     }
     fn linear_memfd(len:u64,offset:u32,stride:u32)->Dmabuf {
         linear_memfd_geometry(len,offset,stride,360,224)
@@ -374,13 +375,13 @@ mod tests {
             + 223*usize::try_from(stride).unwrap() + 360*4;
         let exact=linear_memfd(needed as u64,offset,stride);
         assert!(validate_client_dmabuf(&exact).is_ok());
-        assert_eq!(validate_linear_plane_backing(&exact),Ok(()));
+        assert_eq!(validate_client_plane_backing(&exact),Ok(()));
         let short=linear_memfd(needed as u64-1,offset,stride);
         assert!(validate_client_dmabuf(&short).is_ok());
-        assert_eq!(validate_linear_plane_backing(&short),
+        assert_eq!(validate_client_plane_backing(&short),
                    Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into()));
         let zero=linear_memfd(0,offset,stride);
-        assert!(validate_linear_plane_backing(&zero).is_err());
+        assert!(validate_client_plane_backing(&zero).is_err());
     }
 
     #[test]
@@ -395,7 +396,7 @@ mod tests {
         let valid=linear_memfd_geometry(valid_extent,0,valid_stride,360,height);
         assert!(valid_extent<=MAX_CLIENT_BUFFER_BYTES as u64);
         assert_eq!(validate_client_dmabuf(&valid),Ok(()));
-        assert_eq!(validate_linear_plane_backing(&valid),Ok(()));
+        assert_eq!(validate_client_plane_backing(&valid),Ok(()));
 
         let excessive_stride=32768u32;
         let excessive_extent=1023u64*u64::from(excessive_stride)+360*4;
@@ -408,8 +409,8 @@ mod tests {
         );
         // The FD genuinely backs the advertised extent: both the logical
         // stride/offset budget and the whole-FD residency check reject it.
-        assert_eq!(validate_linear_plane_backing(&excessive),
-                   Err("LINEAR DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+        assert_eq!(validate_client_plane_backing(&excessive),
+                   Err("DMA-BUF FD exceeds 16 MiB allocation budget".into()));
     }
 
     #[test]
@@ -425,12 +426,26 @@ mod tests {
         for b in [&exact,&at_limit,&over_limit,&huge] {
             assert_eq!(validate_client_dmabuf(b),Ok(()));
         }
-        assert_eq!(validate_linear_plane_backing(&exact),Ok(()));
-        assert_eq!(validate_linear_plane_backing(&at_limit),Ok(()));
+        assert_eq!(validate_client_plane_backing(&exact),Ok(()));
+        assert_eq!(validate_client_plane_backing(&at_limit),Ok(()));
         for b in [&over_limit,&huge] {
-            assert_eq!(validate_linear_plane_backing(b),
-                       Err("LINEAR DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+            assert_eq!(validate_client_plane_backing(b),
+                       Err("DMA-BUF FD exceeds 16 MiB allocation budget".into()));
         }
+    }
+
+    #[test]
+    fn non_linear_modifier_still_has_real_kernel_allocation_budget() {
+        // An opaque layout needs no invented LINEAR last-row extent,
+        // but must not pin an oversized BO through an arbitrary modifier.
+        let small=memfd_geometry(4096,0,1440,360,224,Modifier::Invalid);
+        let oversized=memfd_geometry(
+            MAX_CLIENT_BUFFER_BYTES as u64+1,0,1440,360,224,Modifier::Invalid);
+        assert_eq!(validate_client_dmabuf(&small),Ok(()));
+        assert_eq!(validate_client_plane_backing(&small),Ok(()));
+        assert_eq!(validate_client_dmabuf(&oversized),Ok(()));
+        assert_eq!(validate_client_plane_backing(&oversized),
+                   Err("DMA-BUF FD exceeds 16 MiB allocation budget".into()));
     }
 
     #[test]
@@ -439,9 +454,9 @@ mod tests {
         // can have superficially valid dimensions. It cannot reach EGL.
         let empty=buffer(360,224,360*4,0,Fourcc::Xrgb8888,1);
         assert!(validate_client_dmabuf(&empty).is_ok());
-        assert!(validate_linear_plane_backing(&empty).is_err());
+        assert!(validate_client_plane_backing(&empty).is_err());
         let valid=linear_memfd((360*224*4) as u64,0,360*4);
-        assert_eq!(validate_linear_plane_backing(&valid),Ok(()));
+        assert_eq!(validate_client_plane_backing(&valid),Ok(()));
     }
 
     #[test]
