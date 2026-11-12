@@ -376,8 +376,9 @@ mod tests {
         let mut formats:Vec<Format>=(1u64..=96).map(|id|Format{
             code:Fourcc::Argb8888,modifier:Modifier::from(id),
         }).collect();
-        for code in [Fourcc::Xrgb8888,Fourcc::Abgr8888,Fourcc::Xbgr8888] {
-            formats.push(Format{code,modifier:Modifier::from(1000u64+code as u32 as u64)});
+        for (index,code) in [Fourcc::Xrgb8888,Fourcc::Abgr8888,
+                             Fourcc::Xbgr8888].into_iter().enumerate() {
+            formats.push(Format{code,modifier:Modifier::from(1000u64+index as u64)});
         }
         let selected=ordered_advertised_formats(formats.clone());
         assert_eq!(selected.len(),MAX_ADVERTISED_CLIENT_FORMATS);
