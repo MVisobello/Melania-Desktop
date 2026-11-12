@@ -104,6 +104,14 @@ pub fn client_import_formats(renderer:&GlesRenderer)->Vec<Format> {
     ordered_advertised_formats(renderer.dmabuf_formats().iter().copied())
 }
 
+/// Enforce the *bounded Wayland registry* at import time, not merely the
+/// underlying EGL driver's larger capability table. Otherwise a client can
+/// submit an unadvertised modifier that was excluded by the 64-entry cap,
+/// bypassing the format contract established by the active compositor GPU.
+fn admitted_client_format(advertised:&[Format],requested:Format)->bool {
+    advertised.contains(&requested)
+}
+
 /// Check untrusted Wayland metadata before sending any FD to EGL. For now,
 /// disallow multi-plane YUV, large images and oversized offsets; a future
 /// GPU scene renderer will need per-plane and explicit-fence lifetime rules.
@@ -248,8 +256,9 @@ pub fn import_client_dmabuf(
 )->Result<GlesTexture,String> {
     validate_client_dmabuf(buffer)?;
     validate_client_plane_backing(buffer)?;
-    if !renderer.has_dmabuf_format(buffer.format()) {
-        return Err("client DMA-BUF format/modifier not advertised by active GLES GPU".into());
+    if !renderer.has_dmabuf_format(buffer.format()) ||
+       !admitted_client_format(&client_import_formats(renderer),buffer.format()) {
+        return Err("client DMA-BUF format/modifier not in active bounded Wayland GPU registry".into());
     }
     renderer.import_dmabuf(buffer,None)
         .map_err(|error|format!("client DMA-BUF GLES texture import failed: {error}"))
@@ -390,6 +399,30 @@ mod tests {
         assert!(selected.iter().all(|format|formats.contains(format)));
         formats.reverse();
         assert_eq!(selected,ordered_advertised_formats(formats));
+    }
+
+    #[test]
+    fn real_import_admission_matches_bounded_wayland_modifier_registry() {
+        use smithay::backend::allocator::Modifier;
+        // The real EGL driver may support 96 ARGB vendor modifiers, but
+        // the Wayland registry promises at most 64. A hidden 96th entry
+        // must not pass import admission merely because EGL supports it.
+        let driver:Vec<Format>=(1u64..=96).map(|id|Format{
+            code:Fourcc::Argb8888,modifier:Modifier::from(id),
+        }).collect();
+        let registry=ordered_advertised_formats(driver.clone());
+        assert_eq!(registry.len(),MAX_ADVERTISED_CLIENT_FORMATS);
+        for entry in &registry {
+            assert!(admitted_client_format(&registry,*entry));
+            assert!(driver.contains(entry));
+        }
+        let excluded=driver.iter().copied()
+            .find(|entry|!registry.contains(entry)).unwrap();
+        assert!(!admitted_client_format(&registry,excluded));
+        assert!(!admitted_client_format(&registry,Format{
+            code:Fourcc::Rgb565,modifier:Modifier::Linear,
+        }));
+        assert!(!admitted_client_format(&[],driver[0]));
     }
 
     #[test]
