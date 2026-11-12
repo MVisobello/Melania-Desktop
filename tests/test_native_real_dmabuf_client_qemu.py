@@ -113,6 +113,32 @@ class RealWaylandDmabufClient(unittest.TestCase):
         ):
             self.assertIn(marker,scenario)
 
+    def test_real_gpu_fd_out_of_bounds_offset_rejected_without_frame_ack(self):
+        source=CLIENT.split("fn exercise_real_client_dmabuf(",1)[1].split(
+            "fn main()->Result",1)[0]
+        begin=source.index('MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET')
+        end=source.index('MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_REJECTED=true')
+        negative=source[begin:end]
+        for marker in (
+            'image.handles().zip(image.offsets()).zip(image.strides())',
+            'invalid.add(fd,planes as u32,u32::MAX,stride,',
+            'invalid.create(',
+            'queue.roundtrip(state)?;',
+            'if !state.invalid_invert_failed || state.invalid_invert_created',
+            'state.frame_done_count!=old_callback_count',
+        ):
+            self.assertIn(marker,negative)
+        self.assertNotIn('probe.attach(',negative)
+        self.assertNotIn('probe.commit()',negative)
+        scenario=GUEST[GUEST.index('# ONE-PROCESS native integration proof:'):
+                       GUEST.index('# Sustain 24 successive real Wayland/client buffer')]
+        for marker in (
+            'MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET=YES_QEMU_VM',
+            'MELANIA_QEMU_REAL_CLIENT_OOB_OFFSET_REJECTED=true',
+            'MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED=client DMA-BUF unbounded plane offset or backing extent',
+        ):
+            self.assertIn(marker,scenario)
+
     def test_qemu_guest_observes_real_import_but_forbids_fake_ack(self):
         begin=GUEST.index("# ONE-PROCESS native integration proof:")
         end=GUEST.index("# Sustain 24 successive real Wayland/client buffer",begin)
