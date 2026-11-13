@@ -58,6 +58,7 @@ class RealClientDmabufToKms(unittest.TestCase):
             self.assertIn(marker,GPU)
         self.assertIn("client_import_formats(&renderer)",BRIDGE)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true",GUEST)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
 
     def test_gpu_import_cannot_bypass_bounded_wayland_registry(self):
@@ -85,10 +86,12 @@ class RealClientDmabufToKms(unittest.TestCase):
             "renderer.map_texture(&mapping)",
             "mapping.flipped()",
             "convert_rgba_readback_to_bgra",
+            "let alpha=if opaque {255} else {src[3]};",
+            "fn opaque_xrgb_xbgr_ignore_undefined_readback_alpha()",
             "let mut pixels=vec![0;len]",
-            "over_opaque_background(src[2],QEMU_SCENE_BGRA[0],src[3])",
-            "over_opaque_background(src[1],QEMU_SCENE_BGRA[1],src[3])",
-            "over_opaque_background(src[0],QEMU_SCENE_BGRA[2],src[3])",
+            "over_opaque_background(src[2],QEMU_SCENE_BGRA[0],alpha)",
+            "over_opaque_background(src[1],QEMU_SCENE_BGRA[1],alpha)",
+            "over_opaque_background(src[0],QEMU_SCENE_BGRA[2],alpha)",
             "fn imported_argb_premultiplied_alpha_blends_over_real_kms_background()",
             "fn readback_swizzles_rgba_into_opaque_bgra_and_flips_bottom_up()",
         ):
@@ -111,7 +114,9 @@ class RealClientDmabufToKms(unittest.TestCase):
             "MELANIA_NATIVE_CLIENT_DMABUF_KMS",
             "qemu_gpu_frame_allowed(",
             "MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU",
-            "readback_qemu_client_bgra(renderer,texture)",
+            "readback_qemu_client_bgra(renderer,texture,source_format)",
+            "smithay::wayland::dmabuf::get_dmabuf(&buffer)",
+            "Ok(dmabuf)=>dmabuf.format().code",
             "self.multi_scene.upsert(key,pixels)",
             "self.continuous_client_ledger.stage(surface.clone(),buffer)",
             "self.submit_continuous_frame()",
@@ -130,6 +135,12 @@ class RealClientDmabufToKms(unittest.TestCase):
 
     def test_two_different_gpu_dmabufs_present_before_ten_shm_frames(self):
         self.assertIn("for gpu_index in 1..=gpu_frames",CLIENT)
+        self.assertIn("!state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier))",CLIENT)
+        self.assertIn("let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
+        self.assertIn("W as u32,H as u32,frame_format,&[Modifier::Linear]",CLIENT)
+        self.assertIn("W as i32,H as i32,frame_format as u32",CLIENT)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",CLIENT)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("let mut image=allocator.create_buffer(",CLIENT)
         self.assertLess(
             CLIENT.index("for gpu_index in 1..=gpu_frames"),

@@ -2966,6 +2966,8 @@ grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true' "$gpu_clie
   fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame1_callback'
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true' "$gpu_client_client_log" ||
   fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame2_callback'
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true' "$gpu_client_client_log" ||
+  fatal 'gpu_client_missing_real_XRGB_DMA_BUF_frame2_KMS_callback'
 for index in $(seq 1 12); do
   grep -q "^MELANIA_RUST_CONTINUOUS_FRAME_ACKED=$index " "$gpu_client_server_log" ||
     fatal "gpu_client_missing_actual_kernel_KMS_ACK_$index"
