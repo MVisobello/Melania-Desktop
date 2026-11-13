@@ -77,7 +77,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(path.index("validate_client_plane_backing(buffer)?;"),
                         path.index("admitted_client_format("))
         self.assertLess(path.index("admitted_client_format("),
+                        path.index("ensure_implicit_client_writer_ready(buffer)?;"))
+        self.assertLess(path.index("ensure_implicit_client_writer_ready(buffer)?;"),
                         path.index("renderer.import_dmabuf(buffer,None)"))
+        # The real buffer's implicit writer fence is polled non-blockingly,
+        # not guessed from a Wayland ACK or replaced by a sleeping wait.
+        self.assertIn("events:libc::POLLIN",GPU)
+        self.assertIn("libc::poll(&mut pollfd,1,0)",GPU)
+        self.assertIn("fn kernel_poll_implicit_writer_fence_does_not_block_wayland()",GPU)
+        self.assertIn("fn kernel_poll_accepts_readable_fd_without_fabricating_completion()",GPU)
+        self.assertIn("client DMA-BUF implicit writer fence still pending",GPU)
+        self.assertLess(path.index("validate_client_plane_backing(buffer)?;"),
+                        path.index("ensure_implicit_client_writer_ready(buffer)?;"))
 
     def test_egl_readback_converts_bottom_up_rgba_with_owned_bytes(self):
         for marker in (
