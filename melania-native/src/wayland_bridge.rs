@@ -16,7 +16,6 @@ use std::{
     sync::{Arc,atomic::{AtomicBool,AtomicU32,Ordering}},
     time::{Duration,Instant},
 };
-use smithay::backend::allocator::Buffer;
 use smithay::{
     backend::{
         input::{InputEvent, ButtonState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
