@@ -271,7 +271,7 @@ pub fn import_client_dmabuf(
 /// The snapshot may be submitted to KMS only via the existing frame ticket
 /// and DRM FB_ID/vblank ACK; no wl_buffer.release occurs here.
 pub fn readback_qemu_client_bgra(
-    renderer:&mut GlesRenderer,texture:&GlesTexture,
+    renderer:&mut GlesRenderer,texture:&GlesTexture,source_format:Fourcc,
 )->Result<Vec<u8>,String> {
     use smithay::{
         backend::renderer::{ExportMem,Texture,TextureMapping},
@@ -290,7 +290,7 @@ pub fn readback_qemu_client_bgra(
     let flipped=mapping.flipped();
     let mapped=renderer.map_texture(&mapping)
         .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
-    convert_rgba_readback_to_bgra(mapped,width,height,flipped)
+    convert_rgba_readback_to_bgra(mapped,width,height,flipped,source_format)
 }
 
 // The existing QEMU retained CPU scene is opaque XRGB over this BGRA
@@ -307,8 +307,15 @@ fn over_opaque_background(premultiplied:u8,background:u8,alpha:u8)->u8 {
 }
 
 fn convert_rgba_readback_to_bgra(
-    rgba:&[u8],width:usize,height:usize,flipped:bool,
+    rgba:&[u8],width:usize,height:usize,flipped:bool,source_format:Fourcc,
 )->Result<Vec<u8>,String> {
+    // XRGB/XBGR have no alpha channel: GLES may return an unspecified
+    // fourth byte. Never treat it as transparency during CPU staging.
+    let opaque=match source_format {
+        Fourcc::Xrgb8888 | Fourcc::Xbgr8888 => true,
+        Fourcc::Argb8888 | Fourcc::Abgr8888 => false,
+        _ => return Err("client GPU readback requires supported packed RGB".into()),
+    };
     let row=width.checked_mul(4).ok_or("client readback row overflow")?;
     let len=row.checked_mul(height).ok_or("client readback allocation overflow")?;
     if width==0 || height==0 || width>MAX_CLIENT_SURFACE_EDGE ||
@@ -327,10 +334,11 @@ fn convert_rgba_readback_to_bgra(
             // otherwise partial alpha becomes an incorrectly solid color.
             // Preserve the B,G,R byte order and discard alpha only AFTER
             // the per-channel source-over operation.
+            let alpha=if opaque {255} else {src[3]};
             dst.copy_from_slice(&[
-                over_opaque_background(src[2],QEMU_SCENE_BGRA[0],src[3]),
-                over_opaque_background(src[1],QEMU_SCENE_BGRA[1],src[3]),
-                over_opaque_background(src[0],QEMU_SCENE_BGRA[2],src[3]),
+                over_opaque_background(src[2],QEMU_SCENE_BGRA[0],alpha),
+                over_opaque_background(src[1],QEMU_SCENE_BGRA[1],alpha),
+                over_opaque_background(src[0],QEMU_SCENE_BGRA[2],alpha),
                 0,
             ]);
         }
@@ -661,7 +669,7 @@ mod tests {
             0,0,255,255, 255,255,255,255,
             255,0,0,255, 0,255,0,255,
         ];
-        let pixels=convert_rgba_readback_to_bgra(&data,2,2,true).unwrap();
+        let pixels=convert_rgba_readback_to_bgra(&data,2,2,true,Fourcc::Argb8888).unwrap();
         assert_eq!(&pixels[..8],[0,0,255,0,0,255,0,0]);
         assert_eq!(&pixels[8..],[255,0,0,0,255,255,255,0]);
     }
@@ -674,7 +682,7 @@ mod tests {
             0,0,0,0,
             84,46,186,255,
         ];
-        let pixels=convert_rgba_readback_to_bgra(&rgba,3,1,false).unwrap();
+        let pixels=convert_rgba_readback_to_bgra(&rgba,3,1,false,Fourcc::Argb8888).unwrap();
         assert_eq!(&pixels[0..4],&[122,39,55,0]);
         assert_eq!(&pixels[4..8],&[58,33,27,0]);
         assert_eq!(&pixels[8..12],&[186,46,84,0]);
@@ -683,10 +691,29 @@ mod tests {
     }
     #[test]
     fn readback_rejects_wrong_stride_length_and_zero_dimensions() {
-        assert!(convert_rgba_readback_to_bgra(&[0;4],2,1,false).is_err());
-        assert!(convert_rgba_readback_to_bgra(&[],0,2,false).is_err());
-        assert!(convert_rgba_readback_to_bgra(&[0;4],1,1,false).is_ok());
+        assert!(convert_rgba_readback_to_bgra(&[0;4],2,1,false,Fourcc::Argb8888).is_err());
+        assert!(convert_rgba_readback_to_bgra(&[],0,2,false,Fourcc::Argb8888).is_err());
+        assert!(convert_rgba_readback_to_bgra(&[0;4],1,1,false,Fourcc::Argb8888).is_ok());
     }
+    #[test]
+    fn opaque_xrgb_xbgr_ignore_undefined_readback_alpha() {
+        // EGL can return arbitrary alpha bytes for formats with no alpha
+        // channel. Those pixels must remain fully opaque in the KMS image.
+        let rgba=[84,46,186,0, 10,20,30,128];
+        for format in [Fourcc::Xrgb8888,Fourcc::Xbgr8888] {
+            let pixels=convert_rgba_readback_to_bgra(
+                &rgba,2,1,false,format).unwrap();
+            assert_eq!(pixels,[186,46,84,0,30,20,10,0]);
+        }
+        for format in [Fourcc::Argb8888,Fourcc::Abgr8888] {
+            let pixels=convert_rgba_readback_to_bgra(
+                &rgba[..4],1,1,false,format).unwrap();
+            assert_eq!(pixels,[58,33,27,0]);
+        }
+        assert!(convert_rgba_readback_to_bgra(
+            &rgba[..4],1,1,false,Fourcc::Rgb565).is_err());
+    }
+
     #[test]
     fn second_real_client_gpu_frame_needs_explicit_mode_and_first_kms_ack() {
         assert!(qemu_gpu_frame_allowed(0,false));
