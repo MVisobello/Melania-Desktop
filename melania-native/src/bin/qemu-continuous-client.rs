@@ -184,6 +184,13 @@ fn exercise_real_client_dmabuf(
     if double_gpu && !gpu_kms {
         return Err("two DMA-BUF frames require the dedicated QEMU KMS experiment".into());
     }
+    // The second independently allocated GPU frame must exercise a *real*
+    // opaque XRGB client DMA-BUF. Fail closed if EGL/Wayland cannot negotiate
+    // it; never fall back to ARGB or a synthetic image for this QEMU proof.
+    if double_gpu &&
+       !state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier)) {
+        return Err("QEMU Wayland compositor did not advertise XRGB8888+LINEAR".into());
+    }
     let gpu_frames:u32=if double_gpu {2} else {1};
 
     // VirtIO's GBM allocator uses DRM_IOCTL_MODE_CREATE_DUMB on the
@@ -200,10 +207,12 @@ fn exercise_real_client_dmabuf(
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
     for gpu_index in 1..=gpu_frames {
         // Real fresh GBM BO and live FD for each independent frame.
-        // Frame 1 retains historical opaque+alpha probe; frame 2 has a
-        // visibly different opaque pixel (R,G,B)=(0.12,0.64,0.27).
+        // Frame 1 keeps the original ARGB transparency probe; frame 2
+        // is XRGB without alpha. Its undefined readback alpha must NOT
+        // corrupt the visibly different (R,G,B)=(0.12,0.64,0.27) pixel.
+        let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};
         let mut image=allocator.create_buffer(
-            W as u32,H as u32,format,&[Modifier::Linear],
+            W as u32,H as u32,frame_format,&[Modifier::Linear],
         )?;
         {
             let mut target=renderer.bind(&mut image)?;
@@ -241,7 +250,7 @@ fn exercise_real_client_dmabuf(
             return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
         }
         let imported=params.create_immed(
-            W as i32,H as i32,format as u32,
+            W as i32,H as i32,frame_format as u32,
             zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
         );
         let probe=if gpu_kms {xdg_surface.clone()}
@@ -271,6 +280,9 @@ fn exercise_real_client_dmabuf(
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true");
             } else {
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true");
+                // Emitted only after the real wl_surface.frame callback
+                // and wl_buffer.release paired with verified DRM ACK #2.
+                println!("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true");
             }
             if gpu_index==1 {
                 println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
