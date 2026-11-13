@@ -21,7 +21,7 @@ use smithay::{
         input::{InputEvent, ButtonState, KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent,
                 AbsolutePositionEvent, PointerAxisEvent, Axis, AxisSource, Event, KeyState},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        allocator::{gbm::GbmDevice,dmabuf::Dmabuf},
+        allocator::{gbm::GbmDevice,dmabuf::Dmabuf,Buffer},
         drm::DrmDeviceFd,
         egl::{EGLContext,EGLDisplay},
         renderer::gles::{GlesRenderer,GlesTexture},
