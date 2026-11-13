@@ -58,6 +58,7 @@ class RealClientDmabufToKms(unittest.TestCase):
             self.assertIn(marker,GPU)
         self.assertIn("client_import_formats(&renderer)",BRIDGE)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true",GUEST)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("MELANIA_NATIVE_SESSION_READY=false",GUEST)
 
     def test_gpu_import_cannot_bypass_bounded_wayland_registry(self):
@@ -134,6 +135,12 @@ class RealClientDmabufToKms(unittest.TestCase):
 
     def test_two_different_gpu_dmabufs_present_before_ten_shm_frames(self):
         self.assertIn("for gpu_index in 1..=gpu_frames",CLIENT)
+        self.assertIn("!state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier))",CLIENT)
+        self.assertIn("let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
+        self.assertIn("W as u32,H as u32,frame_format,&[Modifier::Linear]",CLIENT)
+        self.assertIn("W as i32,H as i32,frame_format as u32",CLIENT)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",CLIENT)
+        self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("let mut image=allocator.create_buffer(",CLIENT)
         self.assertLess(
             CLIENT.index("for gpu_index in 1..=gpu_frames"),
