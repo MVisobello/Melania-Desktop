@@ -246,6 +246,51 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     Ok(())
 }
 
+/// Check the Linux DMA-BUF implicit *writer* fence using the real kernel
+/// dma_buf poll operation (POLLIN), not an EGL/Wayland acknowledgement.
+/// A pending GPU write must not stall the compositor's Wayland dispatch
+/// thread: the caller reports import failure and the client may submit a
+/// newly synchronized buffer later. This is NOT explicit Wayland syncobj
+/// acquire/release support or evidence of a DRM page flip.
+fn poll_implicit_writer_ready(fd:std::os::fd::RawFd)->Result<(),String> {
+    if fd<0 {return Err("client DMA-BUF acquire fence has invalid FD".into());}
+    let mut pollfd=libc::pollfd {
+        fd,
+        events:libc::POLLIN,
+        revents:0,
+    };
+    // Linux dma_buf_poll: POLLIN means the exclusive/write fence completed.
+    // Zero timeout is deliberate: never block the live Wayland event loop.
+    let rc=unsafe {libc::poll(&mut pollfd,1,0)};
+    if rc<0 {
+        return Err(format!("client DMA-BUF acquire poll failed: {}",
+            std::io::Error::last_os_error()));
+    }
+    if rc==0 {
+        return Err("client DMA-BUF implicit writer fence still pending".into());
+    }
+    if pollfd.revents & (libc::POLLERR|libc::POLLHUP|libc::POLLNVAL)!=0 {
+        return Err("client DMA-BUF implicit fence reported invalid or hung-up FD".into());
+    }
+    if pollfd.revents & libc::POLLIN==0 {
+        return Err("client DMA-BUF implicit writer fence is not readable".into());
+    }
+    Ok(())
+}
+
+fn ensure_implicit_client_writer_ready(buffer:&Dmabuf)->Result<(),String> {
+    use std::os::fd::AsRawFd;
+    let mut planes=0usize;
+    for handle in buffer.handles() {
+        poll_implicit_writer_ready(handle.as_raw_fd())?;
+        planes+=1;
+    }
+    if planes!=1 {
+        return Err("client DMA-BUF acquire fence needs one packed-RGB plane".into());
+    }
+    Ok(())
+}
+
 /// Import a *client-supplied* DMA-BUF on the renderer that belongs to the
 /// currently active libseat DRM device. The caller must retain both the
 /// returned GlesTexture and the wl_buffer until the import's lifetime ends,
@@ -260,6 +305,9 @@ pub fn import_client_dmabuf(
        !admitted_client_format(&client_import_formats(renderer),buffer.format()) {
         return Err("client DMA-BUF format/modifier not in active bounded Wayland GPU registry".into());
     }
+    // Fail closed before touching EGL if the producer's implicit GPU writes
+    // have not completed. This never signals a release fence or KMS receipt.
+    ensure_implicit_client_writer_ready(buffer)?;
     renderer.import_dmabuf(buffer,None)
         .map_err(|error|format!("client DMA-BUF GLES texture import failed: {error}"))
 }
@@ -716,6 +764,34 @@ mod tests {
         }
         assert!(convert_rgba_readback_to_bgra(
             &rgba[..4],1,1,false,Fourcc::Rgb565).is_err());
+    }
+
+    #[test]
+    fn kernel_poll_implicit_writer_fence_does_not_block_wayland() {
+        use std::{io::{Read,Write},os::{fd::AsRawFd,unix::net::UnixStream}};
+        let (mut reader,mut producer)=UnixStream::pair().unwrap();
+        // This is a REAL kernel poll readiness test using a local socket as
+        // the controllable FD, not proof of a GPU fence or scanout.
+        assert!(poll_implicit_writer_ready(reader.as_raw_fd()).unwrap_err()
+            .contains("pending"));
+        producer.write_all(b"ready").unwrap();
+        assert!(poll_implicit_writer_ready(reader.as_raw_fd()).is_ok());
+        let mut received=[0u8;5];
+        reader.read_exact(&mut received).unwrap();
+        assert_eq!(&received,b"ready");
+        assert!(poll_implicit_writer_ready(reader.as_raw_fd()).is_err());
+        drop(producer);
+        assert!(poll_implicit_writer_ready(reader.as_raw_fd()).is_err());
+        assert!(poll_implicit_writer_ready(-1).is_err());
+    }
+
+    #[test]
+    fn kernel_poll_accepts_readable_fd_without_fabricating_completion() {
+        use std::os::fd::AsRawFd;
+        // /dev/zero is intentionally NOT a DMA-BUF and only checks that
+        // the wrapper uses POLLIN correctly; live QEMU verifies GBM FDs.
+        let readable=std::fs::File::open("/dev/zero").unwrap();
+        assert!(poll_implicit_writer_ready(readable.as_raw_fd()).is_ok());
     }
 
     #[test]
