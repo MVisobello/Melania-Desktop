@@ -705,10 +705,14 @@ mod tests {
                 &rgba,2,1,false,format).unwrap();
             assert_eq!(pixels,[186,46,84,0,30,20,10,0]);
         }
+        // ARGB/ABGR input must be genuinely premultiplied: alpha=0
+        // requires zero color channels. Unlike XRGB, it blends entirely
+        // into the opaque scene background; partial alpha still blends.
+        let premultiplied=[0,0,0,0, 10,20,30,128];
         for format in [Fourcc::Argb8888,Fourcc::Abgr8888] {
             let pixels=convert_rgba_readback_to_bgra(
-                &rgba[..4],1,1,false,format).unwrap();
-            assert_eq!(pixels,[58,33,27,0]);
+                &premultiplied,2,1,false,format).unwrap();
+            assert_eq!(pixels,[58,33,27,0,59,36,23,0]);
         }
         assert!(convert_rgba_readback_to_bgra(
             &rgba[..4],1,1,false,Fourcc::Rgb565).is_err());
