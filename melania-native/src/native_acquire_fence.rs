@@ -42,12 +42,15 @@ pub fn acquire_fence_state(fd: BorrowedFd<'_>) -> Result<AcquireFenceState, Stri
 /// Every acquire fence must be signaled before importing or sampling its buffer.
 /// No state here asserts that a frame was submitted, displayed or released.
 pub fn all_acquire_fences_ready(fds: &[BorrowedFd<'_>]) -> Result<AcquireFenceState, String> {
+    // Inspect every fence: a failed fence must not be hidden indefinitely
+    // behind an earlier pending fence in a multi-buffer transaction.
+    let mut state = AcquireFenceState::Ready;
     for fd in fds {
         if acquire_fence_state(*fd)? == AcquireFenceState::Pending {
-            return Ok(AcquireFenceState::Pending);
+            state = AcquireFenceState::Pending;
         }
     }
-    Ok(AcquireFenceState::Ready)
+    Ok(state)
 }
 
 #[cfg(test)]
@@ -80,6 +83,33 @@ mod tests {
         let (producer, consumer) = UnixStream::pair().unwrap();
         drop(producer);
         assert!(acquire_fence_state(consumer.as_fd()).is_err());
+    }
+
+    #[test]
+    fn pending_fence_does_not_hide_failed_fence() {
+        let (_writer, pending) = UnixStream::pair().unwrap();
+        let (writer, failed) = UnixStream::pair().unwrap();
+        drop(writer);
+        assert!(all_acquire_fences_ready(&[pending.as_fd(), failed.as_fd()]).is_err());
+        assert!(all_acquire_fences_ready(&[failed.as_fd(), pending.as_fd()]).is_err());
+    }
+
+    #[test]
+    fn kernel_eventfd_transitions_without_consuming_signal() {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        assert!(raw >= 0);
+        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        assert_eq!(acquire_fence_state(fd.as_fd()).unwrap(), AcquireFenceState::Pending);
+        let value = 1u64.to_ne_bytes();
+        assert_eq!(unsafe { libc::write(raw, value.as_ptr().cast(), value.len()) }, 8);
+        for _ in 0..2 {
+            assert_eq!(acquire_fence_state(fd.as_fd()).unwrap(), AcquireFenceState::Ready);
+        }
+        let mut received = [0u8; 8];
+        assert_eq!(unsafe { libc::read(raw, received.as_mut_ptr().cast(), received.len()) }, 8);
+        assert_eq!(u64::from_ne_bytes(received), 1);
+        assert_eq!(acquire_fence_state(fd.as_fd()).unwrap(), AcquireFenceState::Pending);
     }
 
     #[test]
