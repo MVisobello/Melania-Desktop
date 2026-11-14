@@ -261,11 +261,20 @@ fn poll_implicit_writer_ready(fd:std::os::fd::RawFd)->Result<(),String> {
     };
     // Linux dma_buf_poll: POLLIN means the exclusive/write fence completed.
     // Zero timeout is deliberate: never block the live Wayland event loop.
-    let rc=unsafe {libc::poll(&mut pollfd,1,0)};
-    if rc<0 {
-        return Err(format!("client DMA-BUF acquire poll failed: {}",
-            std::io::Error::last_os_error()));
-    }
+    // EINTR does not mean the producer fence is pending. Retry a strictly
+    // bounded number of zero-timeout syscalls; never sleep in Wayland dispatch.
+    let mut interruptions=0u8;
+    let rc=loop {
+        pollfd.revents=0;
+        let rc=unsafe {libc::poll(&mut pollfd,1,0)};
+        if rc>=0 {break rc;}
+        let error=std::io::Error::last_os_error();
+        if error.kind()==std::io::ErrorKind::Interrupted && interruptions<3 {
+            interruptions+=1;
+            continue;
+        }
+        return Err(format!("client DMA-BUF acquire poll failed: {error}"));
+    };
     if rc==0 {
         return Err("client DMA-BUF implicit writer fence still pending".into());
     }

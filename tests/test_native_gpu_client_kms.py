@@ -90,6 +90,15 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(path.index("validate_client_plane_backing(buffer)?;"),
                         path.index("ensure_implicit_client_writer_ready(buffer)?;"))
 
+    def test_implicit_fence_poll_retries_eintr_without_blocking(self):
+        # EINTR is not a GPU-fence failure. Keep retries bounded and do not
+        # convert an interrupted kernel poll into an unbounded Wayland stall.
+        self.assertIn("let mut interruptions=0u8;", GPU)
+        self.assertIn("error.kind()==std::io::ErrorKind::Interrupted && interruptions<3", GPU)
+        self.assertIn("pollfd.revents=0;", GPU)
+        self.assertIn("libc::poll(&mut pollfd,1,0)", GPU)
+        self.assertNotIn("std::thread::sleep", GPU)
+
     def test_egl_readback_converts_bottom_up_rgba_with_owned_bytes(self):
         for marker in (
             "readback_qemu_client_bgra",
