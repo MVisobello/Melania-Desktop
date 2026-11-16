@@ -3069,7 +3069,7 @@ report 'MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 
-# Two actual XDG GPU windows, updated alternately for 12 real KMS frames.
+# Four real XDG GPU windows; 12 commits in non-round-robin order.
 retained_gpu_client_server_log="$(mktemp -t melania-retained-gpu-client-kms-server-XXXXXX)"
 retained_gpu_client_client_log="$(mktemp -t melania-retained-gpu-client-kms-client-XXXXXX)"
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
@@ -3123,7 +3123,7 @@ for marker in \
   'MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true' \
   'MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=1' \
   'MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=2' \
-  'MELANIA_NATIVE_RETAINED_GPU_TWO_WINDOW_12_FRAMES_PASS=true' \
+  'MELANIA_NATIVE_RETAINED_GPU_FOUR_WINDOW_12_FRAMES_PASS=true' \
   'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=1' \
   'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=2' \
   'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
@@ -3139,11 +3139,11 @@ grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true' "$retained
   fatal 'retained_gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame2_callback'
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true' "$retained_gpu_client_client_log" ||
   fatal 'retained_gpu_client_missing_real_XRGB_DMA_BUF_frame2_KMS_callback'
-grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_TWO_WINDOW_CLIENT_12_ACKS=true' "$retained_gpu_client_client_log" ||
-  fatal 'retained_gpu_client_missing_two_wayland_window_proof'
+grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_FOUR_WINDOW_CLIENT_12_ACKS=true' "$retained_gpu_client_client_log" ||
+  fatal 'retained_gpu_client_missing_four_wayland_window_proof'
 for index in $(seq 1 12); do
-  windows=2
-  [[ "$index" == 1 ]] && windows=1
+  windows=4
+  if (( index < 4 )); then windows="$index"; fi
   grep -Fqx "MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows" "$retained_gpu_client_server_log" ||
     fatal "retained_gpu_client_missing_both_independent_GPU_windows_$index"
   grep -Fqx "MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index" "$retained_gpu_client_server_log" ||
@@ -3159,7 +3159,7 @@ if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_c
   fatal 'retained_gpu_client_used_forbidden_cpu_staging'
 fi
 rm -f "$retained_gpu_client_server_log" "$retained_gpu_client_client_log"
-report 'MELANIA_QEMU_RETAINED_TWO_WINDOW_GPU_KMS_12_FRAMES_PASS=true'
+report 'MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 
