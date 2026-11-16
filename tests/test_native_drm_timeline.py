@@ -27,7 +27,7 @@ class NativeKernelTimeline(unittest.TestCase):
         self.assertLess(TIMELINE.index("consumer.export_sync_file(2)?"),
                         TIMELINE.index("release.signal(7)?"))
         self.assertIn("release.signal(7).is_ok()",TIMELINE)
-        self.assertIn("AcquireFenceState::Pending",TIMELINE)
+        self.assertIn("BlockerState::Pending",TIMELINE)
         self.assertIn("AcquireFenceState::Ready",TIMELINE)
 
     def test_no_advertisement_or_false_success_on_missing_capabilities(self):
@@ -39,3 +39,15 @@ class NativeKernelTimeline(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_DRM_SYNCOBJ_EVENTFD_UNSUPPORTED=true",GUEST)
         self.assertIn("MELANIA_QEMU_DRM_SYNCOBJ_TIMELINE_UNSUPPORTED=true",GUEST)
         self.assertIn("native_DRM_syncobj_capability_probe_missing",GUEST)
+
+    def test_transaction_gate_checks_seat_and_actual_timeline_after_wake(self):
+        gate=(ROOT/"melania-native/src/native_explicit_acquire.rs").read_text()
+        self.assertIn("add_blocker(surface,gate.blocker())",gate)
+        self.assertIn("point.eventfd()",gate)
+        self.assertIn("Fence::is_signaled(&self.point)",gate)
+        self.assertLess(gate.index("guard.accepts(self.token,seat_active)"),
+                        gate.index("acquire_fence_state(fd)"))
+        self.assertLess(gate.index("acquire_fence_state(fd)"),gate.index("match verify_point()"))
+        self.assertIn("BlockerState::Cancelled",gate)
+        self.assertIn("guard.revoke()",TIMELINE)
+        self.assertIn("MELANIA_NATIVE_DRM_ACQUIRE_BLOCKER_VERIFIED=true",TIMELINE)

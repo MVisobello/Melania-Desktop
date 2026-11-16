@@ -101,8 +101,16 @@ pub fn probe_kernel_timelines(card:&DrmDeviceFd)->Result<TimelineProbe,Box<dyn s
         Err(err) if matches!(err.raw_os_error(),Some(libc::ENOTTY)|Some(libc::EOPNOTSUPP)|Some(libc::ENOSYS))=>None,
         Err(err)=>return Err(err.into()),
     };
+    use smithay::wayland::compositor::BlockerState;
+    use crate::{native_explicit_acquire::AcquireCommitGate,
+        native_presentation_guard::NativePresentationGuard};
+    let mut guard=NativePresentationGuard::default();
+    guard.arm_initial(true).map_err(|_|"probe seat guard not armed")?;
+    let token=guard.ticket(true).ok_or("probe seat token missing")?;
+    let gate=AcquireCommitGate::new(token);
     if let Some(fd)=event.as_ref() {
-        if acquire_fence_state(fd.as_fd())?!=AcquireFenceState::Pending {
+        if gate.observe(&guard,true,fd.as_fd(),||consumer.ready(2).map_err(|e|e.to_string()))?
+            !=BlockerState::Pending {
             return Err("DRM acquire eventfd was ready before timeline signal".into());
         }
     }
@@ -118,12 +126,27 @@ pub fn probe_kernel_timelines(card:&DrmDeviceFd)->Result<TimelineProbe,Box<dyn s
         // Kernel workqueue signalling can be asynchronous. Wait in this
         // isolated capability probe only, never in a Wayland commit hook.
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(1);
-        while acquire_fence_state(fd.as_fd())?==AcquireFenceState::Pending {
-            if std::time::Instant::now()>=deadline {
-                return Err("DRM syncobj eventfd did not signal".into());
+        loop {
+            match gate.observe(&guard,true,fd.as_fd(),||consumer.ready(2).map_err(|e|e.to_string()))? {
+                BlockerState::Released=>break,
+                BlockerState::Cancelled=>return Err("real DRM acquire transaction cancelled".into()),
+                BlockerState::Pending=>{
+                    if std::time::Instant::now()>=deadline {
+                        return Err("DRM syncobj eventfd did not signal".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        // A second transaction cannot be released by the same already
+        // signalled FD after its original device epoch has been revoked.
+        let revoked=AcquireCommitGate::new(token);
+        guard.revoke();
+        if revoked.observe(&guard,true,fd.as_fd(),||consumer.ready(2).map_err(|e|e.to_string()))?
+            !=BlockerState::Cancelled {
+            return Err("revoked DRM acquire transaction accepted a stale kernel event".into());
+        }
+        println!("MELANIA_NATIVE_DRM_ACQUIRE_BLOCKER_VERIFIED=true");
     }
     let sync_file=consumer.export_sync_file(2)?;
     if acquire_fence_state(sync_file.as_fd())?!=AcquireFenceState::Ready {

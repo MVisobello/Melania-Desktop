@@ -37,6 +37,7 @@ pub mod owned_shm;
 pub mod native_client_dmabuf;
 pub mod native_acquire_fence;
 pub mod native_drm_timeline;
+pub mod native_explicit_acquire;
 pub mod planes;
 pub mod frame_gate;
 pub mod kms_test;
