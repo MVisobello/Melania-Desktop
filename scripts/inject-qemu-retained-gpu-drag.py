@@ -27,6 +27,12 @@ def main():
     time.sleep(.15)
     tablet(args.qmp,670,200,"release")
     print("MELANIA_QEMU_RETAINED_GPU_USB_GESTURE_SENT=true",flush=True)
+    keys=runpy.run_path(str(Path(__file__).with_name("inject-qemu-super-snap.py")))
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_READY_FOR_MINIMIZE=true",until)
+    keys["chord"](args.qmp,"down")
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_MINIMIZED_FRAME16=true",until)
+    keys["chord"](args.qmp,"up")
+    print("MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true",flush=True)
 
 if __name__=="__main__":
     main()

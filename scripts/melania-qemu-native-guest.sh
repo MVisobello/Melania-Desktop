@@ -137,7 +137,7 @@ run_retained_gpu_probe() {
       server_timeout=120
     fi
     # Four real XDG GPU windows; 12 commits followed by one real XDG close.
-    rm -f /run/melania-native-qemu/retained-gpu-close-acked{,.pending} /run/melania-native-qemu/retained-gpu-move-acked{,.pending}
+    rm -f /run/melania-native-qemu/retained-gpu-close-acked{,.pending} /run/melania-native-qemu/retained-gpu-move-acked{,.pending} /run/melania-native-qemu/retained-gpu-visibility-acked{,.pending}
     retained_gpu_client_server_log="$(mktemp -t melania-retained-gpu-client-kms-server-XXXXXX)"
     retained_gpu_client_client_log="$(mktemp -t melania-retained-gpu-client-kms-client-XXXXXX)"
     MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
@@ -152,9 +152,9 @@ run_retained_gpu_probe() {
     MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
     MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
     MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
-    MELANIA_NATIVE_DIRECT_GPU_MOVE=LIVE_QEMU_VM \
-    MELANIA_NATIVE_QEMU_FRAME_TARGET=15 \
-    MELANIA_QEMU_CONTINUOUS_FRAMES=15 \
+    MELANIA_NATIVE_DIRECT_GPU_MOVE=VISIBILITY_QEMU_VM \
+    MELANIA_NATIVE_QEMU_FRAME_TARGET=17 \
+    MELANIA_QEMU_CONTINUOUS_FRAMES=17 \
       timeout --signal=TERM --kill-after=3s "${server_timeout}s" \
       "${compositor_command[@]}" < /dev/tty1 \
       > "$retained_gpu_client_server_log" 2>&1 &
@@ -176,13 +176,23 @@ run_retained_gpu_probe() {
     # Host QMP emits a USB tablet gesture in response, never client IPC.
     (
       ready=false
-      for attempt in $(seq 1 600); do
+      held=false
+      moved=false
+      for attempt in $(seq 1 700); do
         if [[ "$ready" == false ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK=2' "$retained_gpu_client_server_log"; then
           report 'MELANIA_QEMU_RETAINED_GPU_READY_FOR_REAL_DRAG=true'
           ready=true
         fi
-        if [[ "$ready" == true ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_HELD_DRAG_ACK=14' "$retained_gpu_client_server_log"; then
+        if [[ "$ready" == true && "$held" == false ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_HELD_DRAG_ACK=14' "$retained_gpu_client_server_log"; then
           report 'MELANIA_QEMU_RETAINED_GPU_HELD_DRAG_FRAME14=true'
+          held=true
+        fi
+        if [[ "$held" == true && "$moved" == false ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_MOVE_KMS_ACK=1' "$retained_gpu_client_server_log"; then
+          report 'MELANIA_QEMU_RETAINED_GPU_READY_FOR_MINIMIZE=true'
+          moved=true
+        fi
+        if [[ "$moved" == true ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_ACK=16 slot=1 visible=false' "$retained_gpu_client_server_log"; then
+          report 'MELANIA_QEMU_RETAINED_GPU_MINIMIZED_FRAME16=true'
           exit 0
         fi
         kill -0 "$retained_gpu_client_server_pid" 2>/dev/null || exit 1
@@ -196,7 +206,7 @@ run_retained_gpu_probe() {
       MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM \
       MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM \
       MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
-      MELANIA_QEMU_DIRECT_GPU_MOVE=LIVE_QEMU_VM \
+      MELANIA_QEMU_DIRECT_GPU_MOVE=VISIBILITY_QEMU_VM \
       WAYLAND_DISPLAY="$retained_gpu_client_socket" \
       timeout --signal=TERM --kill-after=3s 65s \
       "$continuous_client" > "$retained_gpu_client_client_log" 2>&1; then
@@ -288,7 +298,19 @@ run_retained_gpu_probe() {
     done
     grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_REAL_DRAG_ACKED=true' "$retained_gpu_client_client_log" ||
       fatal 'retained_gpu_drag_missing_client_receipt'
-    grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=15' "$retained_gpu_client_server_log" ||
+    for marker in \
+      'MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_PIXELS_VERIFIED=16 visible=false' \
+      'MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_PIXELS_VERIFIED=17 visible=true' \
+      'MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_ACK=16 slot=1 visible=false' \
+      'MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_ACK=17 slot=1 visible=true' \
+      'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=16' \
+      'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=17' \
+      'MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_17_FRAMES_PASS=true'; do
+      grep -Fqx "$marker" "$retained_gpu_client_server_log" || fatal "retained_gpu_visibility_missing_$marker"
+    done
+    grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_VISIBILITY_ACKED=true' "$retained_gpu_client_client_log" ||
+      fatal 'retained_gpu_visibility_missing_client_receipt'
+    grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=17' "$retained_gpu_client_server_log" ||
       fatal 'retained_gpu_client_in_process_KMS_worker_not_joined'
     if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
       fatal 'retained_gpu_client_used_forbidden_cpu_staging'
@@ -298,6 +320,7 @@ run_retained_gpu_probe() {
     report 'MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_KMS_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_REAL_USB_DRAG_KMS_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_LIVE_DRAG_KMS_PASS=true'
+    report 'MELANIA_QEMU_RETAINED_GPU_VISIBILITY_KMS_PASS=true'
     report 'MELANIA_NATIVE_SESSION_READY=false'
     
 }

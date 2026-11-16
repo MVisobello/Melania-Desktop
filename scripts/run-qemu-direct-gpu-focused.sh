@@ -105,5 +105,7 @@ done
 if [[ "$guest_arg" == --retained-gpu-only ]]; then
   grep -qxF 'MELANIA_QEMU_RETAINED_GPU_REAL_USB_DRAG_KMS_PASS=true' "$normalized"
   grep -qxF 'MELANIA_QEMU_RETAINED_GPU_LIVE_DRAG_KMS_PASS=true' "$normalized"
+  grep -qxF 'MELANIA_QEMU_RETAINED_GPU_VISIBILITY_KMS_PASS=true' "$normalized"
+  grep -qxF 'MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true' "$report/qmp-retained-drag.log"
 fi
 echo 'MELANIA_QEMU_FOCUSED_DIRECT_GPU_RESULT=PASS'
