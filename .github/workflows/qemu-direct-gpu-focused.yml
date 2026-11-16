@@ -32,7 +32,7 @@ jobs:
             libegl1-mesa-dev libgles2-mesa-dev libudev-dev libseat-dev \
             libdrm-dev libgbm-dev libinput-dev qemu-system-x86 \
             qemu-utils cloud-image-utils genisoimage curl
-          cargo build -p melania-native --bin melania-native --bin melania-continuous-client
+          cargo build -p melania-native --bin melania-native --bin qemu-continuous-client
       - name: Run only the real 12-frame direct GPU acceptance
         env:
           MELANIA_QEMU_NATIVE_VM: YES_DISPOSABLE_QEMU

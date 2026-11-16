@@ -6,7 +6,7 @@ set -euo pipefail
   { echo 'Explicit disposable QEMU opt-in required' >&2; exit 78; }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 native="$root/target/debug/melania-native"
-client="$root/target/debug/melania-continuous-client"
+client="$root/target/debug/qemu-continuous-client"
 [[ -x "$native" && -x "$client" ]] || { echo 'Build real native server/client first' >&2; exit 78; }
 report="${MELANIA_QEMU_NATIVE_REPORT_DIR:-$root/reports/qemu-direct-gpu}"
 mkdir -p "$report"

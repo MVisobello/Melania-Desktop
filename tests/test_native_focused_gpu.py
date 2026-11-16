@@ -25,4 +25,4 @@ class NativeFocusedGpu(unittest.TestCase):
         self.assertIn("--direct-gpu-only",HOST)
         self.assertIn("MELANIA_QEMU_NATIVE_GUEST_EXIT=0",HOST)
         self.assertIn("MELANIA_QEMU_FOCUSED_DIRECT_GPU_PASS=true",HOST)
-        self.assertIn("cargo build -p melania-native --bin melania-native --bin melania-continuous-client",CI)
+        self.assertIn("cargo build -p melania-native --bin melania-native --bin qemu-continuous-client",CI)
