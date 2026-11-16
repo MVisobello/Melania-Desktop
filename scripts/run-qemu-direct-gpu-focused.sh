@@ -42,13 +42,14 @@ packages:
   - libwayland-client0
   - libwayland-server0
   - libdisplay-info1
+  - gdb
 write_files:
   - path: /usr/local/sbin/melania-qemu-native-guest.sh
     permissions: '0700'
     encoding: b64
     content: $encoded
 runcmd:
-  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; bash /usr/local/sbin/melania-qemu-native-guest.sh --direct-gpu-only > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
+  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; MELANIA_QEMU_DIRECT_GDB=YES_QEMU_VM bash /usr/local/sbin/melania-qemu-native-guest.sh --direct-gpu-only > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
 EOF
 cloud-localds seed.iso user-data meta-data
 serial="$report/serial.log"
