@@ -154,6 +154,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
 
+    def test_opaque_output_uses_vertical_gpu_blit_with_asymmetric_client_pixels(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        copy=gbm.split("fn blit_opaque_direct_window(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("gl.BlitFramebuffer(0,h,w,0,160,120,160+w,120+h",copy)
+        self.assertIn("gl.Finish()",copy)
+        self.assertNotIn("map_texture(",copy)
+        self.assertIn("gl.BindFramebuffer(ffi::FRAMEBUFFER,draw as u32)",copy)
+        self.assertIn("opaque GPU blit orientation mismatch",gbm)
+        guest=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
+        self.assertIn("MELANIA_QEMU_CLIENT_DIRECT_ORIENTATION=YES_QEMU_VM",guest)
+        self.assertIn("MELANIA_NATIVE_DIRECT_GPU_XRGB_OUTPUT_BLIT=true",guest)
+
     def test_opaque_source_normalized_on_gpu_without_cpu_staging(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         normalize=gbm.split("fn normalize_opaque_direct_source(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]

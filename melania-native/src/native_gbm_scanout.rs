@@ -441,6 +441,64 @@ fn normalize_opaque_direct_source(
     Ok(copy)
 }
 
+// An opaque window needs no blend shader. The Mesa llvmpipe stack trace
+// crashed in its rasterizer even after XRGB normalization succeeded.
+// Copy the opaque image into the actual scanout FBO with a GLES3 blit;
+// preserve the same vertical transform as the alpha-composition path.
+fn blit_opaque_direct_window(
+    renderer:&mut GlesRenderer,
+    source:&mut smithay::backend::renderer::gles::GlesTexture,
+)->Result<(),Box<dyn Error>> {
+    use smithay::backend::renderer::Texture;
+    use smithay::backend::renderer::gles::ffi;
+    let draw=renderer.with_context(|gl|{
+        let mut id=0;
+        unsafe {gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING,&mut id);}
+        id
+    })?;
+    if draw==0 {return Err("opaque direct scanout FBO missing".into());}
+    let (w,h)=(source.width() as i32,source.height() as i32);
+    {
+        let mut input=renderer.bind(source)?;
+        // Obtain the actual source FBO via Smithay's binding, not a
+        // guessed GL object name. Rendering an empty frame changes no pixels.
+        let mut frame=renderer.render(&mut input,(w,h).into(),Transform::Normal)?;
+        let read=frame.with_context(|gl|{
+            let mut id=0;
+            unsafe {gl.GetIntegerv(ffi::READ_FRAMEBUFFER_BINDING,&mut id);}
+            id
+        })?;
+        frame.finish()?.wait()?;
+        if read==0 || read==draw {return Err("opaque direct source FBO invalid".into());}
+        renderer.with_context(|gl|->Result<(),String>{
+            unsafe {
+                gl.BindFramebuffer(ffi::READ_FRAMEBUFFER,read as u32);
+                gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER,draw as u32);
+                if gl.CheckFramebufferStatus(ffi::READ_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE ||
+                   gl.CheckFramebufferStatus(ffi::DRAW_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE {
+                    return Err("opaque direct blit framebuffer incomplete".into());
+                }
+                let scissor=gl.IsEnabled(ffi::SCISSOR_TEST)==ffi::TRUE;
+                gl.Disable(ffi::SCISSOR_TEST);
+                gl.ReadBuffer(ffi::COLOR_ATTACHMENT0);
+                gl.BlitFramebuffer(0,h,w,0,160,120,160+w,120+h,
+                    ffi::COLOR_BUFFER_BIT,ffi::NEAREST);
+                gl.Finish();
+                let error=gl.GetError();
+                if scissor {gl.Enable(ffi::SCISSOR_TEST);}
+                // Subsequent pixel verification must read the real output,
+                // not the source. Restore the output as both GL targets.
+                gl.BindFramebuffer(ffi::FRAMEBUFFER,draw as u32);
+                if error!=ffi::NO_ERROR {
+                    return Err(format!("opaque direct scanout blit error {error:#x}"));
+                }
+            }
+            Ok(())
+        })??;
+    }
+    Ok(())
+}
+
 fn verify_direct_client_gpu_pixels(
     renderer:&mut GlesRenderer,
     bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
@@ -464,6 +522,12 @@ fn verify_direct_client_gpu_pixels(
         let alpha=sample(renderer,bound,200,303)?;
         if !close(opaque,expected,20) || !close(alpha,[56,39,122],13) {
             return Err(format!("direct GBM alpha/orientation mismatch: {opaque:?} {alpha:?}").into());
+        }
+    } else {
+        let top=sample(renderer,bound,200,160)?;
+        let bottom=sample(renderer,bound,200,303)?;
+        if !close(top,expected,20) || !close(bottom,[201,61,20],5) {
+            return Err(format!("opaque GPU blit orientation mismatch: {top:?} {bottom:?}").into());
         }
     }
     let background=sample(renderer,bound,5,5)?;
@@ -686,7 +750,7 @@ fn qemu_gpu_scene_stream(
                     &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
                 )?
             };
-            let opaque_snapshot=if direct_frame && index==1 {
+            let mut opaque_snapshot=if direct_frame && index==1 {
                 println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} opaque_blit",index+1);
                 let image=normalize_opaque_direct_source(&mut renderer,&mut texture)?;
                 println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true");
@@ -717,8 +781,12 @@ fn qemu_gpu_scene_stream(
                 // CPU staging path flipped the bottom-up GLES readback
                 // before uploading the top-origin scene. Do that transform
                 // in the GPU shader, rather than copying rows on the CPU.
-                frame.render_texture_from_to(sampled_texture,src,dest,&[local],opaque,
-                    Transform::Flipped180,1.0,None,&[])?;
+                if index==0 {
+                    frame.render_texture_from_to(sampled_texture,src,dest,&[local],opaque,
+                        Transform::Flipped180,1.0,None,&[])?;
+                }
+                // Opaque XRGB is copied by framebuffer blit after clear;
+                // do not run the llvmpipe texture shader that crashed.
             } else {
                 let src=Rectangle::from_size((W as f64,H as f64).into());
                 frame.clear(Color32F::new(0.0,0.0,0.0,1.0),&[output_rect])?;
@@ -738,6 +806,11 @@ fn qemu_gpu_scene_stream(
             let completion=frame.finish()?;
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} wait",index+1);}
             completion.wait()?;
+            if let Some(image)=opaque_snapshot.as_mut() {
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} output_blit",index+1);
+                blit_opaque_direct_window(&mut renderer,image)?;
+                println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_OUTPUT_BLIT=true");
+            }
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} verify",index+1);}
             if direct_frame {
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
