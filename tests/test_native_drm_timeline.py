@@ -65,3 +65,13 @@ class NativeKernelTimeline(unittest.TestCase):
         self.assertLess(ack.index("self.client_dmabuf_imports.retain("),
                         ack.index("point.signal()?"))
         self.assertIn("if !explicit_buffer {completed.resource.release();}",ack)
+
+    def test_real_wayland_client_delays_acquire_and_reads_kernel_release(self):
+        client=(ROOT/"melania-native/src/bin/qemu-continuous-client.rs").read_text()
+        self.assertIn("surface_sync.set_acquire_point(&acquire_obj,0,1)",client)
+        self.assertIn("surface_sync.set_release_point(&release_obj,0,1)",client)
+        self.assertLess(client.index("MELANIA_QEMU_EXPLICIT_ACQUIRE_BLOCKED"),
+                        client.index("acquire.signal(1)?"))
+        self.assertIn("state.buffer_released=release.ready(1)?",client)
+        self.assertIn("MELANIA_QEMU_REAL_WAYLAND_EXPLICIT_SYNC_TWO_GPU_FRAMES_PASS=true",GUEST)
+        self.assertIn("MELANIA_QEMU_WAYLAND_EXPLICIT_SYNC_UNSUPPORTED=true",GUEST)
