@@ -31,6 +31,25 @@ pub fn retained_gpu_position(slot:u64)->Option<(i32,i32)> {
     }
 }
 
+/// Fit the natural client pixel dimensions to the bounded physical output,
+/// including the six-pixel decoration margin. No stretching, truncation,
+/// integer wrapping or oversized GPU texture allocation.
+pub fn retained_gpu_geometry(slot:u64,width:i32,height:i32)->Option<(i32,i32,i32,i32)> {
+    if width<=0 || height<=0 || width>1268 || height>788 {return None;}
+    let (x,y)=retained_gpu_position(slot)?;
+    Some((x.clamp(6,1274-width),y.clamp(6,794-height),width,height))
+}
+
+/// Real buffer sizes change independently for every surface in the fixture.
+pub fn retained_gpu_probe_size(index:u64)->Option<(i32,i32)> {
+    const SIZES:[(i32,i32);12]=[
+        (360,224),(320,200),(384,240),(300,180),
+        (400,240),(304,192),(380,220),(320,190),
+        (416,250),(400,248),(300,180),(340,210),
+    ];
+    SIZES.get(usize::try_from(index).ok()?).copied()
+}
+
 /// This is only the deterministic QEMU client fixture. Runtime admission
 /// and scene composition must use actual surface IDs, never this schedule.
 pub const RETAINED_GPU_PROBE_SLOTS:[u64;12]=[1,2,3,4,2,1,4,3,1,3,2,4];
@@ -65,6 +84,24 @@ mod tests {
         assert_eq!(retained_gpu_probe_rgb(0),Some([84,46,186]));
         assert_eq!(retained_gpu_probe_rgb(1),Some([31,163,69]));
         assert_eq!(retained_gpu_probe_rgb(12),None);
+    }
+    #[test]
+    fn retained_gpu_natural_size_is_bounded_and_different_per_commit() {
+        for id in 1..=MAX_PLACED_WINDOWS {
+            assert_eq!(retained_gpu_geometry(id,1268,788),Some((6,6,1268,788)));
+            for index in 0..12 {
+                let (w,h)=retained_gpu_probe_size(index).unwrap();
+                let (x,y,actual_w,actual_h)=retained_gpu_geometry(id,w,h).unwrap();
+                assert_eq!((actual_w,actual_h),(w,h));
+                assert!(x>=6 && y>=6 && x+w+6<=1280 && y+h+6<=800);
+            }
+        }
+        assert_eq!(retained_gpu_geometry(0,10,10),None);
+        assert_eq!(retained_gpu_geometry(1,0,100),None);
+        assert_eq!(retained_gpu_geometry(1,i32::MAX,1),None);
+        assert_eq!(retained_gpu_geometry(1,100,789),None);
+        assert_ne!(retained_gpu_probe_size(0),retained_gpu_probe_size(5));
+        assert_eq!(retained_gpu_probe_size(12),None);
     }
     #[test]
     fn preserves_both_kms_pixel_proof_windows() {
