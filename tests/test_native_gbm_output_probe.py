@@ -21,7 +21,7 @@ class NativeGbmOutputProbe(unittest.TestCase):
         self.assertIn('recommended_mode_for_budget(', NATIVE)
         self.assertIn('smoke_render_gbm_output_buffers(', NATIVE)
         # The kernel topology, not one EDID-derived mode, drives GPU probes.
-        self.assertIn('inspect_stable_active_outputs(', NATIVE)
+        self.assertIn('inspect_stable_active_outputs_with_timings(', NATIVE)
         self.assertIn('plan_active_output_probes(&topology)', NATIVE)
         self.assertIn('plan.iter().try_for_each(|probe|', NATIVE)
         self.assertIn('device.device_fd().clone(),probe.width,probe.height,2', NATIVE)
@@ -42,8 +42,21 @@ class NativeGbmOutputProbe(unittest.TestCase):
         self.assertLess(NATIVE.index('let supported=conn.advertised_modes'),
                         NATIVE.index('let candidate=melania_native::outputs::recommended_mode_for_budget('))
         self.assertIn('width>4096 || height>4096', RENDERER)
-        self.assertIn('let plan=active_output_plan.as_ref()', NATIVE)
+        self.assertIn('let (before_routes,before_timings,plan)=active_output_plan.as_ref()', NATIVE)
         self.assertIn('plan.iter().try_for_each(|probe|', NATIVE)
+
+    def test_real_output_probe_rechecks_full_kernel_epoch_before_aggregate_pass(self):
+        probe = NATIVE.split("fn experimental_drm(", 1)[1].split("fn experimental_gbm_kms_scanout(", 1)[0]
+        render = probe.index("plan.iter().try_for_each")
+        after = probe.index("let (after_routes,after_timings)", render)
+        verify = probe.index("verify_unchanged_scanout_epoch(", after)
+        aggregate = probe.index("MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED=", verify)
+        self.assertLess(render, after)
+        self.assertLess(after, verify)
+        self.assertLess(verify, aggregate)
+        self.assertIn("before_routes,before_timings,&after_routes,&after_timings", probe)
+        self.assertIn("MELANIA_NATIVE_GBM_OUTPUT_EPOCH_REVALIDATED=true", GUEST)
+        self.assertIn("native_output_sized_GBM_complete_route_set_not_verified", GUEST)
 
     def test_not_installable_and_no_kms_mutation_in_probe(self):
         self.assertIn('--experimental-gbm-output', NATIVE)
