@@ -282,6 +282,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("GPU drag fabricated callback",CLIENT)
         self.assertIn("inject-qemu-retained-gpu-drag.py",HOST)
 
+    def test_gpu_motion_has_intermediate_held_ack_and_coalesced_position(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        injector=(ROOT/"scripts/inject-qemu-retained-gpu-drag.py").read_text()
+        self.assertEqual(BRIDGE.count("if state.gpu_live_drag_probe() {state.gpu_drag_motion(point);}"),2)
+        self.assertIn("!matches!(update,DirectGpuUpdate::Move{..})",BRIDGE)
+        self.assertIn("self.pointer_buttons_held.contains(&0x110)",BRIDGE)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_HELD_DRAG_ACK=14",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_MOVE_FRAME_PIXELS_VERIFIED=15",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=15",GUEST)
+        self.assertIn("sample(renderer,460,200,[27,33,58])?",gbm)
+        self.assertLess(injector.index("MELANIA_QEMU_RETAINED_GPU_HELD_DRAG_FRAME14=true"),injector.index('tablet(args.qmp,670,200,"release")'))
+
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)

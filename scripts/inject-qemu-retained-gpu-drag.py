@@ -12,12 +12,17 @@ def main():
     parser.add_argument("--timeout",type=float,required=True)
     args=parser.parse_args()
     helper=runpy.run_path(str(Path(__file__).with_name("inject-qemu-dynamic-pointer.py")))
-    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_READY_FOR_REAL_DRAG=true",time.monotonic()+args.timeout)
+    until=time.monotonic()+args.timeout
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_READY_FOR_REAL_DRAG=true",until)
     tablet=helper["tablet"]
     tablet(args.qmp,180,130)
     time.sleep(.15)
     tablet(args.qmp,180,130,"press")
     time.sleep(.15)
+    tablet(args.qmp,430,165)
+    # Do not release or send the next position until the real kernel ACK
+    # for the intermediate position has been observed in guest serial.
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_HELD_DRAG_FRAME14=true",until)
     tablet(args.qmp,670,200)
     time.sleep(.15)
     tablet(args.qmp,670,200,"release")

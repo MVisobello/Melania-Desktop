@@ -568,7 +568,7 @@ fn main()->Result<(),Box<dyn Error>> {
             }
             if state.frame_done_count!=12 {return Err("GPU close fabricated a client frame callback".into());}
             println!("MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_ACKED=true");
-            if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM") {
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("YES_QEMU_VM"|"LIVE_QEMU_VM")) {
                 let deadline=Instant::now()+Duration::from_secs(20);
                 loop {
                     queue.roundtrip(&mut state)?;
