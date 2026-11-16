@@ -136,7 +136,8 @@ run_retained_gpu_probe() {
         -ex 'thread apply all bt' --args "$continuous_server" --experimental-wayland-seat)
       server_timeout=120
     fi
-    # Four real XDG GPU windows; 12 commits in non-round-robin order.
+    # Four real XDG GPU windows; 12 commits followed by one real XDG close.
+    rm -f /run/melania-native-qemu/retained-gpu-close-acked{,.pending}
     retained_gpu_client_server_log="$(mktemp -t melania-retained-gpu-client-kms-server-XXXXXX)"
     retained_gpu_client_client_log="$(mktemp -t melania-retained-gpu-client-kms-client-XXXXXX)"
     MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
@@ -151,7 +152,8 @@ run_retained_gpu_probe() {
     MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
     MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
     MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
-    MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+    MELANIA_NATIVE_QEMU_FRAME_TARGET=13 \
+    MELANIA_QEMU_CONTINUOUS_FRAMES=13 \
       timeout --signal=TERM --kill-after=3s "${server_timeout}s" \
       "${compositor_command[@]}" < /dev/tty1 \
       > "$retained_gpu_client_server_log" 2>&1 &
@@ -235,13 +237,27 @@ run_retained_gpu_probe() {
       grep -Fqx "MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index" "$retained_gpu_client_server_log" ||
         fatal "retained_gpu_client_stale_pixels_after_shrink_$index"
     done
-    grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=12' "$retained_gpu_client_server_log" ||
+    for marker in \
+      'MELANIA_NATIVE_RETAINED_GPU_CLOSE_PIXELS_VERIFIED=2' \
+      'MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=13 windows=3' \
+      'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=13' \
+      'MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK=2' \
+      'MELANIA_NATIVE_RETAINED_GPU_CLOSE_13_FRAMES_PASS=true'; do
+      grep -Fqx "$marker" "$retained_gpu_client_server_log" ||
+        fatal "retained_gpu_close_missing_$marker"
+    done
+    grep -q '^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=13 ' "$retained_gpu_client_server_log" ||
+      fatal 'retained_gpu_close_missing_bridge_ack'
+    grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_ACKED=true' "$retained_gpu_client_client_log" ||
+      fatal 'retained_gpu_close_missing_real_client_receipt'
+    grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=13' "$retained_gpu_client_server_log" ||
       fatal 'retained_gpu_client_in_process_KMS_worker_not_joined'
     if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
       fatal 'retained_gpu_client_used_forbidden_cpu_staging'
     fi
     rm -f "$retained_gpu_client_server_log" "$retained_gpu_client_client_log"
     report 'MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true'
+    report 'MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_KMS_PASS=true'
     report 'MELANIA_NATIVE_SESSION_READY=false'
     
 }

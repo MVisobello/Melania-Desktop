@@ -548,6 +548,26 @@ fn main()->Result<(),Box<dyn Error>> {
         if multi_gpu {
             println!("MELANIA_QEMU_RETAINED_GPU_FOUR_WINDOW_CLIENT_12_ACKS=true");
             std::io::stdout().flush()?;
+            // Destroy a real mapped XDG role, without attaching a replacement
+            // buffer. Keep all other windows alive until the compositor's
+            // post-KMS receipt for the GPU-only removal is visible.
+            let (closed_s,closed_x,closed_t)=extra.remove(0);
+            closed_t.destroy();
+            closed_x.destroy();
+            closed_s.destroy();
+            connection.flush()?;
+            let deadline=Instant::now()+Duration::from_secs(10);
+            loop {
+                queue.roundtrip(&mut state)?;
+                if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-close-acked")
+                    .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") {
+                    break;
+                }
+                if Instant::now()>=deadline {return Err("closed GPU window missing real KMS receipt".into());}
+                thread::sleep(Duration::from_millis(10));
+            }
+            if state.frame_done_count!=12 {return Err("GPU close fabricated a client frame callback".into());}
+            println!("MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_ACKED=true");
             for (s,x,t) in extra {
                 t.destroy();
                 x.destroy();

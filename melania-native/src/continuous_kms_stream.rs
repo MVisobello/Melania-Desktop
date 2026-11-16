@@ -25,7 +25,9 @@ const ACK_BYTES: usize = 4 + 8 + 8 + 8 + 1;
 
 /// The actual imported client DMA-BUF stays owned until the KMS worker
 /// finishes sampling it. Only its matching ticket may unlock a direct job.
-pub type DirectGpuFrame = (PlannedSceneFrame, u64, smithay::backend::allocator::dmabuf::Dmabuf);
+// Some(buffer) replaces GPU-owned content; None removes the actual surface.
+// Both operations carry the same presentation ticket and zero CPU pixels.
+pub type DirectGpuFrame = (PlannedSceneFrame, u64, Option<smithay::backend::allocator::dmabuf::Dmabuf>);
 
 #[derive(Debug)]
 pub struct ContinuousKmsJob {
