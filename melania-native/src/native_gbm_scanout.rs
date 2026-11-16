@@ -405,19 +405,43 @@ fn verify_retained_gpu_scene(
     index:u64,
 )->Result<(),Box<dyn Error>> {
     use smithay::backend::renderer::ExportMem;
-    use crate::window_placement::{retained_gpu_position,retained_gpu_probe_rgb,RETAINED_GPU_PROBE_SLOTS};
+    use crate::window_placement::{retained_gpu_geometry,retained_gpu_probe_size,
+        retained_gpu_probe_rgb,RETAINED_GPU_PROBE_SLOTS};
     let mut expected_by_slot=std::collections::BTreeMap::new();
+    let mut previous_size=None;
     for (frame,&slot) in RETAINED_GPU_PROBE_SLOTS.iter().take(index as usize+1).enumerate() {
-        expected_by_slot.insert(slot,retained_gpu_probe_rgb(frame as u64).ok_or("missing probe color")?);
+        let previous=expected_by_slot.insert(slot,frame as u64);
+        if frame as u64==index {previous_size=previous.and_then(retained_gpu_probe_size);}
     }
-    for (slot,expected) in expected_by_slot {
-        let (x,y)=retained_gpu_position(slot).ok_or("missing GPU probe geometry")?;
+    let sample=|renderer:&mut GlesRenderer,x:i32,y:i32,expected:[u8;3]|->Result<(),Box<dyn Error>> {
         let mapping=renderer.copy_framebuffer(bound,
-            Rectangle::from_loc_and_size((x+180,y+112),(1,1)),Fourcc::Abgr8888)?;
+            Rectangle::from_loc_and_size((x,y),(1,1)),Fourcc::Abgr8888)?;
         let rgba=renderer.map_texture(&mapping)?;
         if rgba.len()<3 || !rgba[..3].iter().zip(expected).all(|(actual,want)|
             actual.abs_diff(want)<=4) {
-            return Err(format!("retained GPU scene slot {slot} frame {index} mismatch: {rgba:?} expected {expected:?}").into());
+            return Err(format!("retained GPU scene frame {index} pixel ({x},{y}) mismatch: {rgba:?} expected {expected:?}").into());
+        }
+        Ok(())
+    };
+    for (slot,frame) in expected_by_slot {
+        let (w,h)=retained_gpu_probe_size(frame).ok_or("missing probe size")?;
+        let expected=retained_gpu_probe_rgb(frame).ok_or("missing probe color")?;
+        let (x,y,w,h)=retained_gpu_geometry(slot,w,h).ok_or("missing GPU probe geometry")?;
+        // Center AND far corner prove the actual retained extent.
+        sample(renderer,x+w/2,y+h/2,expected)?;
+        sample(renderer,x+w-3,y+h-3,expected)?;
+        sample(renderer,x+w+2,y+h/2,[65,171,216])?;
+        if frame==index {
+            if let Some((old_w,old_h))=previous_size {
+                if old_w>w+12 {
+                    sample(renderer,x+old_w-2,y+h.min(old_h)/2,[27,33,58])?;
+                    println!("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED={}",index+1);
+                } else if old_h>h+12 {
+                    sample(renderer,x+w.min(old_w)/2,y+old_h-2,[27,33,58])?;
+                    println!("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED={}",index+1);
+                }
+                println!("MELANIA_NATIVE_RETAINED_GPU_RESIZE_VERIFIED={} {}x{}",index+1,w,h);
+            }
         }
     }
     Ok(())
@@ -431,14 +455,17 @@ fn retain_direct_window(
     source:&smithay::backend::renderer::gles::GlesTexture,
     opaque:bool,
 )->Result<smithay::backend::renderer::gles::GlesTexture,Box<dyn Error>> {
-    use smithay::backend::renderer::Offscreen;
+    use smithay::backend::renderer::{Offscreen,Texture};
     use smithay::backend::renderer::gles::GlesTexture;
-    let mut image:GlesTexture=renderer.create_buffer(Fourcc::Abgr8888,(360,224).into())?;
+    let (w,h)=(source.width() as i32,source.height() as i32);
+    crate::window_placement::retained_gpu_geometry(1,w,h)
+        .ok_or("retained GPU texture exceeds output geometry")?;
+    let mut image:GlesTexture=renderer.create_buffer(Fourcc::Abgr8888,(w,h).into())?;
     {
         let mut target=renderer.bind(&mut image)?;
-        let mut frame=renderer.render(&mut target,(360,224).into(),Transform::Normal)?;
-        let rect=Rectangle::from_size((360,224).into());
-        let src=Rectangle::from_size((360.0,224.0).into());
+        let mut frame=renderer.render(&mut target,(w,h).into(),Transform::Normal)?;
+        let rect=Rectangle::from_size((w,h).into());
+        let src=Rectangle::from_size((f64::from(w),f64::from(h)).into());
         // Preserve premultiplied source alpha in GPU-owned storage.
         // Blend against the actual destination only when drawing the scene.
         frame.clear(Color32F::new(0.0,0.0,0.0,0.0),&[rect])?;
@@ -659,9 +686,13 @@ fn qemu_gpu_scene_stream(
             // GPU context, revalidating its producer fence at sampling.
             // SHM-only frames retain the historical memory upload.
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} import",index+1);}
-            let texture=if let Some((_,buffer))=client_dmabuf.as_ref() {
+            let texture=if let Some((slot,buffer))=client_dmabuf.as_ref() {
                 use smithay::backend::allocator::Buffer;
-                if buffer.size().w!=360 || buffer.size().h!=224 ||
+                let size=buffer.size();
+                let valid_size=if multi_gpu {
+                    crate::window_placement::retained_gpu_geometry(*slot,size.w,size.h).is_some()
+                } else {size.w==360 && size.h==224};
+                if !valid_size ||
                    !matches!(buffer.format().code,Fourcc::Argb8888|Fourcc::Xrgb8888) ||
                    (!multi_gpu && buffer.format().code!=(if index==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888})) {
                     return Err("direct GPU client size/format mismatch".into());
@@ -694,17 +725,19 @@ fn qemu_gpu_scene_stream(
                 // Stable order is independent of update order. A bounded
                 // scene can now contain more than two surface IDs.
                 for (&slot,image) in retained.iter() {
-                    let (x,y)=crate::window_placement::retained_gpu_position(slot)
+                    use smithay::backend::renderer::Texture;
+                    let (x,y,w,h)=crate::window_placement::retained_gpu_geometry(
+                        slot,image.width() as i32,image.height() as i32)
                         .ok_or("missing retained GPU window geometry")?;
                     let border=[
-                        Rectangle::from_loc_and_size((x-6,y-6),(372,6)),
-                        Rectangle::from_loc_and_size((x-6,y+224),(372,6)),
-                        Rectangle::from_loc_and_size((x-6,y),(6,224)),
-                        Rectangle::from_loc_and_size((x+360,y),(6,224)),
+                        Rectangle::from_loc_and_size((x-6,y-6),(w+12,6)),
+                        Rectangle::from_loc_and_size((x-6,y+h),(w+12,6)),
+                        Rectangle::from_loc_and_size((x-6,y),(6,h)),
+                        Rectangle::from_loc_and_size((x+w,y),(6,h)),
                     ];
-                    let dest=Rectangle::from_loc_and_size((x,y),(360,224));
-                    let local=Rectangle::from_size((360,224).into());
-                    let src=Rectangle::from_size((360.0,224.0).into());
+                    let dest=Rectangle::from_loc_and_size((x,y),(w,h));
+                    let local=Rectangle::from_size((w,h).into());
+                    let src=Rectangle::from_size((f64::from(w),f64::from(h)).into());
                     frame.clear(Color32F::new(65.0/255.0,171.0/255.0,216.0/255.0,1.0),&border)?;
                     // Transparent client pixels reveal the composed scene,
                     // not a flattened copy of the original desktop color.
