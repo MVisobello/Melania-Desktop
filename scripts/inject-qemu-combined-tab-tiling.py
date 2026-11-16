@@ -21,6 +21,25 @@ sys.modules[spec.name]=tab
 spec.loader.exec_module(tab)
 tab.START="MELANIA_QEMU_COMBINED_TAB_STAGE_STARTED=true"
 
+def confirm_usb_release(serial: Path, qmp: Path, deadline: float) -> None:
+    # A successfully acknowledged QMP command does not prove that libinput
+    # delivered the key to the focused Wayland client. After all pixel
+    # checks, retry only this terminal, idempotent input on a bounded budget.
+    # Always send key-up, even when the real client never acknowledges it.
+    marker = "MELANIA_QEMU_TAB_REAL_USB_RELEASE=F8"
+    for _ in range(3):
+        if time.monotonic() >= deadline:
+            break
+        tab.key(qmp, "f8", True)
+        try:
+            tab.wait(serial, marker, min(deadline, time.monotonic()+5))
+            return
+        except TimeoutError:
+            pass
+        finally:
+            tab.key(qmp, "f8", False)
+    raise TimeoutError("real F8 Wayland delivery absent after bounded USB retries")
+
 def main()->int:
     args=argparse.ArgumentParser()
     args.add_argument("--serial",type=Path,required=True)
@@ -75,9 +94,7 @@ def main()->int:
         ("B buffer concealed",740,260,tab.A),
     ))
     print("MELANIA_QEMU_COMBINED_TAB_REAL_CRTC_A_RESTORED=true",flush=True)
-    tab.key(a.qmp,"f8",True)
-    tab.wait(a.serial,"MELANIA_QEMU_TAB_REAL_USB_RELEASE=F8",deadline)
-    tab.key(a.qmp,"f8",False)
+    confirm_usb_release(a.serial,a.qmp,deadline)
     print("MELANIA_QEMU_COMBINED_TAB_REAL_XDG_SHM_KMS_PASS=true",flush=True)
     return 0
 
