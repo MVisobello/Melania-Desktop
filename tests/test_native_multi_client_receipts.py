@@ -45,7 +45,9 @@ class MultiSurfaceKmsReceipts(unittest.TestCase):
         self.assertLess(ledger,frame)
         self.assertLess(frame,release)
         self.assertIn("completed.notify_frame && is_live",section)
-        self.assertIn("self.known_window_surfaces.get(slot)==Some(&completed.key)",section)
+        self.assertIn("self.known_window_surfaces.id_of(&completed.key).is_some()",section)
+        # Registry lookup works for all live slots, not just the old pair.
+        self.assertNotIn("1..=MAX_PENDING_CLIENTS as u64",section)
 
 if __name__=="__main__":
     unittest.main()

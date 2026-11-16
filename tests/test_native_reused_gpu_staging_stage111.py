@@ -35,7 +35,7 @@ class NativeReusedGpuStaging111(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER",code)
 
     def test_identical_client_commit_is_real_gpu_presented_not_fake_ack(self):
-        body=GPU[GPU.index("pub fn qemu_wayland_gpu_scene_stream("):]
+        body=GPU[GPU.index("fn qemu_gpu_scene_stream("):]
         self.assertIn("if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent",body)
         self.assertLess(body.index("if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent"),
                         body.index("frame.render_texture_from_to("))

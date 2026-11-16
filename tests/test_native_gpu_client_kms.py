@@ -139,10 +139,10 @@ class RealClientDmabufToKms(unittest.TestCase):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         direct=BRIDGE.split("if dma_buffer && gpu_client_kms && self.direct_gpu_sender.is_some()",1)[1].split(
             "// Opt-in QEMU transitional path",1)[0]
-        self.assertIn("self.direct_gpu_pending=dmabuf",direct)
+        self.assertIn("self.direct_gpu_pending=dmabuf.map",direct)
         self.assertIn("self.multi_scene.note_external_gpu_frame()",direct)
         self.assertNotIn("readback_qemu_client_bgra",direct)
-        self.assertIn("sender.try_send((planned,dmabuf))",BRIDGE)
+        self.assertIn("sender.try_send((planned,slot,dmabuf))",BRIDGE)
         self.assertIn("ContinuousKmsJob{planned,pixels:Vec::new()}",BRIDGE)
         self.assertIn("fn direct_gpu_transport_sends_only_ticket_and_requires_matching_ack()",stream)
         self.assertIn('header[..4].copy_from_slice(b"MLG1")',stream)
@@ -157,7 +157,7 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_opaque_output_uses_vertical_gpu_blit_with_asymmetric_client_pixels(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         copy=gbm.split("fn blit_opaque_direct_window(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
-        self.assertIn("gl.BlitFramebuffer(0,h,w,0,160,120,160+w,120+h",copy)
+        self.assertIn("gl.BlitFramebuffer(0,h,w,0,x,y,x+w,y+h",copy)
         self.assertIn("gl.Finish()",copy)
         self.assertNotIn("map_texture(",copy)
         self.assertIn("gl.BindFramebuffer(ffi::FRAMEBUFFER,draw as u32)",copy)
@@ -209,6 +209,38 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertNotIn("renderer.cleanup_texture_cache()",loop[retained:restore])
         self.assertIn("renderer.cleanup_texture_cache()",loop[clear:])
 
+    def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
+                       "for (&slot,image) in retained.iter()",
+                       "verify_retained_gpu_scene(&mut renderer,&bound,index)",
+                       "retained GPU scene frame {index} pixel ({x},{y}) mismatch"):
+            self.assertIn(marker,gbm)
+        snapshot=gbm.split("fn retain_direct_window(",1)[1].split("fn qemu_gpu_scene_stream(",1)[0]
+        self.assertNotIn("copy_framebuffer",snapshot)
+        self.assertNotIn("map_texture",snapshot)
+        self.assertIn("frame.finish()?.wait()?",snapshot)
+        self.assertIn("blit_opaque_direct_window(renderer,source,(0,0))?",snapshot)
+        self.assertIn("if !opaque {",snapshot)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_OPAQUE_SNAPSHOT_BLIT=true",snapshot)
+        self.assertIn("blit_opaque_direct_window(&mut renderer,image,(160,120))?",gbm)
+        self.assertIn("extra_surfaces[(slot-2) as usize].clone()",CLIENT)
+        self.assertIn("RETAINED_GPU_PROBE_SLOTS",CLIENT)
+        self.assertIn("for slot in 2..=4",CLIENT)
+        self.assertIn("self.known_window_surfaces.id_of(&completed.key).is_some()",BRIDGE)
+        self.assertIn("self.known_window_surfaces.register(surface.clone())",BRIDGE)
+        self.assertIn("let (slot,buffer)=client_dmabuf.as_ref()",gbm)
+        self.assertIn("Color32F::new(0.0,0.0,0.0,0.0)",snapshot)
+        self.assertIn("let gpu_frames:u32=if multi_gpu {12}",CLIENT)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
+        self.assertIn("retained_gpu_probe_size(u64::from(gpu_index-1))",CLIENT)
+        self.assertIn("retained_gpu_geometry(*slot,size.w,size.h)",gbm)
+        self.assertIn("renderer.create_buffer(Fourcc::Abgr8888,(w,h).into())",snapshot)
+        self.assertIn("sample(renderer,x+w-3,y+h-3,expected)?",gbm)
+        self.assertIn("sample(renderer,x+old_w-2,y+h.min(old_h)/2,[27,33,58])?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index",GUEST)
+
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
@@ -248,9 +280,9 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_two_different_gpu_dmabufs_present_before_ten_shm_frames(self):
         self.assertIn("for gpu_index in 1..=gpu_frames",CLIENT)
         self.assertIn("!state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier))",CLIENT)
-        self.assertIn("let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
-        self.assertIn("W as u32,H as u32,frame_format,&[Modifier::Linear]",CLIENT)
-        self.assertIn("W as i32,H as i32,frame_format as u32",CLIENT)
+        self.assertIn("let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
+        self.assertIn("gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear]",CLIENT)
+        self.assertIn("gpu_w,gpu_h,frame_format as u32",CLIENT)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",CLIENT)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("let mut image=allocator.create_buffer(",CLIENT)
