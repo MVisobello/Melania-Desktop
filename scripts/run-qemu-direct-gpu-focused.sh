@@ -4,6 +4,17 @@
 set -euo pipefail
 [[ "${MELANIA_QEMU_NATIVE_VM:-}" == YES_DISPOSABLE_QEMU ]] ||
   { echo 'Explicit disposable QEMU opt-in required' >&2; exit 78; }
+case "${MELANIA_QEMU_FOCUSED_MODE:-direct}" in
+  direct)
+    guest_arg=--direct-gpu-only
+    proof=MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true
+    focused=MELANIA_QEMU_FOCUSED_DIRECT_GPU_PASS=true ;;
+  retained)
+    guest_arg=--retained-gpu-only
+    proof=MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true
+    focused=MELANIA_QEMU_FOCUSED_RETAINED_GPU_PASS=true ;;
+  *) echo 'Unknown focused GPU mode' >&2; exit 78 ;;
+esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 native="$root/target/debug/melania-native"
 client="$root/target/debug/qemu-continuous-client"
@@ -49,7 +60,7 @@ write_files:
     encoding: b64
     content: $encoded
 runcmd:
-  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; MELANIA_QEMU_DIRECT_GDB=YES_QEMU_VM bash /usr/local/sbin/melania-qemu-native-guest.sh --direct-gpu-only > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
+  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; MELANIA_QEMU_DIRECT_GDB=YES_QEMU_VM bash /usr/local/sbin/melania-qemu-native-guest.sh $guest_arg > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
 EOF
 cloud-localds seed.iso user-data meta-data
 serial="$report/serial.log"
@@ -71,7 +82,7 @@ set -e
 cat "$serial"
 [[ "$status" == 0 ]] &&
   grep -qx 'MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial" &&
-  grep -qx 'MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true' "$serial" &&
-  grep -qx 'MELANIA_QEMU_FOCUSED_DIRECT_GPU_PASS=true' "$serial" ||
+  grep -Fqx "$proof" "$serial" &&
+  grep -Fqx "$focused" "$serial" ||
     { echo 'Focused real GPU diagnostic failed' >&2; exit 1; }
 echo 'MELANIA_QEMU_FOCUSED_DIRECT_GPU_RESULT=PASS'
