@@ -23,6 +23,10 @@ const IMAGE_BYTES: usize = 1280 * 800 * 4;
 const HEADER_BYTES: usize = 4 + 8 + 8 + 8 + 4;
 const ACK_BYTES: usize = 4 + 8 + 8 + 8 + 1;
 
+/// The actual imported client DMA-BUF stays owned until the KMS worker
+/// finishes sampling it. Only its matching ticket may unlock a direct job.
+pub type DirectGpuFrame = (PlannedSceneFrame, smithay::backend::allocator::dmabuf::Dmabuf);
+
 #[derive(Debug)]
 pub struct ContinuousKmsJob {
     pub planned: PlannedSceneFrame,
@@ -94,8 +98,31 @@ fn transfer(stream: &mut UnixStream, job: &ContinuousKmsJob) -> Result<(), Strin
     verified_ack(&ack, job.planned)
 }
 
+// Distinct wire marker: the legacy CPU receiver cannot misinterpret this
+// as a zero-sized image. The DMA-BUF itself travels only in-process, via a
+// separate bounded typed channel, never as serialized pixel data.
+fn transfer_direct(stream:&mut UnixStream, job:&ContinuousKmsJob)->Result<(),String> {
+    if !job.pixels.is_empty() {return Err("direct GPU job must have no CPU pixels".into());}
+    let mut header=frame_header(job.planned);
+    header[..4].copy_from_slice(b"MLG1");
+    header[28..32].copy_from_slice(&0u32.to_le_bytes());
+    stream.write_all(&header).map_err(|e|e.to_string())?;
+    stream.flush().map_err(|e|e.to_string())?;
+    let mut ack=[0u8;ACK_BYTES];
+    stream.read_exact(&mut ack).map_err(|e|e.to_string())?;
+    verified_ack(&ack,job.planned)
+}
+
 impl ContinuousKmsWorker {
-    pub fn spawn(mut stream: UnixStream) -> std::io::Result<Self> {
+    pub fn spawn(stream: UnixStream) -> std::io::Result<Self> {
+        Self::spawn_mode(stream,false)
+    }
+
+    pub fn spawn_direct(stream:UnixStream)->std::io::Result<Self> {
+        Self::spawn_mode(stream,true)
+    }
+
+    fn spawn_mode(mut stream:UnixStream,direct:bool)->std::io::Result<Self> {
         // If duplicating the FD fails, do NOT start a worker that cannot be
         // interrupted safely during libseat/VT cleanup.
         let shutdown = stream.try_clone()?;
@@ -105,7 +132,11 @@ impl ContinuousKmsWorker {
         let worker_poisoned = Arc::clone(&poisoned);
         let worker = thread::spawn(move || {
             while let Ok(job) = jobs.recv() {
-                let status = transfer(&mut stream, &job);
+                let status = if direct && job.pixels.is_empty() {
+                    transfer_direct(&mut stream,&job)
+                } else {
+                    transfer(&mut stream,&job)
+                };
                 let failed = status.is_err();
                 // transfer only borrowed the pixels; move the SAME allocation
                 // back to the compositor. No 1280x800 staging copy or second
@@ -210,6 +241,28 @@ mod tests {
             },
             generation: u64::from_le_bytes(header[20..28].try_into().unwrap()),
         }
+    }
+
+    #[test]
+    fn direct_gpu_transport_sends_only_ticket_and_requires_matching_ack() {
+        let (client,mut peer)=UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let worker=ContinuousKmsWorker::spawn_direct(client).unwrap();
+        let frame=plan(7,1,3);
+        worker.submit(ContinuousKmsJob{planned:frame,pixels:Vec::new()}).unwrap();
+        let mut header=[0u8;HEADER_BYTES];
+        peer.read_exact(&mut header).unwrap();
+        assert_eq!(&header[..4],b"MLG1");
+        assert_eq!(&header[28..32],&0u32.to_le_bytes());
+        assert_eq!(&header[4..28],&frame_header(frame)[4..28]);
+        peer.write_all(&ack(frame,0)).unwrap();
+        let result=result_for(&worker);
+        assert!(result.status.is_ok());
+        assert!(result.pixels.is_empty());
+        worker.submit(ContinuousKmsJob{planned:plan(7,2,4),pixels:Vec::new()}).unwrap();
+        peer.read_exact(&mut header).unwrap();
+        peer.write_all(&ack(frame,0)).unwrap();
+        assert!(result_for(&worker).status.is_err());
     }
 
     #[test]
