@@ -307,6 +307,10 @@ if ! grep -Eq '^MELANIA_NATIVE_GBM_OUTPUT_SIZED_SYNCHRONIZED=[0-9]+x[0-9]+x2$' "
   cat "$gpu_output_log"
   fatal 'native_output_sized_GBM_two_frames_not_verified'
 fi
+grep -qx 'MELANIA_NATIVE_GBM_OUTPUT_EPOCH_REVALIDATED=true' "$gpu_output_log" ||
+  fatal 'native_output_sized_GBM_scanout_epoch_not_revalidated'
+grep -Eq '^MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED=[1-8]$' "$gpu_output_log" ||
+  fatal 'native_output_sized_GBM_complete_route_set_not_verified'
 grep -qx 'MELANIA_NATIVE_STAGE2_LIBSEAT_DRM_CLOSED=true' "$gpu_output_log" ||
   fatal 'native_output_sized_GBM_did_not_retire_libseat_device'
 rm -f "$gpu_output_log"

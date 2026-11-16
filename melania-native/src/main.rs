@@ -652,10 +652,10 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                 // a display. Mirrors/shared CRTCs fail closed until explicit
                 // per-output KMS ownership is implemented.
                 let active_output_plan=match
-                    melania_native::native_output_topology::inspect_stable_active_outputs(
+                    melania_native::native_output_topology::inspect_stable_active_outputs_with_timings(
                         device.device_fd()
                     ) {
-                    Ok(topology)=>{
+                    Ok((topology,timings))=>{
                         println!("MELANIA_NATIVE_ACTIVE_DRM_ROUTES={} (READ_ONLY)",
                                  topology.active.len());
                         for route in &topology.active {
@@ -664,7 +664,7 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                                      route.width,route.height);
                         }
                         match melania_native::native_output_probe_plan::plan_active_output_probes(&topology) {
-                            Ok(probes)=>Some(probes),
+                            Ok(probes)=>Some((topology,timings,probes)),
                             Err(error)=>{
                                 eprintln!("MELANIA_NATIVE_ACTIVE_DRM_PROBE_PLAN_REFUSED: {error}");
                                 None
@@ -781,7 +781,7 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                         // Render and synchronize two real GBM/GLES frames for
                         // every connector's active kernel mode. A partial
                         // success cannot claim full physical GPU coverage.
-                        let plan=active_output_plan.as_ref()
+                        let (before_routes,before_timings,plan)=active_output_plan.as_ref()
                             .expect("output-sized DRM route plan validated above");
                         let all:Result<(),String>=plan.iter().try_for_each(|probe|{
                             melania_native::renderer::smoke_render_gbm_output_buffers(
@@ -793,11 +793,23 @@ fn experimental_drm(render_offscreen: bool, output_sized: bool) -> Result<(),Box
                                      probe.crtc);
                             Ok(())
                         });
-                        if all.is_ok() {
+                        // Re-read the actual kernel routes and complete CRTC mode
+                        // after every GPU fence has completed. A hotplug or
+                        // modeset during allocation must invalidate the aggregate
+                        // result, even if all old output buffers rendered.
+                        all.and_then(|()|{
+                            let (after_routes,after_timings)=
+                                melania_native::native_output_topology::inspect_stable_active_outputs_with_timings(
+                                    device.device_fd()
+                                )?;
+                            melania_native::native_output_topology::verify_unchanged_scanout_epoch(
+                                before_routes,before_timings,&after_routes,&after_timings
+                            )?;
+                            println!("MELANIA_NATIVE_GBM_OUTPUT_EPOCH_REVALIDATED=true");
                             println!("MELANIA_NATIVE_GBM_ALL_ACTIVE_OUTPUTS_SYNCHRONIZED={}",
                                      plan.len());
-                        }
-                        all
+                            Ok(())
+                        })
                     } else {
                         melania_native::renderer::smoke_render_gbm_offscreen(
                             device.device_fd().clone()
