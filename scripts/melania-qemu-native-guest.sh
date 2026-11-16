@@ -3153,6 +3153,16 @@ for index in $(seq 1 12); do
   grep -Fqx "MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index" "$retained_gpu_client_client_log" ||
     fatal "retained_gpu_client_missing_real_client_release_or_callback_$index"
 done
+# All four surfaces replace their real GPU allocation twice. Verify
+# resized extents and the erased area after shrinking, not only callbacks.
+for index in $(seq 5 12); do
+  grep -q "^MELANIA_NATIVE_RETAINED_GPU_RESIZE_VERIFIED=$index " "$retained_gpu_client_server_log" ||
+    fatal "retained_gpu_client_missing_real_resize_$index"
+done
+for index in 6 8 11 12; do
+  grep -Fqx "MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index" "$retained_gpu_client_server_log" ||
+    fatal "retained_gpu_client_stale_pixels_after_shrink_$index"
+done
 grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=12' "$retained_gpu_client_server_log" ||
   fatal 'retained_gpu_client_in_process_KMS_worker_not_joined'
 if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
