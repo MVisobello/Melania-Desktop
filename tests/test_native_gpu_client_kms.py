@@ -163,7 +163,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
                        "for (&slot,image) in retained.iter()",
                        "verify_retained_gpu_scene(&mut renderer,&bound,index)",
-                       "retained GPU scene slot {slot} frame {index} mismatch"):
+                       "retained GPU scene frame {index} pixel ({x},{y}) mismatch"):
             self.assertIn(marker,gbm)
         snapshot=gbm.split("fn retain_direct_window(",1)[1].split("fn qemu_gpu_scene_stream(",1)[0]
         self.assertNotIn("copy_framebuffer",snapshot)
@@ -179,6 +179,12 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("let gpu_frames:u32=if multi_gpu {12}",CLIENT)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows",GUEST)
         self.assertIn("MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
+        self.assertIn("retained_gpu_probe_size(u64::from(gpu_index-1))",CLIENT)
+        self.assertIn("retained_gpu_geometry(*slot,size.w,size.h)",gbm)
+        self.assertIn("renderer.create_buffer(Fourcc::Abgr8888,(w,h).into())",snapshot)
+        self.assertIn("sample(renderer,x+w-3,y+h-3,expected)?",gbm)
+        self.assertIn("sample(renderer,x+old_w-2,y+h.min(old_h)/2,[27,33,58])?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index",GUEST)
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
@@ -220,8 +226,8 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("for gpu_index in 1..=gpu_frames",CLIENT)
         self.assertIn("!state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier))",CLIENT)
         self.assertIn("let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
-        self.assertIn("W as u32,H as u32,frame_format,&[Modifier::Linear]",CLIENT)
-        self.assertIn("W as i32,H as i32,frame_format as u32",CLIENT)
+        self.assertIn("gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear]",CLIENT)
+        self.assertIn("gpu_w,gpu_h,frame_format as u32",CLIENT)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",CLIENT)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("let mut image=allocator.create_buffer(",CLIENT)
