@@ -462,7 +462,19 @@ fn qemu_gpu_scene_stream(
     let handles=[*fb_a.as_ref(),*fb_b.as_ref()];
     let display=unsafe {EGLDisplay::new(gbm)}?;
     let context=EGLContext::new(&display)?;
-    let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    let mut renderer=if direct_mode {
+        // The disposable VirtIO EGL path crashed during frame 2, while
+        // single-frame pixel/CRTC verification passed. Isolate driver fence
+        // export and delayed EGL image destruction from the experiment.
+        // Smithay's finish falls back to actual glFinish without ExportFence;
+        // this is still GPU rendering, never a synthetic completion.
+        use smithay::backend::renderer::gles::Capability;
+        let mut caps=unsafe {GlesRenderer::supported_capabilities(&context)}?;
+        caps.retain(|cap| *cap!=Capability::ExportFence);
+        let renderer=unsafe {GlesRenderer::with_capabilities(context,caps)}?;
+        println!("MELANIA_NATIVE_DIRECT_GPU_FINISH_MODE=GL_FINISH");
+        renderer
+    } else {unsafe {GlesRenderer::new(context)}?};
     // The XRGB8888 wl_shm scene has no meaningful alpha channel.
     // Never interpret padding bytes as transparency on the target.
     if !renderer.mem_formats().any(|fmt|fmt==Fourcc::Xrgb8888) {
@@ -478,6 +490,15 @@ fn qemu_gpu_scene_stream(
     println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",
              topology.active.len());
     let mut frames_seen=0u64;
+    // The finite direct proof owns at most twelve source allocations.
+    // Keep imported image/FD handles alive across the next EGL draw instead
+    // of allowing the client's destroy request to retire the driver's EGL
+    // resources during the following frame. Never sample a released source.
+    // Drop after kernel restoration; not a policy for unbounded sessions.
+    let mut direct_import_lifetime=Vec::<(
+        smithay::backend::allocator::dmabuf::Dmabuf,
+        smithay::backend::renderer::gles::GlesTexture,
+    )>::new();
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut prior_identity:Option<crate::native_frame_order::FrameIdentity>=None;
         // Retain two fixed-size CPU staging buffers for the entire GPU
@@ -573,6 +594,7 @@ fn qemu_gpu_scene_stream(
             // Import the genuine client DMA-BUF directly into the scanout
             // GPU context, revalidating its producer fence at sampling.
             // SHM-only frames retain the historical memory upload.
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} import",index+1);}
             let texture=if let Some(buffer)=client_dmabuf.as_ref() {
                 use smithay::backend::allocator::Buffer;
                 if buffer.size().w!=360 || buffer.size().h!=224 ||
@@ -585,11 +607,13 @@ fn qemu_gpu_scene_stream(
                     &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
                 )?
             };
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} bind",index+1);}
             let target=if index%2==0 {&mut a} else {&mut b};
             let mut bound=renderer.bind(target)?;
             let mut frame=renderer.render(&mut bound,
                 (W as i32,H as i32).into(),Transform::Normal)?;
             let output_rect=Rectangle::from_size((W as i32,H as i32).into());
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} draw",index+1);}
             if direct_frame {
                 // Entire single-window output (background, decorations and
                 // client pixels) is rendered into the actual GBM scanout BO.
@@ -617,15 +641,22 @@ fn qemu_gpu_scene_stream(
                     Transform::Normal,1.0,None,&[],
                 )?;
             }
-            frame.finish()?.wait()?;
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} finish",index+1);}
+            let completion=frame.finish()?;
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} wait",index+1);}
+            completion.wait()?;
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} verify",index+1);}
             if direct_frame {
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
             drop(bound);
             if direct_frame {
-                drop(texture);
-                drop(client_dmabuf);
-                renderer.cleanup_texture_cache()?;
+                let buffer=client_dmabuf.ok_or("direct client import disappeared")?;
+                if direct_import_lifetime.len()>=12 {
+                    return Err("finite direct GPU import lifetime budget exceeded".into());
+                }
+                direct_import_lifetime.push((buffer,texture));
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} retained",index+1);
             }
 
             // A previously confirmed scanout may have been taken over
@@ -738,6 +769,14 @@ fn qemu_gpu_scene_stream(
     let restored=rollback.restore();
     attempt?;
     restored?;
+    if direct_mode {
+        // All draws returned actual GPU completion and the kernel has
+        // restored its original CRTC. The old client images are never used
+        // for future rendering; retire them now under the owning context.
+        direct_import_lifetime.clear();
+        renderer.cleanup_texture_cache()?;
+        println!("MELANIA_NATIVE_DIRECT_GPU_RETIRED_AFTER_RESTORE=true");
+    }
     println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");
     if persistent {
         println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES={frames_seen}");
