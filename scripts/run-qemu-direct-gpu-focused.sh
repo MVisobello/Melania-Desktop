@@ -80,9 +80,17 @@ timeout --signal=TERM --kill-after=10s 650s \
 status=$?
 set -e
 cat "$serial"
-[[ "$status" == 0 ]] &&
-  grep -qx 'MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$serial" &&
-  grep -Fqx "$proof" "$serial" &&
-  grep -Fqx "$focused" "$serial" ||
-    { echo 'Focused real GPU diagnostic failed' >&2; exit 1; }
+# Preserve raw serial evidence; ttyS0 emits CRLF.
+normalized="$report/serial.normalized.log"
+sed 's/\r$//' "$serial" > "$normalized"
+if [[ "$status" != 0 ]]; then
+  echo "Focused real GPU diagnostic: QEMU exit $status" >&2
+  exit 1
+fi
+for marker in 'MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$proof" "$focused"; do
+  if ! grep -qxF "$marker" "$normalized"; then
+    echo "Focused real GPU diagnostic: missing exact marker $marker" >&2
+    exit 1
+  fi
+done
 echo 'MELANIA_QEMU_FOCUSED_DIRECT_GPU_RESULT=PASS'
