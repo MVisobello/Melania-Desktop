@@ -396,6 +396,59 @@ fn verify_direct_client_gpu_pixels(
     Ok(())
 }
 
+// Diagnostic sampling after GPU composition, never on the render data path.
+// Both actual windows must retain the expected color from their latest commit.
+// Alternate colors across updates make stale snapshots detectable.
+fn verify_retained_gpu_scene(
+    renderer:&mut GlesRenderer,
+    bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
+    index:u64,
+)->Result<(),Box<dyn Error>> {
+    use smithay::backend::renderer::ExportMem;
+    for slot in 0..=usize::from(index>0) {
+        let last=if index%2==slot as u64 {index} else {index-1};
+        let (x,y)=if slot==0 {(340,232)} else {(830,302)};
+        let mapping=renderer.copy_framebuffer(bound,
+            Rectangle::from_loc_and_size((x,y),(1,1)),Fourcc::Abgr8888)?;
+        let rgba=renderer.map_texture(&mapping)?;
+        let expected=if slot==0 {
+            [84+(last/2*10) as u8,46,186]
+        } else {
+            [31,163-(last/2*10) as u8,69]
+        };
+        if rgba.len()<3 || !rgba[..3].iter().zip(expected).all(|(actual,want)|
+            actual.abs_diff(want)<=4) {
+            return Err(format!("retained GPU scene slot {slot} frame {index} mismatch: {rgba:?} expected {expected:?}").into());
+        }
+    }
+    Ok(())
+}
+
+// GPU-owned immutable window snapshot. The client BO may be released
+// after KMS ACK, but its pixels must remain available for later frames
+// of other windows. Never map or download this retained texture.
+fn retain_direct_window(
+    renderer:&mut GlesRenderer,
+    source:&smithay::backend::renderer::gles::GlesTexture,
+    opaque:bool,
+)->Result<smithay::backend::renderer::gles::GlesTexture,Box<dyn Error>> {
+    use smithay::backend::renderer::Offscreen;
+    use smithay::backend::renderer::gles::GlesTexture;
+    let mut image:GlesTexture=renderer.create_buffer(Fourcc::Abgr8888,(360,224).into())?;
+    {
+        let mut target=renderer.bind(&mut image)?;
+        let mut frame=renderer.render(&mut target,(360,224).into(),Transform::Normal)?;
+        let rect=Rectangle::from_size((360,224).into());
+        let src=Rectangle::from_size((360.0,224.0).into());
+        frame.clear(Color32F::new(27.0/255.0,33.0/255.0,58.0/255.0,1.0),&[rect])?;
+        let opaque_regions=if opaque {std::slice::from_ref(&rect)} else {&[]};
+        frame.render_texture_from_to(source,src,rect,&[rect],opaque_regions,
+            Transform::Flipped180,1.0,None,&[])?;
+        frame.finish()?.wait()?;
+    }
+    Ok(image)
+}
+
 fn qemu_gpu_scene_stream(
     mut stream:UnixStream, card_fd:OwnedFd,
     direct:Option<std::sync::mpsc::Receiver<crate::continuous_kms_stream::DirectGpuFrame>>,
@@ -403,6 +456,9 @@ fn qemu_gpu_scene_stream(
     const W:usize=1280;
     const H:usize=800;
     let direct_mode=direct.is_some();
+    let multi_gpu=std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if multi_gpu && !direct_mode {return Err("retained GPU mode requires direct channel".into());}
     let total=if direct_mode {12u64} else {24u64};
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
@@ -487,6 +543,9 @@ fn qemu_gpu_scene_stream(
         let mut pixels=vec![0u8;W*H*4];
         let mut prior_pixels=vec![0u8;W*H*4];
         let mut have_prior_pixels=false;
+        // Two stable window slots; each owns its GPU copy independently
+        // of the last client commit or the currently displayed scanout BO.
+        let mut retained:[Option<smithay::backend::renderer::gles::GlesTexture>;2]=[None,None];
         loop {
             if !persistent && frames_seen>=total {break;}
             let index=frames_seen;
@@ -525,7 +584,7 @@ fn qemu_gpu_scene_stream(
                 stream.read_exact(&mut header)?;
                 None
             };
-            let direct_frame=direct_mode && index<2;
+            let direct_frame=direct_mode && (index<2 || multi_gpu);
             let expected_marker=if direct_frame {b"MLG1"} else {b"MLF1"};
             if &header[..4]!=expected_marker {
                 return Err("GPU Wayland frame header has wrong protocol version".into());
@@ -543,11 +602,14 @@ fn qemu_gpu_scene_stream(
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
             let client_dmabuf=if direct_frame {
-                let (planned,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
+                let (planned,slot,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
                     .recv_timeout(Duration::from_secs(2))?;
                 if planned.ticket.epoch!=epoch || planned.ticket.sequence!=sequence ||
                    planned.generation!=generation {
                     return Err("direct GPU buffer ticket mismatch".into());
+                }
+                if slot!=(if multi_gpu {1+index%2} else {1}) {
+                    return Err("unexpected direct GPU surface slot".into());
                 }
                 Some(buffer)
             } else {
@@ -576,7 +638,7 @@ fn qemu_gpu_scene_stream(
             let texture=if let Some(buffer)=client_dmabuf.as_ref() {
                 use smithay::backend::allocator::Buffer;
                 if buffer.size().w!=360 || buffer.size().h!=224 ||
-                   buffer.format().code!=(if index==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888}) {
+                   buffer.format().code!=(if index%2==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888}) {
                     return Err("direct GPU client size/format mismatch".into());
                 }
                 crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)?
@@ -585,12 +647,34 @@ fn qemu_gpu_scene_stream(
                     &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
                 )?
             };
+            if multi_gpu {
+                let slot=(index%2) as usize;
+                // Replace only the committing surface. The other GPU copy
+                // remains owned after its source wl_buffer was released.
+                retained[slot]=Some(retain_direct_window(&mut renderer,&texture,slot==1)?);
+            }
             let target=if index%2==0 {&mut a} else {&mut b};
             let mut bound=renderer.bind(target)?;
             let mut frame=renderer.render(&mut bound,
                 (W as i32,H as i32).into(),Transform::Normal)?;
             let output_rect=Rectangle::from_size((W as i32,H as i32).into());
-            if direct_frame {
+            if multi_gpu {
+                let bg=Color32F::new(27.0/255.0,33.0/255.0,58.0/255.0,1.0);
+                frame.clear(bg,&[output_rect])?;
+                // Fixed slots follow the native retained scene's positions;
+                // no assumption that both commits arrive simultaneously.
+                for (slot,entry) in retained.iter().enumerate() {
+                    let Some(image)=entry.as_ref() else {continue;};
+                    let (x,y)=if slot==0 {(160,120)} else {(650,190)};
+                    let border=Rectangle::from_loc_and_size((x-6,y-6),(372,236));
+                    let dest=Rectangle::from_loc_and_size((x,y),(360,224));
+                    let local=Rectangle::from_size((360,224).into());
+                    let src=Rectangle::from_size((360.0,224.0).into());
+                    frame.clear(Color32F::new(65.0/255.0,171.0/255.0,216.0/255.0,1.0),&[border])?;
+                    frame.render_texture_from_to(image,src,dest,&[local],&[local],
+                        Transform::Normal,1.0,None,&[])?;
+                }
+            } else if direct_frame {
                 // Entire single-window output (background, decorations and
                 // client pixels) is rendered into the actual GBM scanout BO.
                 let border=Rectangle::from_loc_and_size((154,114),(372,236));
@@ -618,7 +702,9 @@ fn qemu_gpu_scene_stream(
                 )?;
             }
             frame.finish()?.wait()?;
-            if direct_frame {
+            if multi_gpu {
+                verify_retained_gpu_scene(&mut renderer,&bound,index)?;
+            } else if direct_frame {
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
             drop(bound);
@@ -724,6 +810,10 @@ fn qemu_gpu_scene_stream(
             println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
             if direct_frame {
                 println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK={}",index+1);
+                if multi_gpu {
+                    println!("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK={} windows={}",
+                        index+1,retained.iter().filter(|image|image.is_some()).count());
+                }
             }
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("GPU Wayland compositor frame counter exhausted")?;
@@ -744,6 +834,9 @@ fn qemu_gpu_scene_stream(
         println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true");
     } else if direct_mode {
         println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_12_KMS_FRAMES_PASS=true");
+        if multi_gpu {
+            println!("MELANIA_NATIVE_RETAINED_GPU_TWO_WINDOW_12_FRAMES_PASS=true");
+        }
     } else {
         println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
     }
