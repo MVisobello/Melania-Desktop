@@ -102,11 +102,13 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_egl_readback_converts_bottom_up_rgba_with_owned_bytes(self):
         for marker in (
             "readback_qemu_client_bgra",
-            "renderer.copy_texture(texture,region,Fourcc::Abgr8888)",
+            "renderer.copy_framebuffer(&target,region,Fourcc::Abgr8888)",
             "renderer.map_texture(&mapping)",
             "mapping.flipped()",
             "convert_rgba_readback_to_bgra",
-            "let alpha=if opaque {255} else {src[3]};",
+            "if opaque {",
+            "dst.copy_from_slice(&[src[2],src[1],src[0],0]);",
+            "let alpha=src[3];",
             "fn opaque_xrgb_xbgr_ignore_undefined_readback_alpha()",
             "let mut pixels=vec![0;len]",
             "over_opaque_background(src[2],QEMU_SCENE_BGRA[0],alpha)",
@@ -116,6 +118,38 @@ class RealClientDmabufToKms(unittest.TestCase):
             "fn readback_swizzles_rgba_into_opaque_bgra_and_flips_bottom_up()",
         ):
             self.assertIn(marker,GPU)
+
+    def test_live_gpu_composition_precedes_opaque_readback(self):
+        compose=GPU.split("fn compose_client_texture_to_target(",1)[1].split(
+            "pub fn readback_qemu_client_bgra(",1)[0]
+        readback=GPU.split("pub fn readback_qemu_client_bgra(",1)[1].split(
+            "const QEMU_SCENE_BGRA",1)[0]
+        self.assertIn("frame.clear(Color32F::new(",compose)
+        self.assertIn("frame.render_texture_from_to(",compose)
+        self.assertIn("let opaque_regions=if opaque",compose)
+        self.assertLess(compose.index("frame.clear("),compose.index("frame.render_texture_from_to("))
+        self.assertLess(compose.index("frame.render_texture_from_to("),compose.index("frame.finish()"))
+        self.assertIn(".wait()",compose)
+        self.assertIn("renderer.create_buffer(",readback)
+        self.assertLess(readback.index("compose_client_texture_to_target("),
+                        readback.index("renderer.copy_framebuffer(&target,"))
+        self.assertIn("flipped,Fourcc::Xrgb8888)",readback)
+        self.assertNotIn("renderer.copy_texture(texture,",readback)
+        self.assertIn("MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224",GUEST)
+
+    def test_composited_framebuffer_lifetime_is_bounded_per_frame(self):
+        readback=GPU.split("pub fn readback_qemu_client_bgra(",1)[1].split(
+            "const QEMU_SCENE_BGRA",1)[0]
+        self.assertIn("let mut composed:GlesRenderbuffer=renderer.create_buffer(",readback)
+        self.assertEqual(readback.count("renderer.bind(&mut composed)"),1)
+        self.assertNotIn("renderer.copy_texture(",readback)
+        self.assertEqual(readback.count("renderer.cleanup_texture_cache()"),2)
+        self.assertLess(readback.index("renderer.cleanup_texture_cache()"),
+                        readback.index("renderer.create_buffer("))
+        self.assertLess(readback.index("convert_rgba_readback_to_bgra(mapped"),
+                        readback.rindex("renderer.cleanup_texture_cache()"))
+        self.assertIn('MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete',GUEST)
+        self.assertIn("gpu_client_missing_two_completed_GLES_compositions",GUEST)
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)

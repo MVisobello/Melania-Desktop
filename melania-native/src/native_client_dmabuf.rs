@@ -321,17 +321,59 @@ pub fn import_client_dmabuf(
         .map_err(|error|format!("client DMA-BUF GLES texture import failed: {error}"))
 }
 
-/// QEMU-only transitional compositor path: import happened on the
-/// libseat-owned EGL renderer, then download the GLES texture into one
-/// *owned* bounded BGRA image for the existing verified Rust DRM worker.
-/// This is a GPU -> CPU readback, NOT a zero-copy GPU composition engine.
-/// The snapshot may be submitted to KMS only via the existing frame ticket
-/// and DRM FB_ID/vblank ACK; no wl_buffer.release occurs here.
+/// Composite the actual imported Wayland texture with premultiplied alpha
+/// using GLES, into a caller-owned GPU render target. This operation can
+/// also target a GBM scanout buffer once the KMS worker shares GPU resources.
+/// It does not submit DRM, acknowledge presentation, or release wl_buffer.
+fn compose_client_texture_to_target(
+    renderer:&mut GlesRenderer,
+    target:&mut smithay::backend::renderer::gles::GlesTarget<'_>,
+    texture:&GlesTexture,source_format:Fourcc,
+)->Result<(),String> {
+    use smithay::{
+        backend::renderer::{Color32F,Frame,Renderer,Texture},
+        utils::{Rectangle,Transform},
+    };
+    let width=texture.width() as i32;
+    let height=texture.height() as i32;
+    if width!=360 || height!=224 {
+        return Err("QEMU GPU client composition must match verified 360x224 scene".into());
+    }
+    let opaque=match source_format {
+        Fourcc::Xrgb8888 | Fourcc::Xbgr8888 => true,
+        Fourcc::Argb8888 | Fourcc::Abgr8888 => false,
+        _ => return Err("GPU composition requires supported packed RGB".into()),
+    };
+    let dest=Rectangle::from_size((width,height).into());
+    let src=Rectangle::from_size((f64::from(width),f64::from(height)).into());
+    let mut frame=renderer.render(target,(width,height).into(),Transform::Normal)
+        .map_err(|error|format!("client GPU composition frame failed: {error}"))?;
+    frame.clear(Color32F::new(
+        f32::from(QEMU_SCENE_BGRA[2])/255.0,
+        f32::from(QEMU_SCENE_BGRA[1])/255.0,
+        f32::from(QEMU_SCENE_BGRA[0])/255.0,1.0,
+    ),&[dest]).map_err(|error|format!("client GPU background clear failed: {error}"))?;
+    // XRGB/XBGR have no alpha; the actual format, not arbitrary bytes
+    // returned by a readback, selects the fully opaque render region.
+    let opaque_regions=if opaque {std::slice::from_ref(&dest)} else {&[]};
+    frame.render_texture_from_to(
+        texture,src,dest,&[dest],opaque_regions,Transform::Normal,1.0,None,&[],
+    ).map_err(|error|format!("client GPU texture composition failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish");
+    frame.finish().map_err(|error|format!("client GPU composition finish failed: {error}"))?
+        .wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
+    Ok(())
+}
+
+/// Transitional QEMU path: alpha composition occurs on an actual GLES
+/// framebuffer, then the opaque completed image is downloaded for the
+/// existing CPU scene/KMS worker. This is NOT zero-copy or native scanout.
+/// No fallback to CPU blending on GPU failure, and no wl_buffer release.
 pub fn readback_qemu_client_bgra(
     renderer:&mut GlesRenderer,texture:&GlesTexture,source_format:Fourcc,
 )->Result<Vec<u8>,String> {
     use smithay::{
-        backend::renderer::{ExportMem,Texture,TextureMapping},
+        backend::renderer::{gles::GlesRenderbuffer,Bind,ExportMem,Offscreen,Renderer,Texture,TextureMapping},
         utils::Rectangle,
     };
     let width=texture.width() as usize;
@@ -339,22 +381,47 @@ pub fn readback_qemu_client_bgra(
     if width!=360 || height!=224 {
         return Err("QEMU GPU client readback must match verified 360x224 scene".into());
     }
-    let region=Rectangle::from_size((width as i32,height as i32).into());
-    // GLES readback in ABGR8888 gives byte order RGBA (little endian).
-    // Convert to the CPU/KMS scene's opaque XRGB8888 / BGRA byte order.
-    let mapping=renderer.copy_texture(texture,region,Fourcc::Abgr8888)
-        .map_err(|error|format!("QEMU GPU client texture download failed: {error}"))?;
-    let flipped=mapping.flipped();
-    let mapped=renderer.map_texture(&mapping)
-        .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
-    convert_rgba_readback_to_bgra(mapped,width,height,flipped,source_format)
+    // The staging bridge never samples its output as a texture. Use a
+    // renderbuffer and read the exact same bound framebuffer, avoiding a
+    // second FBO attachment and its texture read/write sync bookkeeping.
+    // The previous QEMU run presented frame 1 but segfaulted at frame 2;
+    // keep explicit stage markers to localize any remaining driver fault.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_previous");
+    renderer.cleanup_texture_cache()
+        .map_err(|error|format!("client GPU previous resource cleanup failed: {error}"))?;
+    let pixels={
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=allocate");
+        let mut composed:GlesRenderbuffer=renderer.create_buffer(
+            Fourcc::Abgr8888,(width as i32,height as i32).into(),
+        ).map_err(|error|format!("client GPU composition allocation failed: {error}"))?;
+        let mut target=renderer.bind(&mut composed)
+            .map_err(|error|format!("client GPU composition target failed: {error}"))?;
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=compose");
+        compose_client_texture_to_target(renderer,&mut target,texture,source_format)?;
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224");
+        let region=Rectangle::from_size((width as i32,height as i32).into());
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=download");
+        let mapping=renderer.copy_framebuffer(&target,region,Fourcc::Abgr8888)
+            .map_err(|error|format!("QEMU composited GPU framebuffer download failed: {error}"))?;
+        let flipped=mapping.flipped();
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=map");
+        let mapped=renderer.map_texture(&mapping)
+            .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
+        // Target is opaque; packing never applies source alpha twice.
+        // Copy before dropping the PBO mapping, framebuffer and renderbuffer.
+        convert_rgba_readback_to_bgra(mapped,width,height,flipped,Fourcc::Xrgb8888)?
+    };
+    // Smithay queues destruction until its next cleanup call. Drain now,
+    // after the owned CPU copy, rather than inside the next client's draw.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_completed");
+    renderer.cleanup_texture_cache()
+        .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete");
+    Ok(pixels)
 }
 
-// The existing QEMU retained CPU scene is opaque XRGB over this BGRA
-// background. Its GPU client has real ARGB8888 alpha; dropping alpha would
-// wrongly turn translucent and fully transparent client texels into solid
-// foreground pixels. This is an explicitly bounded CPU composition step,
-// NOT direct GPU scanout or proof of production DMA-BUF fencing.
+// Shared background for the actual GPU composition and the reference
+// CPU source-over unit tests. The transitional KMS transport is opaque XRGB.
 const QEMU_SCENE_BGRA:[u8;3]=[58,33,27];
 
 fn over_opaque_background(premultiplied:u8,background:u8,alpha:u8)->u8 {
@@ -391,7 +458,11 @@ fn convert_rgba_readback_to_bgra(
             // otherwise partial alpha becomes an incorrectly solid color.
             // Preserve the B,G,R byte order and discard alpha only AFTER
             // the per-channel source-over operation.
-            let alpha=if opaque {255} else {src[3]};
+            if opaque {
+                dst.copy_from_slice(&[src[2],src[1],src[0],0]);
+                continue;
+            }
+            let alpha=src[3];
             dst.copy_from_slice(&[
                 over_opaque_background(src[2],QEMU_SCENE_BGRA[0],alpha),
                 over_opaque_background(src[1],QEMU_SCENE_BGRA[1],alpha),
