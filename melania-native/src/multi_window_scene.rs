@@ -45,6 +45,11 @@ impl MultiWindowScene {
     pub fn layout_generation(&self)->u64 { self.layout_generation }
     fn dirty(&mut self) { self.layout_generation=self.layout_generation.wrapping_add(1); }
 
+    /// A separate GPU presenter owns this frame; advance the real scene
+    /// ticket without allocating or fabricating a CPU window snapshot.
+    /// Only the isolated single-client direct-GPU bridge may use this.
+    pub fn note_external_gpu_frame(&mut self) { self.dirty(); }
+
     /// Keys are compositor-local, never client-provided filenames or paths.
     /// A first commit creates a slot; subsequent commits update that slot.
     pub fn upsert(&mut self, key: u64, pixels: Vec<u8>) -> Result<(), MultiSceneError> {
