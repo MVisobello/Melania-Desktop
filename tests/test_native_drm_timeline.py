@@ -51,3 +51,17 @@ class NativeKernelTimeline(unittest.TestCase):
         self.assertIn("BlockerState::Cancelled",gate)
         self.assertIn("guard.revoke()",TIMELINE)
         self.assertIn("MELANIA_NATIVE_DRM_ACQUIRE_BLOCKER_VERIFIED=true",TIMELINE)
+
+    def test_real_wayland_protocol_opt_in_and_release_after_kernel_ack(self):
+        bridge=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
+        self.assertIn("delegate_drm_syncobj!(BridgeState)",bridge)
+        self.assertIn("if !supports_syncobj_eventfd(&sync_device)",bridge)
+        self.assertIn("DrmSyncobjState::new::<BridgeState>(&handle,sync_device)",bridge)
+        self.assertIn("state.poll_explicit_acquires()?",bridge)
+        self.assertIn("current.release_point.take()",bridge)
+        ack=bridge.split("fn poll_continuous_kms",1)[1].split("fn begin_generation_proof",1)[0]
+        self.assertLess(ack.index("self.continuous_redraw.presented(planned)"),
+                        ack.index("point.signal()?"))
+        self.assertLess(ack.index("self.client_dmabuf_imports.retain("),
+                        ack.index("point.signal()?"))
+        self.assertIn("if !explicit_buffer {completed.resource.release();}",ack)

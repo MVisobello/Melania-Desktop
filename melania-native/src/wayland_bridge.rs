@@ -29,7 +29,7 @@ use smithay::{
         udev::{UdevBackend,UdevEvent},
     },
     delegate_compositor, delegate_seat, delegate_xdg_shell, delegate_layer_shell, delegate_shm, delegate_output,
-    delegate_dmabuf,
+    delegate_dmabuf, delegate_drm_syncobj,
     delegate_data_device, delegate_primary_selection,
     delegate_text_input_manager, delegate_input_method_manager,
     input::{keyboard::FilterResult, pointer::{AxisFrame, ButtonEvent, CursorImageStatus,
@@ -47,6 +47,7 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         dmabuf::{DmabufState,DmabufGlobal,DmabufHandler,ImportNotifier},
+        drm_syncobj::{DrmSyncobjState,DrmSyncobjHandler,DrmSyncobjCachedState,DrmSyncPoint,supports_syncobj_eventfd},
         compositor::{with_states,with_surface_tree_downward,TraversalAction,BufferAssignment,SurfaceAttributes,CompositorClientState,CompositorHandler,CompositorState},
         shm::{ShmState,ShmHandler,with_buffer_contents},
         selection::{SelectionHandler, data_device::{DataDeviceHandler,DataDeviceState,
@@ -78,6 +79,9 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+use melania_native::native_explicit_acquire::{WaylandAcquireGate,cancel_acquire_transaction};
+use smithay::wayland::compositor::{BlockerState,add_pre_commit_hook};
+use smithay::backend::renderer::sync::Fence;
 use melania_native::auto_tiling::{AutoTiling,TileAxis,TileDirection};
 use melania_native::tile_swap_shortcuts::{TileSwapKeyHandler,SwapKeyAction};
 use melania_native::auto_tiling_shortcuts::{AutoTileKeyHandler,AutoTileKeyAction};
@@ -164,6 +168,11 @@ struct BridgeState {
     // No linux-dmabuf global exists unless the isolated QEMU bridge has
     // independently acquired a real, active libseat-owned GBM/EGL renderer.
     dmabuf:DmabufState,
+    explicit_syncobj:Option<DrmSyncobjState>,
+    explicit_acquires:Vec<(Client,WaylandAcquireGate,Instant)>,
+    explicit_release:Option<(wl_buffer::WlBuffer,DrmSyncPoint)>,
+    explicit_sync_error:Option<String>,
+    explicit_release_count:u64,
     client_dmabuf_renderer:Option<GlesRenderer>,
     // Hold wl_buffer + imported texture together until client destruction
     // or *permanent* seat revocation; never leave EGL image FDs after close.
@@ -673,13 +682,24 @@ impl BridgeState {
                 self.client_dmabuf_imports.retain(|(known,_)|
                     known!=&completed.resource);
             }
+            // Real KMS ACK and GPU import retirement precede release.
+            let explicit_buffer=self.explicit_release.as_ref()
+                .is_some_and(|(resource,_)|resource==&completed.resource);
+            if explicit_buffer {
+                let (_,point)=self.explicit_release.take().expect("matching release receipt");
+                point.signal()?;
+                self.explicit_release_count+=1;
+                println!("MELANIA_NATIVE_WAYLAND_EXPLICIT_RELEASE_ACK={}",self.continuous_frame_count);
+            } else if is_gpu_client && self.explicit_syncobj.is_some() {
+                return Err("explicit GPU ACK has no matching release point".into());
+            }
             if completed.notify_frame && is_live {
                 let delivered=complete_presented_frame(
                     &completed.key,(self.continuous_frame_count as u32).saturating_mul(16)
                 );
                 self.frame_callback_count=self.frame_callback_count.saturating_add(delivered);
             }
-            completed.resource.release();
+            if !explicit_buffer {completed.resource.release();}
             if is_gpu_client {
                 println!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",
                          self.continuous_frame_count);
@@ -2253,6 +2273,13 @@ impl BridgeState {
 /// No old EGL import may outlive VT pause or GPU hotplug, even if a Wayland
 /// client never explicitly destroys its protocol buffer.
 fn revoke_client_dmabuf_gpu(state:&mut BridgeState) {
+    // Cancel transactions BEFORE timeline invalidation wakes eventfds.
+    for (_,gate,_) in state.explicit_acquires.drain(..) {gate.cancel();}
+    state.explicit_release.take();
+    if let Some(syncobj)=state.explicit_syncobj.take() {
+        let global=syncobj.into_global();
+        state.display_handle.remove_global::<BridgeState>(global);
+    }
     state.client_dmabuf_imports.clear();
     state.client_dmabuf_renderer.take();
 }
@@ -2297,10 +2324,87 @@ impl DmabufHandler for BridgeState {
         }
     }
 }
+impl DrmSyncobjHandler for BridgeState {
+    fn drm_syncobj_state(&mut self)->Option<&mut DrmSyncobjState> {
+        self.explicit_syncobj.as_mut()
+    }
+}
+impl BridgeState {
+    fn explicit_pre_commit(&mut self,surface:&WlSurface) {
+        if self.explicit_syncobj.is_none() {return;}
+        let (acquire,has_release,has_dmabuf)=with_states(surface,|states|{
+            let (acquire,has_release)={
+                let mut cached=states.cached_state.get::<DrmSyncobjCachedState>();
+                let pending=cached.pending();
+                (pending.acquire_point.clone(),pending.release_point.is_some())
+            };
+            let mut attrs=states.cached_state.get::<SurfaceAttributes>();
+            let dmabuf=matches!(attrs.pending().buffer.as_ref(),
+                Some(BufferAssignment::NewBuffer(buffer))
+                    if smithay::wayland::dmabuf::get_dmabuf(buffer).is_ok());
+            (acquire,has_release,dmabuf)
+        });
+        if acquire.is_none() && !has_release && !has_dmabuf {return;}
+        let installed=(||->Result<(),String>{
+            let point=acquire.ok_or("explicit GPU attach missing acquire point")?;
+            if !has_release || !has_dmabuf {
+                return Err("explicit sync requires both points and a real DMA-BUF".into());
+            }
+            // Isolated finite probe only: one pending GPU commit.
+            if !self.explicit_acquires.is_empty() || self.explicit_release.is_some() ||
+               self.continuous_inflight.is_some() {
+                return Err("explicit GPU transaction already outstanding".into());
+            }
+            let token=self.native_presentation_guard.ticket(self.lifecycle.seat_active())
+                .ok_or("explicit acquire on inactive seat")?;
+            let client=surface.client().ok_or("explicit acquire has no Wayland client")?;
+            let gate=WaylandAcquireGate::install(surface,point,token)?;
+            self.explicit_acquires.push((client,gate,Instant::now()));
+            println!("MELANIA_NATIVE_WAYLAND_EXPLICIT_ACQUIRE_QUEUED=true");
+            Ok(())
+        })();
+        if let Err(error)=installed {
+            cancel_acquire_transaction(surface);
+            self.explicit_sync_error=Some(error);
+        }
+    }
+
+    fn poll_explicit_acquires(&mut self)->Result<(),Box<dyn Error>> {
+        if let Some(error)=self.explicit_sync_error.take() {return Err(error.into());}
+        // Existing event loop has a bounded 12ms dispatch timeout.
+        // Observe zero-timeout FD polls, not blocking kernel waits.
+        let mut index=0;
+        while index<self.explicit_acquires.len() {
+            let (client,gate,started)=&self.explicit_acquires[index];
+            let status=gate.observe(&self.native_presentation_guard,self.lifecycle.seat_active());
+            if matches!(status,Ok(BlockerState::Pending)) && started.elapsed()<Duration::from_secs(8) {
+                index+=1;
+                continue;
+            }
+            if !matches!(status,Ok(BlockerState::Released)) {
+                gate.cancel();
+                return Err(format!("explicit acquire failed or timed out: {status:?}").into());
+            }
+            let client=client.clone();
+            self.explicit_acquires.remove(index);
+            println!("MELANIA_NATIVE_WAYLAND_EXPLICIT_ACQUIRE_VERIFIED=true");
+            let dh=self.display_handle.clone();
+            self.client_compositor_state(&client).blocker_cleared(self,&dh);
+        }
+        if let Some(error)=self.explicit_sync_error.take() {return Err(error.into());}
+        if self.explicit_release.is_some() && self.continuous_inflight.is_none() {
+            return Err("explicit GPU commit did not submit its real KMS receipt".into());
+        }
+        Ok(())
+    }
+}
 impl CompositorHandler for BridgeState {
     fn compositor_state(&mut self)->&mut CompositorState {&mut self.compositor}
     fn client_compositor_state<'a>(&self,client:&'a Client)->&'a CompositorClientState {
         &client.get_data::<BridgeClientState>().expect("registered client").compositor
+    }
+    fn new_surface(&mut self,surface:&WlSurface) {
+        add_pre_commit_hook::<BridgeState,_>(surface,|state,_,surface|state.explicit_pre_commit(surface));
     }
     fn commit(&mut self,surface:&WlSurface) {
         if self.layer_pixels_mode {
@@ -2451,6 +2555,25 @@ impl CompositorHandler for BridgeState {
                 // successful EGL DMA-BUF *creation* is not yet a kernel
                 // presentation: refuse it without a fake frame receipt.
                 let dma_buffer=smithay::wayland::dmabuf::get_dmabuf(&buffer).is_ok();
+                if self.explicit_syncobj.is_some() && dma_buffer {
+                    // Take committed points; later cache merges or surface
+                    // destruction must not signal a live renderer receipt.
+                    let (acquire,release)=with_states(surface,|states|{
+                        let mut sync=states.cached_state.get::<DrmSyncobjCachedState>();
+                        let current=sync.current();
+                        (current.acquire_point.take(),current.release_point.take())
+                    });
+                    match (acquire,release) {
+                        (Some(acquire),Some(release)) if Fence::is_signaled(&acquire) &&
+                            self.explicit_release.is_none() && self.continuous_inflight.is_none() => {
+                            self.explicit_release=Some((buffer.clone(),release));
+                        }
+                        _=>{
+                            self.explicit_sync_error=Some("unverified explicit GPU buffer commit".into());
+                            return;
+                        }
+                    }
+                }
                 let gpu_client_kms=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
                     .as_deref()==Ok("YES_QEMU_VM");
                 if dma_buffer && !gpu_client_kms {
@@ -3508,6 +3631,7 @@ delegate_xdg_shell!(BridgeState);
 delegate_layer_shell!(BridgeState);
 delegate_shm!(BridgeState);
 delegate_dmabuf!(BridgeState);
+delegate_drm_syncobj!(BridgeState);
 delegate_output!(BridgeState);
 
 fn register(state:&mut BridgeState,device:libinput::Device) {
@@ -4269,6 +4393,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         compositor:CompositorState::new::<BridgeState>(&handle),
         shm:ShmState::new::<BridgeState>(&handle,vec![]),
         dmabuf:DmabufState::new(),
+        explicit_syncobj:None,explicit_acquires:Vec::new(),explicit_release:None,
+        explicit_sync_error:None,explicit_release_count:0,
         client_dmabuf_renderer:None,
         client_dmabuf_imports:Vec::new(),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
@@ -4728,6 +4854,12 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     ) {
         return Err("QEMU client DMA-BUF KMS requires the exact single-output 12-frame isolated experiment".into());
     }
+    let explicit_sync_probe=std::env::var("MELANIA_NATIVE_EXPLICIT_SYNC")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if explicit_sync_probe && (!gpu_client_kms ||
+        std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU").as_deref()!=Ok("YES_QEMU_VM")) {
+        return Err("explicit sync requires isolated two-DMA-BUF KMS experiment".into());
+    }
     if persistent_kms && (
         !integrated_kms || state.continuous_reopen_mode ||
         state.dynamic_pointer_proof_mode || state.dynamic_xdg_resize_mode ||
@@ -4823,6 +4955,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.dmabuf.create_global::<BridgeState>(&handle,formats);
             state.client_dmabuf_renderer=Some(renderer);
             println!("MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true");
+            if explicit_sync_probe {
+                let sync_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
+                let sync_device=DrmDeviceFd::new(DeviceFd::from(sync_fd));
+                if !supports_syncobj_eventfd(&sync_device) {
+                    return Err("explicit sync requires actual DRM syncobj eventfd support".into());
+                }
+                state.explicit_syncobj=Some(DrmSyncobjState::new::<BridgeState>(&handle,sync_device));
+                println!("MELANIA_NATIVE_WAYLAND_EXPLICIT_SYNC_GLOBAL_READY=true");
+            }
         }
         let (sender,receiver)=UnixStream::pair()?;
         sender.set_read_timeout(Some(Duration::from_secs(8)))?;
@@ -4995,6 +5136,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             }))?;
         }
         display.dispatch_clients(&mut state)?;
+        state.poll_explicit_acquires()?;
         // The old USB keyboard/pointer smoke exit predicate does not apply to
         // this real IME probe. Wait for the single kernel-authenticated IME
         // connection and two distinct untrusted peers (editor, intruder) to
@@ -5039,6 +5181,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
                 .as_deref()==Ok("YES_QEMU_VM");
             let expected_callbacks=if state.dynamic_pointer_proof_mode ||
                 compositor_only_minimize {12} else {state.continuous_frame_target};
+            if explicit_sync_probe && (state.explicit_release_count!=2 ||
+                state.explicit_release.is_some() || !state.explicit_acquires.is_empty()) {
+                return Err("explicit sync did not complete both real GPU release points".into());
+            }
             if !state.real_gtk_pixel_kms_mode &&
                u64::from(state.frame_callback_count)!=expected_callbacks {
                 return Err("Wayland callbacks not completed after continuous KMS".into());

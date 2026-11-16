@@ -36,6 +36,11 @@ impl ExplicitAcquireBlocker {
     }
 }
 
+/// Refuse a malformed transaction without applying it.
+pub fn cancel_acquire_transaction(surface:&WlSurface) {
+    add_blocker(surface,ExplicitAcquireBlocker(Arc::new(AtomicU8::new(CANCELLED))));
+}
+
 pub struct AcquireCommitGate {
     token:PresentationToken,
     blocker:ExplicitAcquireBlocker,
