@@ -137,6 +137,27 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
 
+    def test_direct_gpu_finishes_real_work_and_defers_import_destruction_until_restore(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        loop=gbm.split("fn qemu_gpu_scene_stream(",1)[1]
+        self.assertIn("caps.retain(|cap| *cap!=Capability::ExportFence)",loop)
+        finish=loop.index("let completion=frame.finish()?;")
+        wait=loop.index("completion.wait()?;",finish)
+        sample=loop.index("verify_direct_client_gpu_pixels(&mut renderer,&bound,index)",wait)
+        retained=loop.index("direct_import_lifetime.push((buffer,texture))",sample)
+        ack=loop.index("stream.write_all(&ack)?;",retained)
+        restore=loop.index("let restored=rollback.restore();",ack)
+        clear=loop.index("direct_import_lifetime.clear();",restore)
+        self.assertLess(finish,wait)
+        self.assertLess(wait,sample)
+        self.assertLess(sample,retained)
+        self.assertLess(retained,ack)
+        self.assertLess(ack,restore)
+        self.assertLess(restore,clear)
+        self.assertIn("if direct_import_lifetime.len()>=12",loop)
+        self.assertNotIn("renderer.cleanup_texture_cache()",loop[retained:restore])
+        self.assertIn("renderer.cleanup_texture_cache()",loop[clear:])
+
     def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
