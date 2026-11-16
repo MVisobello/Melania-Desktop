@@ -405,17 +405,16 @@ fn verify_retained_gpu_scene(
     index:u64,
 )->Result<(),Box<dyn Error>> {
     use smithay::backend::renderer::ExportMem;
-    for slot in 0..=usize::from(index>0) {
-        let last=if index%2==slot as u64 {index} else {index-1};
-        let (x,y)=if slot==0 {(340,232)} else {(830,302)};
+    use crate::window_placement::{retained_gpu_position,retained_gpu_probe_rgb,RETAINED_GPU_PROBE_SLOTS};
+    let mut expected_by_slot=std::collections::BTreeMap::new();
+    for (frame,&slot) in RETAINED_GPU_PROBE_SLOTS.iter().take(index as usize+1).enumerate() {
+        expected_by_slot.insert(slot,retained_gpu_probe_rgb(frame as u64).ok_or("missing probe color")?);
+    }
+    for (slot,expected) in expected_by_slot {
+        let (x,y)=retained_gpu_position(slot).ok_or("missing GPU probe geometry")?;
         let mapping=renderer.copy_framebuffer(bound,
-            Rectangle::from_loc_and_size((x,y),(1,1)),Fourcc::Abgr8888)?;
+            Rectangle::from_loc_and_size((x+180,y+112),(1,1)),Fourcc::Abgr8888)?;
         let rgba=renderer.map_texture(&mapping)?;
-        let expected=if slot==0 {
-            [84+(last/2*10) as u8,46,186]
-        } else {
-            [31,163-(last/2*10) as u8,69]
-        };
         if rgba.len()<3 || !rgba[..3].iter().zip(expected).all(|(actual,want)|
             actual.abs_diff(want)<=4) {
             return Err(format!("retained GPU scene slot {slot} frame {index} mismatch: {rgba:?} expected {expected:?}").into());
@@ -440,7 +439,9 @@ fn retain_direct_window(
         let mut frame=renderer.render(&mut target,(360,224).into(),Transform::Normal)?;
         let rect=Rectangle::from_size((360,224).into());
         let src=Rectangle::from_size((360.0,224.0).into());
-        frame.clear(Color32F::new(27.0/255.0,33.0/255.0,58.0/255.0,1.0),&[rect])?;
+        // Preserve premultiplied source alpha in GPU-owned storage.
+        // Blend against the actual destination only when drawing the scene.
+        frame.clear(Color32F::new(0.0,0.0,0.0,0.0),&[rect])?;
         let opaque_regions=if opaque {std::slice::from_ref(&rect)} else {&[]};
         frame.render_texture_from_to(source,src,rect,&[rect],opaque_regions,
             Transform::Flipped180,1.0,None,&[])?;
@@ -543,9 +544,9 @@ fn qemu_gpu_scene_stream(
         let mut pixels=vec![0u8;W*H*4];
         let mut prior_pixels=vec![0u8;W*H*4];
         let mut have_prior_pixels=false;
-        // Two stable window slots; each owns its GPU copy independently
-        // of the last client commit or the currently displayed scanout BO.
-        let mut retained:[Option<smithay::backend::renderer::gles::GlesTexture>;2]=[None,None];
+        // At most the registry's bounded number of independently retained
+        // texture allocations. IDs do not shift when another surface commits.
+        let mut retained=std::collections::BTreeMap::<u64,smithay::backend::renderer::gles::GlesTexture>::new();
         loop {
             if !persistent && frames_seen>=total {break;}
             let index=frames_seen;
@@ -608,10 +609,11 @@ fn qemu_gpu_scene_stream(
                    planned.generation!=generation {
                     return Err("direct GPU buffer ticket mismatch".into());
                 }
-                if slot!=(if multi_gpu {1+index%2} else {1}) {
+                if crate::window_placement::retained_gpu_position(slot).is_none() ||
+                    (!multi_gpu && slot!=1) {
                     return Err("unexpected direct GPU surface slot".into());
                 }
-                Some(buffer)
+                Some((slot,buffer))
             } else {
                 if let Some(read)=pending_read {
                     read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
@@ -635,10 +637,11 @@ fn qemu_gpu_scene_stream(
             // Import the genuine client DMA-BUF directly into the scanout
             // GPU context, revalidating its producer fence at sampling.
             // SHM-only frames retain the historical memory upload.
-            let texture=if let Some(buffer)=client_dmabuf.as_ref() {
+            let texture=if let Some((_,buffer))=client_dmabuf.as_ref() {
                 use smithay::backend::allocator::Buffer;
                 if buffer.size().w!=360 || buffer.size().h!=224 ||
-                   buffer.format().code!=(if index%2==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888}) {
+                   !matches!(buffer.format().code,Fourcc::Argb8888|Fourcc::Xrgb8888) ||
+                   (!multi_gpu && buffer.format().code!=(if index==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888})) {
                     return Err("direct GPU client size/format mismatch".into());
                 }
                 crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)?
@@ -648,10 +651,13 @@ fn qemu_gpu_scene_stream(
                 )?
             };
             if multi_gpu {
-                let slot=(index%2) as usize;
-                // Replace only the committing surface. The other GPU copy
-                // remains owned after its source wl_buffer was released.
-                retained[slot]=Some(retain_direct_window(&mut renderer,&texture,slot==1)?);
+                use smithay::backend::allocator::Buffer;
+                let (slot,buffer)=client_dmabuf.as_ref().ok_or("missing retained GPU source")?;
+                let opaque=buffer.format().code==Fourcc::Xrgb8888;
+                // Replace only this real surface's image, regardless of
+                // commit order, source Fourcc or presentation sequence.
+                let image=retain_direct_window(&mut renderer,&texture,opaque)?;
+                retained.insert(*slot,image);
             }
             let target=if index%2==0 {&mut a} else {&mut b};
             let mut bound=renderer.bind(target)?;
@@ -661,17 +667,24 @@ fn qemu_gpu_scene_stream(
             if multi_gpu {
                 let bg=Color32F::new(27.0/255.0,33.0/255.0,58.0/255.0,1.0);
                 frame.clear(bg,&[output_rect])?;
-                // Fixed slots follow the native retained scene's positions;
-                // no assumption that both commits arrive simultaneously.
-                for (slot,entry) in retained.iter().enumerate() {
-                    let Some(image)=entry.as_ref() else {continue;};
-                    let (x,y)=if slot==0 {(160,120)} else {(650,190)};
-                    let border=Rectangle::from_loc_and_size((x-6,y-6),(372,236));
+                // Stable order is independent of update order. A bounded
+                // scene can now contain more than two surface IDs.
+                for (&slot,image) in retained.iter() {
+                    let (x,y)=crate::window_placement::retained_gpu_position(slot)
+                        .ok_or("missing retained GPU window geometry")?;
+                    let border=[
+                        Rectangle::from_loc_and_size((x-6,y-6),(372,6)),
+                        Rectangle::from_loc_and_size((x-6,y+224),(372,6)),
+                        Rectangle::from_loc_and_size((x-6,y),(6,224)),
+                        Rectangle::from_loc_and_size((x+360,y),(6,224)),
+                    ];
                     let dest=Rectangle::from_loc_and_size((x,y),(360,224));
                     let local=Rectangle::from_size((360,224).into());
                     let src=Rectangle::from_size((360.0,224.0).into());
-                    frame.clear(Color32F::new(65.0/255.0,171.0/255.0,216.0/255.0,1.0),&[border])?;
-                    frame.render_texture_from_to(image,src,dest,&[local],&[local],
+                    frame.clear(Color32F::new(65.0/255.0,171.0/255.0,216.0/255.0,1.0),&border)?;
+                    // Transparent client pixels reveal the composed scene,
+                    // not a flattened copy of the original desktop color.
+                    frame.render_texture_from_to(image,src,dest,&[local],&[],
                         Transform::Normal,1.0,None,&[])?;
                 }
             } else if direct_frame {
@@ -812,7 +825,7 @@ fn qemu_gpu_scene_stream(
                 println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK={}",index+1);
                 if multi_gpu {
                     println!("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK={} windows={}",
-                        index+1,retained.iter().filter(|image|image.is_some()).count());
+                        index+1,retained.len());
                 }
             }
             frames_seen=frames_seen.checked_add(1)
@@ -835,7 +848,7 @@ fn qemu_gpu_scene_stream(
     } else if direct_mode {
         println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_12_KMS_FRAMES_PASS=true");
         if multi_gpu {
-            println!("MELANIA_NATIVE_RETAINED_GPU_TWO_WINDOW_12_FRAMES_PASS=true");
+            println!("MELANIA_NATIVE_RETAINED_GPU_FOUR_WINDOW_12_FRAMES_PASS=true");
         }
     } else {
         println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
