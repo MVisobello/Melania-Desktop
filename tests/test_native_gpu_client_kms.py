@@ -122,10 +122,10 @@ class RealClientDmabufToKms(unittest.TestCase):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         direct=BRIDGE.split("if dma_buffer && gpu_client_kms && self.direct_gpu_sender.is_some()",1)[1].split(
             "// Opt-in QEMU transitional path",1)[0]
-        self.assertIn("self.direct_gpu_pending=dmabuf",direct)
+        self.assertIn("self.direct_gpu_pending=dmabuf.map",direct)
         self.assertIn("self.multi_scene.note_external_gpu_frame()",direct)
         self.assertNotIn("readback_qemu_client_bgra",direct)
-        self.assertIn("sender.try_send((planned,dmabuf))",BRIDGE)
+        self.assertIn("sender.try_send((planned,slot,dmabuf))",BRIDGE)
         self.assertIn("ContinuousKmsJob{planned,pixels:Vec::new()}",BRIDGE)
         self.assertIn("fn direct_gpu_transport_sends_only_ticket_and_requires_matching_ack()",stream)
         self.assertIn('header[..4].copy_from_slice(b"MLG1")',stream)
@@ -136,6 +136,22 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=2",GUEST)
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
+
+    def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        for marker in ("fn retain_direct_window(", "retained[slot]=Some(retain_direct_window",
+                       "for (slot,entry) in retained.iter().enumerate()",
+                       "verify_retained_gpu_scene(&mut renderer,&bound,index)",
+                       "retained GPU scene slot {slot} frame {index} mismatch"):
+            self.assertIn(marker,gbm)
+        snapshot=gbm.split("fn retain_direct_window(",1)[1].split("fn qemu_gpu_scene_stream(",1)[0]
+        self.assertNotIn("copy_framebuffer",snapshot)
+        self.assertNotIn("map_texture",snapshot)
+        self.assertIn("frame.finish()?.wait()?",snapshot)
+        self.assertIn("second_surface.unwrap_or(xdg_surface).clone()",CLIENT)
+        self.assertIn("let gpu_frames:u32=if multi_gpu {12}",CLIENT)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_TWO_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
