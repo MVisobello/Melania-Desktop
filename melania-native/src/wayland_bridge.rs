@@ -168,6 +168,8 @@ struct BridgeState {
     // Hold wl_buffer + imported texture together until client destruction
     // or *permanent* seat revocation; never leave EGL image FDs after close.
     client_dmabuf_imports:Vec<(wl_buffer::WlBuffer,GlesTexture)>,
+    direct_gpu_sender:Option<std::sync::mpsc::SyncSender<melania_native::continuous_kms_stream::DirectGpuFrame>>,
+    direct_gpu_pending:Option<Dmabuf>,
     // GTK4's GDK Wayland backend requires wl_data_device_manager even
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
@@ -450,6 +452,28 @@ impl BridgeState {
         if planned.generation!=generation {
             self.continuous_redraw.failed(planned);
             return Err("continuous KMS scene changed during planning".into());
+        }
+        if let Some(dmabuf)=self.direct_gpu_pending.take() {
+            let sent=self.direct_gpu_sender.as_ref().is_some_and(|sender|
+                sender.try_send((planned,dmabuf)).is_ok());
+            if !sent {
+                self.continuous_redraw.failed(planned);
+                return Err("direct GPU presenter channel unavailable".into());
+            }
+            let submitted=self.continuous_worker.as_ref().is_some_and(|worker|
+                worker.submit(ContinuousKmsJob{planned,pixels:Vec::new()}).is_ok());
+            if !submitted {
+                self.continuous_redraw.failed(planned);
+                return Err("direct GPU ticket transport rejected".into());
+            }
+            self.continuous_presentation_token=Some(presentation_token);
+            self.continuous_inflight=Some((
+                planned,self.continuous_client_ledger.take_for_presentation()
+            ));
+            println!("MELANIA_NATIVE_DIRECT_GPU_TICKET_SUBMITTED={} generation={}",
+                     planned.ticket.sequence,planned.generation);
+            let _=std::io::stdout().flush();
+            return Ok(());
         }
         let composed=if self.dynamic_window_mode {
             if let Some(mut previous)=self.dynamic_confirmed_frame.take() {
@@ -2253,6 +2277,8 @@ impl BridgeState {
 /// No old EGL import may outlive VT pause or GPU hotplug, even if a Wayland
 /// client never explicitly destroys its protocol buffer.
 fn revoke_client_dmabuf_gpu(state:&mut BridgeState) {
+    state.direct_gpu_pending.take();
+    state.direct_gpu_sender.take();
     state.client_dmabuf_imports.clear();
     state.client_dmabuf_renderer.take();
 }
@@ -2457,6 +2483,47 @@ impl CompositorHandler for BridgeState {
                     self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                     eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_NOT_PRESENTED=true");
                     buffer.release();
+                    return;
+                }
+                // A distinct direct path hands the actual DMA-BUF to the
+                // render/scanout thread. No GPU client pixels enter a Vec.
+                if dma_buffer && gpu_client_kms && self.direct_gpu_sender.is_some() {
+                    let admitted=melania_native::native_client_dmabuf::qemu_gpu_frame_allowed(
+                        self.continuous_frame_count,true) &&
+                        self.continuous_inflight.is_none() &&
+                        self.direct_gpu_pending.is_none() &&
+                        self.client_dmabuf_imports.len()==1 &&
+                        self.client_dmabuf_imports.iter().any(|(known,_)|known==&buffer);
+                    let dmabuf=smithay::wayland::dmabuf::get_dmabuf(&buffer).ok().cloned();
+                    if !admitted || dmabuf.is_none() {
+                        eprintln!("MELANIA_NATIVE_DIRECT_GPU_COMMIT_REFUSED=true");
+                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                        buffer.release();
+                        return;
+                    }
+                    if self.known_window_surfaces.register(surface.clone()).ok()!=Some(1) {
+                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                        buffer.release();
+                        return;
+                    }
+                    match self.continuous_client_ledger.stage(surface.clone(),buffer) {
+                        Ok(None)=>{},
+                        Ok(Some(superseded))=>{
+                            superseded.release();
+                            eprintln!("MELANIA_NATIVE_DIRECT_GPU_UNEXPECTED_SUPERSEDED=true");
+                            return;
+                        },
+                        Err((_,rejected))=>{
+                            rejected.release();
+                            return;
+                        }
+                    }
+                    self.direct_gpu_pending=dmabuf;
+                    self.multi_scene.note_external_gpu_frame();
+                    self.note_scene_change();
+                    if let Err(error)=self.submit_continuous_frame() {
+                        eprintln!("MELANIA_NATIVE_DIRECT_GPU_SUBMIT_FAILED={error}");
+                    }
                     return;
                 }
                 // Opt-in QEMU transitional path: a real imported client GPU
@@ -4258,6 +4325,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         dmabuf:DmabufState::new(),
         client_dmabuf_renderer:None,
         client_dmabuf_imports:Vec::new(),
+        direct_gpu_sender:None,direct_gpu_pending:None,
         data_device:DataDeviceState::new::<BridgeState>(&handle),
         primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
@@ -4715,6 +4783,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     ) {
         return Err("QEMU client DMA-BUF KMS requires the exact single-output 12-frame isolated experiment".into());
     }
+    let direct_gpu=std::env::var("MELANIA_NATIVE_DIRECT_CLIENT_GBM")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if std::env::var_os("MELANIA_NATIVE_DIRECT_CLIENT_GBM").is_some() &&
+       (!direct_gpu || !gpu_client_kms ||
+        std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU").as_deref()!=Ok("YES_QEMU_VM") ||
+        std::env::var_os("MELANIA_NATIVE_GPU_WAYLAND_KMS").is_some()) {
+        return Err("direct client GBM requires the isolated two-GPU 12-frame mode".into());
+    }
     if persistent_kms && (
         !integrated_kms || state.continuous_reopen_mode ||
         state.dynamic_pointer_proof_mode || state.dynamic_xdg_resize_mode ||
@@ -4814,12 +4890,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         let (sender,receiver)=UnixStream::pair()?;
         sender.set_read_timeout(Some(Duration::from_secs(8)))?;
         sender.set_write_timeout(Some(Duration::from_secs(7)))?;
-        state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender)?);
-        integrated_thread=Some(std::thread::spawn(move || {
-            qemu_continuous_receiver::run_embedded(
-                receiver,std::fs::File::from(presenter_fd)
-            ).map_err(|error|error.to_string())
-        }));
+        if direct_gpu {
+            let (gpu_tx,gpu_rx)=std::sync::mpsc::sync_channel(1);
+            state.direct_gpu_sender=Some(gpu_tx);
+            state.continuous_worker=Some(ContinuousKmsWorker::spawn_direct(sender)?);
+            integrated_thread=Some(std::thread::spawn(move || {
+                qemu_continuous_receiver::run_embedded_direct(
+                    receiver,std::fs::File::from(presenter_fd),gpu_rx
+                ).map_err(|error|error.to_string())
+            }));
+        } else {
+            state.continuous_worker=Some(ContinuousKmsWorker::spawn(sender)?);
+            integrated_thread=Some(std::thread::spawn(move || {
+                qemu_continuous_receiver::run_embedded(
+                    receiver,std::fs::File::from(presenter_fd)
+                ).map_err(|error|error.to_string())
+            }));
+        }
         println!("MELANIA_NATIVE_LIBSEAT_DRM_ACQUIRED=true");
         println!("MELANIA_NATIVE_IN_PROCESS_KMS_WORKER_STARTED=true");
     }
