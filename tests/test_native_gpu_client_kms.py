@@ -137,6 +137,17 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
 
+    def test_direct_gpu_diagnostics_do_not_queue_pbo_destruction(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        sample=gbm.split("fn sample_direct_gpu_pixel(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("gl.ReadPixels(x,y,1,1,ffi::RGBA,ffi::UNSIGNED_BYTE",sample)
+        self.assertIn("gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,0)",sample)
+        self.assertIn("gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,pack_buffer as u32)",sample)
+        self.assertIn("ffi::FRAMEBUFFER_COMPLETE",sample)
+        self.assertNotIn("copy_framebuffer(",sample)
+        self.assertNotIn("map_texture(",sample)
+        self.assertLess(gbm.index("driver_finished"),gbm.index("let completion=frame.finish()?;"))
+
     def test_direct_gpu_finishes_real_work_and_defers_import_destruction_until_restore(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         loop=gbm.split("fn qemu_gpu_scene_stream(",1)[1]

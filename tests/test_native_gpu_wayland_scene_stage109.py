@@ -14,7 +14,7 @@ GUEST=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
 
 class NativeGpuWaylandScene109(unittest.TestCase):
     def test_gpu_input_is_actual_wayland_owned_composition_not_test_color(self):
-        body=GPU[GPU.index("pub fn qemu_wayland_gpu_scene_stream("):]
+        body=GPU[GPU.index("fn qemu_gpu_scene_stream("):]
         for marker in (
             'stream.read_exact(&mut header)?',
             'b"MLF1"',
@@ -22,12 +22,17 @@ class NativeGpuWaylandScene109(unittest.TestCase):
             'renderer.import_memory(',
             'Fourcc::Xrgb8888',
             'frame.render_texture_from_to(',
-            'frame.finish()?.wait()?',
+            'let completion=frame.finish()?;',
+            'completion.wait()?;',
             'GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT',
             'framebuffer_from_dmabuf(&card,&gbm,&a,true,true)',
             'framebuffer_from_dmabuf(&card,&gbm,&b,true,true)',
         ):
             self.assertIn(marker,body)
+        self.assertLess(body.index('let completion=frame.finish()?;'),
+                        body.index('completion.wait()?;'))
+        self.assertLess(body.index('completion.wait()?;'),
+                        body.index('wait_for_scanout(&card,crtc,connector,framebuffer)?'))
         self.assertIn('self.continuous_client_ledger.take_for_presentation()',BRIDGE)
         self.assertIn('self.multi_scene.composite()',BRIDGE)
 

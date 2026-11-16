@@ -356,22 +356,51 @@ pub fn qemu_direct_client_gpu_scene_stream(
 
 // Verify a few real rendered GBM pixels for the VM acceptance test only.
 // Readback is diagnostic; it never feeds rendering or KMS framebuffer data.
+// The VirtIO guest crashed inside Smithay finish on the second frame even
+// with ExportFence disabled and every client image retained. Avoid diagnostic
+// PBOs entirely: their delayed unmap/delete is processed inside the next
+// GlesFrame::finish. Read one pixel synchronously from the CURRENT real
+// render target; this is diagnostic only and never provides scene pixels.
+// The caller must have just finished a frame on the same EGL context/FBO.
+fn sample_direct_gpu_pixel(renderer:&mut GlesRenderer,x:i32,y:i32)
+    ->Result<[u8;3],Box<dyn Error>> {
+    use smithay::backend::renderer::gles::ffi;
+    let pixel=renderer.with_context(|gl|->Result<[u8;4],String>{
+        let mut fbo=0;
+        let mut pack_buffer=0;
+        let mut read_buffer=0;
+        let mut rgba=[0u8;4];
+        unsafe {
+            gl.GetIntegerv(ffi::READ_FRAMEBUFFER_BINDING,&mut fbo);
+            if fbo==0 || gl.CheckFramebufferStatus(ffi::READ_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE {
+                return Err("direct GPU diagnostic has no complete bound framebuffer".into());
+            }
+            gl.GetIntegerv(ffi::PIXEL_PACK_BUFFER_BINDING,&mut pack_buffer);
+            gl.GetIntegerv(ffi::READ_BUFFER,&mut read_buffer);
+            // Restore all state modified by this tiny diagnostic. No GPU
+            // mapping object or deferred PBO destruction survives the call.
+            gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,0);
+            gl.ReadBuffer(ffi::COLOR_ATTACHMENT0);
+            gl.ReadPixels(x,y,1,1,ffi::RGBA,ffi::UNSIGNED_BYTE,rgba.as_mut_ptr().cast());
+            let error=gl.GetError();
+            gl.ReadBuffer(read_buffer as u32);
+            gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,pack_buffer as u32);
+            if error!=ffi::NO_ERROR {return Err(format!("direct GPU diagnostic glReadPixels error {error:#x}"));}
+        }
+        Ok(rgba)
+    })??;
+    Ok([pixel[0],pixel[1],pixel[2]])
+}
+
 fn verify_direct_client_gpu_pixels(
     renderer:&mut GlesRenderer,
     bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
     index:u64,
 )->Result<(),Box<dyn Error>> {
-    use smithay::backend::renderer::ExportMem;
     fn sample(renderer:&mut GlesRenderer,
-        bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
+        _bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
         x:i32,y:i32)->Result<[u8;3],Box<dyn Error>> {
-        // Transform::Normal on Smithay's offscreen target projects
-        // destination y directly into GL row coordinates (as in the
-        // existing XRGB memory upload). A 1px sample has no row reversal.
-        let region=Rectangle::from_loc_and_size((x,y),(1,1));
-        let mapping=renderer.copy_framebuffer(bound,region,Fourcc::Abgr8888)?;
-        let rgba=renderer.map_texture(&mapping)?;
-        Ok(rgba.get(..3).ok_or("short GPU diagnostic sample")?.try_into()?)
+        sample_direct_gpu_pixel(renderer,x,y)
     }
     fn close(actual:[u8;3],expected:[u8;3],tolerance:u8)->bool {
         actual.into_iter().zip(expected).all(|(a,b)|a.abs_diff(b)<=tolerance)
@@ -641,7 +670,14 @@ fn qemu_gpu_scene_stream(
                     Transform::Normal,1.0,None,&[],
                 )?;
             }
-            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} finish",index+1);}
+            if direct_frame {
+                // Distinguish a driver flush crash from Smithay's deferred
+                // deletion during finish. This does not replace completion.
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} driver_finish",index+1);
+                frame.with_context(|gl|unsafe {gl.Finish()})?;
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} driver_finished",index+1);
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} finish",index+1);
+            }
             let completion=frame.finish()?;
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} wait",index+1);}
             completion.wait()?;
