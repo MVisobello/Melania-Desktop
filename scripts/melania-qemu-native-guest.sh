@@ -150,6 +150,8 @@ grep -qx 'MELANIA_NATIVE_KMS_TEST_LIBSEAT_DRM_CLOSED=true' "$kms_test_log" ||
 explicit_sync_supported=false
 if grep -qx 'MELANIA_NATIVE_DRM_SYNCOBJ_PROBE=timeline_and_eventfd_verified' "$kms_test_log"; then
   explicit_sync_supported=true
+  grep -qx 'MELANIA_NATIVE_DRM_ACQUIRE_BLOCKER_VERIFIED=true' "$kms_test_log" ||
+    fatal 'syncobj_kernel_acquire_blocker_missing'
   report 'MELANIA_QEMU_REAL_DRM_SYNCOBJ_TIMELINE_EVENTFD_PASS=true'
 elif grep -qx 'MELANIA_NATIVE_DRM_SYNCOBJ_PROBE=timeline_only' "$kms_test_log"; then
   report 'MELANIA_QEMU_DRM_SYNCOBJ_EVENTFD_UNSUPPORTED=true'
@@ -3093,6 +3095,9 @@ for index in 1 2; do
     fatal "explicit_release_missing_kernel_ack_$index"
   grep -Fqx "MELANIA_QEMU_EXPLICIT_RELEASE_VERIFIED=$index" "$explicit_gpu_client_log" ||
     fatal "explicit_client_release_timeline_not_verified_$index"
+  # Export only exact validated receipts, never a generic success inferred
+  # from a successful VM shutdown.
+  report "MELANIA_QEMU_EXPLICIT_WIRE_FRAME_VERIFIED=$index"
 done
 [[ "$(grep -Fxc 'MELANIA_NATIVE_WAYLAND_EXPLICIT_ACQUIRE_VERIFIED=true' "$explicit_gpu_server_log" || true)" == 2 ]] ||
   fatal 'explicit_acquire_timeline_not_verified_twice'

@@ -678,6 +678,15 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-real-gtk-super-input.log" || true
   exit 1
 fi
+# Require a consistent kernel capability and actual wire protocol result.
+# An unsupported driver remains a valid general-regression environment,
+# but must never be reported as a successful explicit-sync protocol test.
+if ! python3 "$root/scripts/verify-qemu-explicit-sync.py" "$serial" |
+    tee "$report/explicit-sync-evidence.txt"; then
+  printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
+  exit 1
+fi
+cat "$report/explicit-sync-evidence.txt" >> "$report/result.txt"
 # Export only the previously verified LIVE QMP GTK framebuffer, preserving
 # the original PPM as forensic evidence. Never synthesize a screenshot.
 python3 "$root/scripts/export-qemu-real-gtk-png.py" \
