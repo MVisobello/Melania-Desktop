@@ -3069,6 +3069,100 @@ report 'MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true'
 report 'MELANIA_NATIVE_SESSION_READY=false'
 
 
+# Two actual XDG GPU windows, updated alternately for 12 real KMS frames.
+retained_gpu_client_server_log="$(mktemp -t melania-retained-gpu-client-kms-server-XXXXXX)"
+retained_gpu_client_client_log="$(mktemp -t melania-retained-gpu-client-kms-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU=YES_QEMU_VM \
+MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
+MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
+  timeout --signal=TERM --kill-after=3s 76s \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$retained_gpu_client_server_log" 2>&1 &
+retained_gpu_client_server_pid=$!
+retained_gpu_client_socket=''
+for attempt in $(seq 1 100); do
+  retained_gpu_client_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$retained_gpu_client_server_log" | head -n 1)"
+  [[ -n "$retained_gpu_client_socket" ]] && break
+  kill -0 "$retained_gpu_client_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$retained_gpu_client_socket" ]] ||
+   ! grep -Fqx 'MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true' "$retained_gpu_client_server_log"; then
+  cat "$retained_gpu_client_server_log"
+  kill "$retained_gpu_client_server_pid" 2>/dev/null || true
+  fatal 'retained_gpu_client_DRM_compositor_or_actual_EGL_import_global_missing'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM \
+  MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
+  WAYLAND_DISPLAY="$retained_gpu_client_socket" \
+  timeout --signal=TERM --kill-after=3s 65s \
+  "$continuous_client" > "$retained_gpu_client_client_log" 2>&1; then
+  cat "$retained_gpu_client_server_log" "$retained_gpu_client_client_log"
+  kill "$retained_gpu_client_server_pid" 2>/dev/null || true
+  fatal 'retained_gpu_client_real_separate_Wayland_process_failed'
+fi
+if ! wait "$retained_gpu_client_server_pid"; then
+  cat "$retained_gpu_client_server_log" "$retained_gpu_client_client_log"
+  fatal 'retained_gpu_client_full_KMS_lifecycle_or_real_CRTC_restore_failed'
+fi
+for marker in \
+  'MELANIA_NATIVE_QEMU_CLIENT_DMABUF_GPU_GLOBAL_READY=true' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_GPU_TEXTURE_IMPORTED=true' \
+  'MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=1' \
+  'MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=2' \
+  'MELANIA_NATIVE_RETAINED_GPU_TWO_WINDOW_12_FRAMES_PASS=true' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=1' \
+  'MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED=2' \
+  'MELANIA_NATIVE_GBM_KMS_CRTC_RESTORE=true' \
+  'MELANIA_NATIVE_GBM_KMS_CONNECTOR_RESTORE=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true'; do
+  grep -Fqx "$marker" "$retained_gpu_client_server_log" ||
+    fatal "retained_gpu_client_real_egl_to_KMS_missing_$marker"
+done
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true' "$retained_gpu_client_client_log" ||
+  fatal 'retained_gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame1_callback'
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true' "$retained_gpu_client_client_log" ||
+  fatal 'retained_gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame2_callback'
+grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true' "$retained_gpu_client_client_log" ||
+  fatal 'retained_gpu_client_missing_real_XRGB_DMA_BUF_frame2_KMS_callback'
+grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_TWO_WINDOW_CLIENT_12_ACKS=true' "$retained_gpu_client_client_log" ||
+  fatal 'retained_gpu_client_missing_two_wayland_window_proof'
+for index in $(seq 1 12); do
+  windows=2
+  [[ "$index" == 1 ]] && windows=1
+  grep -Fqx "MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows" "$retained_gpu_client_server_log" ||
+    fatal "retained_gpu_client_missing_both_independent_GPU_windows_$index"
+  grep -Fqx "MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index" "$retained_gpu_client_server_log" ||
+    fatal "retained_gpu_client_missing_actual_kernel_KMS_ACK_$index"
+  grep -q "^MELANIA_NATIVE_CONTINUOUS_KMS_ACK=$index " "$retained_gpu_client_server_log" ||
+    fatal "retained_gpu_client_missing_compositor_ACK_$index"
+  grep -Fqx "MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index" "$retained_gpu_client_client_log" ||
+    fatal "retained_gpu_client_missing_real_client_release_or_callback_$index"
+done
+grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=12' "$retained_gpu_client_server_log" ||
+  fatal 'retained_gpu_client_in_process_KMS_worker_not_joined'
+if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
+  fatal 'retained_gpu_client_used_forbidden_cpu_staging'
+fi
+rm -f "$retained_gpu_client_server_log" "$retained_gpu_client_client_log"
+report 'MELANIA_QEMU_RETAINED_TWO_WINDOW_GPU_KMS_12_FRAMES_PASS=true'
+report 'MELANIA_NATIVE_SESSION_READY=false'
+
+
 # P0 text-input-v3 + input-method-v2: TWO real client processes,
 # kernel PID-gated privileged Wayland global, UTF-8 commit to an XDG editor.
 # This is protocol acceptance only; NO KMS IME candidate popup is advertised.
