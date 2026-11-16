@@ -14,9 +14,13 @@ class NativeOwnedFramebufferAckStage112(unittest.TestCase):
     def test_worker_returns_same_owned_frame_allocation_with_receipt(self):
         self.assertIn("pub pixels: Vec<u8>",WORKER)
         self.assertIn("planned:job.planned,status,pixels:job.pixels",WORKER)
-        self.assertIn("let status = transfer(&mut stream, &job);",WORKER)
-        self.assertLess(WORKER.index("let status = transfer(&mut stream, &job);"),
+        self.assertIn("let status = if direct && job.pixels.is_empty()",WORKER)
+        self.assertIn("transfer_direct(&mut stream,&job)",WORKER)
+        self.assertLess(WORKER.index("transfer(&mut stream,&job)"),
                         WORKER.index("pixels:job.pixels"))
+        self.assertLess(WORKER.index("transfer_direct(&mut stream,&job)"),
+                        WORKER.index("pixels:job.pixels"))
+        self.assertIn("direct_gpu_transport_sends_only_ticket_and_requires_matching_ack",WORKER)
         self.assertIn("verified_ack(&ack, job.planned)",WORKER)
         self.assertIn("verified_ack_returns_same_scene_allocation_without_a_frame_clone",WORKER)
         self.assertIn("receipt.pixels.as_ptr(),original_ptr",WORKER)

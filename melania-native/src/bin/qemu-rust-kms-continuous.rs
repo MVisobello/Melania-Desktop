@@ -226,6 +226,21 @@ pub(crate) fn run_embedded(stream:UnixStream,card:File)->Result<(),Box<dyn Error
     }
 }
 
+/// Same libseat-owned DRM worker, with a typed in-process DMA-BUF route.
+pub(crate) fn run_embedded_direct(
+    stream:UnixStream,card:File,
+    gpu:std::sync::mpsc::Receiver<melania_native::continuous_kms_stream::DirectGpuFrame>,
+)->Result<(),Box<dyn Error>> {
+    guest_only()?;
+    if std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()!=Ok("YES_QEMU_VM") ||
+       std::env::var("MELANIA_NATIVE_DIRECT_CLIENT_GBM").as_deref()!=Ok("YES_QEMU_VM") ||
+       std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").as_deref()!=Ok("12") {
+        return Err("direct GBM requires explicit isolated QEMU opt-in".into());
+    }
+    melania_native::native_gbm_scanout::qemu_direct_client_gpu_scene_stream(
+        stream,card.into(),gpu)
+}
+
 fn run_stream(mut stream:UnixStream,card_file:File)->Result<(),Box<dyn Error>> {
     // The persistent Smithay owner is damage-driven. A compositor that is
     // idle for 12 seconds is still healthy: only a clean transport EOF from

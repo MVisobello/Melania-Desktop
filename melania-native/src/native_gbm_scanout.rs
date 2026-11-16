@@ -342,13 +342,215 @@ fn qemu_gpu_frames(card_fd:OwnedFd,total_frames:u32)
 /// gates the libseat session, DMI and dedicated TTY before calling it.
 /// Nothing here registers a production login or enables native readiness.
 pub fn qemu_wayland_gpu_scene_stream(
+    stream:UnixStream, card_fd:OwnedFd,
+)->Result<(),Box<dyn Error>> {
+    qemu_gpu_scene_stream(stream,card_fd,None)
+}
+
+pub fn qemu_direct_client_gpu_scene_stream(
+    stream:UnixStream,card_fd:OwnedFd,
+    gpu:std::sync::mpsc::Receiver<crate::continuous_kms_stream::DirectGpuFrame>,
+)->Result<(),Box<dyn Error>> {
+    qemu_gpu_scene_stream(stream,card_fd,Some(gpu))
+}
+
+// Verify a few real rendered GBM pixels for the VM acceptance test only.
+// Readback is diagnostic; it never feeds rendering or KMS framebuffer data.
+// The VirtIO guest crashed inside Smithay finish on the second frame even
+// with ExportFence disabled and every client image retained. Avoid diagnostic
+// PBOs entirely: their delayed unmap/delete is processed inside the next
+// GlesFrame::finish. Read one pixel synchronously from the CURRENT real
+// render target; this is diagnostic only and never provides scene pixels.
+// The caller must have just finished a frame on the same EGL context/FBO.
+fn sample_direct_gpu_pixel(renderer:&mut GlesRenderer,x:i32,y:i32)
+    ->Result<[u8;3],Box<dyn Error>> {
+    use smithay::backend::renderer::gles::ffi;
+    let pixel=renderer.with_context(|gl|->Result<[u8;4],String>{
+        let mut fbo=0;
+        let mut pack_buffer=0;
+        let mut read_buffer=0;
+        let mut rgba=[0u8;4];
+        unsafe {
+            gl.GetIntegerv(ffi::READ_FRAMEBUFFER_BINDING,&mut fbo);
+            if fbo==0 || gl.CheckFramebufferStatus(ffi::READ_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE {
+                return Err("direct GPU diagnostic has no complete bound framebuffer".into());
+            }
+            gl.GetIntegerv(ffi::PIXEL_PACK_BUFFER_BINDING,&mut pack_buffer);
+            gl.GetIntegerv(ffi::READ_BUFFER,&mut read_buffer);
+            // Restore all state modified by this tiny diagnostic. No GPU
+            // mapping object or deferred PBO destruction survives the call.
+            gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,0);
+            gl.ReadBuffer(ffi::COLOR_ATTACHMENT0);
+            gl.ReadPixels(x,y,1,1,ffi::RGBA,ffi::UNSIGNED_BYTE,rgba.as_mut_ptr().cast());
+            let error=gl.GetError();
+            gl.ReadBuffer(read_buffer as u32);
+            gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,pack_buffer as u32);
+            if error!=ffi::NO_ERROR {return Err(format!("direct GPU diagnostic glReadPixels error {error:#x}"));}
+        }
+        Ok(rgba)
+    })??;
+    Ok([pixel[0],pixel[1],pixel[2]])
+}
+
+// Normalize the opaque client EGL image into a compositor-owned RGBA
+// texture using a GPU framebuffer blit, not a CPU download/upload. The
+// focused VM reproduced a crash during glFinish when sampling the second
+// imported XRGB texture directly. Keep ARGB sampling and its premultiplied
+// alpha test unchanged. This is a proposed driver-path workaround.
+fn normalize_opaque_direct_source(
+    renderer:&mut GlesRenderer,
+    source:&mut smithay::backend::renderer::gles::GlesTexture,
+)->Result<smithay::backend::renderer::gles::GlesTexture,Box<dyn Error>> {
+    use smithay::backend::renderer::{Blit,Offscreen,Texture,TextureFilter};
+    use smithay::backend::renderer::gles::{ffi,GlesTexture};
+    let size=(source.width() as i32,source.height() as i32);
+    let mut copy:GlesTexture=renderer.create_buffer(Fourcc::Abgr8888,size.into())?;
+    {
+        let input=renderer.bind(source)?;
+        let mut output=renderer.bind(&mut copy)?;
+        let rect=Rectangle::from_size(size.into());
+        renderer.blit(&input,&mut output,rect,rect,TextureFilter::Nearest)?;
+        // The undefined X byte is never an alpha channel. Force alpha=1
+        // while preserving the GPU-copied RGB channels. Restore GL state.
+        renderer.with_context(|gl|->Result<(),String>{
+            unsafe {
+                if gl.CheckFramebufferStatus(ffi::DRAW_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE {
+                    return Err("opaque GPU normalization framebuffer incomplete".into());
+                }
+                let mut mask=[0u8;4];
+                let mut clear=[0f32;4];
+                gl.GetBooleanv(ffi::COLOR_WRITEMASK,mask.as_mut_ptr());
+                gl.GetFloatv(ffi::COLOR_CLEAR_VALUE,clear.as_mut_ptr());
+                let scissor=gl.IsEnabled(ffi::SCISSOR_TEST)==ffi::TRUE;
+                gl.Disable(ffi::SCISSOR_TEST);
+                gl.ColorMask(ffi::FALSE,ffi::FALSE,ffi::FALSE,ffi::TRUE);
+                gl.ClearColor(0.0,0.0,0.0,1.0);
+                gl.Clear(ffi::COLOR_BUFFER_BIT);
+                gl.ColorMask(mask[0],mask[1],mask[2],mask[3]);
+                gl.ClearColor(clear[0],clear[1],clear[2],clear[3]);
+                if scissor {gl.Enable(ffi::SCISSOR_TEST);}
+                gl.Finish();
+                let error=gl.GetError();
+                if error!=ffi::NO_ERROR {
+                    return Err(format!("opaque GPU normalization failed {error:#x}"));
+                }
+            }
+            Ok(())
+        })??;
+    }
+    Ok(copy)
+}
+
+// An opaque window needs no blend shader. The Mesa llvmpipe stack trace
+// crashed in its rasterizer even after XRGB normalization succeeded.
+// Copy the opaque image into the actual scanout FBO with a GLES3 blit;
+// preserve the same vertical transform as the alpha-composition path.
+fn blit_opaque_direct_window(
+    renderer:&mut GlesRenderer,
+    source:&mut smithay::backend::renderer::gles::GlesTexture,
+)->Result<(),Box<dyn Error>> {
+    use smithay::backend::renderer::Texture;
+    use smithay::backend::renderer::gles::ffi;
+    let draw=renderer.with_context(|gl|{
+        let mut id=0;
+        unsafe {gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING,&mut id);}
+        id
+    })?;
+    if draw==0 {return Err("opaque direct scanout FBO missing".into());}
+    let (w,h)=(source.width() as i32,source.height() as i32);
+    {
+        let mut input=renderer.bind(source)?;
+        // Obtain the actual source FBO via Smithay's binding, not a
+        // guessed GL object name. Rendering an empty frame changes no pixels.
+        let mut frame=renderer.render(&mut input,(w,h).into(),Transform::Normal)?;
+        let read=frame.with_context(|gl|{
+            let mut id=0;
+            unsafe {gl.GetIntegerv(ffi::READ_FRAMEBUFFER_BINDING,&mut id);}
+            id
+        })?;
+        frame.finish()?.wait()?;
+        if read==0 || read==draw {return Err("opaque direct source FBO invalid".into());}
+        renderer.with_context(|gl|->Result<(),String>{
+            unsafe {
+                gl.BindFramebuffer(ffi::READ_FRAMEBUFFER,read as u32);
+                gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER,draw as u32);
+                if gl.CheckFramebufferStatus(ffi::READ_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE ||
+                   gl.CheckFramebufferStatus(ffi::DRAW_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE {
+                    return Err("opaque direct blit framebuffer incomplete".into());
+                }
+                let scissor=gl.IsEnabled(ffi::SCISSOR_TEST)==ffi::TRUE;
+                gl.Disable(ffi::SCISSOR_TEST);
+                gl.ReadBuffer(ffi::COLOR_ATTACHMENT0);
+                gl.BlitFramebuffer(0,h,w,0,160,120,160+w,120+h,
+                    ffi::COLOR_BUFFER_BIT,ffi::NEAREST);
+                gl.Finish();
+                let error=gl.GetError();
+                if scissor {gl.Enable(ffi::SCISSOR_TEST);}
+                // Subsequent pixel verification must read the real output,
+                // not the source. Restore the output as both GL targets.
+                gl.BindFramebuffer(ffi::FRAMEBUFFER,draw as u32);
+                if error!=ffi::NO_ERROR {
+                    return Err(format!("opaque direct scanout blit error {error:#x}"));
+                }
+            }
+            Ok(())
+        })??;
+    }
+    Ok(())
+}
+
+fn verify_direct_client_gpu_pixels(
+    renderer:&mut GlesRenderer,
+    bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
+    index:u64,
+)->Result<(),Box<dyn Error>> {
+    fn sample(renderer:&mut GlesRenderer,
+        _bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
+        x:i32,y:i32)->Result<[u8;3],Box<dyn Error>> {
+        sample_direct_gpu_pixel(renderer,x,y)
+    }
+    fn close(actual:[u8;3],expected:[u8;3],tolerance:u8)->bool {
+        actual.into_iter().zip(expected).all(|(a,b)|a.abs_diff(b)<=tolerance)
+    }
+    let center=sample(renderer,bound,340,232)?;
+    let expected=if index==0 {[84,46,186]} else {[31,163,69]};
+    if !close(center,expected,20) {
+        return Err(format!("direct client GBM center mismatch: {center:?} expected {expected:?}").into());
+    }
+    if index==0 {
+        let opaque=sample(renderer,bound,200,160)?;
+        let alpha=sample(renderer,bound,200,303)?;
+        if !close(opaque,expected,20) || !close(alpha,[56,39,122],13) {
+            return Err(format!("direct GBM alpha/orientation mismatch: {opaque:?} {alpha:?}").into());
+        }
+    } else {
+        let top=sample(renderer,bound,200,160)?;
+        let bottom=sample(renderer,bound,200,303)?;
+        if !close(top,expected,20) || !close(bottom,[201,61,20],5) {
+            return Err(format!("opaque GPU blit orientation mismatch: {top:?} {bottom:?}").into());
+        }
+    }
+    let background=sample(renderer,bound,5,5)?;
+    let border=sample(renderer,bound,157,120)?;
+    if !close(background,[27,33,58],3) || !close(border,[65,171,216],3) {
+        return Err(format!("direct GBM desktop geometry mismatch: {background:?} {border:?}").into());
+    }
+    Ok(())
+}
+
+fn qemu_gpu_scene_stream(
     mut stream:UnixStream, card_fd:OwnedFd,
+    direct:Option<std::sync::mpsc::Receiver<crate::continuous_kms_stream::DirectGpuFrame>>,
 )->Result<(),Box<dyn Error>> {
     const W:usize=1280;
     const H:usize=800;
-    const TOTAL:u64=24;
+    let direct_mode=direct.is_some();
+    let total=if direct_mode {12u64} else {24u64};
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
+    if direct_mode && persistent {
+        return Err("direct client GPU proof cannot enter persistent mode".into());
+    }
     if persistent &&
        std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").as_deref()
            !=Ok("YES_DISPOSABLE_QEMU") {
@@ -402,7 +604,19 @@ pub fn qemu_wayland_gpu_scene_stream(
     let handles=[*fb_a.as_ref(),*fb_b.as_ref()];
     let display=unsafe {EGLDisplay::new(gbm)}?;
     let context=EGLContext::new(&display)?;
-    let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    let mut renderer=if direct_mode {
+        // The disposable VirtIO EGL path crashed during frame 2, while
+        // single-frame pixel/CRTC verification passed. Isolate driver fence
+        // export and delayed EGL image destruction from the experiment.
+        // Smithay's finish falls back to actual glFinish without ExportFence;
+        // this is still GPU rendering, never a synthetic completion.
+        use smithay::backend::renderer::gles::Capability;
+        let mut caps=unsafe {GlesRenderer::supported_capabilities(&context)}?;
+        caps.retain(|cap| *cap!=Capability::ExportFence);
+        let renderer=unsafe {GlesRenderer::with_capabilities(context,caps)}?;
+        println!("MELANIA_NATIVE_DIRECT_GPU_FINISH_MODE=GL_FINISH");
+        renderer
+    } else {unsafe {GlesRenderer::new(context)}?};
     // The XRGB8888 wl_shm scene has no meaningful alpha channel.
     // Never interpret padding bytes as transparency on the target.
     if !renderer.mem_formats().any(|fmt|fmt==Fourcc::Xrgb8888) {
@@ -418,6 +632,16 @@ pub fn qemu_wayland_gpu_scene_stream(
     println!("MELANIA_NATIVE_GPU_WAYLAND_DRM_TOPOLOGY_OUTPUTS={}",
              topology.active.len());
     let mut frames_seen=0u64;
+    // The finite direct proof owns at most twelve source allocations.
+    // Keep imported image/FD handles alive across the next EGL draw instead
+    // of allowing the client's destroy request to retire the driver's EGL
+    // resources during the following frame. Never sample a released source.
+    // Drop after kernel restoration; not a policy for unbounded sessions.
+    let mut normalized_gpu_sources=Vec::<smithay::backend::renderer::gles::GlesTexture>::new();
+    let mut direct_import_lifetime=Vec::<(
+        smithay::backend::allocator::dmabuf::Dmabuf,
+        smithay::backend::renderer::gles::GlesTexture,
+    )>::new();
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut prior_identity:Option<crate::native_frame_order::FrameIdentity>=None;
         // Retain two fixed-size CPU staging buffers for the entire GPU
@@ -428,7 +652,7 @@ pub fn qemu_wayland_gpu_scene_stream(
         let mut prior_pixels=vec![0u8;W*H*4];
         let mut have_prior_pixels=false;
         loop {
-            if !persistent && frames_seen>=TOTAL {break;}
+            if !persistent && frames_seen>=total {break;}
             let index=frames_seen;
             let mut header=[0u8;32];
             // The SAME real DRM ownership checker now protects the idle
@@ -465,14 +689,16 @@ pub fn qemu_wayland_gpu_scene_stream(
                 stream.read_exact(&mut header)?;
                 None
             };
-            if &header[..4]!=b"MLF1" {
+            let direct_frame=direct_mode && index<2;
+            let expected_marker=if direct_frame {b"MLG1"} else {b"MLF1"};
+            if &header[..4]!=expected_marker {
                 return Err("GPU Wayland frame header has wrong protocol version".into());
             }
             let epoch=u64::from_le_bytes(header[4..12].try_into()?);
             let sequence=u64::from_le_bytes(header[12..20].try_into()?);
             let generation=u64::from_le_bytes(header[20..28].try_into()?);
             let length=u32::from_le_bytes(header[28..32].try_into()?) as usize;
-            if length!=W*H*4 || sequence==0 {
+            if length!=(if direct_frame {0} else {W*H*4}) || sequence==0 {
                 return Err("GPU Wayland scene has invalid frame buffer dimensions".into());
             }
             let identity=crate::native_frame_order::FrameIdentity::new(
@@ -480,12 +706,23 @@ pub fn qemu_wayland_gpu_scene_stream(
             if !identity.accepted_after(prior_identity,persistent) {
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
-            if let Some(read)=pending_read {
-                read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
+            let client_dmabuf=if direct_frame {
+                let (planned,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
+                    .recv_timeout(Duration::from_secs(2))?;
+                if planned.ticket.epoch!=epoch || planned.ticket.sequence!=sequence ||
+                   planned.generation!=generation {
+                    return Err("direct GPU buffer ticket mismatch".into());
+                }
+                Some(buffer)
             } else {
-                stream.read_exact(&mut pixels)?;
-            }
-            if have_prior_pixels && prior_pixels==pixels && !persistent {
+                if let Some(read)=pending_read {
+                    read.read_payload_guarded(&mut stream,&mut pixels,&mut verify_read_drm)?;
+                } else {
+                    stream.read_exact(&mut pixels)?;
+                }
+                None
+            };
+            if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent {
                 // Preserve the finite QEMU pixel-change acceptance. In a
                 // persistent desktop, however, a real Wayland client may
                 // commit the same image again (e.g. frame callback request,
@@ -497,24 +734,97 @@ pub fn qemu_wayland_gpu_scene_stream(
 
             // This is the native compositor's real, owned Wayland wl_shm
             // composite, not a test card or synthetic EGL clear color.
-            let texture=renderer.import_memory(
-                &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
-            )?;
+            // Import the genuine client DMA-BUF directly into the scanout
+            // GPU context, revalidating its producer fence at sampling.
+            // SHM-only frames retain the historical memory upload.
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} import",index+1);}
+            let mut texture=if let Some(buffer)=client_dmabuf.as_ref() {
+                use smithay::backend::allocator::Buffer;
+                if buffer.size().w!=360 || buffer.size().h!=224 ||
+                   buffer.format().code!=(if index==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888}) {
+                    return Err("direct GPU client size/format mismatch".into());
+                }
+                crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)?
+            } else {
+                renderer.import_memory(
+                    &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
+                )?
+            };
+            let mut opaque_snapshot=if direct_frame && index==1 {
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} opaque_blit",index+1);
+                let image=normalize_opaque_direct_source(&mut renderer,&mut texture)?;
+                println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true");
+                Some(image)
+            } else {None};
+            let sampled_texture=opaque_snapshot.as_ref().unwrap_or(&texture);
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} bind",index+1);}
             let target=if index%2==0 {&mut a} else {&mut b};
             let mut bound=renderer.bind(target)?;
             let mut frame=renderer.render(&mut bound,
                 (W as i32,H as i32).into(),Transform::Normal)?;
             let output_rect=Rectangle::from_size((W as i32,H as i32).into());
-            let src=Rectangle::from_size((W as f64,H as f64).into());
-            frame.clear(Color32F::new(0.0,0.0,0.0,1.0),&[output_rect])?;
-            // GlesFrame's concrete overload expects custom shader args
-            // even when the default texture shader is selected.
-            frame.render_texture_from_to(
-                &texture,src,output_rect,&[output_rect],&[],
-                Transform::Normal,1.0,None,&[],
-            )?;
-            frame.finish()?.wait()?;
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} draw",index+1);}
+            if direct_frame {
+                // Entire single-window output (background, decorations and
+                // client pixels) is rendered into the actual GBM scanout BO.
+                let border=Rectangle::from_loc_and_size((154,114),(372,236));
+                let dest=Rectangle::from_loc_and_size((160,120),(360,224));
+                let src=Rectangle::from_size((360.0,224.0).into());
+                let bg=Color32F::new(27.0/255.0,33.0/255.0,58.0/255.0,1.0);
+                frame.clear(bg,&[output_rect])?;
+                frame.clear(Color32F::new(65.0/255.0,171.0/255.0,216.0/255.0,1.0),&[border])?;
+                frame.clear(bg,&[dest])?;
+                // Damage and opaque regions are local to the destination.
+                let local=Rectangle::from_size((360,224).into());
+                let opaque=if index==1 {std::slice::from_ref(&local)} else {&[]};
+                // Match the existing compositor orientation: its old
+                // CPU staging path flipped the bottom-up GLES readback
+                // before uploading the top-origin scene. Do that transform
+                // in the GPU shader, rather than copying rows on the CPU.
+                if index==0 {
+                    frame.render_texture_from_to(sampled_texture,src,dest,&[local],opaque,
+                        Transform::Flipped180,1.0,None,&[])?;
+                }
+                // Opaque XRGB is copied by framebuffer blit after clear;
+                // do not run the llvmpipe texture shader that crashed.
+            } else {
+                let src=Rectangle::from_size((W as f64,H as f64).into());
+                frame.clear(Color32F::new(0.0,0.0,0.0,1.0),&[output_rect])?;
+                frame.render_texture_from_to(
+                    &texture,src,output_rect,&[output_rect],&[],
+                    Transform::Normal,1.0,None,&[],
+                )?;
+            }
+            if direct_frame {
+                // Distinguish a driver flush crash from Smithay's deferred
+                // deletion during finish. This does not replace completion.
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} driver_finish",index+1);
+                frame.with_context(|gl|unsafe {gl.Finish()})?;
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} driver_finished",index+1);
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} finish",index+1);
+            }
+            let completion=frame.finish()?;
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} wait",index+1);}
+            completion.wait()?;
+            if let Some(image)=opaque_snapshot.as_mut() {
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} output_blit",index+1);
+                blit_opaque_direct_window(&mut renderer,image)?;
+                println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_OUTPUT_BLIT=true");
+            }
+            if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} verify",index+1);}
+            if direct_frame {
+                verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
+            }
             drop(bound);
+            if direct_frame {
+                let buffer=client_dmabuf.ok_or("direct client import disappeared")?;
+                if direct_import_lifetime.len()>=12 {
+                    return Err("finite direct GPU import lifetime budget exceeded".into());
+                }
+                direct_import_lifetime.push((buffer,texture));
+                if let Some(image)=opaque_snapshot {normalized_gpu_sources.push(image);}
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} retained",index+1);
+            }
 
             // A previously confirmed scanout may have been taken over
             // between frames. Never render/submit into a lost DRM route.
@@ -597,7 +907,7 @@ pub fn qemu_wayland_gpu_scene_stream(
                 println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
                          flip_ledger.completed_count());
             }
-            if !persistent && index+1==TOTAL {
+            if !persistent && index+1==total {
                 // Finite mode must restore before its last client ACK.
                 rollback.restore()?;
             }
@@ -610,21 +920,37 @@ pub fn qemu_wayland_gpu_scene_stream(
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
+            if direct_frame {
+                println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK={}",index+1);
+            }
             frames_seen=frames_seen.checked_add(1)
                 .ok_or("GPU Wayland compositor frame counter exhausted")?;
             prior_identity=Some(identity);
-            std::mem::swap(&mut pixels,&mut prior_pixels);
-            have_prior_pixels=true;
+            if !direct_frame {
+                std::mem::swap(&mut pixels,&mut prior_pixels);
+                have_prior_pixels=true;
+            }
         }
         Ok(())
     })();
     let restored=rollback.restore();
     attempt?;
     restored?;
+    if direct_mode {
+        // All draws returned actual GPU completion and the kernel has
+        // restored its original CRTC. The old client images are never used
+        // for future rendering; retire them now under the owning context.
+        normalized_gpu_sources.clear();
+        direct_import_lifetime.clear();
+        renderer.cleanup_texture_cache()?;
+        println!("MELANIA_NATIVE_DIRECT_GPU_RETIRED_AFTER_RESTORE=true");
+    }
     println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");
     if persistent {
         println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES={frames_seen}");
         println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true");
+    } else if direct_mode {
+        println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_12_KMS_FRAMES_PASS=true");
     } else {
         println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
     }

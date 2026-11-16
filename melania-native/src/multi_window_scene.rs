@@ -45,6 +45,11 @@ impl MultiWindowScene {
     pub fn layout_generation(&self)->u64 { self.layout_generation }
     fn dirty(&mut self) { self.layout_generation=self.layout_generation.wrapping_add(1); }
 
+    /// A separate GPU presenter owns this frame; advance the real scene
+    /// ticket without allocating or fabricating a CPU window snapshot.
+    /// Only the isolated single-client direct-GPU bridge may use this.
+    pub fn note_external_gpu_frame(&mut self) { self.dirty(); }
+
     /// Keys are compositor-local, never client-provided filenames or paths.
     /// A first commit creates a slot; subsequent commits update that slot.
     pub fn upsert(&mut self, key: u64, pixels: Vec<u8>) -> Result<(), MultiSceneError> {
@@ -159,6 +164,19 @@ mod tests {
     fn sample(frame:&[u8],x:usize,y:usize)->[u8;3] {
         let p=(y*OUTPUT_W+x)*4;
         [frame[p+2],frame[p+1],frame[p]]
+    }
+
+    #[test]
+    fn external_gpu_frame_advances_generation_without_cpu_snapshot() {
+        let mut graph=MultiWindowScene::default();
+        graph.note_external_gpu_frame();
+        graph.note_external_gpu_frame();
+        assert_eq!(graph.layout_generation(),2);
+        assert_eq!(graph.window_count(),0);
+        graph.upsert(1,solid(1,2,3)).unwrap();
+        assert_eq!(graph.layout_generation(),3);
+        assert_eq!(graph.window_count(),1);
+        assert_eq!(sample(&graph.composite().unwrap(),160,120),[1,2,3]);
     }
 
     #[test]
