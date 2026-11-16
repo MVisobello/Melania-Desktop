@@ -241,6 +241,15 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("sample(renderer,x+old_w-2,y+h.min(old_h)/2,[27,33,58])?",gbm)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index",GUEST)
 
+    def test_direct_gpu_receiver_admits_only_exact_legacy_or_retained_budget(self):
+        receiver=DRM.split("fn run_embedded_direct(",1)[1].split("fn run_stream(",1)[0]
+        self.assertIn("guest_only()?",receiver)
+        self.assertIn("direct_gpu_frame_budget_matches(",receiver)
+        self.assertIn('std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")',receiver)
+        self.assertIn('std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")',receiver)
+        self.assertLess(receiver.index("direct_gpu_frame_budget_matches("),
+                        receiver.index("qemu_direct_client_gpu_scene_stream("))
+
     def test_gpu_role_close_removes_texture_and_requires_real_13th_frame(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         close=BRIDGE.split("fn toplevel_destroyed(",1)[1]

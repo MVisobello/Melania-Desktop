@@ -56,6 +56,13 @@ pub fn receiver_frame_budget(
     Ok(count)
 }
 
+/// Direct GBM has two distinct finite acceptance contracts. The additional
+/// frame in retained mode is compositor-only XDG destruction, not an extra
+/// DMA-BUF import. Refuse missing, arbitrary or mismatched configuration.
+pub fn direct_gpu_frame_budget_matches(multi:Option<&str>,frames:Option<&str>)->bool {
+    matches!((multi,frames),(None,Some("12"))|(Some("YES_QEMU_VM"),Some("13")))
+}
+
 impl std::fmt::Display for FrameBudgetError {
     fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
         write!(f,"invalid QEMU continuous frame budget")
@@ -67,6 +74,17 @@ impl std::error::Error for FrameBudgetError {}
 mod tests {
     use super::*;
 
+    #[test]
+    fn direct_gpu_exact_mode_budget_rejects_cross_mode_and_invalid_counts() {
+        assert!(direct_gpu_frame_budget_matches(None,Some("12")));
+        assert!(direct_gpu_frame_budget_matches(Some("YES_QEMU_VM"),Some("13")));
+        for mode in [None,Some("YES_QEMU_VM"),Some("NO"),Some("")] {
+            for count in [None,Some("0"),Some("12"),Some("13"),Some("013"),Some("14"),Some("24"),Some("64")] {
+                let expected=matches!((mode,count),(None,Some("12"))|(Some("YES_QEMU_VM"),Some("13")));
+                assert_eq!(direct_gpu_frame_budget_matches(mode,count),expected);
+            }
+        }
+    }
     #[test]
     fn old_twelve_frame_proof_unchanged() {
         assert_eq!(frame_budget(None,DEFAULT_QEMU_FRAMES),Ok(12));
