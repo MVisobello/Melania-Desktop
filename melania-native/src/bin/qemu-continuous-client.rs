@@ -169,7 +169,7 @@ fn exercise_real_client_dmabuf(
     state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
     qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
     xdg_surface:&wl_surface::WlSurface,
-    second_surface:Option<&wl_surface::WlSurface>,
+    extra_surfaces:&[wl_surface::WlSurface],
 )->Result<(),Box<dyn Error>> {
     let dmabuf=state.dmabuf.take()
         .ok_or("QEMU Smithay server did not advertise zwp_linux_dmabuf_v1")?;
@@ -192,7 +192,8 @@ fn exercise_real_client_dmabuf(
        !state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier)) {
         return Err("QEMU Wayland compositor did not advertise XRGB8888+LINEAR".into());
     }
-    let multi_gpu=second_surface.is_some();
+    let multi_gpu=!extra_surfaces.is_empty();
+    if multi_gpu && extra_surfaces.len()!=3 {return Err("GPU probe requires four XDG surfaces".into());}
     if multi_gpu && !double_gpu {return Err("retained GPU client needs both formats".into());}
     let gpu_frames:u32=if multi_gpu {12} else if double_gpu {2} else {1};
 
@@ -222,12 +223,14 @@ fn exercise_real_client_dmabuf(
             let mut frame=renderer.render(
                 &mut target,(W as i32,H as i32).into(),Transform::Normal
             )?;
-            let color=if gpu_index%2==1 {
-                let delta=if multi_gpu {((gpu_index-1)/2*10) as f32/255.0} else {0.0};
-                Color32F::new(0.33+delta,0.18,0.73,1.0)
+            let color=if multi_gpu {
+                let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(gpu_index-1))
+                    .ok_or("missing retained GPU fixture color")?;
+                Color32F::new(f32::from(r)/255.0,f32::from(g)/255.0,f32::from(b)/255.0,1.0)
+            } else if gpu_index==1 {
+                Color32F::new(0.33,0.18,0.73,1.0)
             } else {
-                let delta=if multi_gpu {((gpu_index-1)/2*10) as f32/255.0} else {0.0};
-                Color32F::new(0.12,0.64-delta,0.27,1.0)
+                Color32F::new(0.12,0.64,0.27,1.0)
             };
             frame.clear(
                 color,
@@ -259,8 +262,10 @@ fn exercise_real_client_dmabuf(
             zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
         );
         let probe=if gpu_kms {
-                if gpu_index%2==0 {
-                    second_surface.unwrap_or(xdg_surface).clone()
+                if multi_gpu {
+                    let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[(gpu_index-1) as usize];
+                    if slot==1 {xdg_surface.clone()}
+                    else {extra_surfaces[(slot-2) as usize].clone()}
                 } else {xdg_surface.clone()}
             } else {compositor.create_surface(qh,())};
         if gpu_kms {
@@ -444,34 +449,39 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.xdg_acked {return Err("continuous client xdg configure missing".into());}
     let multi_gpu=std::env::var("MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW")
         .as_deref()==Ok("YES_QEMU_VM");
-    let second=if multi_gpu {
+    let mut extra=Vec::new();
+    if multi_gpu {
         if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
             .as_deref()!=Ok("YES_QEMU_VM") {
             return Err("multiwindow GPU requires real KMS client mode".into());
         }
-        let s=compositor.create_surface(&qh,());
-        let x=wm.get_xdg_surface(&s,&qh,());
-        let t=x.get_toplevel(&qh,());
-        t.set_title("Melania retained GPU window B".into());
-        state.xdg_acked=false;
-        s.commit();
-        for _ in 0..5 {
-            queue.roundtrip(&mut state)?;
-            if state.xdg_acked {break;}
+        for slot in 2..=4 {
+            let s=compositor.create_surface(&qh,());
+            let x=wm.get_xdg_surface(&s,&qh,());
+            let t=x.get_toplevel(&qh,());
+            t.set_title(format!("Melania retained GPU window {slot}"));
+            state.xdg_acked=false;
+            s.commit();
+            for _ in 0..5 {
+                queue.roundtrip(&mut state)?;
+                if state.xdg_acked {break;}
+            }
+            if !state.xdg_acked {return Err("additional GPU toplevel configure missing".into());}
+            extra.push((s,x,t));
         }
-        if !state.xdg_acked {return Err("second GPU toplevel configure missing".into());}
-        Some((s,x,t))
-    } else {None};
+    }
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
         .as_deref()==Ok("YES_QEMU_VM") {
-        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,
-            second.as_ref().map(|(s,_,_)|s))?;
-        if let Some((s,x,t))=second {
-            println!("MELANIA_QEMU_RETAINED_GPU_TWO_WINDOW_CLIENT_12_ACKS=true");
+        let extra_surfaces:Vec<_>=extra.iter().map(|(s,_,_)|s.clone()).collect();
+        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,&extra_surfaces)?;
+        if multi_gpu {
+            println!("MELANIA_QEMU_RETAINED_GPU_FOUR_WINDOW_CLIENT_12_ACKS=true");
             std::io::stdout().flush()?;
-            t.destroy();
-            x.destroy();
-            s.destroy();
+            for (s,x,t) in extra {
+                t.destroy();
+                x.destroy();
+                s.destroy();
+            }
             toplevel.destroy();
             xdg.destroy();
             surface.destroy();
