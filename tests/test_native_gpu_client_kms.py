@@ -154,6 +154,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
 
+    def test_opaque_output_uses_vertical_gpu_blit_with_asymmetric_client_pixels(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        copy=gbm.split("fn blit_opaque_direct_window(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("gl.BlitFramebuffer(0,h,w,0,x,y,x+w,y+h",copy)
+        self.assertIn("gl.Finish()",copy)
+        self.assertNotIn("map_texture(",copy)
+        self.assertIn("gl.BindFramebuffer(ffi::FRAMEBUFFER,draw as u32)",copy)
+        self.assertIn("opaque GPU blit orientation mismatch",gbm)
+        guest=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
+        self.assertIn("MELANIA_QEMU_CLIENT_DIRECT_ORIENTATION=YES_QEMU_VM",guest)
+        self.assertIn("MELANIA_NATIVE_DIRECT_GPU_XRGB_OUTPUT_BLIT=true",guest)
+
     def test_opaque_source_normalized_on_gpu_without_cpu_staging(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         normalize=gbm.split("fn normalize_opaque_direct_source(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
@@ -208,6 +220,10 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertNotIn("copy_framebuffer",snapshot)
         self.assertNotIn("map_texture",snapshot)
         self.assertIn("frame.finish()?.wait()?",snapshot)
+        self.assertIn("blit_opaque_direct_window(renderer,source,(0,0))?",snapshot)
+        self.assertIn("if !opaque {",snapshot)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_OPAQUE_SNAPSHOT_BLIT=true",snapshot)
+        self.assertIn("blit_opaque_direct_window(&mut renderer,image,(160,120))?",gbm)
         self.assertIn("extra_surfaces[(slot-2) as usize].clone()",CLIENT)
         self.assertIn("RETAINED_GPU_PROBE_SLOTS",CLIENT)
         self.assertIn("for slot in 2..=4",CLIENT)

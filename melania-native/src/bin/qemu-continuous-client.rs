@@ -266,6 +266,12 @@ fn exercise_real_client_dmabuf(
                     &[Rectangle::from_loc_and_size((20,20),(48,36))],
                 )?;
             }
+            if gpu_index==2 &&
+                std::env::var("MELANIA_QEMU_CLIENT_DIRECT_ORIENTATION").as_deref()==Ok("YES_QEMU_VM") {
+                // Prove the flipped opaque blit with an asymmetric GPU patch.
+                frame.clear(Color32F::new(0.79,0.24,0.08,1.0),
+                    &[Rectangle::from_loc_and_size((20,20),(48,36))])?;
+            }
             // Wait for real GLES completion, not a fabricated client fence.
             frame.finish()?.wait()?;
         }
