@@ -67,7 +67,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::{ClientCommitLedger,MAX_PENDING_CLIENTS},multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels,WindowBatchUpdate},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::ClientCommitLedger,multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels,WindowBatchUpdate},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -692,8 +692,7 @@ impl BridgeState {
                    .any(|(known,_)|known==&completed.resource) {
                 return Err("GPU DMA-BUF KMS ACK has no retained EGL client import".into());
             }
-            let is_live=(1..=MAX_PENDING_CLIENTS as u64)
-                .any(|slot|self.known_window_surfaces.get(slot)==Some(&completed.key));
+            let is_live=self.known_window_surfaces.id_of(&completed.key).is_some();
             // Drop the GPU texture BEFORE sending the wl_buffer.release.
             // After the verified kernel ACK the owned CPU/KMS image is the
             // only remaining scene owner, so the client may now reuse its BO.
@@ -2494,7 +2493,6 @@ impl CompositorHandler for BridgeState {
                 if dma_buffer && gpu_client_kms && self.direct_gpu_sender.is_some() {
                     let multi_gpu=std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
                         .as_deref()==Ok("YES_QEMU_VM");
-                    let expected_slot=if multi_gpu {1+self.continuous_frame_count%2} else {1};
                     let allowed=if multi_gpu {self.continuous_frame_count<12} else {
                         melania_native::native_client_dmabuf::qemu_gpu_frame_allowed(
                             self.continuous_frame_count,true)
@@ -2511,18 +2509,16 @@ impl CompositorHandler for BridgeState {
                         buffer.release();
                         return;
                     }
-                    // Never allocate a slot for a third surface or change
-                    // the identity of the established pair.
-                    let existing=self.known_window_surfaces.id_of(surface);
-                    let slot_allowed=existing.map_or_else(
-                        ||self.known_window_surfaces.get(expected_slot).is_none(),
-                        |slot|slot==expected_slot);
-                    if !slot_allowed ||
-                       self.known_window_surfaces.register(surface.clone()).ok()!=Some(expected_slot) {
-                        self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
-                        buffer.release();
-                        return;
-                    }
+                    // The registry, not frame number or pixel format,
+                    // determines the independent compositor-local surface ID.
+                    let slot=match self.known_window_surfaces.register(surface.clone()) {
+                        Ok(slot) if multi_gpu || slot==1=>slot,
+                        _=>{
+                            self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                            buffer.release();
+                            return;
+                        }
+                    };
                     match self.continuous_client_ledger.stage(surface.clone(),buffer) {
                         Ok(None)=>{},
                         Ok(Some(superseded))=>superseded.release(),
@@ -2531,7 +2527,7 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     }
-                    self.direct_gpu_pending=dmabuf.map(|buffer|(expected_slot,buffer));
+                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,buffer));
                     self.multi_scene.note_external_gpu_frame();
                     self.note_scene_change();
                     if let Err(error)=self.submit_continuous_frame() {
@@ -4369,7 +4365,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         continuous_presentation_token:None,
         native_presentation_guard:NativePresentationGuard::default(),
         continuous_client_ledger:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
-            .as_deref()==Ok("YES_QEMU_VM") {
+            .as_deref()==Ok("YES_QEMU_VM") ||
+            std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM") {
                 ClientCommitLedger::with_capacity(16).expect("bounded QEMU receipts")
             } else {ClientCommitLedger::new()}, 
         continuous_frame_count:0,
@@ -4494,7 +4491,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             std::env::var("MELANIA_NATIVE_TWO_WINDOWS").as_deref()==Ok("YES_QEMU_VM"),
         pointer_buttons_held:BTreeSet::new(),
         known_window_surfaces:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
-            .as_deref()==Ok("YES_QEMU_VM") {
+            .as_deref()==Ok("YES_QEMU_VM") ||
+            std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM") {
                 WindowSlots::with_capacity(16).expect("bounded QEMU window registry")
             } else {WindowSlots::default()}, 
         stream:None,
