@@ -365,7 +365,10 @@ fn verify_direct_client_gpu_pixels(
     fn sample(renderer:&mut GlesRenderer,
         bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
         x:i32,y:i32)->Result<[u8;3],Box<dyn Error>> {
-        let region=Rectangle::from_loc_and_size((x,800-1-y),(1,1));
+        // Transform::Normal on Smithay's offscreen target projects
+        // destination y directly into GL row coordinates (as in the
+        // existing XRGB memory upload). A 1px sample has no row reversal.
+        let region=Rectangle::from_loc_and_size((x,y),(1,1));
         let mapping=renderer.copy_framebuffer(bound,region,Fourcc::Abgr8888)?;
         let rgba=renderer.map_texture(&mapping)?;
         Ok(rgba.get(..3).ok_or("short GPU diagnostic sample")?.try_into()?)
@@ -600,8 +603,12 @@ fn qemu_gpu_scene_stream(
                 // Damage and opaque regions are local to the destination.
                 let local=Rectangle::from_size((360,224).into());
                 let opaque=if index==1 {std::slice::from_ref(&local)} else {&[]};
+                // Match the existing compositor orientation: its old
+                // CPU staging path flipped the bottom-up GLES readback
+                // before uploading the top-origin scene. Do that transform
+                // in the GPU shader, rather than copying rows on the CPU.
                 frame.render_texture_from_to(&texture,src,dest,&[local],opaque,
-                    Transform::Normal,1.0,None,&[])?;
+                    Transform::Flipped180,1.0,None,&[])?;
             } else {
                 let src=Rectangle::from_size((W as f64,H as f64).into());
                 frame.clear(Color32F::new(0.0,0.0,0.0,1.0),&[output_rect])?;
@@ -615,9 +622,11 @@ fn qemu_gpu_scene_stream(
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
             drop(bound);
-            drop(texture);
-            drop(client_dmabuf);
-            renderer.cleanup_texture_cache()?;
+            if direct_frame {
+                drop(texture);
+                drop(client_dmabuf);
+                renderer.cleanup_texture_cache()?;
+            }
 
             // A previously confirmed scanout may have been taken over
             // between frames. Never render/submit into a lost DRM route.
