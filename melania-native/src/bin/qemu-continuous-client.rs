@@ -568,6 +568,18 @@ fn main()->Result<(),Box<dyn Error>> {
             }
             if state.frame_done_count!=12 {return Err("GPU close fabricated a client frame callback".into());}
             println!("MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_ACKED=true");
+            if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM") {
+                let deadline=Instant::now()+Duration::from_secs(20);
+                loop {
+                    queue.roundtrip(&mut state)?;
+                    if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-move-acked")
+                        .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") {break;}
+                    if Instant::now()>=deadline {return Err("real GPU drag missing verified KMS receipt".into());}
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if state.frame_done_count!=12 {return Err("GPU drag fabricated callback".into());}
+                println!("MELANIA_QEMU_RETAINED_GPU_REAL_DRAG_ACKED=true");
+            }
             for (s,x,t) in extra {
                 t.destroy();
                 x.destroy();

@@ -542,7 +542,7 @@ fn verify_direct_client_gpu_pixels(
 fn verify_retained_gpu_scene(
     renderer:&mut GlesRenderer,
     bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
-    index:u64,removed_slot:Option<u64>,
+    index:u64,removed_slot:Option<u64>,moved_slot:Option<(u64,i32,i32)>,
 )->Result<(),Box<dyn Error>> {
     let _=bound;
     use crate::window_placement::{retained_gpu_geometry,retained_gpu_probe_size,
@@ -561,22 +561,35 @@ fn verify_retained_gpu_scene(
         }
         Ok(())
     };
-    if index==12 {
-        if removed_slot!=Some(2) {return Err("expected actual destroyed GPU surface 2".into());}
+    if index>=12 {
+        if index==12 && removed_slot!=Some(2) {return Err("expected actual destroyed GPU surface 2".into());}
         let prior=expected_by_slot.remove(&2).ok_or("missing closed GPU window")?;
         let (w,h)=retained_gpu_probe_size(prior).ok_or("missing closed GPU extent")?;
         let (x,y,w,h)=retained_gpu_geometry(2,w,h).ok_or("missing closed GPU geometry")?;
-        for (px,py) in [(x+w/2,y+h/2),(x+w-3,y+h-3),(x+w+2,y+h/2),(x-2,y+h/2)] {
-            sample(renderer,px,py,[27,33,58])?;
+        if index==12 {
+            for (px,py) in [(x+w/2,y+h/2),(x+w-3,y+h-3),(x+w+2,y+h/2),(x-2,y+h/2)] {
+                sample(renderer,px,py,[27,33,58])?;
+            }
         }
-        println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_PIXELS_VERIFIED=2");
+        if index==12 {println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_PIXELS_VERIFIED=2");}
     } else if removed_slot.is_some() {
         return Err("unexpected GPU removal during original 12-frame acceptance".into());
     }
+    if index==13 {
+        let (slot,x,y)=moved_slot.ok_or("missing real GPU drag")?;
+        if slot!=1 || (x-650).abs()>3 || (y-190).abs()>3 || removed_slot.is_some() {
+            return Err("unexpected real GPU drag destination".into());
+        }
+        // Old A content and decoration must disappear, not just move a cursor.
+        for (px,py) in [(200,150),(360,240),(158,200)] {
+            sample(renderer,px,py,[27,33,58])?;
+        }
+    } else if moved_slot.is_some() {return Err("unexpected GPU motion".into());}
     for (slot,frame) in expected_by_slot {
         let (w,h)=retained_gpu_probe_size(frame).ok_or("missing probe size")?;
         let expected=retained_gpu_probe_rgb(frame).ok_or("missing probe color")?;
-        let (x,y,w,h)=retained_gpu_geometry(slot,w,h).ok_or("missing GPU probe geometry")?;
+        let (mut x,mut y,w,h)=retained_gpu_geometry(slot,w,h).ok_or("missing GPU probe geometry")?;
+        if let Some((moved,px,py))=moved_slot {if moved==slot {x=px;y=py;}}
         // Center AND far corner prove the actual retained extent.
         sample(renderer,x+w/2,y+h/2,expected)?;
         sample(renderer,x+w-3,y+h-3,expected)?;
@@ -594,6 +607,7 @@ fn verify_retained_gpu_scene(
             }
         }
     }
+    if index==13 {println!("MELANIA_NATIVE_RETAINED_GPU_MOVE_PIXELS_VERIFIED=1");}
     Ok(())
 }
 
@@ -646,6 +660,8 @@ fn qemu_gpu_scene_stream(
         .as_deref()==Ok("YES_QEMU_VM");
     if multi_gpu && !direct_mode {return Err("retained GPU mode requires direct channel".into());}
     let total=if multi_gpu {13u64} else if direct_mode {12u64} else {24u64};
+    let move_gpu=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM");
+    let total=if move_gpu {14} else {total};
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
     if direct_mode && persistent {
@@ -811,6 +827,7 @@ fn qemu_gpu_scene_stream(
                 return Err("GPU Wayland compositor sent stale or reordered frame".into());
             }
             let mut removed_slot=None;
+            let mut moved_slot=None;
             let client_dmabuf=if direct_frame {
                 let (planned,slot,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
                     .recv_timeout(Duration::from_secs(2))?;
@@ -822,16 +839,25 @@ fn qemu_gpu_scene_stream(
                     (!multi_gpu && slot!=1) {
                     return Err("unexpected direct GPU surface slot".into());
                 }
+                use crate::continuous_kms_stream::DirectGpuUpdate;
                 match buffer {
-                    Some(buffer)=>Some((slot,buffer)),
-                    None if multi_gpu=>{
+                    DirectGpuUpdate::Buffer(buffer)=>Some((slot,buffer)),
+                    DirectGpuUpdate::Remove if multi_gpu=>{
                         if retained.remove(&slot).is_none() || !retained_layout.remove(slot) {
                             return Err("GPU removal references an absent surface".into());
                         }
                         removed_slot=Some(slot);
                         None
                     }
-                    None=>return Err("single-window GPU path cannot remove a surface".into()),
+                    DirectGpuUpdate::Move{x,y} if move_gpu=>{
+                        if !retained.contains_key(&slot) || !retained_layout.move_to(slot,x,y)? {
+                            return Err("GPU motion references missing or unchanged surface".into());
+                        }
+                        let rect=retained_layout.geometry(slot).ok_or("missing moved GPU geometry")?;
+                        moved_slot=Some((slot,rect.x,rect.y));
+                        None
+                    }
+                    _=>return Err("unsupported direct GPU scene operation".into()),
                 }
             } else {
                 if let Some(read)=pending_read {
@@ -869,7 +895,7 @@ fn qemu_gpu_scene_stream(
                     return Err("direct GPU client size/format mismatch".into());
                 }
                 Some(crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)?)
-            } else if removed_slot.is_some() {
+            } else if removed_slot.is_some() || moved_slot.is_some() {
                 None
             } else {
                 Some(renderer.import_memory(
@@ -885,7 +911,7 @@ fn qemu_gpu_scene_stream(
                 println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true");
                 Some(image)
             } else {None};
-            if multi_gpu && removed_slot.is_none() {
+            if multi_gpu && removed_slot.is_none() && moved_slot.is_none() {
                 use smithay::backend::allocator::Buffer;
                 let (slot,buffer)=client_dmabuf.as_ref().ok_or("missing retained GPU source")?;
                 let opaque=buffer.format().code==Fourcc::Xrgb8888;
@@ -988,12 +1014,12 @@ fn qemu_gpu_scene_stream(
             }
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} verify",index+1);}
             if multi_gpu {
-                verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot)?;
+                verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot)?;
             } else if direct_frame {
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
             drop(bound);
-            if direct_frame && removed_slot.is_none() {
+            if direct_frame && removed_slot.is_none() && moved_slot.is_none() {
                 let (_,buffer)=client_dmabuf.ok_or("direct client import disappeared")?;
                 let texture=texture.ok_or("direct client texture disappeared")?;
                 if direct_import_lifetime.len()>=12 {
@@ -1136,6 +1162,7 @@ fn qemu_gpu_scene_stream(
         if multi_gpu {
             println!("MELANIA_NATIVE_RETAINED_GPU_FOUR_WINDOW_12_FRAMES_PASS=true");
             println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_13_FRAMES_PASS=true");
+            if move_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_REAL_DRAG_14_FRAMES_PASS=true");}
         }
     } else {
         println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");

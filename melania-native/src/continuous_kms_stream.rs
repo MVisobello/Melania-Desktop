@@ -27,7 +27,12 @@ const ACK_BYTES: usize = 4 + 8 + 8 + 8 + 1;
 /// finishes sampling it. Only its matching ticket may unlock a direct job.
 // Some(buffer) replaces GPU-owned content; None removes the actual surface.
 // Both operations carry the same presentation ticket and zero CPU pixels.
-pub type DirectGpuFrame = (PlannedSceneFrame, u64, Option<smithay::backend::allocator::dmabuf::Dmabuf>);
+pub enum DirectGpuUpdate {
+    Buffer(smithay::backend::allocator::dmabuf::Dmabuf),
+    Remove,
+    Move {x:i32,y:i32},
+}
+pub type DirectGpuFrame = (PlannedSceneFrame, u64, DirectGpuUpdate);
 
 #[derive(Debug)]
 pub struct ContinuousKmsJob {
