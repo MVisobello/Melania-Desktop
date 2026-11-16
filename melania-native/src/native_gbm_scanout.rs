@@ -754,6 +754,7 @@ fn qemu_gpu_scene_stream(
         // At most the registry's bounded number of independently retained
         // texture allocations. IDs do not shift when another surface commits.
         let mut retained=std::collections::BTreeMap::<u64,smithay::backend::renderer::gles::GlesTexture>::new();
+        let mut retained_layout=crate::retained_gpu_layout::RetainedGpuLayout::default();
         loop {
             if !persistent && frames_seen>=total {break;}
             let index=frames_seen;
@@ -824,7 +825,7 @@ fn qemu_gpu_scene_stream(
                 match buffer {
                     Some(buffer)=>Some((slot,buffer)),
                     None if multi_gpu=>{
-                        if retained.remove(&slot).is_none() {
+                        if retained.remove(&slot).is_none() || !retained_layout.remove(slot) {
                             return Err("GPU removal references an absent surface".into());
                         }
                         removed_slot=Some(slot);
@@ -892,6 +893,8 @@ fn qemu_gpu_scene_stream(
                 // commit order, source Fourcc or presentation sequence.
                 let source=opaque_snapshot.as_mut().or(texture.as_mut()).ok_or("missing retained source texture")?;
                 let image=retain_direct_window(&mut renderer,source,opaque)?;
+                let size=buffer.size();
+                retained_layout.update_buffer(*slot,size.w,size.h)?;
                 retained.insert(*slot,image);
             }
             let sampled_texture=opaque_snapshot.as_ref().or(texture.as_ref());
@@ -905,13 +908,19 @@ fn qemu_gpu_scene_stream(
             if multi_gpu {
                 let bg=Color32F::new(27.0/255.0,33.0/255.0,58.0/255.0,1.0);
                 frame.clear(bg,&[output_rect])?;
-                // Stable order is independent of update order. A bounded
-                // scene can now contain more than two surface IDs.
-                for (&slot,image) in retained.iter() {
+                // Geometry and stacking belong to the compositor, not to
+                // the latest client buffer. Draw back-to-front from the
+                // same scene model that can later receive pointer moves.
+                if retained_layout.bottom_to_top().count()!=retained.len() {
+                    return Err("GPU texture and layout ownership diverged".into());
+                }
+                for (slot,rect) in retained_layout.bottom_to_top() {
                     use smithay::backend::renderer::Texture;
-                    let (x,y,w,h)=crate::window_placement::retained_gpu_geometry(
-                        slot,image.width() as i32,image.height() as i32)
-                        .ok_or("missing retained GPU window geometry")?;
+                    let image=retained.get(&slot).ok_or("missing retained GPU window texture")?;
+                    let (x,y,w,h)=(rect.x,rect.y,rect.width,rect.height);
+                    if (image.width() as i32,image.height() as i32)!=(w,h) {
+                        return Err("retained GPU geometry/texture dimensions diverged".into());
+                    }
                     let border=[
                         Rectangle::from_loc_and_size((x-6,y-6),(w+12,6)),
                         Rectangle::from_loc_and_size((x-6,y+h),(w+12,6)),

@@ -212,7 +212,9 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
-                       "for (&slot,image) in retained.iter()",
+                       "for (slot,rect) in retained_layout.bottom_to_top()",
+                       "retained_layout.update_buffer(*slot,size.w,size.h)?",
+                       "retained_layout.remove(slot)",
                        "verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot)",
                        "retained GPU scene frame {index} pixel ({x},{y}) mismatch"):
             self.assertIn(marker,gbm)
