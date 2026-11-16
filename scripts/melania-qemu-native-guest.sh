@@ -13,6 +13,18 @@ run_direct_gpu_probe() {
     [[ -x "$continuous_server" && -x "$continuous_client" ]] ||
       fatal 'direct_gpu_client_real_binaries_missing'
     # Real second-process client DMA-BUF -> GLES -> scanout GBM (no CPU staging).
+    local -a compositor_command=("$continuous_server" --experimental-wayland-seat)
+    local server_timeout=76
+    if [[ "${MELANIA_QEMU_DIRECT_GDB:-}" == YES_QEMU_VM ]]; then
+      command -v gdb >/dev/null || fatal 'focused_GDB_missing'
+      # Only inside the disposable diagnostic VM. Keep stdin on the real
+      # VT; gdb propagates the inferior exit code and prints all stacks.
+      compositor_command=(gdb --batch --return-child-result
+        -ex 'set pagination off' -ex 'set confirm off'
+        -ex 'set debuginfod enabled off' -ex 'run < /dev/tty1'
+        -ex 'thread apply all bt' --args "$continuous_server" --experimental-wayland-seat)
+      server_timeout=120
+    fi
     direct_gpu_client_server_log="$(mktemp -t melania-direct-gpu-client-kms-server-XXXXXX)"
     direct_gpu_client_client_log="$(mktemp -t melania-direct-gpu-client-kms-client-XXXXXX)"
     MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
@@ -27,12 +39,12 @@ run_direct_gpu_probe() {
     MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
     MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
     MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
-      timeout --signal=TERM --kill-after=3s 76s \
-      "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+      timeout --signal=TERM --kill-after=3s "${server_timeout}s" \
+      "${compositor_command[@]}" < /dev/tty1 \
       > "$direct_gpu_client_server_log" 2>&1 &
     direct_gpu_client_server_pid=$!
     direct_gpu_client_socket=''
-    for attempt in $(seq 1 100); do
+    for attempt in $(seq 1 300); do
       direct_gpu_client_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$direct_gpu_client_server_log" | head -n 1)"
       [[ -n "$direct_gpu_client_socket" ]] && break
       kill -0 "$direct_gpu_client_server_pid" 2>/dev/null || break
@@ -52,7 +64,14 @@ run_direct_gpu_probe() {
       timeout --signal=TERM --kill-after=3s 65s \
       "$continuous_client" > "$direct_gpu_client_client_log" 2>&1; then
       cat "$direct_gpu_client_server_log" "$direct_gpu_client_client_log"
-      kill "$direct_gpu_client_server_pid" 2>/dev/null || true
+      # A client can see socket closure before GDB finishes unwinding.
+      # Wait for the bounded debugger process to print the actual crash.
+      if [[ "${MELANIA_QEMU_DIRECT_GDB:-}" == YES_QEMU_VM ]]; then
+        wait "$direct_gpu_client_server_pid" || true
+        cat "$direct_gpu_client_server_log"
+      else
+        kill "$direct_gpu_client_server_pid" 2>/dev/null || true
+      fi
       fatal 'direct_gpu_client_real_separate_Wayland_process_failed'
     fi
     if ! wait "$direct_gpu_client_server_pid"; then

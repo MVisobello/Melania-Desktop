@@ -392,6 +392,55 @@ fn sample_direct_gpu_pixel(renderer:&mut GlesRenderer,x:i32,y:i32)
     Ok([pixel[0],pixel[1],pixel[2]])
 }
 
+// Normalize the opaque client EGL image into a compositor-owned RGBA
+// texture using a GPU framebuffer blit, not a CPU download/upload. The
+// focused VM reproduced a crash during glFinish when sampling the second
+// imported XRGB texture directly. Keep ARGB sampling and its premultiplied
+// alpha test unchanged. This is a proposed driver-path workaround.
+fn normalize_opaque_direct_source(
+    renderer:&mut GlesRenderer,
+    source:&mut smithay::backend::renderer::gles::GlesTexture,
+)->Result<smithay::backend::renderer::gles::GlesTexture,Box<dyn Error>> {
+    use smithay::backend::renderer::{Blit,Offscreen,Texture,TextureFilter};
+    use smithay::backend::renderer::gles::{ffi,GlesTexture};
+    let size=(source.width() as i32,source.height() as i32);
+    let mut copy:GlesTexture=renderer.create_buffer(Fourcc::Abgr8888,size.into())?;
+    {
+        let input=renderer.bind(source)?;
+        let mut output=renderer.bind(&mut copy)?;
+        let rect=Rectangle::from_size(size.into());
+        renderer.blit(&input,&mut output,rect,rect,TextureFilter::Nearest)?;
+        // The undefined X byte is never an alpha channel. Force alpha=1
+        // while preserving the GPU-copied RGB channels. Restore GL state.
+        renderer.with_context(|gl|->Result<(),String>{
+            unsafe {
+                if gl.CheckFramebufferStatus(ffi::DRAW_FRAMEBUFFER)!=ffi::FRAMEBUFFER_COMPLETE {
+                    return Err("opaque GPU normalization framebuffer incomplete".into());
+                }
+                let mut mask=[0u8;4];
+                let mut clear=[0f32;4];
+                gl.GetBooleanv(ffi::COLOR_WRITEMASK,mask.as_mut_ptr());
+                gl.GetFloatv(ffi::COLOR_CLEAR_VALUE,clear.as_mut_ptr());
+                let scissor=gl.IsEnabled(ffi::SCISSOR_TEST)==ffi::TRUE;
+                gl.Disable(ffi::SCISSOR_TEST);
+                gl.ColorMask(ffi::FALSE,ffi::FALSE,ffi::FALSE,ffi::TRUE);
+                gl.ClearColor(0.0,0.0,0.0,1.0);
+                gl.Clear(ffi::COLOR_BUFFER_BIT);
+                gl.ColorMask(mask[0],mask[1],mask[2],mask[3]);
+                gl.ClearColor(clear[0],clear[1],clear[2],clear[3]);
+                if scissor {gl.Enable(ffi::SCISSOR_TEST);}
+                gl.Finish();
+                let error=gl.GetError();
+                if error!=ffi::NO_ERROR {
+                    return Err(format!("opaque GPU normalization failed {error:#x}"));
+                }
+            }
+            Ok(())
+        })??;
+    }
+    Ok(copy)
+}
+
 fn verify_direct_client_gpu_pixels(
     renderer:&mut GlesRenderer,
     bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
@@ -524,6 +573,7 @@ fn qemu_gpu_scene_stream(
     // of allowing the client's destroy request to retire the driver's EGL
     // resources during the following frame. Never sample a released source.
     // Drop after kernel restoration; not a policy for unbounded sessions.
+    let mut normalized_gpu_sources=Vec::<smithay::backend::renderer::gles::GlesTexture>::new();
     let mut direct_import_lifetime=Vec::<(
         smithay::backend::allocator::dmabuf::Dmabuf,
         smithay::backend::renderer::gles::GlesTexture,
@@ -624,7 +674,7 @@ fn qemu_gpu_scene_stream(
             // GPU context, revalidating its producer fence at sampling.
             // SHM-only frames retain the historical memory upload.
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} import",index+1);}
-            let texture=if let Some(buffer)=client_dmabuf.as_ref() {
+            let mut texture=if let Some(buffer)=client_dmabuf.as_ref() {
                 use smithay::backend::allocator::Buffer;
                 if buffer.size().w!=360 || buffer.size().h!=224 ||
                    buffer.format().code!=(if index==0 {Fourcc::Argb8888} else {Fourcc::Xrgb8888}) {
@@ -636,6 +686,13 @@ fn qemu_gpu_scene_stream(
                     &pixels,Fourcc::Xrgb8888,(W as i32,H as i32).into(),false,
                 )?
             };
+            let opaque_snapshot=if direct_frame && index==1 {
+                println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} opaque_blit",index+1);
+                let image=normalize_opaque_direct_source(&mut renderer,&mut texture)?;
+                println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true");
+                Some(image)
+            } else {None};
+            let sampled_texture=opaque_snapshot.as_ref().unwrap_or(&texture);
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} bind",index+1);}
             let target=if index%2==0 {&mut a} else {&mut b};
             let mut bound=renderer.bind(target)?;
@@ -660,7 +717,7 @@ fn qemu_gpu_scene_stream(
                 // CPU staging path flipped the bottom-up GLES readback
                 // before uploading the top-origin scene. Do that transform
                 // in the GPU shader, rather than copying rows on the CPU.
-                frame.render_texture_from_to(&texture,src,dest,&[local],opaque,
+                frame.render_texture_from_to(sampled_texture,src,dest,&[local],opaque,
                     Transform::Flipped180,1.0,None,&[])?;
             } else {
                 let src=Rectangle::from_size((W as f64,H as f64).into());
@@ -692,6 +749,7 @@ fn qemu_gpu_scene_stream(
                     return Err("finite direct GPU import lifetime budget exceeded".into());
                 }
                 direct_import_lifetime.push((buffer,texture));
+                if let Some(image)=opaque_snapshot {normalized_gpu_sources.push(image);}
                 println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} retained",index+1);
             }
 
@@ -809,6 +867,7 @@ fn qemu_gpu_scene_stream(
         // All draws returned actual GPU completion and the kernel has
         // restored its original CRTC. The old client images are never used
         // for future rendering; retire them now under the owning context.
+        normalized_gpu_sources.clear();
         direct_import_lifetime.clear();
         renderer.cleanup_texture_cache()?;
         println!("MELANIA_NATIVE_DIRECT_GPU_RETIRED_AFTER_RESTORE=true");

@@ -154,6 +154,17 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
 
+    def test_opaque_source_normalized_on_gpu_without_cpu_staging(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        normalize=gbm.split("fn normalize_opaque_direct_source(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("renderer.blit(&input,&mut output,rect,rect,TextureFilter::Nearest)",normalize)
+        self.assertIn("gl.ColorMask(ffi::FALSE,ffi::FALSE,ffi::FALSE,ffi::TRUE)",normalize)
+        self.assertIn("gl.Finish()",normalize)
+        self.assertNotIn("copy_framebuffer(",normalize)
+        self.assertNotIn("map_texture(",normalize)
+        self.assertIn("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true",gbm)
+        self.assertIn("sampled_texture",gbm)
+
     def test_direct_gpu_diagnostics_do_not_queue_pbo_destruction(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         sample=gbm.split("fn sample_direct_gpu_pixel(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
