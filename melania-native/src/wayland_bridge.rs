@@ -3484,6 +3484,7 @@ impl XdgShellHandler for BridgeState {
         let parent_key=self.known_window_surfaces.remove(&surface);
         // GPU-owned content does not live in the CPU multi_scene. A real
         // destroyed XDG role must explicitly retire its independent texture.
+        let mut gpu_removed=false;
         if let Some(slot)=parent_key {
             if self.direct_gpu_slots.remove(&slot) &&
                 std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM") &&
@@ -3494,10 +3495,7 @@ impl XdgShellHandler for BridgeState {
                 }
                 self.direct_gpu_pending=Some((slot,None));
                 self.multi_scene.note_external_gpu_frame();
-                self.note_scene_change();
-                if let Err(error)=self.submit_continuous_frame() {
-                    eprintln!("MELANIA_NATIVE_DIRECT_GPU_CLOSE_SUBMIT_FAILED={error}");
-                }
+                gpu_removed=true;
             }
         }
         let successor=if self.tab_stack_mode {
@@ -3519,7 +3517,7 @@ impl XdgShellHandler for BridgeState {
                 self.multi_scene.remove(key)
             }
         } else {false};
-        if removed || popup_damage {
+        if removed || popup_damage || gpu_removed {
             self.note_scene_change();
             if self.continuous_kms_mode &&
                (self.persistent_kms_mode ||

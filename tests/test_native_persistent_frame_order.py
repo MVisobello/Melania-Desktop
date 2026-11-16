@@ -37,7 +37,7 @@ class PersistentFrameOrder(unittest.TestCase):
                         CPU.index("std::mem::swap(&mut pixels,&mut previous_pixels);"))
         self.assertIn("if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent",GPU)
         self.assertIn("let total=if persistent {None} else",CPU)
-        self.assertIn("let total=if direct_mode {12u64} else {24u64};",GPU)
+        self.assertIn("let total=if multi_gpu {13u64} else if direct_mode {12u64} else {24u64};",GPU)
         self.assertIn("if !persistent && frames_seen>=total {break;}",GPU)
         self.assertIn('let expected_marker=if direct_frame {b"MLG1"} else {b"MLF1"};',GPU)
         self.assertIn("direct GPU buffer ticket mismatch",GPU)

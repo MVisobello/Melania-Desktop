@@ -245,6 +245,12 @@ class RealClientDmabufToKms(unittest.TestCase):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         close=BRIDGE.split("fn toplevel_destroyed(",1)[1]
         self.assertIn("self.direct_gpu_pending=Some((slot,None))",close)
+        close=close.split("fn grab(&mut self",1)[0]
+        self.assertLess(close.index("self.direct_gpu_pending=Some((slot,None))"),
+                        close.index("if removed || popup_damage || gpu_removed {"))
+        self.assertLess(close.index("if removed || popup_damage || gpu_removed {"),
+                        close.index("self.submit_continuous_frame()"))
+        self.assertEqual(close.count("self.submit_continuous_frame()"),1)
         self.assertIn("retained.remove(&slot)",gbm)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_CLOSE_PIXELS_VERIFIED=2",gbm)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=13 windows=3",GUEST)
