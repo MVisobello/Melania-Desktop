@@ -300,6 +300,16 @@ fn ensure_implicit_client_writer_ready(buffer:&Dmabuf)->Result<(),String> {
     Ok(())
 }
 
+/// Import admission is not a permanent acquire guarantee: a client may
+/// submit new producer work after wl_buffer creation, before wl_surface.commit.
+/// Check the same kernel-backed plane again immediately before GPU sampling.
+/// This bounded implicit-fence check does not implement explicit syncobj,
+/// prevent hostile concurrent writes, or establish a presentation receipt.
+pub fn client_sampling_format(buffer:&Dmabuf)->Result<Fourcc,String> {
+    ensure_implicit_client_writer_ready(buffer)?;
+    Ok(buffer.format().code)
+}
+
 /// Import a *client-supplied* DMA-BUF on the renderer that belongs to the
 /// currently active libseat DRM device. The caller must retain both the
 /// returned GlesTexture and the wl_buffer until the import's lifetime ends,
@@ -792,6 +802,30 @@ mod tests {
         drop(producer);
         assert!(poll_implicit_writer_ready(reader.as_raw_fd()).is_err());
         assert!(poll_implicit_writer_ready(-1).is_err());
+    }
+
+    #[test]
+    fn client_sampling_rechecks_kernel_readiness_after_import_admission() {
+        use std::{io::{Read,Write},os::{fd::OwnedFd,unix::net::UnixStream}};
+        let (mut consumer,mut producer)=UnixStream::pair().unwrap();
+        let mut builder=Dmabuf::builder(
+            (360,224),Fourcc::Argb8888,Modifier::Linear,DmabufFlags::empty());
+        let fd:OwnedFd=consumer.try_clone().unwrap().into();
+        assert!(builder.add_plane(fd,0,0,1440));
+        let buffer=builder.build().unwrap();
+        // A real controllable kernel FD, not a GPU or sync_file fixture.
+        // Readiness at import must not be reused as readiness at sampling.
+        producer.write_all(b"1").unwrap();
+        ensure_implicit_client_writer_ready(&buffer).unwrap();
+        let mut byte=[0u8;1];
+        consumer.read_exact(&mut byte).unwrap();
+        assert!(client_sampling_format(&buffer).unwrap_err().contains("pending"));
+        producer.write_all(b"2").unwrap();
+        assert_eq!(client_sampling_format(&buffer).unwrap(),Fourcc::Argb8888);
+        consumer.read_exact(&mut byte).unwrap();
+        assert_eq!(byte,*b"2");
+        drop(producer);
+        assert!(client_sampling_format(&buffer).is_err());
     }
 
     #[test]

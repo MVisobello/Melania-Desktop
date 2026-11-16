@@ -90,6 +90,23 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(path.index("validate_client_plane_backing(buffer)?;"),
                         path.index("ensure_implicit_client_writer_ready(buffer)?;"))
 
+    def test_live_commit_rechecks_writer_fence_before_gpu_sampling(self):
+        helper=GPU.split("pub fn client_sampling_format(",1)[1].split(
+            "pub fn import_client_dmabuf(",1)[0]
+        self.assertIn("ensure_implicit_client_writer_ready(buffer)?;",helper)
+        self.assertIn("fn client_sampling_rechecks_kernel_readiness_after_import_admission()",GPU)
+        live=BRIDGE.split("let client_gpu_snapshot=if dma_buffer && gpu_client_kms",1)[1]
+        check=live.index("client_sampling_format(dmabuf)")
+        refused=live.index("MELANIA_NATIVE_CLIENT_DMABUF_SAMPLING_REFUSED=",check)
+        released=live.index("buffer.release();",refused)
+        returned=live.index("return;",released)
+        sample=live.index("readback_qemu_client_bgra(renderer,texture,source_format)")
+        self.assertLess(check,refused)
+        self.assertLess(refused,released)
+        self.assertLess(released,returned)
+        self.assertLess(returned,sample)
+        self.assertIn("gpu_client_missing_two_sampling_fence_rechecks",GUEST)
+
     def test_implicit_fence_poll_retries_eintr_without_blocking(self):
         # EINTR is not a GPU-fence failure. Keep retries bounded and do not
         # convert an interrupted kernel poll into an unbounded Wayland stall.
@@ -188,7 +205,7 @@ class RealClientDmabufToKms(unittest.TestCase):
             "MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU",
             "readback_qemu_client_bgra(renderer,texture,source_format)",
             "smithay::wayland::dmabuf::get_dmabuf(&buffer)",
-            "Ok(dmabuf)=>dmabuf.format().code",
+            "client_sampling_format(dmabuf)",
             "self.multi_scene.upsert(key,pixels)",
             "self.continuous_client_ledger.stage(surface.clone(),buffer)",
             "self.submit_continuous_frame()",

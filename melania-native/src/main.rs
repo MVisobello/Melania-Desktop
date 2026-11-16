@@ -961,6 +961,14 @@ fn experimental_kms_test() -> Result<(),Box<dyn Error>> {
         // destroying all temporary kernel/GPU handles, including failures.
         let tested=(|| -> Result<bool,Box<dyn Error>> {
         let fd=DrmDeviceFd::new(DeviceFd::from(descriptor.try_clone()?));
+        // Probe the actual libseat-owned kernel timeline functionality
+        // without advertising a protocol or altering the baseline CRTC.
+        let timeline_probe=melania_native::native_drm_timeline::probe_kernel_timelines(&fd)?;
+        println!("MELANIA_NATIVE_DRM_SYNCOBJ_PROBE={}",match timeline_probe {
+            melania_native::native_drm_timeline::TimelineProbe::Unsupported=>"unsupported",
+            melania_native::native_drm_timeline::TimelineProbe::TimelineOnly=>"timeline_only",
+            melania_native::native_drm_timeline::TimelineProbe::TimelineAndEventfd=>"timeline_and_eventfd_verified",
+        });
         let (mut device,_drm_events)=match DrmDevice::new(fd,false) {
             Ok(result)=>result,
             Err(error)=>{

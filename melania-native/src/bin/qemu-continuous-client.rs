@@ -9,6 +9,10 @@ use wayland_client::{
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_v1,zwp_linux_buffer_params_v1,
 };
+use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
+    wp_linux_drm_syncobj_manager_v1,wp_linux_drm_syncobj_surface_v1,wp_linux_drm_syncobj_timeline_v1,
+};
+use melania_native::native_drm_timeline::KernelTimeline;
 use smithay::{
     backend::{
         allocator::{
@@ -35,6 +39,7 @@ struct Client {
     wm:Option<xdg_wm_base::XdgWmBase>,
     shm:Option<wl_shm::WlShm>,
     dmabuf:Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    explicit_sync:Option<wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1>,
     dmabuf_formats:Vec<(u32,u64)>,
     output:Option<wl_output::WlOutput>,
     output_mode_received:bool,
@@ -60,11 +65,17 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                     std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
                         .as_deref()==Ok("YES_QEMU_VM") =>
                     state.dmabuf=Some(registry.bind(name,version.min(3),qh,())),
+                "wp_linux_drm_syncobj_manager_v1" if std::env::var("MELANIA_QEMU_CLIENT_EXPLICIT_SYNC")
+                    .as_deref()==Ok("YES_QEMU_VM") =>
+                    state.explicit_sync=Some(registry.bind(name,1,qh,())),
                 _=>{}
             }
         }
     }
 }
+wayland_client::delegate_noop!(Client: ignore wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1);
+wayland_client::delegate_noop!(Client: ignore wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1);
+wayland_client::delegate_noop!(Client: ignore wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1);
 impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,()> for Client {
     fn event(state:&mut Self,_:&zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
              event:zwp_linux_dmabuf_v1::Event,_:&(),_:&Connection,
@@ -198,13 +209,20 @@ fn exercise_real_client_dmabuf(
     // compositor's separate libseat-owned DRM FD can perform KMS modesets.
     let file=OpenOptions::new().read(true).write(true)
         .open("/dev/dri/card0")?;
-    let gbm=GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file))))?;
+    let card=DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file)));
+    let explicit=std::env::var("MELANIA_QEMU_CLIENT_EXPLICIT_SYNC").as_deref()==Ok("YES_QEMU_VM");
+    let manager=if explicit {
+        if !gpu_kms || !double_gpu {return Err("explicit sync needs two real GPU frames".into());}
+        Some(state.explicit_sync.take().ok_or("missing explicit sync global")?)
+    } else {None};
+    let gbm=GbmDevice::new(card.clone())?;
     let mut allocator=DmabufAllocator(GbmAllocator::new(
         gbm.clone(),GbmBufferFlags::RENDERING,
     ));
     let display=unsafe {EGLDisplay::new(gbm)}?;
     let context=EGLContext::new(&display)?;
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    let surface_sync=manager.as_ref().map(|manager|manager.get_surface(xdg_surface,qh,()));
     for gpu_index in 1..=gpu_frames {
         // Real fresh GBM BO and live FD for each independent frame.
         // Frame 1 keeps the original ARGB transparency probe; frame 2
@@ -263,14 +281,54 @@ fn exercise_real_client_dmabuf(
         state.buffer_released=false;
         probe.attach(Some(&imported),0,0);
         probe.damage_buffer(0,0,W as i32,H as i32);
+        // Deliberately withhold acquire even after the genuine GBM render.
+        // A separate timeline per allocation proves actual release ownership.
+        let sync=if let (Some(manager),Some(surface_sync))=(manager.as_ref(),surface_sync.as_ref()) {
+            let acquire=KernelTimeline::create(&card)?;
+            let release=KernelTimeline::create(&card)?;
+            let acquire_fd=acquire.export_timeline()?;
+            let release_fd=release.export_timeline()?;
+            let acquire_obj=manager.import_timeline(acquire_fd.as_fd(),qh,());
+            let release_obj=manager.import_timeline(release_fd.as_fd(),qh,());
+            surface_sync.set_acquire_point(&acquire_obj,0,1);
+            surface_sync.set_release_point(&release_obj,0,1);
+            Some((acquire,release,acquire_obj,release_obj))
+        } else {None};
         probe.commit();
+        if let Some((acquire,release,_,_))=sync.as_ref() {
+            let withheld=Instant::now()+Duration::from_millis(200);
+            while Instant::now()<withheld {
+                queue.roundtrip(state)?;
+                if state.frame_done_count>=gpu_index || release.ready(1)? {
+                    return Err("explicit commit presented/released before acquire".into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            println!("MELANIA_QEMU_EXPLICIT_ACQUIRE_BLOCKED={gpu_index}");
+            acquire.signal(1)?;
+        }
         let deadline=Instant::now()+Duration::from_secs(10);
         while !state.buffer_released ||
               (gpu_kms && state.frame_done_count!=gpu_index) {
             queue.roundtrip(state)?;
+            if let Some((_,release,_,_))=sync.as_ref() {
+                // Only the kernel release point authorizes explicit reuse.
+                state.buffer_released=release.ready(1)?;
+            }
             if Instant::now()>=deadline {
                 return Err("real client DMA-BUF missing verified GPU-to-KMS release or callback".into());
             }
+        }
+        if let Some((acquire,release,acquire_obj,release_obj))=sync {
+            if !release.ready(1)? || state.frame_done_count!=gpu_index {
+                return Err("explicit release missing verified callback".into());
+            }
+            println!("MELANIA_QEMU_EXPLICIT_RELEASE_VERIFIED={gpu_index}");
+            acquire_obj.destroy();
+            release_obj.destroy();
+            queue.roundtrip(state)?;
+            acquire.close()?;
+            release.close()?;
         }
         if gpu_kms {
             if state.frame_done_count!=gpu_index {
@@ -402,6 +460,9 @@ fn exercise_real_client_dmabuf(
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
     dmabuf.destroy();
+    if let Some(surface_sync)=surface_sync {surface_sync.destroy();}
+    if let Some(manager)=manager {manager.destroy();}
+    if explicit {queue.roundtrip(state)?;}
     Ok(())
 }
 
