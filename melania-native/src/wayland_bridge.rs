@@ -2495,7 +2495,19 @@ impl CompositorHandler for BridgeState {
                     // The wl_buffer's real DMA-BUF Fourcc determines whether
                     // alpha is meaningful. XRGB/XBGR alpha readback is undefined.
                     let source_format=match smithay::wayland::dmabuf::get_dmabuf(&buffer) {
-                        Ok(dmabuf)=>dmabuf.format().code,
+                        Ok(dmabuf)=>match melania_native::native_client_dmabuf::
+                            client_sampling_format(dmabuf) {
+                            Ok(format)=>format,
+                            Err(error)=>{
+                                // A creation-time import check is stale by
+                                // commit time. Do not sample, stage a frame,
+                                // or acknowledge presentation on refusal.
+                                eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_SAMPLING_REFUSED={error}");
+                                self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
+                                buffer.release();
+                                return;
+                            }
+                        },
                         Err(_)=>{
                             eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_FORMAT_MISSING=true");
                             self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
@@ -2503,6 +2515,7 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     };
+                    println!("MELANIA_NATIVE_CLIENT_DMABUF_SAMPLING_FENCE_READY=true");
                     match melania_native::native_client_dmabuf::
                         readback_qemu_client_bgra(renderer,texture,source_format) {
                         Ok(pixels)=>{
