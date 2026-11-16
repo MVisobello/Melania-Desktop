@@ -472,6 +472,8 @@ impl BridgeState {
             ));
             println!("MELANIA_NATIVE_DIRECT_GPU_TICKET_SUBMITTED={} generation={}",
                      planned.ticket.sequence,planned.generation);
+            println!("MELANIA_NATIVE_CONTINUOUS_FRAME_SUBMITTED={} generation={}",
+                     planned.ticket.sequence,planned.generation);
             let _=std::io::stdout().flush();
             return Ok(());
         }
@@ -2508,11 +2510,7 @@ impl CompositorHandler for BridgeState {
                     }
                     match self.continuous_client_ledger.stage(surface.clone(),buffer) {
                         Ok(None)=>{},
-                        Ok(Some(superseded))=>{
-                            superseded.release();
-                            eprintln!("MELANIA_NATIVE_DIRECT_GPU_UNEXPECTED_SUPERSEDED=true");
-                            return;
-                        },
+                        Ok(Some(superseded))=>superseded.release(),
                         Err((_,rejected))=>{
                             rejected.release();
                             return;
