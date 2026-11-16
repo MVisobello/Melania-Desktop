@@ -139,8 +139,8 @@ class RealClientDmabufToKms(unittest.TestCase):
 
     def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
-        for marker in ("fn retain_direct_window(", "retained[slot]=Some(retain_direct_window",
-                       "for (slot,entry) in retained.iter().enumerate()",
+        for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
+                       "for (&slot,image) in retained.iter()",
                        "verify_retained_gpu_scene(&mut renderer,&bound,index)",
                        "retained GPU scene slot {slot} frame {index} mismatch"):
             self.assertIn(marker,gbm)
@@ -148,10 +148,16 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertNotIn("copy_framebuffer",snapshot)
         self.assertNotIn("map_texture",snapshot)
         self.assertIn("frame.finish()?.wait()?",snapshot)
-        self.assertIn("second_surface.unwrap_or(xdg_surface).clone()",CLIENT)
+        self.assertIn("extra_surfaces[(slot-2) as usize].clone()",CLIENT)
+        self.assertIn("RETAINED_GPU_PROBE_SLOTS",CLIENT)
+        self.assertIn("for slot in 2..=4",CLIENT)
+        self.assertIn("self.known_window_surfaces.id_of(&completed.key).is_some()",BRIDGE)
+        self.assertIn("self.known_window_surfaces.register(surface.clone())",BRIDGE)
+        self.assertIn("let (slot,buffer)=client_dmabuf.as_ref()",gbm)
+        self.assertIn("Color32F::new(0.0,0.0,0.0,0.0)",snapshot)
         self.assertIn("let gpu_frames:u32=if multi_gpu {12}",CLIENT)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows",GUEST)
-        self.assertIn("MELANIA_QEMU_RETAINED_TWO_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
