@@ -359,6 +359,7 @@ fn compose_client_texture_to_target(
     frame.render_texture_from_to(
         texture,src,dest,&[dest],opaque_regions,Transform::Normal,1.0,None,&[],
     ).map_err(|error|format!("client GPU texture composition failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish");
     frame.finish().map_err(|error|format!("client GPU composition finish failed: {error}"))?
         .wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
     Ok(())
@@ -372,7 +373,7 @@ pub fn readback_qemu_client_bgra(
     renderer:&mut GlesRenderer,texture:&GlesTexture,source_format:Fourcc,
 )->Result<Vec<u8>,String> {
     use smithay::{
-        backend::renderer::{Bind,ExportMem,Offscreen,Texture,TextureMapping},
+        backend::renderer::{gles::GlesRenderbuffer,Bind,ExportMem,Offscreen,Renderer,Texture,TextureMapping},
         utils::Rectangle,
     };
     let width=texture.width() as usize;
@@ -380,24 +381,43 @@ pub fn readback_qemu_client_bgra(
     if width!=360 || height!=224 {
         return Err("QEMU GPU client readback must match verified 360x224 scene".into());
     }
-    let mut composed:GlesTexture=renderer.create_buffer(
-        Fourcc::Abgr8888,(width as i32,height as i32).into(),
-    ).map_err(|error|format!("client GPU composition allocation failed: {error}"))?;
-    {
+    // The staging bridge never samples its output as a texture. Use a
+    // renderbuffer and read the exact same bound framebuffer, avoiding a
+    // second FBO attachment and its texture read/write sync bookkeeping.
+    // The previous QEMU run presented frame 1 but segfaulted at frame 2;
+    // keep explicit stage markers to localize any remaining driver fault.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_previous");
+    renderer.cleanup_texture_cache()
+        .map_err(|error|format!("client GPU previous resource cleanup failed: {error}"))?;
+    let pixels={
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=allocate");
+        let mut composed:GlesRenderbuffer=renderer.create_buffer(
+            Fourcc::Abgr8888,(width as i32,height as i32).into(),
+        ).map_err(|error|format!("client GPU composition allocation failed: {error}"))?;
         let mut target=renderer.bind(&mut composed)
             .map_err(|error|format!("client GPU composition target failed: {error}"))?;
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=compose");
         compose_client_texture_to_target(renderer,&mut target,texture,source_format)?;
-    }
-    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224");
-    let region=Rectangle::from_size((width as i32,height as i32).into());
-    let mapping=renderer.copy_texture(&composed,region,Fourcc::Abgr8888)
-        .map_err(|error|format!("QEMU composited GPU texture download failed: {error}"))?;
-    let flipped=mapping.flipped();
-    let mapped=renderer.map_texture(&mapping)
-        .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
-    // The target is over an opaque background; packing must never apply
-    // the source alpha a second time. No CPU source-over is used here.
-    convert_rgba_readback_to_bgra(mapped,width,height,flipped,Fourcc::Xrgb8888)
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224");
+        let region=Rectangle::from_size((width as i32,height as i32).into());
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=download");
+        let mapping=renderer.copy_framebuffer(&target,region,Fourcc::Abgr8888)
+            .map_err(|error|format!("QEMU composited GPU framebuffer download failed: {error}"))?;
+        let flipped=mapping.flipped();
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=map");
+        let mapped=renderer.map_texture(&mapping)
+            .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
+        // Target is opaque; packing never applies source alpha twice.
+        // Copy before dropping the PBO mapping, framebuffer and renderbuffer.
+        convert_rgba_readback_to_bgra(mapped,width,height,flipped,Fourcc::Xrgb8888)?
+    };
+    // Smithay queues destruction until its next cleanup call. Drain now,
+    // after the owned CPU copy, rather than inside the next client's draw.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_completed");
+    renderer.cleanup_texture_cache()
+        .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete");
+    Ok(pixels)
 }
 
 // Shared background for the actual GPU composition and the reference
