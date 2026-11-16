@@ -15,7 +15,7 @@ class NativeFocusedGpu(unittest.TestCase):
         self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",case)
         self.assertIn("MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true",case)
         self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",case)
-        self.assertEqual(GUEST.count("\\n    run_direct_gpu_probe\\n")+GUEST.count("\\nrun_direct_gpu_probe\\n"),2)
+        self.assertEqual(GUEST.count("\n    run_direct_gpu_probe\n")+GUEST.count("\nrun_direct_gpu_probe\n"),2)
 
     def test_focused_vm_keeps_real_device_guards(self):
         self.assertIn("MELANIA_QEMU_NATIVE_VM:-",HOST)
