@@ -90,7 +90,7 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         self.assertLess(minimize.index("self.evict_native_popup_tree(&surface,true,true)"),
                         minimize.index("self.submit_continuous_frame()"))
         self.assertIn("scene_changed|=self.evict_native_popup_tree(&surface,true,true)",minimize)
-        self.assertIn("if removed || popup_damage {",close)
+        self.assertIn("if removed || popup_damage || gpu_removed {",close)
         self.assertIn("self.note_scene_change();",close)
         self.assertIn("let popup_damage=self.evict_native_popup_tree(&surface,true,true)",close)
         self.assertIn("if self.continuous_kms_mode &&",close)
@@ -124,11 +124,11 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
         close=lifecycle[:lifecycle.index("fn grab(&mut self")]
         self.assertIn("let parent_key=self.known_window_surfaces.remove(&surface);",close)
         self.assertIn("} else {false};",close)
-        self.assertIn("if removed || popup_damage {",close)
+        self.assertIn("if removed || popup_damage || gpu_removed {",close)
         self.assertLess(close.index("let popup_damage=self.evict_native_popup_tree("),
                         close.index("let parent_key=self.known_window_surfaces.remove("))
-        self.assertLess(close.index("if removed || popup_damage {"),
-                        close.index("if let Some(key)=parent_key {",close.index("if removed || popup_damage {")))
+        self.assertLess(close.index("if removed || popup_damage || gpu_removed {"),
+                        close.index("if let Some(key)=parent_key {",close.index("if removed || popup_damage || gpu_removed {")))
         self.assertLess(close.index("self.note_scene_change();"),
                         close.index("self.submit_continuous_frame()"))
         self.assertEqual(close.count("self.submit_continuous_frame()"),1)

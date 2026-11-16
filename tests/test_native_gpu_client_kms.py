@@ -213,7 +213,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
                        "for (&slot,image) in retained.iter()",
-                       "verify_retained_gpu_scene(&mut renderer,&bound,index)",
+                       "verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot)",
                        "retained GPU scene frame {index} pixel ({x},{y}) mismatch"):
             self.assertIn(marker,gbm)
         snapshot=gbm.split("fn retain_direct_window(",1)[1].split("fn qemu_gpu_scene_stream(",1)[0]
@@ -240,6 +240,35 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("sample(renderer,x+w-3,y+h-3,expected)?",gbm)
         self.assertIn("sample(renderer,x+old_w-2,y+h.min(old_h)/2,[27,33,58])?",gbm)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index",GUEST)
+
+    def test_direct_gpu_receiver_admits_only_exact_legacy_or_retained_budget(self):
+        receiver=DRM.split("fn run_embedded_direct(",1)[1].split("fn run_stream(",1)[0]
+        self.assertIn("guest_only()?",receiver)
+        self.assertIn("direct_gpu_frame_budget_matches(",receiver)
+        self.assertIn('std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")',receiver)
+        self.assertIn('std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")',receiver)
+        self.assertLess(receiver.index("direct_gpu_frame_budget_matches("),
+                        receiver.index("qemu_direct_client_gpu_scene_stream("))
+
+    def test_gpu_role_close_removes_texture_and_requires_real_13th_frame(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1]
+        self.assertIn("self.direct_gpu_pending=Some((slot,None))",close)
+        close=close.split("fn grab(&mut self",1)[0]
+        self.assertLess(close.index("self.direct_gpu_pending=Some((slot,None))"),
+                        close.index("if removed || popup_damage || gpu_removed {"))
+        self.assertLess(close.index("if removed || popup_damage || gpu_removed {"),
+                        close.index("self.submit_continuous_frame()"))
+        self.assertEqual(close.count("self.submit_continuous_frame()"),1)
+        self.assertIn("retained.remove(&slot)",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_CLOSE_PIXELS_VERIFIED=2",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=13 windows=3",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK=2",GUEST)
+        self.assertIn("closed_t.destroy()",CLIENT)
+        self.assertIn("GPU close fabricated a client frame callback",CLIENT)
+        poll=BRIDGE.split("fn poll_continuous_kms(",1)[1].split("fn begin_generation_proof(",1)[0]
+        self.assertLess(poll.index("continuous_redraw.presented(planned)"),
+                        poll.index('publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))'))
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)

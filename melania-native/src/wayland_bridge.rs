@@ -178,7 +178,9 @@ struct BridgeState {
     // or *permanent* seat revocation; never leave EGL image FDs after close.
     client_dmabuf_imports:Vec<(wl_buffer::WlBuffer,GlesTexture)>,
     direct_gpu_sender:Option<std::sync::mpsc::SyncSender<melania_native::continuous_kms_stream::DirectGpuFrame>>,
-    direct_gpu_pending:Option<(u64,Dmabuf)>,
+    direct_gpu_pending:Option<(u64,Option<Dmabuf>)>,
+    direct_gpu_slots:std::collections::BTreeSet<u64>,
+    direct_gpu_removal_inflight:Option<u64>,
     // GTK4's GDK Wayland backend requires wl_data_device_manager even
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
@@ -475,6 +477,7 @@ impl BridgeState {
             return Err("continuous KMS scene changed during planning".into());
         }
         if let Some((slot,dmabuf))=self.direct_gpu_pending.take() {
+            let removal=dmabuf.is_none();
             let sent=self.direct_gpu_sender.as_ref().is_some_and(|sender|
                 sender.try_send((planned,slot,dmabuf)).is_ok());
             if !sent {
@@ -491,6 +494,7 @@ impl BridgeState {
             self.continuous_inflight=Some((
                 planned,self.continuous_client_ledger.take_for_presentation()
             ));
+            self.direct_gpu_removal_inflight=if removal {Some(slot)} else {None};
             println!("MELANIA_NATIVE_DIRECT_GPU_TICKET_SUBMITTED={} generation={}",
                      planned.ticket.sequence,planned.generation);
             println!("MELANIA_NATIVE_CONTINUOUS_FRAME_SUBMITTED={} generation={}",
@@ -745,6 +749,15 @@ impl BridgeState {
                 println!("MELANIA_NATIVE_CLIENT_DMABUF_KMS_ACKED={}",
                          self.continuous_frame_count);
             }
+        }
+        if let Some(slot)=self.direct_gpu_removal_inflight.take() {
+            if self.continuous_frame_count!=13 || slot!=2 ||
+               self.known_window_surfaces.get(slot).is_some() ||
+               self.frame_callback_count!=12 {
+                return Err("retained GPU close ACK inconsistent with live role or callback ledger".into());
+            }
+            publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))?;
+            println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK={slot}");
         }
         println!("MELANIA_NATIVE_CONTINUOUS_KMS_ACK={} generation={}",
                  self.continuous_frame_count,planned.generation);
@@ -2664,7 +2677,8 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     }
-                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,buffer));
+                    self.direct_gpu_slots.insert(slot);
+                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,Some(buffer)));
                     self.multi_scene.note_external_gpu_frame();
                     self.note_scene_change();
                     if let Err(error)=self.submit_continuous_frame() {
@@ -3468,6 +3482,22 @@ impl XdgShellHandler for BridgeState {
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         let parent_key=self.known_window_surfaces.remove(&surface);
+        // GPU-owned content does not live in the CPU multi_scene. A real
+        // destroyed XDG role must explicitly retire its independent texture.
+        let mut gpu_removed=false;
+        if let Some(slot)=parent_key {
+            if self.direct_gpu_slots.remove(&slot) &&
+                std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM") &&
+                self.continuous_frame_count + u64::from(self.continuous_inflight.is_some()) < self.continuous_frame_target {
+                if self.direct_gpu_pending.is_some() {
+                    self.continuous_submission_failure.record("GPU removal collided with queued scene operation".into());
+                    return;
+                }
+                self.direct_gpu_pending=Some((slot,None));
+                self.multi_scene.note_external_gpu_frame();
+                gpu_removed=true;
+            }
+        }
         let successor=if self.tab_stack_mode {
             parent_key.and_then(|id|self.tab_groups.group_tabs(id).ok())
                 .and_then(|tabs|tabs.iter().copied().find(|id|Some(*id)!=parent_key))
@@ -3487,7 +3517,7 @@ impl XdgShellHandler for BridgeState {
                 self.multi_scene.remove(key)
             }
         } else {false};
-        if removed || popup_damage {
+        if removed || popup_damage || gpu_removed {
             self.note_scene_change();
             if self.continuous_kms_mode &&
                (self.persistent_kms_mode ||
@@ -4488,6 +4518,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         client_dmabuf_renderer:None,
         client_dmabuf_imports:Vec::new(),
         direct_gpu_sender:None,direct_gpu_pending:None,
+        direct_gpu_slots:Default::default(),direct_gpu_removal_inflight:None,
         data_device:DataDeviceState::new::<BridgeState>(&handle),
         primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
@@ -4942,7 +4973,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if gpu_client_kms && (
         !client_dmabuf_probe || !integrated_kms ||
         state.dynamic_window_mode || state.multi_window_mode ||
-        state.continuous_frame_target!=12 || state.layer_pixels_mode ||
+        state.continuous_frame_target!=if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
+            .as_deref()==Ok("YES_QEMU_VM") {13} else {12} || state.layer_pixels_mode ||
         state.gtk_layer_mode || persistent_kms ||
         !state.frame_callbacks_probe
     ) {
@@ -5307,7 +5339,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             let compositor_only_minimize=std::env::var("MELANIA_NATIVE_MANAGED_MINIMIZE_QMP")
                 .as_deref()==Ok("YES_QEMU_VM");
             let expected_callbacks=if state.dynamic_pointer_proof_mode ||
-                compositor_only_minimize {12} else {state.continuous_frame_target};
+                compositor_only_minimize ||
+                std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM")
+                {12} else {state.continuous_frame_target};
             if explicit_sync_probe && (state.explicit_release_count!=2 ||
                 state.explicit_release.is_some() || !state.explicit_acquires.is_empty()) {
                 return Err("explicit sync did not complete both real GPU release points".into());

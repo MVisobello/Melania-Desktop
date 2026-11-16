@@ -234,8 +234,11 @@ pub(crate) fn run_embedded_direct(
     guest_only()?;
     if std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()!=Ok("YES_QEMU_VM") ||
        std::env::var("MELANIA_NATIVE_DIRECT_CLIENT_GBM").as_deref()!=Ok("YES_QEMU_VM") ||
-       std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").as_deref()!=Ok("12") {
-        return Err("direct GBM requires explicit isolated QEMU opt-in".into());
+       !melania_native::native_frame_budget::direct_gpu_frame_budget_matches(
+           std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").ok().as_deref(),
+           std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok().as_deref()
+       ) {
+        return Err("direct GBM requires explicit isolated QEMU opt-in and exact mode frame target".into());
     }
     melania_native::native_gbm_scanout::qemu_direct_client_gpu_scene_stream(
         stream,card.into(),gpu)
