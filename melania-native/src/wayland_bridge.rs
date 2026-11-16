@@ -210,6 +210,9 @@ struct BridgeState {
     // Stage89: the token is minted at worker enqueue time. A frame ACK
     // after libseat/VT revocation must never release clients or callbacks.
     continuous_presentation_token:Option<PresentationToken>,
+    // A Wayland callback cannot return a transport error to the main loop.
+    // Preserve the first fatal submission failure until the owner rolls back.
+    continuous_submission_failure:melania_native::native_submission_failure::SubmissionFailure,
     native_presentation_guard:NativePresentationGuard,
     continuous_client_ledger:ClientCommitLedger<WlSurface,wl_buffer::WlBuffer>,
     continuous_frame_count:u64,
@@ -425,6 +428,15 @@ impl BridgeState {
     // Stage46: in this isolated mode ContinuousRedraw is authoritative.
     // All DRM socket writes and ACK reads happen off the Smithay thread.
     fn submit_continuous_frame(&mut self)->Result<(),Box<dyn Error>> {
+        self.continuous_submission_failure.check()?;
+        let result=self.try_submit_continuous_frame();
+        if let Err(error)=&result {
+            self.continuous_submission_failure.record(error.to_string());
+        }
+        result
+    }
+
+    fn try_submit_continuous_frame(&mut self)->Result<(),Box<dyn Error>> {
         if !self.continuous_kms_mode || self.continuous_inflight.is_some()
             || self.persistent_shutdown_requested {
             return Ok(());
@@ -527,6 +539,8 @@ impl BridgeState {
     }
 
     fn poll_continuous_kms(&mut self)->Result<(),Box<dyn Error>> {
+        // Never process even a valid-looking queued ACK after an error.
+        self.continuous_submission_failure.check()?;
         if !self.continuous_kms_mode {return Ok(());}
         if self.native_presentation_guard
             .ticket(self.lifecycle.seat_active()).is_none() {
@@ -4502,6 +4516,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         persistent_shutdown_requested:false,
         continuous_worker:None,continuous_inflight:None,
         continuous_presentation_token:None,
+        continuous_submission_failure:Default::default(),
         native_presentation_guard:NativePresentationGuard::default(),
         continuous_client_ledger:if std::env::var("MELANIA_NATIVE_DYNAMIC_SCENE")
             .as_deref()==Ok("YES_QEMU_VM") ||
@@ -5186,6 +5201,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             }
         }
         events.dispatch(Some(Duration::from_millis(12)),&mut state)?;
+        state.continuous_submission_failure.check()?;
         // A real pause requires complete KMS/VT re-acquisition and rollback
         // before resuming. The Stage89 VM bridge deliberately has no such
         // operation: exit instead of accepting stale DRM ACKs or input.
@@ -5243,6 +5259,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             }))?;
         }
         display.dispatch_clients(&mut state)?;
+        state.continuous_submission_failure.check()?;
         state.poll_explicit_acquires()?;
         // The old USB keyboard/pointer smoke exit predicate does not apply to
         // this real IME probe. Wait for the single kernel-authenticated IME
@@ -5273,6 +5290,9 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         if let Some((listener,_cleanup))=&control_listener {
             control_poller.pump(listener,|request|state.control_command(request))?;
         }
+        // Even a missing worker must not hide an error raised in an IPC,
+        // input, or delayed explicit-acquire commit callback.
+        state.continuous_submission_failure.check()?;
         if state.async_kms_mode && state.async_stream.is_some() {
             state.poll_async_kms()?;
         }
