@@ -21,7 +21,7 @@ run_direct_gpu_probe() {
       # VT; gdb propagates the inferior exit code and prints all stacks.
       compositor_command=(gdb --batch --return-child-result
         -ex 'set pagination off' -ex 'set confirm off'
-        -ex 'set debuginfod enabled off' -ex 'run < /dev/tty1'
+        -ex 'set debuginfod enabled off' -ex 'run --experimental-wayland-seat < /dev/tty1'
         -ex 'thread apply all bt' --args "$continuous_server" --experimental-wayland-seat)
       server_timeout=120
     fi
@@ -130,7 +130,7 @@ run_retained_gpu_probe() {
       command -v gdb >/dev/null || fatal 'focused_GDB_missing'
       compositor_command=(gdb --batch --return-child-result
         -ex 'set pagination off' -ex 'set confirm off'
-        -ex 'set debuginfod enabled off' -ex 'run < /dev/tty1'
+        -ex 'set debuginfod enabled off' -ex 'run --experimental-wayland-seat < /dev/tty1'
         -ex 'thread apply all bt' --args "$continuous_server" --experimental-wayland-seat)
       server_timeout=120
     fi
