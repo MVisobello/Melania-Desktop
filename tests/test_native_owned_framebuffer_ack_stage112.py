@@ -16,7 +16,7 @@ class NativeOwnedFramebufferAckStage112(unittest.TestCase):
         self.assertIn("planned:job.planned,status,pixels:job.pixels",WORKER)
         self.assertIn("let status = if direct && job.pixels.is_empty()",WORKER)
         self.assertIn("transfer_direct(&mut stream,&job)",WORKER)
-        self.assertLess(WORKER.index("transfer(&mut stream, &job)"),
+        self.assertLess(WORKER.index("transfer(&mut stream,&job)"),
                         WORKER.index("pixels:job.pixels"))
         self.assertLess(WORKER.index("transfer_direct(&mut stream,&job)"),
                         WORKER.index("pixels:job.pixels"))
