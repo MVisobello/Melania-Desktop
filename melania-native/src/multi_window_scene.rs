@@ -167,6 +167,19 @@ mod tests {
     }
 
     #[test]
+    fn external_gpu_frame_advances_generation_without_cpu_snapshot() {
+        let mut graph=MultiWindowScene::default();
+        graph.note_external_gpu_frame();
+        graph.note_external_gpu_frame();
+        assert_eq!(graph.layout_generation(),2);
+        assert_eq!(graph.window_count(),0);
+        graph.upsert(1,solid(1,2,3)).unwrap();
+        assert_eq!(graph.layout_generation(),3);
+        assert_eq!(graph.window_count(),1);
+        assert_eq!(sample(&graph.composite().unwrap(),160,120),[1,2,3]);
+    }
+
+    #[test]
     fn layout_generation_changes_only_for_actual_scene_damage() {
         let mut graph=MultiWindowScene::default();
         assert_eq!(graph.layout_generation(),0);
