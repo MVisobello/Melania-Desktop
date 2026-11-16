@@ -180,6 +180,7 @@ fn exercise_real_client_dmabuf(
     state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
     qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
     xdg_surface:&wl_surface::WlSurface,
+    extra_surfaces:&[wl_surface::WlSurface],
 )->Result<(),Box<dyn Error>> {
     let dmabuf=state.dmabuf.take()
         .ok_or("QEMU Smithay server did not advertise zwp_linux_dmabuf_v1")?;
@@ -202,7 +203,10 @@ fn exercise_real_client_dmabuf(
        !state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier)) {
         return Err("QEMU Wayland compositor did not advertise XRGB8888+LINEAR".into());
     }
-    let gpu_frames:u32=if double_gpu {2} else {1};
+    let multi_gpu=!extra_surfaces.is_empty();
+    if multi_gpu && extra_surfaces.len()!=3 {return Err("GPU probe requires four XDG surfaces".into());}
+    if multi_gpu && !double_gpu {return Err("retained GPU client needs both formats".into());}
+    let gpu_frames:u32=if multi_gpu {12} else if double_gpu {2} else {1};
 
     // VirtIO's GBM allocator uses DRM_IOCTL_MODE_CREATE_DUMB on the
     // unprivileged primary device. It never acquires DRM_MASTER; only the
@@ -228,23 +232,31 @@ fn exercise_real_client_dmabuf(
         // Frame 1 keeps the original ARGB transparency probe; frame 2
         // is XRGB without alpha. Its undefined readback alpha must NOT
         // corrupt the visibly different (R,G,B)=(0.12,0.64,0.27) pixel.
-        let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};
+        let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};
+        let (gpu_w,gpu_h)=if multi_gpu {
+            melania_native::window_placement::retained_gpu_probe_size(u64::from(gpu_index-1))
+                .ok_or("missing retained GPU fixture dimensions")?
+        } else {(W as i32,H as i32)};
         let mut image=allocator.create_buffer(
-            W as u32,H as u32,frame_format,&[Modifier::Linear],
+            gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear],
         )?;
         {
             let mut target=renderer.bind(&mut image)?;
             let mut frame=renderer.render(
-                &mut target,(W as i32,H as i32).into(),Transform::Normal
+                &mut target,(gpu_w,gpu_h).into(),Transform::Normal
             )?;
-            let color=if gpu_index==1 {
+            let color=if multi_gpu {
+                let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(gpu_index-1))
+                    .ok_or("missing retained GPU fixture color")?;
+                Color32F::new(f32::from(r)/255.0,f32::from(g)/255.0,f32::from(b)/255.0,1.0)
+            } else if gpu_index==1 {
                 Color32F::new(0.33,0.18,0.73,1.0)
             } else {
                 Color32F::new(0.12,0.64,0.27,1.0)
             };
             frame.clear(
                 color,
-                &[Rectangle::from_size((W as i32,H as i32).into())],
+                &[Rectangle::from_size((gpu_w,gpu_h).into())],
             )?;
             if gpu_index==1 {
                 // Keep the original genuine premultiplied alpha patch and
@@ -274,11 +286,16 @@ fn exercise_real_client_dmabuf(
             return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
         }
         let imported=params.create_immed(
-            W as i32,H as i32,frame_format as u32,
+            gpu_w,gpu_h,frame_format as u32,
             zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
         );
-        let probe=if gpu_kms {xdg_surface.clone()}
-            else {compositor.create_surface(qh,())};
+        let probe=if gpu_kms {
+                if multi_gpu {
+                    let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[(gpu_index-1) as usize];
+                    if slot==1 {xdg_surface.clone()}
+                    else {extra_surfaces[(slot-2) as usize].clone()}
+                } else {xdg_surface.clone()}
+            } else {compositor.create_surface(qh,())};
         if gpu_kms {
             // Each callback is tied to its own real wl_surface.commit,
             // never merely to successful import/zwp_linux_buffer creation.
@@ -286,7 +303,7 @@ fn exercise_real_client_dmabuf(
         }
         state.buffer_released=false;
         probe.attach(Some(&imported),0,0);
-        probe.damage_buffer(0,0,W as i32,H as i32);
+        probe.damage_buffer(0,0,gpu_w,gpu_h);
         // Deliberately withhold acquire even after the genuine GBM render.
         // A separate timeline per allocation proves actual release ownership.
         let sync=if let (Some(manager),Some(surface_sync))=(manager.as_ref(),surface_sync.as_ref()) {
@@ -342,7 +359,7 @@ fn exercise_real_client_dmabuf(
             }
             if gpu_index==1 {
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true");
-            } else {
+            } else if gpu_index==2 {
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true");
                 // Emitted only after the real wl_surface.frame callback
                 // and wl_buffer.release paired with verified DRM ACK #2.
@@ -350,8 +367,10 @@ fn exercise_real_client_dmabuf(
             }
             if gpu_index==1 {
                 println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
-            } else {
+            } else if gpu_index==2 {
                 println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=2");
+            } else {
+                println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED={gpu_index}");
             }
         } else {
             if state.frame_done_count!=0 {
@@ -499,9 +518,48 @@ fn main()->Result<(),Box<dyn Error>> {
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("continuous client xdg configure missing".into());}
+    let multi_gpu=std::env::var("MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW")
+        .as_deref()==Ok("YES_QEMU_VM");
+    let mut extra=Vec::new();
+    if multi_gpu {
+        if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
+            .as_deref()!=Ok("YES_QEMU_VM") {
+            return Err("multiwindow GPU requires real KMS client mode".into());
+        }
+        for slot in 2..=4 {
+            let s=compositor.create_surface(&qh,());
+            let x=wm.get_xdg_surface(&s,&qh,());
+            let t=x.get_toplevel(&qh,());
+            t.set_title(format!("Melania retained GPU window {slot}"));
+            state.xdg_acked=false;
+            s.commit();
+            for _ in 0..5 {
+                queue.roundtrip(&mut state)?;
+                if state.xdg_acked {break;}
+            }
+            if !state.xdg_acked {return Err("additional GPU toplevel configure missing".into());}
+            extra.push((s,x,t));
+        }
+    }
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
         .as_deref()==Ok("YES_QEMU_VM") {
-        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface)?;
+        let extra_surfaces:Vec<_>=extra.iter().map(|(s,_,_)|s.clone()).collect();
+        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,&extra_surfaces)?;
+        if multi_gpu {
+            println!("MELANIA_QEMU_RETAINED_GPU_FOUR_WINDOW_CLIENT_12_ACKS=true");
+            std::io::stdout().flush()?;
+            for (s,x,t) in extra {
+                t.destroy();
+                x.destroy();
+                s.destroy();
+            }
+            toplevel.destroy();
+            xdg.destroy();
+            surface.destroy();
+            wm.destroy();
+            connection.flush()?;
+            return Ok(());
+        }
         if std::env::var("MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET")
             .as_deref()==Ok("YES_QEMU_VM") {
             // This isolated negative client has already received the genuine
