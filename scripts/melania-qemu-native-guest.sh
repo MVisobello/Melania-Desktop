@@ -2963,6 +2963,11 @@ for marker in \
   grep -Fqx "$marker" "$gpu_client_server_log" ||
     fatal "gpu_client_real_egl_to_KMS_missing_$marker"
 done
+if [[ "$(grep -Fxc 'MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete' "$gpu_client_server_log" || true)" != 2 ]] ||
+   [[ "$(grep -Fxc 'MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224' "$gpu_client_server_log" || true)" != 2 ]]; then
+  cat "$gpu_client_server_log"
+  fatal 'gpu_client_missing_two_completed_GLES_compositions'
+fi
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true' "$gpu_client_client_log" ||
   fatal 'gpu_client_missing_real_Wayland_DMA_BUF_KMS_frame1_callback'
 grep -Fqx 'MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true' "$gpu_client_client_log" ||
