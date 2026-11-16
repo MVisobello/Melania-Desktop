@@ -215,13 +215,17 @@ fn exercise_real_client_dmabuf(
         // is XRGB without alpha. Its undefined readback alpha must NOT
         // corrupt the visibly different (R,G,B)=(0.12,0.64,0.27) pixel.
         let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};
+        let (gpu_w,gpu_h)=if multi_gpu {
+            melania_native::window_placement::retained_gpu_probe_size(u64::from(gpu_index-1))
+                .ok_or("missing retained GPU fixture dimensions")?
+        } else {(W as i32,H as i32)};
         let mut image=allocator.create_buffer(
-            W as u32,H as u32,frame_format,&[Modifier::Linear],
+            gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear],
         )?;
         {
             let mut target=renderer.bind(&mut image)?;
             let mut frame=renderer.render(
-                &mut target,(W as i32,H as i32).into(),Transform::Normal
+                &mut target,(gpu_w,gpu_h).into(),Transform::Normal
             )?;
             let color=if multi_gpu {
                 let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(gpu_index-1))
@@ -234,7 +238,7 @@ fn exercise_real_client_dmabuf(
             };
             frame.clear(
                 color,
-                &[Rectangle::from_size((W as i32,H as i32).into())],
+                &[Rectangle::from_size((gpu_w,gpu_h).into())],
             )?;
             if gpu_index==1 {
                 // Keep the original genuine premultiplied alpha patch and
@@ -258,7 +262,7 @@ fn exercise_real_client_dmabuf(
             return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
         }
         let imported=params.create_immed(
-            W as i32,H as i32,frame_format as u32,
+            gpu_w,gpu_h,frame_format as u32,
             zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
         );
         let probe=if gpu_kms {
@@ -275,7 +279,7 @@ fn exercise_real_client_dmabuf(
         }
         state.buffer_released=false;
         probe.attach(Some(&imported),0,0);
-        probe.damage_buffer(0,0,W as i32,H as i32);
+        probe.damage_buffer(0,0,gpu_w,gpu_h);
         probe.commit();
         let deadline=Instant::now()+Duration::from_secs(10);
         while !state.buffer_released ||
