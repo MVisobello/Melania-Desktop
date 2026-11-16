@@ -117,6 +117,26 @@ class RealClientDmabufToKms(unittest.TestCase):
         ):
             self.assertIn(marker,GPU)
 
+    def test_direct_gpu_client_bypasses_cpu_snapshot_and_uses_real_gbm_presenter(self):
+        stream=(ROOT/"melania-native/src/continuous_kms_stream.rs").read_text()
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        direct=BRIDGE.split("if dma_buffer && gpu_client_kms && self.direct_gpu_sender.is_some()",1)[1].split(
+            "// Opt-in QEMU transitional path",1)[0]
+        self.assertIn("self.direct_gpu_pending=dmabuf",direct)
+        self.assertIn("self.multi_scene.note_external_gpu_frame()",direct)
+        self.assertNotIn("readback_qemu_client_bgra",direct)
+        self.assertIn("sender.try_send((planned,dmabuf))",BRIDGE)
+        self.assertIn("ContinuousKmsJob{planned,pixels:Vec::new()}",BRIDGE)
+        self.assertIn("fn direct_gpu_transport_sends_only_ticket_and_requires_matching_ack()",stream)
+        self.assertIn('header[..4].copy_from_slice(b"MLG1")',stream)
+        self.assertIn("crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)",gbm)
+        self.assertIn("direct GPU buffer ticket mismatch",gbm)
+        self.assertIn("verify_direct_client_gpu_pixels(&mut renderer,&bound,index)",gbm)
+        self.assertIn("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=1",GUEST)
+        self.assertIn("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=2",GUEST)
+        self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
+        self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
+
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
