@@ -145,6 +145,17 @@ report "MELANIA_QEMU_NATIVE_KMS_EXIT=$code"
 [[ "$code" -eq 0 ]] || fatal 'native_KMS_TEST_ONLY_failed'
 grep -qx 'MELANIA_NATIVE_KMS_TEST_LIBSEAT_DRM_CLOSED=true' "$kms_test_log" ||
   fatal 'native_KMS_TEST_ONLY_retained_seatd_DRM_device'
+# Older drivers may not implement timeline/eventfd. Record the actual
+# kernel result without turning unsupported into explicit-sync evidence.
+if grep -qx 'MELANIA_NATIVE_DRM_SYNCOBJ_PROBE=timeline_and_eventfd_verified' "$kms_test_log"; then
+  report 'MELANIA_QEMU_REAL_DRM_SYNCOBJ_TIMELINE_EVENTFD_PASS=true'
+elif grep -qx 'MELANIA_NATIVE_DRM_SYNCOBJ_PROBE=timeline_only' "$kms_test_log"; then
+  report 'MELANIA_QEMU_DRM_SYNCOBJ_EVENTFD_UNSUPPORTED=true'
+elif grep -qx 'MELANIA_NATIVE_DRM_SYNCOBJ_PROBE=unsupported' "$kms_test_log"; then
+  report 'MELANIA_QEMU_DRM_SYNCOBJ_TIMELINE_UNSUPPORTED=true'
+else
+  fatal 'native_DRM_syncobj_capability_probe_missing'
+fi
 rm -f "$kms_test_log"
 report 'MELANIA_QEMU_NATIVE_KMS_PASS=true'
 
