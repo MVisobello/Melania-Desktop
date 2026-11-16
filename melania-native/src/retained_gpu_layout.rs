@@ -48,6 +48,7 @@ impl RetainedGpuLayout {
         Ok(true)
     }
     pub fn raise(&mut self,slot:u64)->Result<bool,&'static str> {
+        if self.is_visible(slot)!=Some(true) {return Err("cannot raise hidden or unknown GPU surface");}
         let index=self.stack.iter().position(|id|*id==slot).ok_or("unknown GPU surface")?;
         if index+1==self.stack.len() {return Ok(false);}
         self.stack.remove(index);
@@ -120,6 +121,7 @@ mod tests {
         assert_eq!(scene.set_visible(2,false),Ok(true));
         assert_eq!(scene.set_visible(2,false),Ok(false));
         assert_eq!(scene.hit_test(200.0,150.0),Some(1));
+        assert!(scene.raise(2).is_err());
         let rect=scene.update_buffer(2,340,210).unwrap();
         assert_eq!(scene.is_visible(2),Some(false));
         assert_eq!(scene.geometry(2),Some(rect));

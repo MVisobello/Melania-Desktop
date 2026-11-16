@@ -543,7 +543,7 @@ fn verify_retained_gpu_scene(
     renderer:&mut GlesRenderer,
     bound:&smithay::backend::renderer::gles::GlesTarget<'_>,
     index:u64,removed_slot:Option<u64>,moved_slot:Option<(u64,i32,i32)>,
-    visibility_slot:Option<(u64,bool)>,layout:&crate::retained_gpu_layout::RetainedGpuLayout,
+    visibility_slot:Option<(u64,bool)>,raised_slot:Option<u64>,layout:&crate::retained_gpu_layout::RetainedGpuLayout,
 )->Result<(),Box<dyn Error>> {
     let _=bound;
     use crate::window_placement::{retained_gpu_geometry,retained_gpu_probe_size,
@@ -576,7 +576,7 @@ fn verify_retained_gpu_scene(
     } else if removed_slot.is_some() {
         return Err("unexpected GPU removal during original 12-frame acceptance".into());
     }
-    let live_drag=matches!(std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref(),Ok("LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"));
+    let live_drag=matches!(std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref(),Ok("LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"));
     if (13..=14).contains(&index) {
         let (slot,x,y)=moved_slot.ok_or("missing real GPU drag")?;
         let (expected_x,expected_y)=if live_drag && index==13 {(410,155)} else {(650,190)};
@@ -589,8 +589,8 @@ fn verify_retained_gpu_scene(
         }
         // The second position must clear the intermediate footprint too.
         if live_drag && index==14 {sample(renderer,460,200,[27,33,58])?;}
-    } else if moved_slot.is_some() {return Err("unexpected GPU motion".into());}
-    if index>=15 {
+    } else if index!=17 && moved_slot.is_some() {return Err("unexpected GPU motion".into());}
+    if (15..=16).contains(&index) {
         let visible=index==16;
         if visibility_slot!=Some((1,visible)) || layout.is_visible(1)!=Some(visible) || removed_slot.is_some() {
             return Err("unexpected GPU visibility operation".into());
@@ -606,7 +606,40 @@ fn verify_retained_gpu_scene(
             expected_by_slot.remove(&1);
         }
         for (px,py) in [(200,150),(360,240),(158,200),(460,200)] {sample(renderer,px,py,[27,33,58])?;}
-    } else if visibility_slot.is_some() {return Err("unexpected early visibility operation".into());}
+    } else if visibility_slot.is_some() {return Err("unexpected visibility operation".into());}
+    if index>=17 {
+        if removed_slot.is_some() || visibility_slot.is_some() ||
+            layout.is_visible(1)!=Some(true) || layout.is_visible(4)!=Some(true) {
+            return Err("stale or hidden overlapping GPU surface".into());
+        }
+        let rect=layout.geometry(1).ok_or("missing overlapping GPU surface")?;
+        if (rect.x-650).abs()>6 || (rect.y-350).abs()>6 || (rect.width,rect.height)!=(416,250) {
+            return Err("unexpected overlap geometry".into());
+        }
+        let raised=index==18;
+        if (!raised && (moved_slot!=Some((1,rect.x,rect.y)) || raised_slot.is_some())) ||
+            (raised && (raised_slot!=Some(1) || moved_slot.is_some())) {
+            return Err("unexpected overlap/raise ticket".into());
+        }
+        let front=if raised {1} else {4};
+        if layout.hit_test(800.0,550.0)!=Some(front) {
+            return Err("overlap hit-test and stacking disagree".into());
+        }
+        let a=retained_gpu_probe_rgb(8).ok_or("missing A color")?;
+        let c=retained_gpu_probe_rgb(9).ok_or("missing C color")?;
+        let d=retained_gpu_probe_rgb(11).ok_or("missing D color")?;
+        // Independently sample the exposed portions of BOTH overlapping
+        // windows, the other survivor, and the contested actual GPU pixels.
+        sample(renderer,700,400,a)?;
+        sample(renderer,800,650,d)?;
+        sample(renderer,300,500,c)?;
+        sample(renderer,700,220,[27,33,58])?;
+        sample(renderer,rect.x+rect.width+2,400,[65,171,216])?;
+        sample(renderer,992,650,[65,171,216])?;
+        sample(renderer,800,550,if raised {a} else {d})?;
+        println!("MELANIA_NATIVE_RETAINED_GPU_STACK_PIXELS_VERIFIED={} front={front}",index+1);
+        return Ok(());
+    } else if raised_slot.is_some() {return Err("unexpected early GPU raise".into());}
     for (slot,frame) in expected_by_slot {
         let (w,h)=retained_gpu_probe_size(frame).ok_or("missing probe size")?;
         let expected=retained_gpu_probe_rgb(frame).ok_or("missing probe color")?;
@@ -692,10 +725,11 @@ fn qemu_gpu_scene_stream(
         .as_deref()==Ok("YES_QEMU_VM");
     if multi_gpu && !direct_mode {return Err("retained GPU mode requires direct channel".into());}
     let total=if multi_gpu {13u64} else if direct_mode {12u64} else {24u64};
-    let visibility_gpu=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("VISIBILITY_QEMU_VM");
+    let stack_gpu=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("STACK_QEMU_VM");
+    let visibility_gpu=stack_gpu || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("VISIBILITY_QEMU_VM"));
     let live_drag=visibility_gpu || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_QEMU_VM"));
     let move_gpu=live_drag || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM"));
-    let total=if visibility_gpu {17} else if live_drag {15} else if move_gpu {14} else {total};
+    let total=if stack_gpu {19} else if visibility_gpu {17} else if live_drag {15} else if move_gpu {14} else {total};
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
     if direct_mode && persistent {
@@ -863,6 +897,7 @@ fn qemu_gpu_scene_stream(
             let mut removed_slot=None;
             let mut moved_slot=None;
             let mut visibility_slot=None;
+            let mut raised_slot=None;
             let client_dmabuf=if direct_frame {
                 let (planned,slot,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
                     .recv_timeout(Duration::from_secs(2))?;
@@ -897,6 +932,13 @@ fn qemu_gpu_scene_stream(
                             return Err("GPU visibility references missing or unchanged surface".into());
                         }
                         visibility_slot=Some((slot,visible));
+                        None
+                    }
+                    DirectGpuUpdate::Raise if stack_gpu=>{
+                        if !retained.contains_key(&slot) || !retained_layout.raise(slot)? {
+                            return Err("GPU raise references missing, hidden or unchanged surface".into());
+                        }
+                        raised_slot=Some(slot);
                         None
                     }
                     _=>return Err("unsupported direct GPU scene operation".into()),
@@ -937,7 +979,7 @@ fn qemu_gpu_scene_stream(
                     return Err("direct GPU client size/format mismatch".into());
                 }
                 Some(crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)?)
-            } else if removed_slot.is_some() || moved_slot.is_some() || visibility_slot.is_some() {
+            } else if removed_slot.is_some() || moved_slot.is_some() || visibility_slot.is_some() || raised_slot.is_some() {
                 None
             } else {
                 Some(renderer.import_memory(
@@ -953,7 +995,7 @@ fn qemu_gpu_scene_stream(
                 println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true");
                 Some(image)
             } else {None};
-            if multi_gpu && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() {
+            if multi_gpu && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
                 use smithay::backend::allocator::Buffer;
                 let (slot,buffer)=client_dmabuf.as_ref().ok_or("missing retained GPU source")?;
                 let opaque=buffer.format().code==Fourcc::Xrgb8888;
@@ -1057,12 +1099,12 @@ fn qemu_gpu_scene_stream(
             }
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} verify",index+1);}
             if multi_gpu {
-                verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot,visibility_slot,&retained_layout)?;
+                verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot,visibility_slot,raised_slot,&retained_layout)?;
             } else if direct_frame {
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
             drop(bound);
-            if direct_frame && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() {
+            if direct_frame && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
                 let (_,buffer)=client_dmabuf.ok_or("direct client import disappeared")?;
                 let texture=texture.ok_or("direct client texture disappeared")?;
                 if direct_import_lifetime.len()>=12 {
@@ -1205,6 +1247,7 @@ fn qemu_gpu_scene_stream(
         if multi_gpu {
             println!("MELANIA_NATIVE_RETAINED_GPU_FOUR_WINDOW_12_FRAMES_PASS=true");
             println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_13_FRAMES_PASS=true");
+            if stack_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_STACK_19_FRAMES_PASS=true");}
             if visibility_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_17_FRAMES_PASS=true");}
             if live_drag {println!("MELANIA_NATIVE_RETAINED_GPU_LIVE_DRAG_15_FRAMES_PASS=true");}
             else if move_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_REAL_DRAG_14_FRAMES_PASS=true");}

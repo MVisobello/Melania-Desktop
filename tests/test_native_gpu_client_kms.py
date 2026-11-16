@@ -215,7 +215,7 @@ class RealClientDmabufToKms(unittest.TestCase):
                        "for (slot,rect) in retained_layout.bottom_to_top()",
                        "retained_layout.update_buffer(*slot,size.w,size.h)?",
                        "retained_layout.remove(slot)",
-                       "verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot,visibility_slot,&retained_layout)",
+                       "verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot,visibility_slot,raised_slot,&retained_layout)",
                        "retained GPU scene frame {index} pixel ({x},{y}) mismatch"):
             self.assertIn(marker,gbm)
         snapshot=gbm.split("fn retain_direct_window(",1)[1].split("fn qemu_gpu_scene_stream(",1)[0]
@@ -305,6 +305,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_PIXELS_VERIFIED=17 visible=true",GUEST)
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=17",GUEST)
         self.assertIn("GPU visibility fabricated callback",CLIENT)
+
+    def test_gpu_raise_uses_actual_click_and_overlapping_pixel_gate(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        injector=(ROOT/"scripts/inject-qemu-retained-gpu-drag.py").read_text()
+        self.assertIn("self.gpu_raise_clicked(point)",BRIDGE)
+        self.assertIn("self.direct_gpu_layout.hit_test(point.x,point.y)",BRIDGE)
+        self.assertIn("retained_layout.raise(slot)?",gbm)
+        self.assertIn("sample(renderer,800,550,if raised {a} else {d})?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_STACK_PIXELS_VERIFIED=18 front=4",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_STACK_PIXELS_VERIFIED=19 front=1",GUEST)
+        self.assertIn("GPU raise fabricated callback",CLIENT)
+        self.assertLess(injector.index("MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true"),injector.index('tablet(args.qmp,700,400,"press")'))
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)

@@ -32,6 +32,7 @@ pub enum DirectGpuUpdate {
     Remove,
     Move {x:i32,y:i32},
     Visibility {visible:bool},
+    Raise,
 }
 pub type DirectGpuFrame = (PlannedSceneFrame, u64, DirectGpuUpdate);
 
