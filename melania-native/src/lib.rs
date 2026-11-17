@@ -11,6 +11,7 @@ pub mod dynamic_window_scene;
 pub mod damage_regions;
 pub mod region_compositor;
 pub mod window_placement;
+pub mod retained_gpu_layout;
 pub mod snap_layout;
 pub mod auto_tiling;
 pub mod tab_groups;
