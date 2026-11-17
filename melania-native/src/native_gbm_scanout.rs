@@ -1261,10 +1261,6 @@ fn qemu_gpu_scene_stream(
                 println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
                          flip_ledger.completed_count());
             }
-            if !persistent && index+1==total {
-                // Finite mode must restore before its last client ACK.
-                rollback.restore()?;
-            }
             if rolling_retire {
                 // At this point GLES completion and the real kernel route,
                 // connector, mode and framebuffer verification succeeded.
@@ -1275,6 +1271,10 @@ fn qemu_gpu_scene_stream(
                     renderer.cleanup_texture_cache()?;
                     println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED={} frame={}",retired,index+1);
                 }
+            }
+            if !persistent && index+1==total {
+                // Finite mode must restore before its last client ACK.
+                rollback.restore()?;
             }
             let mut ack=[0u8;29];
             ack[..4].copy_from_slice(b"MLA1");
