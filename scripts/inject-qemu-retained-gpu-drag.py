@@ -63,6 +63,8 @@ def main():
     time.sleep(.15)
     tablet(args.qmp,1050,585,"press")
     helper["wait_marker"](args.serial,"MELANIA_QEMU_GPU_XDG_RESIZE_GRANTED=true",until)
+    tablet(args.qmp,1080,603)
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_HELD_FRAME20=true",until)
     tablet(args.qmp,1100,615)
     time.sleep(.15)
     tablet(args.qmp,1100,615,"release")

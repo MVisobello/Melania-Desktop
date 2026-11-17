@@ -356,6 +356,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=20",GUEST)
         self.assertIn("MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true",HOST)
 
+    def test_live_gpu_resize_serializes_real_configures_and_held_ack(self):
+        self.assertIn("self.gpu_resize_motion(point,false)",BRIDGE)
+        self.assertIn("self.gpu_resize_motion(point,true)",BRIDGE)
+        self.assertIn("self.gpu_resize_latest=Some((slot,target,finished))",BRIDGE)
+        flush=BRIDGE.split("fn gpu_resize_flush(",1)[1].split("fn gpu_stack_probe(",1)[0]
+        self.assertLess(flush.index("self.gpu_resize_pending.is_some()"),flush.index("top.send_configure()"))
+        self.assertIn("self.continuous_inflight.is_some()",flush)
+        self.assertIn("intermediate GPU resize was not presented while held",BRIDGE)
+        self.assertIn("client received release before intermediate resize ACK",CLIENT)
+        self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=21",GUEST)
+        self.assertIn("MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true",HOST)
+
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
