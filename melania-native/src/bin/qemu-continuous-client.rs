@@ -3,7 +3,7 @@
 use std::{error::Error,fs::OpenOptions,io::Write,os::fd::{AsFd,OwnedFd},thread,time::{Duration,Instant}};
 use melania_native::native_frame_budget::frame_budget;
 use wayland_client::{
-    Connection,Dispatch,QueueHandle,
+    Connection,Dispatch,QueueHandle,WEnum,
     protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback,wl_seat,wl_pointer,wl_keyboard},
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
@@ -46,6 +46,12 @@ struct Client {
     gpu_seat:Option<wl_seat::WlSeat>,
     gpu_keyboard_enters:Vec<wl_surface::WlSurface>,
     gpu_pointer_enters:Vec<(wl_surface::WlSurface,f64,f64)>,
+    gpu_keyboard_focus:Option<wl_surface::WlSurface>,
+    gpu_pointer_focus:Option<wl_surface::WlSurface>,
+    gpu_buttons:Vec<(wl_surface::WlSurface,bool)>,
+    gpu_keys:Vec<(wl_surface::WlSurface,u32,bool)>,
+    gpu_move_target:Option<(wl_surface::WlSurface,xdg_toplevel::XdgToplevel)>,
+    gpu_move_requested:bool,
     xdg_acked:bool,
     buffer_released:bool,
     frame_done_count:u32,
@@ -82,16 +88,45 @@ wayland_client::delegate_noop!(Client: ignore wl_seat::WlSeat);
 impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
     fn event(state:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
-        if let wl_keyboard::Event::Enter{surface,..}=event {
-            state.gpu_keyboard_enters.push(surface);
+        match event {
+            wl_keyboard::Event::Enter{surface,..}=>{
+                state.gpu_keyboard_focus=Some(surface.clone());
+                state.gpu_keyboard_enters.push(surface);
+            },
+            wl_keyboard::Event::Leave{..}=>state.gpu_keyboard_focus=None,
+            wl_keyboard::Event::Key{key,state:edge,..}=>{
+                if let Some(surface)=state.gpu_keyboard_focus.clone() {
+                    state.gpu_keys.push((surface,key,edge==WEnum::Value(wl_keyboard::KeyState::Pressed)));
+                }
+            },
+            _=>{},
         }
     }
 }
 impl Dispatch<wl_pointer::WlPointer,()> for Client {
     fn event(state:&mut Self,_:&wl_pointer::WlPointer,event:wl_pointer::Event,
              _:&(),_:&Connection,_:&QueueHandle<Self>) {
-        if let wl_pointer::Event::Enter{surface,surface_x,surface_y,..}=event {
-            state.gpu_pointer_enters.push((surface,surface_x,surface_y));
+        match event {
+            wl_pointer::Event::Enter{surface,surface_x,surface_y,..}=>{
+                state.gpu_pointer_focus=Some(surface.clone());
+                state.gpu_pointer_enters.push((surface,surface_x,surface_y));
+            },
+            wl_pointer::Event::Leave{..}=>state.gpu_pointer_focus=None,
+            wl_pointer::Event::Button{serial,button:0x110,state:edge,..}=>{
+                let pressed=edge==WEnum::Value(wl_pointer::ButtonState::Pressed);
+                if let Some(surface)=state.gpu_pointer_focus.clone() {
+                    state.gpu_buttons.push((surface.clone(),pressed));
+                    if pressed && !state.gpu_move_requested {
+                        if let (Some((target,top)),Some(seat))=(&state.gpu_move_target,&state.gpu_seat) {
+                            if target==&surface {
+                                top._move(seat,serial);
+                                state.gpu_move_requested=true;
+                            }
+                        }
+                    }
+                }
+            },
+            _=>{},
         }
     }
 }
@@ -541,6 +576,9 @@ fn main()->Result<(),Box<dyn Error>> {
     let xdg=wm.get_xdg_surface(&surface,&qh,());
     let toplevel=xdg.get_toplevel(&qh,());
     toplevel.set_title("Melania QEMU continuous real Wayland client".into());
+    if state.gpu_seat.is_some() {
+        state.gpu_move_target=Some((surface.clone(),toplevel.clone()));
+    }
     surface.commit();
     for _ in 0..5 {
         queue.roundtrip(&mut state)?;
@@ -626,8 +664,9 @@ fn main()->Result<(),Box<dyn Error>> {
                 loop {
                     queue.roundtrip(&mut state)?;
                     if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-raise-acked")
-                        .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") {break;}
-                    if Instant::now()>=deadline {return Err("GPU raise missing verified KMS receipt".into());}
+                        .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") &&
+                        state.gpu_buttons.last()==Some(&(surface.clone(),false)) {break;}
+                    if Instant::now()>=deadline {return Err("GPU raise missing verified KMS receipt or real button release".into());}
                     thread::sleep(Duration::from_millis(10));
                 }
                 if state.frame_done_count!=12 {return Err("GPU raise fabricated callback".into());}
@@ -644,6 +683,14 @@ fn main()->Result<(),Box<dyn Error>> {
                 if !keyboard_ok || !pointer_ok {
                     return Err(format!("GPU focus missing real D to A seat enters; keyboard={keyboard_ok} pointer={pointer_ok}").into());
                 }
+                let buttons_ok=state.gpu_buttons==vec![(surface.clone(),true),(surface.clone(),false),
+                    (d.clone(),true),(d.clone(),false),(surface.clone(),true),(surface.clone(),false)];
+                // F8 (evdev 66) is sent to D before the final A raise.
+                let keys_ok=state.gpu_keys==vec![(d.clone(),66,true),(d.clone(),66,false)];
+                if !state.gpu_move_requested || !buttons_ok || !keys_ok {
+                    return Err(format!("GPU input missing real client move/button/key pairs: move={} buttons={buttons_ok} keys={keys_ok}",state.gpu_move_requested).into());
+                }
+                println!("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_VERIFIED=true");
                 println!("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true");
                 println!("MELANIA_QEMU_RETAINED_GPU_RAISE_ACKED=true");
             }

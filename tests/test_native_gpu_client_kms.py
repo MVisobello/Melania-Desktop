@@ -329,6 +329,17 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true",HOST)
         self.assertIn("GPU focus missing real D to A seat enters",CLIENT)
 
+    def test_gpu_client_input_requires_real_held_serial_and_forwarded_pairs(self):
+        gate=BRIDGE.split("fn move_request(",1)[1].split("// Stage113:",1)[0]
+        for marker in ("self.seat.owns(&seat)","self.pointer_buttons_held.contains(&0x110)",
+                       "self.gpu_forwarded_left.as_ref()!=Some(surface)",
+                       "take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial)"):
+            self.assertIn(marker,gate)
+        self.assertIn("top._move(seat,serial)",CLIENT)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_VERIFIED=true",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true",HOST)
+        self.assertIn("state.gpu_forwarded_keys.remove(&code)",BRIDGE)
+
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
