@@ -3,6 +3,7 @@
 //! Slot IDs come from the Wayland registry, not the client.
 use std::collections::{BTreeMap,BTreeSet};
 use crate::window_placement::{retained_gpu_position, MAX_PLACED_WINDOWS};
+use crate::window_interaction::{ResizeDirection,WindowRect};
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct GpuRect { pub x:i32, pub y:i32, pub width:i32, pub height:i32 }
@@ -47,6 +48,47 @@ impl RetainedGpuLayout {
         self.rects.insert(slot,next);
         Ok(true)
     }
+    /// Clamp only the edge being dragged, reserving the existing six-pixel
+    /// decoration margin. Opposite edges must remain anchored on all eight
+    /// XDG directions. This is a preview, not a published GPU geometry.
+    pub fn resize_target(&self,slot:u64,requested:WindowRect,direction:ResizeDirection)
+        ->Option<GpuRect> {
+        if self.is_visible(slot)!=Some(true) {return None;}
+        let old=self.geometry(slot)?;
+        let (mut left,mut top)=(old.x,old.y);
+        let (mut right,mut bottom)=(old.x+old.width,old.y+old.height);
+        if direction.left() {
+            if right-96<6 {return None;}
+            left=requested.x.clamp(6,right-96);
+        } else if direction.right() {
+            if left+96>1274 {return None;}
+            right=requested.x.checked_add(requested.width)?.clamp(left+96,1274);
+        }
+        if direction.top() {
+            if bottom-72<6 {return None;}
+            top=requested.y.clamp(6,bottom-72);
+        } else if direction.bottom() {
+            if top+72>794 {return None;}
+            bottom=requested.y.checked_add(requested.height)?.clamp(top+72,794);
+        }
+        let next=GpuRect{x:left,y:top,width:right-left,height:bottom-top};
+        (next!=old && GpuRect::fit(next.x,next.y,next.width,next.height)==Some(next))
+            .then_some(next)
+    }
+
+    /// Commit the configured origin and size together. A wrong-sized buffer,
+    /// hidden/missing role or off-screen geometry never alters the scene.
+    /// Both Smithay and the retained GLES presenter use the same rule.
+    pub fn commit_resize(&mut self,slot:u64,target:GpuRect,width:i32,height:i32)
+        ->Result<(),&'static str> {
+        if self.is_visible(slot)!=Some(true) || (target.width,target.height)!=(width,height) ||
+            width<96 || height<72 || GpuRect::fit(target.x,target.y,width,height)!=Some(target) {
+            return Err("invalid configured GPU resize");
+        }
+        self.rects.insert(slot,target);
+        Ok(())
+    }
+
     pub fn raise(&mut self,slot:u64)->Result<bool,&'static str> {
         if self.is_visible(slot)!=Some(true) {return Err("cannot raise hidden or unknown GPU surface");}
         let index=self.stack.iter().position(|id|*id==slot).ok_or("unknown GPU surface")?;
@@ -158,6 +200,50 @@ mod tests {
         scene.remove(2);
         assert!(scene.target_at(point.0,point.1).is_none());
         assert!(scene.target_at(f64::NAN,0.0).is_none());
+    }
+    #[test]
+    fn all_eight_resize_edges_anchor_opposite_edges_and_commit_exact_buffer() {
+        use crate::window_interaction::{WindowInteraction,InteractionKind};
+        for edge in [ResizeDirection::Top,ResizeDirection::Bottom,
+            ResizeDirection::Left,ResizeDirection::Right,ResizeDirection::TopLeft,
+            ResizeDirection::TopRight,ResizeDirection::BottomLeft,ResizeDirection::BottomRight] {
+            let mut scene=RetainedGpuLayout::default();
+            let old=scene.update_buffer(1,360,224).unwrap();
+            scene.update_buffer(2,320,200).unwrap();
+            scene.raise(1).unwrap();
+            let mut drag=WindowInteraction::default();
+            let start=WindowRect{x:old.x,y:old.y,width:old.width,height:old.height};
+            assert!(drag.begin(1,start,200.0,150.0,InteractionKind::Resize(edge)));
+            let (_,request)=drag.motion(240.0,180.0).unwrap();
+            let next=scene.resize_target(1,request,edge).unwrap();
+            assert_eq!(scene.geometry(1),Some(old));
+            assert_eq!(next.x,old.x+if edge.left(){40}else{0});
+            assert_eq!(next.y,old.y+if edge.top(){30}else{0});
+            assert_eq!(next.width,old.width+if edge.right(){40}else if edge.left(){-40}else{0});
+            assert_eq!(next.height,old.height+if edge.bottom(){30}else if edge.top(){-30}else{0});
+            assert!(scene.commit_resize(1,next,next.width-1,next.height).is_err());
+            assert_eq!(scene.geometry(1),Some(old));
+            scene.commit_resize(1,next,next.width,next.height).unwrap();
+            assert_eq!(scene.geometry(1),Some(next));
+            assert_eq!(scene.bottom_to_top().map(|(id,_)|id).collect::<Vec<_>>(),vec![2,1]);
+        }
+    }
+    #[test]
+    fn resize_clamps_moving_edges_to_margin_and_rejects_stale_roles() {
+        let mut scene=RetainedGpuLayout::default();
+        let old=scene.update_buffer(1,360,224).unwrap();
+        let requested=WindowRect{x:0,y:0,width:old.x+old.width,height:old.y+old.height};
+        let next=scene.resize_target(1,requested,ResizeDirection::TopLeft).unwrap();
+        assert_eq!(next.x,6);
+        assert_eq!(next.y,6);
+        assert_eq!(next.x+next.width,old.x+old.width);
+        assert_eq!(next.y+next.height,old.y+old.height);
+        assert!(scene.commit_resize(1,GpuRect{x:0,..next},next.width,next.height).is_err());
+        scene.set_visible(1,false).unwrap();
+        assert!(scene.resize_target(1,requested,ResizeDirection::TopLeft).is_none());
+        assert!(scene.commit_resize(1,next,next.width,next.height).is_err());
+        scene.remove(1);
+        assert!(scene.commit_resize(1,next,next.width,next.height).is_err());
     }
     #[test]
     fn invalid_update_does_not_mutate_existing_window_or_order() {

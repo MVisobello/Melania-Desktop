@@ -916,6 +916,7 @@ fn qemu_gpu_scene_stream(
             let mut moved_slot=None;
             let mut visibility_slot=None;
             let mut raised_slot=None;
+            let mut resize_target=None;
             let client_dmabuf=if direct_frame {
                 let (planned,slot,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
                     .recv_timeout(Duration::from_secs(2))?;
@@ -930,6 +931,13 @@ fn qemu_gpu_scene_stream(
                 use crate::continuous_kms_stream::DirectGpuUpdate;
                 match buffer {
                     DirectGpuUpdate::Buffer(buffer)=>Some((slot,buffer)),
+                    DirectGpuUpdate::Resize{buffer,rect} if resize_gpu && index==19=>{
+                        if !retained.contains_key(&slot) || retained_layout.is_visible(slot)!=Some(true) {
+                            return Err("GPU resize references missing or hidden surface".into());
+                        }
+                        resize_target=Some(rect);
+                        Some((slot,buffer))
+                    },
                     DirectGpuUpdate::Remove if multi_gpu=>{
                         if retained.remove(&slot).is_none() || !retained_layout.remove(slot) {
                             return Err("GPU removal references an absent surface".into());
@@ -1022,7 +1030,11 @@ fn qemu_gpu_scene_stream(
                 let source=opaque_snapshot.as_mut().or(texture.as_mut()).ok_or("missing retained source texture")?;
                 let image=retain_direct_window(&mut renderer,source,opaque)?;
                 let size=buffer.size();
-                retained_layout.update_buffer(*slot,size.w,size.h)?;
+                if let Some(rect)=resize_target {
+                    retained_layout.commit_resize(*slot,rect,size.w,size.h)?;
+                } else {
+                    retained_layout.update_buffer(*slot,size.w,size.h)?;
+                }
                 retained.insert(*slot,image);
             }
             let sampled_texture=opaque_snapshot.as_ref().or(texture.as_ref());

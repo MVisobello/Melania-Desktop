@@ -29,6 +29,7 @@ const ACK_BYTES: usize = 4 + 8 + 8 + 8 + 1;
 // Both operations carry the same presentation ticket and zero CPU pixels.
 pub enum DirectGpuUpdate {
     Buffer(smithay::backend::allocator::dmabuf::Dmabuf),
+    Resize {buffer:smithay::backend::allocator::dmabuf::Dmabuf,rect:crate::retained_gpu_layout::GpuRect},
     Remove,
     Move {x:i32,y:i32},
     Visibility {visible:bool},

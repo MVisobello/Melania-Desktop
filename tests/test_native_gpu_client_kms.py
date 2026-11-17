@@ -341,12 +341,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("state.gpu_forwarded_keys.remove(&code)",BRIDGE)
 
     def test_gpu_resize_requires_configure_ack_and_new_client_buffer(self):
-        for marker in ("self.gpu_resize_pending.as_ref().is_some_and", "dma.size().w==*w && dma.size().h==*h",
+        for marker in ("self.gpu_resize_pending.as_ref().is_some_and", "dma.size().w==rect.width && dma.size().h==rect.height",
                        "MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE_ACK=true",
                        "MELANIA_NATIVE_GPU_XDG_RESIZE_KMS_ACK=20"):
             self.assertIn(marker,BRIDGE)
         self.assertIn("top.resize(seat,serial,xdg_toplevel::ResizeEdge::BottomRight)",CLIENT)
         self.assertIn("resize DMA-BUF missing verified callback/release",CLIENT)
+        self.assertIn("self.direct_gpu_layout.resize_target(slot,rect,direction)",BRIDGE)
+        self.assertIn("self.direct_gpu_layout.commit_resize(slot,rect,size.w,size.h)",BRIDGE)
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        self.assertIn("DirectGpuUpdate::Resize{buffer,rect}",gbm)
+        self.assertIn("retained_layout.commit_resize(*slot,rect,size.w,size.h)",gbm)
+        self.assertNotIn("direction!=ResizeDirection::BottomRight",BRIDGE)
         self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=20",GUEST)
         self.assertIn("MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true",HOST)
 
