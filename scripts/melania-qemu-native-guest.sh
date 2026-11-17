@@ -152,9 +152,9 @@ run_retained_gpu_probe() {
     MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
     MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
     MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
-    MELANIA_NATIVE_DIRECT_GPU_MOVE=STACK_QEMU_VM \
-    MELANIA_NATIVE_QEMU_FRAME_TARGET=19 \
-    MELANIA_QEMU_CONTINUOUS_FRAMES=19 \
+    MELANIA_NATIVE_DIRECT_GPU_MOVE=RESIZE_QEMU_VM \
+    MELANIA_NATIVE_QEMU_FRAME_TARGET=20 \
+    MELANIA_QEMU_CONTINUOUS_FRAMES=20 \
       timeout --signal=TERM --kill-after=3s "${server_timeout}s" \
       "${compositor_command[@]}" < /dev/tty1 \
       > "$retained_gpu_client_server_log" 2>&1 &
@@ -181,6 +181,8 @@ run_retained_gpu_probe() {
       minimized=false
       restored=false
       client_move=false
+      overlap=false
+      resize_ready=false
       for attempt in $(seq 1 700); do
         if [[ "$ready" == false ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK=2' "$retained_gpu_client_server_log"; then
           report 'MELANIA_QEMU_RETAINED_GPU_READY_FOR_REAL_DRAG=true'
@@ -206,8 +208,17 @@ run_retained_gpu_probe() {
           report 'MELANIA_QEMU_RETAINED_GPU_XDG_MOVE_GRANTED=true'
           client_move=true
         fi
-        if [[ "$client_move" == true ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_OVERLAP_ACK=18' "$retained_gpu_client_server_log"; then
+        if [[ "$client_move" == true && "$overlap" == false ]] && grep -Fqx 'MELANIA_NATIVE_RETAINED_GPU_OVERLAP_ACK=18' "$retained_gpu_client_server_log"; then
           report 'MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true'
+          overlap=true
+        fi
+        if [[ "$overlap" == true && "$resize_ready" == false ]] &&
+           grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_VERIFIED=true' "$retained_gpu_client_client_log"; then
+          report 'MELANIA_QEMU_GPU_XDG_RESIZE_READY=true'
+          resize_ready=true
+        fi
+        if [[ "$resize_ready" == true ]] && grep -Fqx 'MELANIA_NATIVE_GPU_XDG_RESIZE_GRANTED=1' "$retained_gpu_client_server_log"; then
+          report 'MELANIA_QEMU_GPU_XDG_RESIZE_GRANTED=true'
           exit 0
         fi
         kill -0 "$retained_gpu_client_server_pid" 2>/dev/null || exit 1
@@ -221,7 +232,7 @@ run_retained_gpu_probe() {
       MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM \
       MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM \
       MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
-      MELANIA_QEMU_DIRECT_GPU_MOVE=STACK_QEMU_VM \
+      MELANIA_QEMU_DIRECT_GPU_MOVE=RESIZE_QEMU_VM \
       WAYLAND_DISPLAY="$retained_gpu_client_socket" \
       timeout --signal=TERM --kill-after=3s 65s \
       "$continuous_client" > "$retained_gpu_client_client_log" 2>&1; then
@@ -343,7 +354,14 @@ run_retained_gpu_probe() {
       fatal 'retained_gpu_missing_real_client_input'
     [[ "$(grep -Fxc 'MELANIA_NATIVE_GPU_XDG_CLIENT_MOVE_GRANTED=1' "$retained_gpu_client_server_log")" == 1 ]] ||
       fatal 'retained_gpu_missing_unique_authenticated_move'
-    grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=19' "$retained_gpu_client_server_log" ||
+    for marker in 'MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE_ACK=true' \
+      'MELANIA_NATIVE_GPU_XDG_RESIZE_KMS_ACK=20' 'MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=20' \
+      'MELANIA_NATIVE_GPU_XDG_RESIZE_20_FRAMES_PASS=true' 'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=20'; do
+      grep -Fqx "$marker" "$retained_gpu_client_server_log" || fatal "retained_gpu_resize_missing_$marker"
+    done
+    grep -Fqx 'MELANIA_QEMU_GPU_XDG_RESIZE_CLIENT_ACKED=true' "$retained_gpu_client_client_log" ||
+      fatal 'retained_gpu_resize_missing_client_release'
+    grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=20' "$retained_gpu_client_server_log" ||
       fatal 'retained_gpu_client_in_process_KMS_worker_not_joined'
     if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
       fatal 'retained_gpu_client_used_forbidden_cpu_staging'
@@ -357,6 +375,7 @@ run_retained_gpu_probe() {
     report 'MELANIA_QEMU_RETAINED_GPU_STACK_KMS_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true'
+    report 'MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true'
     report 'MELANIA_NATIVE_SESSION_READY=false'
     
 }

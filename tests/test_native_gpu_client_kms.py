@@ -340,6 +340,16 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true",HOST)
         self.assertIn("state.gpu_forwarded_keys.remove(&code)",BRIDGE)
 
+    def test_gpu_resize_requires_configure_ack_and_new_client_buffer(self):
+        for marker in ("self.gpu_resize_pending.as_ref().is_some_and", "dma.size().w==*w && dma.size().h==*h",
+                       "MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE_ACK=true",
+                       "MELANIA_NATIVE_GPU_XDG_RESIZE_KMS_ACK=20"):
+            self.assertIn(marker,BRIDGE)
+        self.assertIn("top.resize(seat,serial,xdg_toplevel::ResizeEdge::BottomRight)",CLIENT)
+        self.assertIn("resize DMA-BUF missing verified callback/release",CLIENT)
+        self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=20",GUEST)
+        self.assertIn("MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true",HOST)
+
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)
         self.assertIn("Rectangle::from_loc_and_size((20,20),(48,36))",CLIENT)
