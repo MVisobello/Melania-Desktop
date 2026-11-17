@@ -65,7 +65,8 @@ pub fn direct_gpu_frame_budget_matches(multi:Option<&str>,frames:Option<&str>)->
 
 pub fn direct_gpu_move_budget_matches(multi:Option<&str>,motion:Option<&str>,frames:Option<&str>)->bool {
     match motion {None=>direct_gpu_frame_budget_matches(multi,frames),
-        Some("YES_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("14"),_=>false}
+        Some("YES_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("14"),
+        Some("LIVE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("15"),_=>false}
 }
 
 impl std::fmt::Display for FrameBudgetError {
@@ -92,6 +93,11 @@ mod tests {
     }
     #[test]
     fn drag_budget_requires_exact_retained_opt_in() {
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("LIVE_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_QEMU_VM"),Some("14")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("YES_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),None,Some("15")));
         assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("YES_QEMU_VM"),Some("14")));
         assert!(!direct_gpu_move_budget_matches(None,Some("YES_QEMU_VM"),Some("14")));
         assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),None,Some("14")));

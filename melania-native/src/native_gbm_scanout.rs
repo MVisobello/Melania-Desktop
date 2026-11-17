@@ -575,15 +575,19 @@ fn verify_retained_gpu_scene(
     } else if removed_slot.is_some() {
         return Err("unexpected GPU removal during original 12-frame acceptance".into());
     }
-    if index==13 {
+    let live_drag=std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_QEMU_VM");
+    if index>=13 {
         let (slot,x,y)=moved_slot.ok_or("missing real GPU drag")?;
-        if slot!=1 || (x-650).abs()>3 || (y-190).abs()>3 || removed_slot.is_some() {
+        let (expected_x,expected_y)=if live_drag && index==13 {(410,155)} else {(650,190)};
+        if slot!=1 || (x-expected_x).abs()>3 || (y-expected_y).abs()>3 || removed_slot.is_some() {
             return Err("unexpected real GPU drag destination".into());
         }
         // Old A content and decoration must disappear, not just move a cursor.
         for (px,py) in [(200,150),(360,240),(158,200)] {
             sample(renderer,px,py,[27,33,58])?;
         }
+        // The second position must clear the intermediate footprint too.
+        if live_drag && index==14 {sample(renderer,460,200,[27,33,58])?;}
     } else if moved_slot.is_some() {return Err("unexpected GPU motion".into());}
     for (slot,frame) in expected_by_slot {
         let (w,h)=retained_gpu_probe_size(frame).ok_or("missing probe size")?;
@@ -607,7 +611,10 @@ fn verify_retained_gpu_scene(
             }
         }
     }
-    if index==13 {println!("MELANIA_NATIVE_RETAINED_GPU_MOVE_PIXELS_VERIFIED=1");}
+    if index>=13 {
+        println!("MELANIA_NATIVE_RETAINED_GPU_MOVE_PIXELS_VERIFIED=1");
+        println!("MELANIA_NATIVE_RETAINED_GPU_MOVE_FRAME_PIXELS_VERIFIED={}",index+1);
+    }
     Ok(())
 }
 
@@ -660,8 +667,9 @@ fn qemu_gpu_scene_stream(
         .as_deref()==Ok("YES_QEMU_VM");
     if multi_gpu && !direct_mode {return Err("retained GPU mode requires direct channel".into());}
     let total=if multi_gpu {13u64} else if direct_mode {12u64} else {24u64};
-    let move_gpu=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM");
-    let total=if move_gpu {14} else {total};
+    let live_drag=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_QEMU_VM");
+    let move_gpu=live_drag || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM"));
+    let total=if live_drag {15} else if move_gpu {14} else {total};
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
     if direct_mode && persistent {
@@ -1162,7 +1170,8 @@ fn qemu_gpu_scene_stream(
         if multi_gpu {
             println!("MELANIA_NATIVE_RETAINED_GPU_FOUR_WINDOW_12_FRAMES_PASS=true");
             println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_13_FRAMES_PASS=true");
-            if move_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_REAL_DRAG_14_FRAMES_PASS=true");}
+            if live_drag {println!("MELANIA_NATIVE_RETAINED_GPU_LIVE_DRAG_15_FRAMES_PASS=true");}
+            else if move_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_REAL_DRAG_14_FRAMES_PASS=true");}
         }
     } else {
         println!("MELANIA_NATIVE_GPU_WAYLAND_24_KMS_FRAMES_PASS=true");
