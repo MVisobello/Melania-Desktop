@@ -208,12 +208,11 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("if direct_import_lifetime.len()>=12",loop)
         # The original finite path still never destroys its imports until
         # restore. The opt-in rolling path may retire only after kernel ACK.
-        cleanup=loop.index("renderer.cleanup_texture_cache()",retained)
         route=loop.index("if !ack_owned",retained)
         confirm=loop.index("rolling_imports.confirm(index+1)?",route)
         self.assertLess(route,confirm)
-        self.assertLess(confirm,cleanup)
-        self.assertLess(cleanup,ack)
+        self.assertLess(confirm,ack)
+        self.assertNotIn("renderer.cleanup_texture_cache()",loop[retained:restore])
         self.assertIn("if rolling_retire {",loop[route:confirm])
         self.assertIn("rolling_imports.clear_after_restore()",loop[restore:clear])
         self.assertIn("renderer.cleanup_texture_cache()",loop[clear:])

@@ -1268,7 +1268,11 @@ fn qemu_gpu_scene_stream(
                 let retired=rolling_imports.confirm(index+1)?;
                 rolling_retired+=retired;
                 if retired>0 {
-                    renderer.cleanup_texture_cache()?;
+                    // Do not purge Smithay EGL caches while the independent
+                    // Wayland import context is still active. The real VM
+                    // rejected its fifth import after an eager cache purge.
+                    // Actual source handles are retired by the queue; final
+                    // cache cleanup remains after CRTC restoration.
                     println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED={} frame={}",retired,index+1);
                 }
             }
