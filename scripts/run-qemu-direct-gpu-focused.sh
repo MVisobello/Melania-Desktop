@@ -65,11 +65,17 @@ EOF
 cloud-localds seed.iso user-data meta-data
 serial="$report/serial.log"
 : > "$serial"
+drag_pid=''
+if [[ "$guest_arg" == --retained-gpu-only ]]; then
+  python3 "$root/scripts/inject-qemu-retained-gpu-drag.py" --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 650 > "$report/qmp-retained-drag.log" 2>&1 &
+  drag_pid=$!
+fi
 set +e
 timeout --signal=TERM --kill-after=10s 650s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \
+  -qmp "unix:$work/melania-qmp.sock,server=on,wait=off" \
   -device qemu-xhci,id=melania-usb \
   -device usb-kbd,bus=melania-usb.0 -device usb-tablet,bus=melania-usb.0 \
   -device virtio-scsi-pci,id=scsi \
@@ -78,7 +84,10 @@ timeout --signal=TERM --kill-after=10s 650s \
   -drive if=none,file=payload.iso,id=payload,format=raw,media=cdrom -device scsi-cd,drive=payload \
   -netdev user,id=net0 -device virtio-net-pci,netdev=net0
 status=$?
+drag_status=0
+if [[ -n "$drag_pid" ]]; then wait "$drag_pid"; drag_status=$?; fi
 set -e
+if [[ "$drag_status" != 0 ]]; then cat "$report/qmp-retained-drag.log"; exit 1; fi
 cat "$serial"
 # Preserve raw serial evidence; ttyS0 emits CRLF.
 normalized="$report/serial.normalized.log"
@@ -93,4 +102,7 @@ for marker in 'MELANIA_QEMU_NATIVE_GUEST_EXIT=0' "$proof" "$focused"; do
     exit 1
   fi
 done
+if [[ "$guest_arg" == --retained-gpu-only ]]; then
+  grep -qxF 'MELANIA_QEMU_RETAINED_GPU_REAL_USB_DRAG_KMS_PASS=true' "$normalized"
+fi
 echo 'MELANIA_QEMU_FOCUSED_DIRECT_GPU_RESULT=PASS'

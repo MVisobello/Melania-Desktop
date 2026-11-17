@@ -79,6 +79,8 @@ use melania_control::{start_toggle_socket_path,SOCKET_ENV,
 use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
+use melania_native::continuous_kms_stream::DirectGpuUpdate;
+use melania_native::retained_gpu_layout::RetainedGpuLayout;
 use melania_native::native_explicit_acquire::{WaylandAcquireGate,cancel_acquire_transaction};
 use smithay::wayland::compositor::{BlockerState,add_pre_commit_hook};
 use smithay::backend::renderer::sync::Fence;
@@ -178,7 +180,9 @@ struct BridgeState {
     // or *permanent* seat revocation; never leave EGL image FDs after close.
     client_dmabuf_imports:Vec<(wl_buffer::WlBuffer,GlesTexture)>,
     direct_gpu_sender:Option<std::sync::mpsc::SyncSender<melania_native::continuous_kms_stream::DirectGpuFrame>>,
-    direct_gpu_pending:Option<(u64,Option<Dmabuf>)>,
+    direct_gpu_pending:Option<(u64,DirectGpuUpdate)>,
+    direct_gpu_layout:RetainedGpuLayout,
+    direct_gpu_move_inflight:Option<(u64,i32,i32)>,
     direct_gpu_slots:std::collections::BTreeSet<u64>,
     direct_gpu_removal_inflight:Option<u64>,
     // GTK4's GDK Wayland backend requires wl_data_device_manager even
@@ -477,7 +481,8 @@ impl BridgeState {
             return Err("continuous KMS scene changed during planning".into());
         }
         if let Some((slot,dmabuf))=self.direct_gpu_pending.take() {
-            let removal=dmabuf.is_none();
+            let removal=matches!(&dmabuf,DirectGpuUpdate::Remove);
+            let movement=match &dmabuf {DirectGpuUpdate::Move{x,y}=>Some((slot,*x,*y)),_=>None};
             let sent=self.direct_gpu_sender.as_ref().is_some_and(|sender|
                 sender.try_send((planned,slot,dmabuf)).is_ok());
             if !sent {
@@ -495,6 +500,7 @@ impl BridgeState {
                 planned,self.continuous_client_ledger.take_for_presentation()
             ));
             self.direct_gpu_removal_inflight=if removal {Some(slot)} else {None};
+            self.direct_gpu_move_inflight=movement;
             println!("MELANIA_NATIVE_DIRECT_GPU_TICKET_SUBMITTED={} generation={}",
                      planned.ticket.sequence,planned.generation);
             println!("MELANIA_NATIVE_CONTINUOUS_FRAME_SUBMITTED={} generation={}",
@@ -759,6 +765,14 @@ impl BridgeState {
             publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))?;
             println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK={slot}");
         }
+        if let Some((slot,x,y))=self.direct_gpu_move_inflight.take() {
+            if self.continuous_frame_count!=14 || slot!=1 || self.frame_callback_count!=12 ||
+                self.direct_gpu_layout.geometry(slot).map(|r|(r.x,r.y))!=Some((x,y)) {
+                return Err("GPU motion ACK did not match the retained role and callback ledger".into());
+            }
+            publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-move-acked"))?;
+            println!("MELANIA_NATIVE_RETAINED_GPU_MOVE_KMS_ACK={slot}");
+        }
         println!("MELANIA_NATIVE_CONTINUOUS_KMS_ACK={} generation={}",
                  self.continuous_frame_count,planned.generation);
         let _=std::io::stdout().flush();
@@ -798,6 +812,44 @@ impl BridgeState {
         }
         println!("MELANIA_NATIVE_SCENE_GENERATION_ACK={}",candidate.generation);
         Ok(())
+    }
+
+    fn gpu_drag_probe(&self)->bool {
+        self.direct_gpu_sender.is_some() && self.continuous_frame_target==14 &&
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM")
+    }
+
+    // Real libinput button events enter here only after device/seat checks.
+    // The finite fixture uses a compositor-owned 26px title area, deferring
+    // presentation until release so event bursts cannot exhaust the budget.
+    fn gpu_drag_button(&mut self,code:u32,pressed:bool) {
+        if code!=0x110 || self.continuous_frame_count!=13 ||
+           !self.lifecycle.seat_active() || self.native_presentation_guard.permanently_revoked() {
+            self.window_interaction.cancel();
+            return;
+        }
+        let point=self.pointer_position;
+        if pressed {
+            let Some(slot)=self.direct_gpu_layout.hit_test(point.x,point.y) else{return;};
+            let Some(rect)=self.direct_gpu_layout.geometry(slot) else{return;};
+            if point.y>=f64::from(rect.y+26) {return;}
+            if self.window_interaction.begin(slot,WindowRect{x:rect.x,y:rect.y,width:rect.width,height:rect.height},point.x,point.y,InteractionKind::Move) {
+                println!("MELANIA_NATIVE_RETAINED_GPU_REAL_DRAG_BEGIN={slot}");
+            }
+            return;
+        }
+        let motion=self.window_interaction.motion(point.x,point.y);
+        self.window_interaction.end();
+        let Some((slot,rect))=motion else{return;};
+        if self.continuous_inflight.is_some() || self.direct_gpu_pending.is_some() {return;}
+        if self.direct_gpu_layout.move_to(slot,rect.x,rect.y)!=Ok(true) {return;}
+        let moved=self.direct_gpu_layout.geometry(slot).expect("moved GPU role");
+        self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move{x:moved.x,y:moved.y}));
+        self.multi_scene.note_external_gpu_frame();
+        self.note_scene_change();
+        if let Err(error)=self.submit_continuous_frame() {
+            eprintln!("GPU drag submission failed: {error}");
+        }
     }
 
     /// Resolve QEMU physical output coordinates to a retained client surface.
@@ -2677,8 +2729,15 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     }
+                    if multi_gpu {
+                        let size=dmabuf.as_ref().expect("admitted DMA-BUF").size();
+                        if let Err(error)=self.direct_gpu_layout.update_buffer(slot,size.w,size.h) {
+                            self.continuous_submission_failure.record(error.into());
+                            return;
+                        }
+                    }
                     self.direct_gpu_slots.insert(slot);
-                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,Some(buffer)));
+                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,DirectGpuUpdate::Buffer(buffer)));
                     self.multi_scene.note_external_gpu_frame();
                     self.note_scene_change();
                     if let Err(error)=self.submit_continuous_frame() {
@@ -3493,7 +3552,11 @@ impl XdgShellHandler for BridgeState {
                     self.continuous_submission_failure.record("GPU removal collided with queued scene operation".into());
                     return;
                 }
-                self.direct_gpu_pending=Some((slot,None));
+                if !self.direct_gpu_layout.remove(slot) {
+                    self.continuous_submission_failure.record("missing GPU layout during removal".into());
+                    return;
+                }
+                self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove));
                 self.multi_scene.note_external_gpu_frame();
                 gpu_removed=true;
             }
@@ -4101,17 +4164,18 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_keys+=1;
         }
         InputEvent::PointerMotion {event} => {
-            if (state.focused.is_none() && !state.multi_window_mode) ||
+            if (state.focused.is_none() && !state.multi_window_mode && !state.gpu_drag_probe()) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             let point:Point<f64,Logical>=(
                 (state.pointer_position.x+event.delta_x())
-                    .clamp(0.0,if state.multi_window_mode {1279.0} else {639.0}),
+                    .clamp(0.0,if state.multi_window_mode || state.gpu_drag_probe() {1279.0} else {639.0}),
                 (state.pointer_position.y+event.delta_y())
-                    .clamp(0.0,if state.multi_window_mode {799.0} else {479.0})
+                    .clamp(0.0,if state.multi_window_mode || state.gpu_drag_probe() {799.0} else {479.0})
             ).into();
             state.pointer_position=point;
+            if state.gpu_drag_probe() {return;}
             state.apply_window_motion(point);
             if state.multi_window_mode {
                 println!("MELANIA_NATIVE_WINDOW_POINTER_REL=({:.1},{:.1}) target={:?}",
@@ -4129,16 +4193,17 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_motions+=1;
         }
         InputEvent::PointerMotionAbsolute {event} => {
-            if (state.focused.is_none() && !state.multi_window_mode) ||
+            if (state.focused.is_none() && !state.multi_window_mode && !state.gpu_drag_probe()) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
-            let point=if state.multi_window_mode {
+            let point=if state.multi_window_mode || state.gpu_drag_probe() {
                 event.position_transformed((1280,800).into())
             } else {
                 event.position_transformed((640,480).into())
             };
             state.pointer_position=point;
+            if state.gpu_drag_probe() {return;}
             state.apply_window_motion(point);
             if state.multi_window_mode {
                 println!("MELANIA_NATIVE_WINDOW_POINTER_ABS=({:.1},{:.1}) target={:?}",
@@ -4196,13 +4261,17 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.delivered_scroll_frames=state.delivered_scroll_frames.saturating_add(1);
         }
         InputEvent::PointerButton {event} => {
-            if (state.focused.is_none() && !state.multi_window_mode) ||
+            if (state.focused.is_none() && !state.multi_window_mode && !state.gpu_drag_probe()) ||
                state.lifecycle.input_registry_mut().event(&InputDevice::id(&event.device())).is_err() {
                 return;
             }
             match event.state() {
                 ButtonState::Pressed => {state.pointer_buttons_held.insert(event.button_code());},
                 ButtonState::Released => {state.pointer_buttons_held.remove(&event.button_code());},
+            }
+            if state.gpu_drag_probe() {
+                state.gpu_drag_button(event.button_code(),event.state()==ButtonState::Pressed);
+                return;
             }
             // The outside click which dismisses a grabbed popup may not
             // activate the application beneath it. Suppress its paired
@@ -4519,6 +4588,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         client_dmabuf_imports:Vec::new(),
         direct_gpu_sender:None,direct_gpu_pending:None,
         direct_gpu_slots:Default::default(),direct_gpu_removal_inflight:None,
+        direct_gpu_layout:Default::default(),direct_gpu_move_inflight:None,
         data_device:DataDeviceState::new::<BridgeState>(&handle),
         primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
@@ -4973,7 +5043,8 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if gpu_client_kms && (
         !client_dmabuf_probe || !integrated_kms ||
         state.dynamic_window_mode || state.multi_window_mode ||
-        state.continuous_frame_target!=if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
+        state.continuous_frame_target!=if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
+            .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
             .as_deref()==Ok("YES_QEMU_VM") {13} else {12} || state.layer_pixels_mode ||
         state.gtk_layer_mode || persistent_kms ||
         !state.frame_callbacks_probe
@@ -4992,6 +5063,11 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         (!direct_gpu || std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
             .as_deref()!=Ok("YES_QEMU_VM")) {
         return Err("retained GPU scene requires direct isolated GBM mode".into());
+    }
+    if std::env::var_os("MELANIA_NATIVE_DIRECT_GPU_MOVE").is_some() &&
+        (!direct_gpu || std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()!=Ok("YES_QEMU_VM") ||
+         std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()!=Ok("YES_QEMU_VM")) {
+        return Err("GPU drag requires isolated retained scene mode".into());
     }
     let explicit_sync_probe=std::env::var("MELANIA_NATIVE_EXPLICIT_SYNC")
         .as_deref()==Ok("YES_QEMU_VM");
