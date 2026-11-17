@@ -152,6 +152,7 @@ run_retained_gpu_probe() {
     MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
     MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
     MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+    MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM \
     MELANIA_NATIVE_DIRECT_GPU_MOVE=LIVE_RESIZE_QEMU_VM \
     MELANIA_NATIVE_QEMU_FRAME_TARGET=21 \
     MELANIA_QEMU_CONTINUOUS_FRAMES=21 \
@@ -380,6 +381,12 @@ run_retained_gpu_probe() {
     if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
       fatal 'retained_gpu_client_used_forbidden_cpu_staging'
     fi
+    for marker in 'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2' \
+      'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED=14' \
+      'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE=13' \
+      'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true'; do
+      grep -Fqx "$marker" "$retained_gpu_client_server_log" || fatal "rolling_gpu_missing_$marker"
+    done
     rm -f "$retained_gpu_client_server_log" "$retained_gpu_client_client_log"
     report 'MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_KMS_PASS=true'
@@ -391,6 +398,7 @@ run_retained_gpu_probe() {
     report 'MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true'
     report 'MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true'
     report 'MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true'
+    report 'MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true'
     report 'MELANIA_NATIVE_SESSION_READY=false'
     
 }

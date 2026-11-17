@@ -206,7 +206,16 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(ack,restore)
         self.assertLess(restore,clear)
         self.assertIn("if direct_import_lifetime.len()>=12",loop)
-        self.assertNotIn("renderer.cleanup_texture_cache()",loop[retained:restore])
+        # The original finite path still never destroys its imports until
+        # restore. The opt-in rolling path may retire only after kernel ACK.
+        cleanup=loop.index("renderer.cleanup_texture_cache()",retained)
+        route=loop.index("if !ack_owned",retained)
+        confirm=loop.index("rolling_imports.confirm(index+1)?",route)
+        self.assertLess(route,confirm)
+        self.assertLess(confirm,cleanup)
+        self.assertLess(cleanup,ack)
+        self.assertIn("if rolling_retire {",loop[route:confirm])
+        self.assertIn("rolling_imports.clear_after_restore()",loop[restore:clear])
         self.assertIn("renderer.cleanup_texture_cache()",loop[clear:])
 
     def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
@@ -367,6 +376,15 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("client received release before intermediate resize ACK",CLIENT)
         self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=21",GUEST)
         self.assertIn("MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true",HOST)
+
+    def test_rolling_gpu_imports_remain_bounded_in_real_vm(self):
+        self.assertIn("MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM",GUEST)
+        for marker in ("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2",
+                       "MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED=14",
+                       "MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE=13",
+                       "MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true"):
+            self.assertIn(marker,GUEST)
+        self.assertIn("MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true",HOST)
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)

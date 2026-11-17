@@ -439,6 +439,7 @@ if [[ "$retained_drag_code" -ne 0 || "$qemu_code" -ne 0 || "$capture_code" -ne 0
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_GESTURE_SENT=true' "$report/qmp-retained-drag.log" ||
