@@ -2921,7 +2921,7 @@ impl CompositorHandler for BridgeState {
                     let allowed=if multi_gpu {self.continuous_frame_count<12 ||
                          (self.gpu_resize_probe() && self.continuous_frame_count==19 &&
                           self.gpu_resize_pending.as_ref().is_some_and(|(role,_,w,h,acked)|
-                              role==&surface && *acked &&
+                              role==surface && *acked &&
                               smithay::wayland::dmabuf::get_dmabuf(&buffer).is_ok_and(|dma|
                                   dma.size().w==*w && dma.size().h==*h)))} else {
                         melania_native::native_client_dmabuf::qemu_gpu_frame_allowed(
