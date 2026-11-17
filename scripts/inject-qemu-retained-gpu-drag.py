@@ -42,6 +42,12 @@ def main():
     time.sleep(.15)
     tablet(args.qmp,670,360,"release")
     helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true",until)
+    # Focus already-topmost D first; this must not add a KMS frame.
+    tablet(args.qmp,800,650)
+    time.sleep(.15)
+    tablet(args.qmp,800,650,"press")
+    time.sleep(.15)
+    tablet(args.qmp,800,650,"release")
     # Click the exposed upper part of A, not the overlapping D pixels.
     tablet(args.qmp,700,400)
     time.sleep(.15)

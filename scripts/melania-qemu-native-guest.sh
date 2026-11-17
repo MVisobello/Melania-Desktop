@@ -332,6 +332,8 @@ run_retained_gpu_probe() {
     done
     grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_RAISE_ACKED=true' "$retained_gpu_client_client_log" ||
       fatal 'retained_gpu_raise_missing_client_receipt'
+    grep -Fqx 'MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true' "$retained_gpu_client_client_log" ||
+      fatal 'retained_gpu_missing_real_wayland_focus'
     grep -Fqx 'MELANIA_NATIVE_IN_PROCESS_KMS_FRAMES_PASS=19' "$retained_gpu_client_server_log" ||
       fatal 'retained_gpu_client_in_process_KMS_worker_not_joined'
     if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
@@ -344,6 +346,7 @@ run_retained_gpu_probe() {
     report 'MELANIA_QEMU_RETAINED_GPU_LIVE_DRAG_KMS_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_VISIBILITY_KMS_PASS=true'
     report 'MELANIA_QEMU_RETAINED_GPU_STACK_KMS_PASS=true'
+    report 'MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true'
     report 'MELANIA_NATIVE_SESSION_READY=false'
     
 }

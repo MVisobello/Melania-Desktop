@@ -4,7 +4,7 @@ use std::{error::Error,fs::OpenOptions,io::Write,os::fd::{AsFd,OwnedFd},thread,t
 use melania_native::native_frame_budget::frame_budget;
 use wayland_client::{
     Connection,Dispatch,QueueHandle,
-    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
+    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback,wl_seat,wl_pointer,wl_keyboard},
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_v1,zwp_linux_buffer_params_v1,
@@ -43,6 +43,9 @@ struct Client {
     dmabuf_formats:Vec<(u32,u64)>,
     output:Option<wl_output::WlOutput>,
     output_mode_received:bool,
+    gpu_seat:Option<wl_seat::WlSeat>,
+    gpu_keyboard_enters:Vec<wl_surface::WlSurface>,
+    gpu_pointer_enters:Vec<(wl_surface::WlSurface,f64,f64)>,
     xdg_acked:bool,
     buffer_released:bool,
     frame_done_count:u32,
@@ -61,6 +64,8 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "xdg_wm_base"=>state.wm=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_shm"=>state.shm=Some(registry.bind(name,version.min(1),qh,())),
                 "wl_output"=>state.output=Some(registry.bind(name,version.min(3),qh,())),
+                "wl_seat" if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("STACK_QEMU_VM") =>
+                    state.gpu_seat=Some(registry.bind(name,version.min(5),qh,())),
                 "zwp_linux_dmabuf_v1" if
                     std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
                         .as_deref()==Ok("YES_QEMU_VM") =>
@@ -70,6 +75,23 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                     state.explicit_sync=Some(registry.bind(name,1,qh,())),
                 _=>{}
             }
+        }
+    }
+}
+wayland_client::delegate_noop!(Client: ignore wl_seat::WlSeat);
+impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
+    fn event(state:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let wl_keyboard::Event::Enter{surface,..}=event {
+            state.gpu_keyboard_enters.push(surface);
+        }
+    }
+}
+impl Dispatch<wl_pointer::WlPointer,()> for Client {
+    fn event(state:&mut Self,_:&wl_pointer::WlPointer,event:wl_pointer::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        if let wl_pointer::Event::Enter{surface,surface_x,surface_y,..}=event {
+            state.gpu_pointer_enters.push((surface,surface_x,surface_y));
         }
     }
 }
@@ -505,6 +527,13 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.output_mode_received {
         return Err("continuous client did not see 1280x800 Wayland output".into());
     }
+    // This fixture binds the actual seat, not an in-process focus observer.
+    let _gpu_keyboard=state.gpu_seat.as_ref().map(|seat|seat.get_keyboard(&qh,()));
+    let _gpu_pointer=state.gpu_seat.as_ref().map(|seat|seat.get_pointer(&qh,()));
+    if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("STACK_QEMU_VM") &&
+        (_gpu_keyboard.is_none() || _gpu_pointer.is_none()) {
+        return Err("GPU focus probe missing real seat devices".into());
+    }
     let compositor=state.compositor.take().ok_or("wl_compositor missing")?;
     let wm=state.wm.take().ok_or("xdg_wm_base missing")?;
     let shm=state.shm.take().ok_or("wl_shm missing")?;
@@ -602,6 +631,20 @@ fn main()->Result<(),Box<dyn Error>> {
                     thread::sleep(Duration::from_millis(10));
                 }
                 if state.frame_done_count!=12 {return Err("GPU raise fabricated callback".into());}
+                // The real USB clicks target D (already above A), then A.
+                // Verify Wayland Enter events on both exact surface objects.
+                // D is now extra[1] because B was destroyed earlier.
+                let d=&extra.get(1).ok_or("GPU focus missing D")?.0;
+                let keyboard_ok=state.gpu_keyboard_enters.windows(2)
+                    .any(|w|&w[0]==d && w[1]==surface);
+                let pointer_ok=state.gpu_pointer_enters.windows(2).any(|w|
+                    &w[0].0==d && w[1].0==surface &&
+                    (w[0].1-150.0).abs()<12.0 && (w[0].2-150.0).abs()<12.0 &&
+                    (w[1].1-50.0).abs()<12.0 && (w[1].2-50.0).abs()<12.0);
+                if !keyboard_ok || !pointer_ok {
+                    return Err(format!("GPU focus missing real D to A seat enters; keyboard={keyboard_ok} pointer={pointer_ok}").into());
+                }
+                println!("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true");
                 println!("MELANIA_QEMU_RETAINED_GPU_RAISE_ACKED=true");
             }
             for (s,x,t) in extra {

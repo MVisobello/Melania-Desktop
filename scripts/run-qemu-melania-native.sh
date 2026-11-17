@@ -435,6 +435,7 @@ if [[ "$retained_drag_code" -ne 0 || "$qemu_code" -ne 0 || "$capture_code" -ne 0
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_LIVE_DRAG_KMS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_VISIBILITY_KMS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_STACK_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_GESTURE_SENT=true' "$report/qmp-retained-drag.log" ||
