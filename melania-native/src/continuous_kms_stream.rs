@@ -31,6 +31,7 @@ pub enum DirectGpuUpdate {
     Buffer(smithay::backend::allocator::dmabuf::Dmabuf),
     Remove,
     Move {x:i32,y:i32},
+    Visibility {visible:bool},
 }
 pub type DirectGpuFrame = (PlannedSceneFrame, u64, DirectGpuUpdate);
 

@@ -1,7 +1,7 @@
 //! Retained GPU scene geometry, separate from the underlying GPU texture.
 //! Coordinates are physical pixels in the isolated 1280x800 output.
 //! Slot IDs come from the Wayland registry, not the client.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap,BTreeSet};
 use crate::window_placement::{retained_gpu_position, MAX_PLACED_WINDOWS};
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -20,6 +20,7 @@ impl GpuRect {
 #[derive(Debug,Default)]
 pub struct RetainedGpuLayout {
     rects:BTreeMap<u64,GpuRect>,
+    hidden:BTreeSet<u64>,
     // Bottom to top. Buffer replacement never changes this order.
     stack:Vec<u64>,
 }
@@ -53,12 +54,20 @@ impl RetainedGpuLayout {
         self.stack.push(slot);
         Ok(true)
     }
+    pub fn is_visible(&self,slot:u64)->Option<bool> {
+        self.rects.contains_key(&slot).then(||!self.hidden.contains(&slot))
+    }
+    pub fn set_visible(&mut self,slot:u64,visible:bool)->Result<bool,&'static str> {
+        if !self.rects.contains_key(&slot) {return Err("unknown GPU surface");}
+        Ok(if visible {self.hidden.remove(&slot)} else {self.hidden.insert(slot)})
+    }
     pub fn hit_test(&self,x:f64,y:f64)->Option<u64> {
         if !x.is_finite() || !y.is_finite() {return None;}
-        self.stack.iter().rev().copied().find(|slot|self.rects.get(slot).is_some_and(|r|r.contains(x,y)))
+        self.stack.iter().rev().copied().find(|slot|!self.hidden.contains(slot) && self.rects.get(slot).is_some_and(|r|r.contains(x,y)))
     }
     pub fn remove(&mut self,slot:u64)->bool {
         if self.rects.remove(&slot).is_none(){return false;}
+        self.hidden.remove(&slot);
         self.stack.retain(|id|*id!=slot);
         true
     }
@@ -100,6 +109,29 @@ mod tests {
         assert!(scene.move_to(1,0,0).is_err());
         assert!(scene.raise(1).is_err());
         assert!(scene.update_buffer(17,10,10).is_err());
+    }
+    #[test]
+    fn hidden_texture_keeps_geometry_and_stack_but_cannot_receive_pointer() {
+        let mut scene=RetainedGpuLayout::default();
+        scene.update_buffer(1,360,224).unwrap();
+        scene.update_buffer(2,320,200).unwrap();
+        scene.move_to(2,160,120).unwrap();
+        assert_eq!(scene.hit_test(200.0,150.0),Some(2));
+        assert_eq!(scene.set_visible(2,false),Ok(true));
+        assert_eq!(scene.set_visible(2,false),Ok(false));
+        assert_eq!(scene.hit_test(200.0,150.0),Some(1));
+        let rect=scene.update_buffer(2,340,210).unwrap();
+        assert_eq!(scene.is_visible(2),Some(false));
+        assert_eq!(scene.geometry(2),Some(rect));
+        assert_eq!(scene.bottom_to_top().count(),2);
+        assert_eq!(scene.set_visible(2,true),Ok(true));
+        assert_eq!(scene.hit_test(200.0,150.0),Some(2));
+        scene.set_visible(2,false).unwrap();
+        assert!(scene.remove(2));
+        assert_eq!(scene.is_visible(2),None);
+        scene.update_buffer(2,320,200).unwrap();
+        assert_eq!(scene.is_visible(2),Some(true));
+        assert!(scene.set_visible(99,false).is_err());
     }
     #[test]
     fn invalid_update_does_not_mutate_existing_window_or_order() {
