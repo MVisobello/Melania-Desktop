@@ -33,6 +33,22 @@ def main():
     helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_MINIMIZED_FRAME16=true",until)
     keys["chord"](args.qmp,"up")
     print("MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true",flush=True)
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_RESTORED_FRAME17=true",until)
+    tablet(args.qmp,670,200)
+    time.sleep(.15)
+    tablet(args.qmp,670,200,"press")
+    time.sleep(.15)
+    tablet(args.qmp,670,360)
+    time.sleep(.15)
+    tablet(args.qmp,670,360,"release")
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true",until)
+    # Click the exposed upper part of A, not the overlapping D pixels.
+    tablet(args.qmp,700,400)
+    time.sleep(.15)
+    tablet(args.qmp,700,400,"press")
+    time.sleep(.15)
+    tablet(args.qmp,700,400,"release")
+    print("MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true",flush=True)
 
 if __name__=="__main__":
     main()
