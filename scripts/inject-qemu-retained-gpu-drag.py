@@ -34,13 +34,14 @@ def main():
     keys["chord"](args.qmp,"up")
     print("MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true",flush=True)
     helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_RESTORED_FRAME17=true",until)
-    tablet(args.qmp,670,200)
+    # Second drag starts inside A's client area, not the compositor title band.
+    tablet(args.qmp,700,240)
     time.sleep(.15)
-    tablet(args.qmp,670,200,"press")
+    tablet(args.qmp,700,240,"press")
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_XDG_MOVE_GRANTED=true",until)
+    tablet(args.qmp,700,400)
     time.sleep(.15)
-    tablet(args.qmp,670,360)
-    time.sleep(.15)
-    tablet(args.qmp,670,360,"release")
+    tablet(args.qmp,700,400,"release")
     helper["wait_marker"](args.serial,"MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true",until)
     # Focus already-topmost D first; this must not add a KMS frame.
     tablet(args.qmp,800,650)
@@ -48,6 +49,8 @@ def main():
     tablet(args.qmp,800,650,"press")
     time.sleep(.15)
     tablet(args.qmp,800,650,"release")
+    keys["key"](args.qmp,"f8",True)
+    keys["key"](args.qmp,"f8",False)
     # Click the exposed upper part of A, not the overlapping D pixels.
     tablet(args.qmp,700,400)
     time.sleep(.15)

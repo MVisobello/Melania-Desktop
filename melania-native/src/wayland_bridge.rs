@@ -186,6 +186,8 @@ struct BridgeState {
     direct_gpu_visibility_inflight:Option<(u64,bool)>,
     direct_gpu_raise_inflight:Option<u64>,
     direct_gpu_selected:Option<u64>,
+    gpu_forwarded_left:Option<WlSurface>,
+    gpu_forwarded_keys:BTreeSet<u32>,
     direct_gpu_slots:std::collections::BTreeSet<u64>,
     direct_gpu_removal_inflight:Option<u64>,
     // GTK4's GDK Wayland backend requires wl_data_device_manager even
@@ -911,28 +913,30 @@ impl BridgeState {
 
     // Isolated keyboard policy: Super+Down hides the last genuinely grabbed
     // window; Super+Up restores that same retained slot, not a new client.
-    fn gpu_visibility_key(&mut self,code:Option<u32>,pressed:bool) {
+    fn gpu_visibility_key(&mut self,code:Option<u32>,pressed:bool)->bool {
         let action=self.snap_keys.event(code,pressed);
         let visible=match action {
+            SnapKeyAction::Forward=>return true,
             SnapKeyAction::RestoreOrMinimize=>false,
             SnapKeyAction::Maximize=>true,
-            _=>return,
+            _=>return false,
         };
         if !self.lifecycle.seat_active() || self.native_presentation_guard.permanently_revoked() ||
            self.continuous_frame_count!=(if visible {16} else {15}) ||
            self.continuous_inflight.is_some() || self.direct_gpu_pending.is_some() ||
            self.window_interaction.active_key().is_some() || self.pointer_buttons_held.contains(&0x110) {
-            return;
+            return false;
         }
-        let Some(slot)=self.direct_gpu_selected else{return;};
+        let Some(slot)=self.direct_gpu_selected else{return false;};
         if self.known_window_surfaces.get(slot).is_none() ||
-           self.direct_gpu_layout.set_visible(slot,visible)!=Ok(true) {return;}
+           self.direct_gpu_layout.set_visible(slot,visible)!=Ok(true) {return false;}
         self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Visibility{visible}));
         self.multi_scene.note_external_gpu_frame();
         self.note_scene_change();
         if let Err(error)=self.submit_continuous_frame() {
             eprintln!("GPU visibility submission failed: {error}");
         }
+        false
     }
 
     fn gpu_drag_probe(&self)->bool {
@@ -970,6 +974,32 @@ impl BridgeState {
         }
     }
 
+    // Keep real protocol button pairs distinct from compositor-only drags.
+    fn gpu_client_left_press(&mut self,point:Point<f64,Logical>,time:u32) {
+        if self.gpu_forwarded_left.is_some() || self.window_interaction.active_key().is_some() ||
+            self.continuous_inflight.is_some() || self.direct_gpu_pending.is_some() {return;}
+        let Some((surface,origin))=self.pointer_target(point) else{return;};
+        if self.continuous_frame_count==18 {
+            self.gpu_raise_clicked(point,time);
+            if self.focused.as_ref()!=Some(&surface) {return;}
+        } else {
+            let keyboard=self.seat.get_keyboard().expect("keyboard");
+            keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+            self.focused=Some(surface.clone());
+            let pointer=self.seat.get_pointer().expect("pointer");
+            pointer.motion(self,Some((surface.clone(),origin)),&MotionEvent{
+                location:point,serial:SERIAL_COUNTER.next_serial(),time,
+            });
+            pointer.frame(self);
+        }
+        let serial=SERIAL_COUNTER.next_serial();
+        self.last_xdg_press=Some((surface.clone(),serial));
+        self.gpu_forwarded_left=Some(surface);
+        let pointer=self.seat.get_pointer().expect("pointer");
+        pointer.button(self,&ButtonEvent{button:0x110,state:ButtonState::Pressed,serial,time});
+        pointer.frame(self);
+    }
+
     fn gpu_drag_button(&mut self,code:u32,pressed:bool,time:u32) {
         if code!=0x110 {return;}
         if !self.lifecycle.seat_active() || self.native_presentation_guard.permanently_revoked() {
@@ -978,8 +1008,8 @@ impl BridgeState {
         }
         let point=self.pointer_position;
         if pressed {
-            if self.gpu_stack_probe() && self.continuous_frame_count==18 {
-                self.gpu_raise_clicked(point,time);
+            if self.gpu_stack_probe() && matches!(self.continuous_frame_count,17|18) {
+                self.gpu_client_left_press(point,time);
                 return;
             }
             if self.continuous_frame_count!=13 &&
@@ -997,6 +1027,14 @@ impl BridgeState {
         // motion. An unchanged release cannot create another KMS frame.
         self.gpu_drag_motion(point);
         self.window_interaction.end();
+        self.last_xdg_press=None;
+        if self.gpu_forwarded_left.take().is_some() {
+            let pointer=self.seat.get_pointer().expect("pointer");
+            pointer.button(self,&ButtonEvent{
+                button:0x110,state:ButtonState::Released,serial:SERIAL_COUNTER.next_serial(),time,
+            });
+            pointer.frame(self);
+        }
     }
 
     /// Resolve QEMU physical output coordinates to a retained client surface.
@@ -3519,6 +3557,29 @@ impl XdgShellHandler for BridgeState {
                  placement.width,placement.height);
     }
     fn move_request(&mut self,top:ToplevelSurface,seat:wl_seat::WlSeat,serial:Serial){
+        if self.gpu_stack_probe() {
+            // Only a real held, forwarded client press can start a GPU move.
+            // The same one-shot token used by the CPU XDG path is consumed.
+            let surface=top.wl_surface();
+            if !self.seat.owns(&seat) || !self.lifecycle.seat_active() ||
+                self.native_presentation_guard.permanently_revoked() ||
+                self.continuous_frame_count!=17 ||
+                !self.pointer_buttons_held.contains(&0x110) ||
+                self.focused.as_ref()!=Some(surface) ||
+                self.gpu_forwarded_left.as_ref()!=Some(surface) ||
+                !take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial) ||
+                self.window_interaction.active_key().is_some() {return;}
+            let Some(key)=self.known_window_surfaces.id_of(surface) else{return;};
+            if self.direct_gpu_layout.is_visible(key)!=Some(true) {return;}
+            let Some(rect)=self.direct_gpu_layout.geometry(key) else{return;};
+            if self.window_interaction.begin(key,WindowRect{x:rect.x,y:rect.y,width:rect.width,height:rect.height},
+                self.pointer_position.x,self.pointer_position.y,InteractionKind::Move) {
+                self.direct_gpu_selected=Some(key);
+                println!("MELANIA_NATIVE_GPU_XDG_CLIENT_MOVE_GRANTED={key}");
+                let _=std::io::stdout().flush();
+            }
+            return;
+        }
         // Stage113: accept only a real left-button serial issued to this
         // exact focused xdg_toplevel while the libseat KMS epoch is active.
         // This shares the actual pointer-motion -> scene -> KMS ACK path;
@@ -3671,6 +3732,9 @@ impl XdgShellHandler for BridgeState {
     }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
+        if self.gpu_forwarded_left.as_ref()==Some(&surface) {
+            self.gpu_forwarded_left=None;
+        }
         if let Some(id)=self.known_window_surfaces.id_of(&surface) {
             if self.tab_resize_transaction.abort_if_member_destroyed(id) {
                 self.tab_resize_images.clear();
@@ -3998,6 +4062,8 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceAdded {device} =>register(state,device),
         InputEvent::DeviceRemoved {device} => {
             state.pointer_buttons_held.clear();
+            state.gpu_forwarded_left=None;
+            state.gpu_forwarded_keys.clear();
             state.last_xdg_press=None;
             state.last_popup_press=None;
             state.suppressed_popup_button=None;
@@ -4030,7 +4096,24 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             }
             if !device_registered {return;}
             if state.gpu_visibility_probe() {
-                state.gpu_visibility_key(u32::from(event.key_code()).checked_sub(8),event.state()==KeyState::Pressed);
+                let pressed=event.state()==KeyState::Pressed;
+                let code=u32::from(event.key_code());
+                let forward=state.gpu_visibility_key(u32::from(event.key_code()).checked_sub(8),pressed);
+                if state.gpu_stack_probe() && state.continuous_frame_count>=18 {
+                    // Never deliver releases for shortcuts intercepted earlier.
+                    let visible=state.focused.as_ref().and_then(|surface|
+                        state.known_window_surfaces.id_of(surface)).is_some_and(|slot|
+                        state.direct_gpu_layout.is_visible(slot)==Some(true));
+                    let deliver=if pressed {
+                        forward && visible && state.gpu_forwarded_keys.insert(code)
+                    } else {state.gpu_forwarded_keys.remove(&code)};
+                    if deliver {
+                        let keyboard=state.seat.get_keyboard().expect("keyboard");
+                        keyboard.input::<(),_>(state,event.key_code(),event.state(),
+                            SERIAL_COUNTER.next_serial(),event.time_msec(),|_,_,_|FilterResult::Forward);
+                        state.delivered_keys+=1;
+                    }
+                }
                 return;
             }
             // Consume both physical Escape edges for a popup that was really
@@ -4334,6 +4417,15 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.pointer_position=point;
             if state.gpu_drag_probe() {
                 if state.gpu_live_drag_probe() {state.gpu_drag_motion(point);}
+                if state.gpu_stack_probe() && state.continuous_frame_count>=18 &&
+                    state.window_interaction.active_key().is_none() {
+                    let target=state.pointer_target(point);
+                    let pointer=state.seat.get_pointer().expect("pointer");
+                    pointer.motion(state,target,&MotionEvent{location:point,
+                        serial:SERIAL_COUNTER.next_serial(),time:event.time_msec()});
+                    pointer.frame(state);
+                    state.delivered_motions+=1;
+                }
                 return;
             }
             state.apply_window_motion(point);
@@ -4365,6 +4457,15 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
             state.pointer_position=point;
             if state.gpu_drag_probe() {
                 if state.gpu_live_drag_probe() {state.gpu_drag_motion(point);}
+                if state.gpu_stack_probe() && state.continuous_frame_count>=18 &&
+                    state.window_interaction.active_key().is_none() {
+                    let target=state.pointer_target(point);
+                    let pointer=state.seat.get_pointer().expect("pointer");
+                    pointer.motion(state,target,&MotionEvent{location:point,
+                        serial:SERIAL_COUNTER.next_serial(),time:event.time_msec()});
+                    pointer.frame(state);
+                    state.delivered_motions+=1;
+                }
                 return;
             }
             state.apply_window_motion(point);
@@ -4652,6 +4753,8 @@ fn revoke_wayland_input_for_lost_seat(state:&mut BridgeState) {
     set_primary_focus(&state.display_handle,&state.seat,None);
     clear_primary_selection(&state.display_handle,&state.seat);
     state.pointer_buttons_held.clear();
+    state.gpu_forwarded_left=None;
+    state.gpu_forwarded_keys.clear();
     state.last_xdg_press=None;
     state.last_popup_press=None;
     state.suppressed_popup_button=None;
@@ -4753,6 +4856,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         direct_gpu_slots:Default::default(),direct_gpu_removal_inflight:None,
         direct_gpu_layout:Default::default(),direct_gpu_move_inflight:None,
         direct_gpu_visibility_inflight:None,direct_gpu_selected:None,direct_gpu_raise_inflight:None,
+        gpu_forwarded_left:None,gpu_forwarded_keys:BTreeSet::new(),
         data_device:DataDeviceState::new::<BridgeState>(&handle),
         primary_selection:PrimarySelectionState::new::<BridgeState>(&handle),
         display_handle:handle.clone(),
