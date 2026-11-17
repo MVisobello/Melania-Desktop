@@ -13,7 +13,22 @@ class NativeXdgMoveRoleGuard(unittest.TestCase):
     def test_move_requires_normal_managed_window_after_consuming_serial(self):
         start = BRIDGE.index("fn move_request(&mut self,top:ToplevelSurface")
         end = BRIDGE.index("fn resize_request(", start)
-        handler = BRIDGE[start:end]
+        gpu, handler = BRIDGE[start:end].split("// Stage113:", 1)
+        # The GPU scene uses the live visible retained role rather than
+        # the CPU ManagedWindow model. Both branches must consume a serial
+        # before starting an interaction; test their own eligibility gates.
+        for marker in ("self.seat.owns(&seat)", "self.lifecycle.seat_active()",
+                       "self.native_presentation_guard.permanently_revoked()",
+                       "self.pointer_buttons_held.contains(&0x110)",
+                       "self.focused.as_ref()!=Some(surface)",
+                       "self.gpu_forwarded_left.as_ref()!=Some(surface)",
+                       "take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial)",
+                       "self.direct_gpu_layout.is_visible(key)!=Some(true)",
+                       "self.direct_gpu_layout.geometry(key)"):
+            self.assertIn(marker, gpu)
+            self.assertLess(gpu.index(marker), gpu.index("self.window_interaction.begin("))
+        self.assertLess(gpu.index("take_xdg_pointer_press("),
+                        gpu.index("self.direct_gpu_layout.is_visible(key)"))
         for marker in (
             "self.seat.owns(&seat)",
             "self.lifecycle.seat_active()",
