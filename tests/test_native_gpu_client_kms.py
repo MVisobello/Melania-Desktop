@@ -309,7 +309,7 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_gpu_raise_uses_actual_click_and_overlapping_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         injector=(ROOT/"scripts/inject-qemu-retained-gpu-drag.py").read_text()
-        self.assertIn("self.gpu_raise_clicked(point)",BRIDGE)
+        self.assertIn("self.gpu_raise_clicked(point,time)",BRIDGE)
         self.assertIn("self.direct_gpu_layout.hit_test(point.x,point.y)",BRIDGE)
         self.assertIn("retained_layout.raise(slot)?",gbm)
         self.assertIn("sample(renderer,800,550,if raised {a} else {d})?",gbm)
@@ -317,6 +317,17 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_STACK_PIXELS_VERIFIED=19 front=1",GUEST)
         self.assertIn("GPU raise fabricated callback",CLIENT)
         self.assertLess(injector.index("MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true"),injector.index('tablet(args.qmp,700,400,"press")'))
+
+    def test_gpu_focus_is_real_and_independent_of_raise_ticket(self):
+        helper=BRIDGE.split("fn gpu_raise_clicked(",1)[1].split("fn gpu_live_drag_probe(",1)[0]
+        self.assertLess(helper.index("keyboard.set_focus("),helper.index("if !changed {return;}"))
+        self.assertLess(helper.index("pointer.motion("),helper.index("DirectGpuUpdate::Raise"))
+        self.assertIn("self.direct_gpu_layout.target_at(point.x,point.y)",BRIDGE)
+        self.assertIn("wl_keyboard::Event::Enter{surface,..}",CLIENT)
+        self.assertIn("wl_pointer::Event::Enter{surface,surface_x,surface_y,..}",CLIENT)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true",HOST)
+        self.assertIn("GPU focus missing real D to A seat enters",CLIENT)
 
     def test_real_gpu_argb_alpha_is_verified_by_kernel_presenter(self):
         self.assertIn("Color32F::new(0.165,0.09,0.365,0.5)",CLIENT)

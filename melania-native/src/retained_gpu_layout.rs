@@ -66,6 +66,11 @@ impl RetainedGpuLayout {
         if !x.is_finite() || !y.is_finite() {return None;}
         self.stack.iter().rev().copied().find(|slot|!self.hidden.contains(slot) && self.rects.get(slot).is_some_and(|r|r.contains(x,y)))
     }
+    /// Use the same visible stack for selection and surface-local input origin.
+    pub fn target_at(&self,x:f64,y:f64)->Option<(u64,GpuRect)> {
+        let slot=self.hit_test(x,y)?;
+        Some((slot,self.geometry(slot)?))
+    }
     pub fn remove(&mut self,slot:u64)->bool {
         if self.rects.remove(&slot).is_none(){return false;}
         self.hidden.remove(&slot);
@@ -134,6 +139,25 @@ mod tests {
         scene.update_buffer(2,320,200).unwrap();
         assert_eq!(scene.is_visible(2),Some(true));
         assert!(scene.set_visible(99,false).is_err());
+    }
+    #[test]
+    fn input_target_tracks_moved_raised_and_hidden_geometry() {
+        let mut scene=RetainedGpuLayout::default();
+        scene.update_buffer(1,360,224).unwrap();
+        scene.update_buffer(2,320,200).unwrap();
+        scene.move_to(1,600,300).unwrap();
+        scene.move_to(2,650,330).unwrap();
+        let point=(700.0,400.0);
+        let (slot,rect)=scene.target_at(point.0,point.1).unwrap();
+        assert_eq!((slot,point.0-f64::from(rect.x),point.1-f64::from(rect.y)),(2,50.0,70.0));
+        scene.raise(1).unwrap();
+        let (slot,rect)=scene.target_at(point.0,point.1).unwrap();
+        assert_eq!((slot,point.0-f64::from(rect.x),point.1-f64::from(rect.y)),(1,100.0,100.0));
+        scene.set_visible(1,false).unwrap();
+        assert_eq!(scene.target_at(point.0,point.1).unwrap().0,2);
+        scene.remove(2);
+        assert!(scene.target_at(point.0,point.1).is_none());
+        assert!(scene.target_at(f64::NAN,0.0).is_none());
     }
     #[test]
     fn invalid_update_does_not_mutate_existing_window_or_order() {

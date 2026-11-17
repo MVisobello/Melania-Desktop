@@ -875,14 +875,26 @@ impl BridgeState {
         std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("VISIBILITY_QEMU_VM"))
     }
 
-    fn gpu_raise_clicked(&mut self,point:Point<f64,Logical>) {
+    fn gpu_raise_clicked(&mut self,point:Point<f64,Logical>,time:u32) {
         if !self.lifecycle.seat_active() || self.native_presentation_guard.permanently_revoked() ||
             self.continuous_inflight.is_some() || self.direct_gpu_pending.is_some() ||
             self.window_interaction.active_key().is_some() {return;}
         let Some(slot)=self.direct_gpu_layout.hit_test(point.x,point.y) else{return;};
-        if self.known_window_surfaces.get(slot).is_none() ||
-            self.direct_gpu_layout.raise(slot)!=Ok(true) {return;}
+
+        let Some((surface,origin))=self.pointer_target(point) else{return;};
+        let Ok(changed)=self.direct_gpu_layout.raise(slot) else{return;};
+        // An already-topmost window still receives real focus. Focus is
+        // independent of texture changes and must not mint a KMS ticket.
+        let keyboard=self.seat.get_keyboard().expect("keyboard");
+        keyboard.set_focus(self,Some(surface.clone()),SERIAL_COUNTER.next_serial());
+        self.focused=Some(surface.clone());
         self.direct_gpu_selected=Some(slot);
+        let pointer=self.seat.get_pointer().expect("pointer");
+        pointer.motion(self,Some((surface,origin)),&MotionEvent{
+            location:point,serial:SERIAL_COUNTER.next_serial(),time,
+        });
+        pointer.frame(self);
+        if !changed {return;}
         self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Raise));
         self.multi_scene.note_external_gpu_frame();
         self.note_scene_change();
@@ -958,7 +970,7 @@ impl BridgeState {
         }
     }
 
-    fn gpu_drag_button(&mut self,code:u32,pressed:bool) {
+    fn gpu_drag_button(&mut self,code:u32,pressed:bool,time:u32) {
         if code!=0x110 {return;}
         if !self.lifecycle.seat_active() || self.native_presentation_guard.permanently_revoked() {
             self.window_interaction.cancel();
@@ -967,7 +979,7 @@ impl BridgeState {
         let point=self.pointer_position;
         if pressed {
             if self.gpu_stack_probe() && self.continuous_frame_count==18 {
-                self.gpu_raise_clicked(point);
+                self.gpu_raise_clicked(point,time);
                 return;
             }
             if self.continuous_frame_count!=13 &&
@@ -991,6 +1003,11 @@ impl BridgeState {
     fn pointer_target(&self,point:Point<f64,Logical>)
         ->Option<(WlSurface,Point<f64,Logical>)>
     {
+        if self.direct_gpu_sender.is_some() {
+            let (key,rect)=self.direct_gpu_layout.target_at(point.x,point.y)?;
+            let surface=self.known_window_surfaces.get(key)?.clone();
+            return Some((surface,(f64::from(rect.x),f64::from(rect.y)).into()));
+        }
         if !self.multi_window_mode {
             return self.focused.clone().map(|s|(s,(0.0,0.0).into()));
         }
@@ -4416,7 +4433,7 @@ fn handle_input(state:&mut BridgeState,event:InputEvent<LibinputInputBackend>) {
                 ButtonState::Released => {state.pointer_buttons_held.remove(&event.button_code());},
             }
             if state.gpu_drag_probe() {
-                state.gpu_drag_button(event.button_code(),event.state()==ButtonState::Pressed);
+                state.gpu_drag_button(event.button_code(),event.state()==ButtonState::Pressed,event.time_msec());
                 return;
             }
             // The outside click which dismisses a grabbed popup may not
