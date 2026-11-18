@@ -3,6 +3,7 @@
 //! A slot is not a vector index that can shift when another client exits:
 //! retained KMS scene entries and input hit tests keep the same ID until the
 //! slot is explicitly removed. Only a freed slot may be recycled.
+//! Direct GPU removal can reserve a vacant slot until its real DRM ACK.
 //! This registry does not manage DRM resources or authorize native login.
 const MAX_SLOTS:usize=2;
 pub const MAX_DYNAMIC_SLOTS:usize=16;
@@ -13,17 +14,18 @@ pub enum SlotError { CapacityExceeded, InvalidCapacity }
 #[derive(Debug)]
 pub struct WindowSlots<T> {
     slots:Vec<Option<T>>,
+    retiring:std::collections::BTreeSet<u64>,
     limit:usize,
 }
 
 impl<T> Default for WindowSlots<T> {
-    fn default()->Self { Self { slots:Vec::new(),limit:MAX_SLOTS } }
+    fn default()->Self { Self { slots:Vec::new(),retiring:Default::default(),limit:MAX_SLOTS } }
 }
 
 impl<T> WindowSlots<T> {
     pub fn with_capacity(limit:usize)->Result<Self,SlotError> {
         if limit==0 || limit>MAX_DYNAMIC_SLOTS {return Err(SlotError::InvalidCapacity);}
-        Ok(Self {slots:Vec::new(),limit})
+        Ok(Self {slots:Vec::new(),retiring:Default::default(),limit})
     }
     pub fn capacity(&self)->usize {self.limit}
 }
@@ -36,7 +38,8 @@ impl<T:PartialEq> WindowSlots<T> {
             entry.as_ref()==Some(&surface)) {
             return Ok(index as u64+1);
         }
-        if let Some(index)=self.slots.iter().position(Option::is_none) {
+        if let Some(index)=self.slots.iter().enumerate().position(|(index,entry)|
+            entry.is_none() && !self.retiring.contains(&(index as u64+1))) {
             self.slots[index]=Some(surface);
             return Ok(index as u64+1);
         }
@@ -67,6 +70,25 @@ impl<T:PartialEq> WindowSlots<T> {
         self.slots[index]=None;
         Some(index as u64+1)
     }
+
+    /// Immediately hide the destroyed owner from lookups but reserve its
+    /// slot until the GPU presenter acknowledges removal. The retired role
+    /// cannot receive input or callbacks, and a replacement cannot alias it.
+    pub fn begin_retirement(&mut self,surface:&T)->Option<u64> {
+        let id=self.remove(surface)?;
+        let inserted=self.retiring.insert(id);
+        debug_assert!(inserted);
+        Some(id)
+    }
+
+    /// The owner must call this only for the matching verified removal
+    /// transaction of the current DRM epoch. No implicit release on timeout.
+    pub fn finish_retirement(&mut self,id:u64)->bool {
+        self.retiring.remove(&id)
+    }
+
+    pub fn is_retiring(&self,id:u64)->bool {self.retiring.contains(&id)}
+    pub fn retiring_count(&self)->usize {self.retiring.len()}
 
     pub fn live_count(&self)->usize {
         self.slots.iter().filter(|entry|entry.is_some()).count()
@@ -122,6 +144,41 @@ mod tests {
         assert_eq!(WindowSlots::<u32>::with_capacity(17).err(),Some(SlotError::InvalidCapacity));
     }
 
+    #[test]
+    fn gpu_slot_cannot_alias_destroyed_role_before_confirmed_removal() {
+        let mut slots=WindowSlots::default();
+        assert_eq!(slots.register("A"),Ok(1));
+        assert_eq!(slots.register("B"),Ok(2));
+        assert_eq!(slots.begin_retirement(&"A"),Some(1));
+        assert_eq!(slots.get(1),None);
+        assert_eq!(slots.id_of(&"A"),None);
+        assert!(slots.is_retiring(1));
+        assert_eq!(slots.live_count(),1);
+        assert_eq!(slots.retiring_count(),1);
+        assert_eq!(slots.register("C"),Err(SlotError::CapacityExceeded));
+        assert_eq!(slots.begin_retirement(&"A"),None);
+        assert!(!slots.finish_retirement(2));
+        assert!(slots.finish_retirement(1));
+        assert!(!slots.finish_retirement(1));
+        assert_eq!(slots.register("C"),Ok(1));
+        assert_eq!(slots.get(1),Some(&"C"));
+        assert_eq!(slots.get(2),Some(&"B"));
+    }
+    #[test]
+    fn repeated_gpu_role_replacement_stays_within_fixed_capacity() {
+        let mut slots=WindowSlots::with_capacity(16).unwrap();
+        for id in 1..=16 {assert_eq!(slots.register(id),Ok(id));}
+        let mut owner=1;
+        for next in 17..=4112 {
+            assert_eq!(slots.begin_retirement(&owner),Some(1));
+            assert_eq!(slots.register(next),Err(SlotError::CapacityExceeded));
+            assert!(slots.finish_retirement(1));
+            assert_eq!(slots.register(next),Ok(1));
+            assert_eq!(slots.live_count(),16);
+            assert_eq!(slots.retiring_count(),0);
+            owner=next;
+        }
+    }
     #[test]
     fn invalid_ids_and_unknown_surfaces_fail_closed() {
         let mut registry=WindowSlots::default();
