@@ -263,6 +263,25 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(receiver.index("direct_gpu_move_budget_matches("),
                         receiver.index("qemu_direct_client_gpu_scene_stream("))
 
+    def test_persistent_direct_receiver_keeps_finite_proofs_and_drm_gates(self):
+        receiver=DRM.split("fn run_embedded_direct(",1)[1].split("fn run_stream(",1)[0]
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        loop=gbm.split("fn qemu_gpu_scene_stream(",1)[1]
+        self.assertIn("persistent_direct_gpu_mode_matches(",receiver)
+        self.assertIn("guest_only()?",receiver)
+        self.assertIn("if !persistent && frames_seen>=total {break;}",loop)
+        self.assertIn("PersistentFrameRead::begin_with_idle_guard(",loop)
+        self.assertIn("if multi_gpu && !persistent_direct",loop)
+        self.assertIn("verify_retained_gpu_scene(&mut renderer,&bound,index",loop)
+        self.assertIn("persistent GPU retained scene geometry mismatch",loop)
+        self.assertLess(loop.index("completion.wait()?;"),loop.index("if !ack_owned"))
+        self.assertLess(loop.index("if !ack_owned"),loop.index("rolling_imports.confirm_with("))
+        self.assertLess(loop.index("rolling_imports.confirm_with("),loop.index("stream.write_all(&ack)?;"))
+        self.assertIn("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES=",loop)
+        # The bridge must still reject persistent GPU client mode until
+        # arbitrary live client admission and drain are integrated.
+        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+
     def test_gpu_role_close_removes_texture_and_requires_real_13th_frame(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         close=BRIDGE.split("fn toplevel_destroyed(",1)[1]

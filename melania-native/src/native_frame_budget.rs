@@ -63,6 +63,21 @@ pub fn direct_gpu_frame_budget_matches(multi:Option<&str>,frames:Option<&str>)->
     matches!((multi,frames),(None,Some("12"))|(Some("YES_QEMU_VM"),Some("13")))
 }
 
+/// No fixture frame count may leak into the opt-in persistent retained GPU
+/// receiver. This only validates a disposable VM mode, not physical/login
+/// readiness. The Wayland producer needs a separate integration gate.
+pub fn persistent_direct_gpu_mode_matches(
+    opt_in:Option<&str>,persistent_kms:Option<&str>,persistent_gpu:Option<&str>,
+    multi:Option<&str>,motion:Option<&str>,frames:Option<&str>,
+    target:Option<&str>,rolling:Option<&str>,
+)->bool {
+    opt_in==Some("YES_DISPOSABLE_QEMU") &&
+    persistent_kms==Some("YES_DISPOSABLE_QEMU") &&
+    persistent_gpu==Some("YES_DISPOSABLE_QEMU") &&
+    multi==Some("YES_QEMU_VM") && motion.is_none() &&
+    frames.is_none() && target.is_none() && rolling==Some("YES_QEMU_VM")
+}
+
 pub fn direct_gpu_move_budget_matches(multi:Option<&str>,motion:Option<&str>,frames:Option<&str>)->bool {
     match motion {None=>direct_gpu_frame_budget_matches(multi,frames),
         Some("YES_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("14"),
@@ -93,6 +108,32 @@ mod tests {
                 let expected=matches!((mode,count),(None,Some("12"))|(Some("YES_QEMU_VM"),Some("13")));
                 assert_eq!(direct_gpu_frame_budget_matches(mode,count),expected);
             }
+        }
+    }
+    #[test]
+    fn persistent_direct_receiver_needs_explicit_mode_and_no_finite_budget() {
+        let valid=[Some("YES_DISPOSABLE_QEMU"),Some("YES_DISPOSABLE_QEMU"),
+            Some("YES_DISPOSABLE_QEMU"),Some("YES_QEMU_VM"),None,None,None,Some("YES_QEMU_VM")];
+        let check=|v:[Option<&str>;8]|persistent_direct_gpu_mode_matches(
+            v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7]);
+        assert!(check(valid));
+        for i in 0..valid.len() {
+            let mut wrong=valid;
+            wrong[i]=Some("invalid");
+            assert!(!check(wrong));
+            if valid[i].is_some() {
+                wrong=valid;
+                wrong[i]=None;
+                assert!(!check(wrong));
+            }
+        }
+        for frames in ["12","13","14","15","17","19","20","21","24","64"] {
+            let mut finite=valid;
+            finite[5]=Some(frames);
+            assert!(!check(finite));
+            finite=valid;
+            finite[6]=Some(frames);
+            assert!(!check(finite));
         }
     }
     #[test]

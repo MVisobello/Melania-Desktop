@@ -770,8 +770,20 @@ fn qemu_gpu_scene_stream(
     }
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
-    if direct_mode && persistent {
-        return Err("direct client GPU proof cannot enter persistent mode".into());
+    let persistent_direct=crate::native_frame_budget::persistent_direct_gpu_mode_matches(
+        std::env::var("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").ok().as_deref(),
+        std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_GPU_ROLLING_RETIRE").ok().as_deref(),
+    );
+    if (direct_mode && persistent && !persistent_direct) ||
+       (std::env::var_os("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU").is_some() &&
+        (!persistent_direct || !direct_mode)) {
+        return Err("direct client GPU proof cannot enter persistent mode without retained lifetime opt-in".into());
     }
     if persistent &&
        std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").as_deref()
@@ -894,6 +906,8 @@ fn qemu_gpu_scene_stream(
         loop {
             if !persistent && frames_seen>=total {break;}
             let index=frames_seen;
+            // Never wrap the local presentation ordinal used by retirement.
+            if index==u64::MAX {return Err("GPU presentation ordinal exhausted".into());}
             let mut header=[0u8;32];
             // The SAME real DRM ownership checker now protects the idle
             // socket, partial header and incomplete pixel buffer. A client
@@ -965,7 +979,7 @@ fn qemu_gpu_scene_stream(
                 use crate::continuous_kms_stream::DirectGpuUpdate;
                 match buffer {
                     DirectGpuUpdate::Buffer(buffer)=>Some((slot,buffer)),
-                    DirectGpuUpdate::Resize{buffer,rect} if resize_gpu && (index==19 || (live_resize && index==20))=>{
+                    DirectGpuUpdate::Resize{buffer,rect} if persistent_direct || (resize_gpu && (index==19 || (live_resize && index==20)))=>{
                         if !retained.contains_key(&slot) || retained_layout.is_visible(slot)!=Some(true) {
                             return Err("GPU resize references missing or hidden surface".into());
                         }
@@ -979,7 +993,7 @@ fn qemu_gpu_scene_stream(
                         removed_slot=Some(slot);
                         None
                     }
-                    DirectGpuUpdate::Move{x,y} if move_gpu=>{
+                    DirectGpuUpdate::Move{x,y} if move_gpu || persistent_direct=>{
                         if !retained.contains_key(&slot) || !retained_layout.move_to(slot,x,y)? {
                             return Err("GPU motion references missing or unchanged surface".into());
                         }
@@ -987,14 +1001,14 @@ fn qemu_gpu_scene_stream(
                         moved_slot=Some((slot,rect.x,rect.y));
                         None
                     }
-                    DirectGpuUpdate::Visibility{visible} if visibility_gpu=>{
+                    DirectGpuUpdate::Visibility{visible} if visibility_gpu || persistent_direct=>{
                         if !retained.contains_key(&slot) || !retained_layout.set_visible(slot,visible)? {
                             return Err("GPU visibility references missing or unchanged surface".into());
                         }
                         visibility_slot=Some((slot,visible));
                         None
                     }
-                    DirectGpuUpdate::Raise if stack_gpu=>{
+                    DirectGpuUpdate::Raise if stack_gpu || persistent_direct=>{
                         if !retained.contains_key(&slot) || !retained_layout.raise(slot)? {
                             return Err("GPU raise references missing, hidden or unchanged surface".into());
                         }
@@ -1162,8 +1176,21 @@ fn qemu_gpu_scene_stream(
                 }
             }
             if direct_frame {println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} verify",index+1);}
-            if multi_gpu {
+            if multi_gpu && !persistent_direct {
+                // All existing deterministic fixture pixel checks stay mandatory.
                 verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot,visibility_slot,raised_slot,&retained_layout)?;
+            } else if persistent_direct {
+                // General client scenes have no expected fixture colors.
+                // Validate the complete retained scene (including hidden
+                // windows) and still require actual GPU completion + DRM ACK.
+                if retained_layout.bottom_to_top().count()!=retained.len() ||
+                   retained_layout.bottom_to_top().any(|(slot,rect)|{
+                       use smithay::backend::renderer::Texture;
+                       !retained.get(&slot).is_some_and(|texture|
+                           (texture.width() as i32,texture.height() as i32)==(rect.width,rect.height))
+                   }) {
+                    return Err("persistent GPU retained scene geometry mismatch".into());
+                }
             } else if direct_frame {
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
@@ -1354,6 +1381,9 @@ fn qemu_gpu_scene_stream(
     }
     println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");
     if persistent {
+        if persistent_direct {
+            println!("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES={frames_seen}");
+        }
         println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_STOPPED_FRAMES={frames_seen}");
         println!("MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true");
     } else if direct_mode {

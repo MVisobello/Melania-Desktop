@@ -232,13 +232,24 @@ pub(crate) fn run_embedded_direct(
     gpu:std::sync::mpsc::Receiver<melania_native::continuous_kms_stream::DirectGpuFrame>,
 )->Result<(),Box<dyn Error>> {
     guest_only()?;
+    let persistent_direct=melania_native::native_frame_budget::persistent_direct_gpu_mode_matches(
+        std::env::var("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").ok().as_deref(),
+        std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_GPU_ROLLING_RETIRE").ok().as_deref(),
+    );
     if std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS").as_deref()!=Ok("YES_QEMU_VM") ||
        std::env::var("MELANIA_NATIVE_DIRECT_CLIENT_GBM").as_deref()!=Ok("YES_QEMU_VM") ||
-       !melania_native::native_frame_budget::direct_gpu_move_budget_matches(
+       (std::env::var_os("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU").is_some() && !persistent_direct) ||
+       (!persistent_direct && !melania_native::native_frame_budget::direct_gpu_move_budget_matches(
            std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").ok().as_deref(),
            std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").ok().as_deref(),
            std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok().as_deref()
-       ) {
+       )) {
         return Err("direct GBM requires explicit isolated QEMU opt-in and exact mode frame target".into());
     }
     melania_native::native_gbm_scanout::qemu_direct_client_gpu_scene_stream(
