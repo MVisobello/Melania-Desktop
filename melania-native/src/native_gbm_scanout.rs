@@ -26,6 +26,24 @@ use std::{
     thread, time::{Duration, Instant},
 };
 
+/// Upload a bounded, owned SHM source on the same GLES renderer used
+/// by the retained scene. This is a CPU-to-GPU upload, not DMA-BUF
+/// readback, and is NOT a presentation receipt or a frame callback.
+/// Caller must still sample/retain, finish GPU work, verify the kernel
+/// scanout route, and match its Wayland receipt before notifying a client.
+/// This primitive alone does not enable the mixed protocol/scene path.
+pub fn upload_retained_shm_texture(
+    renderer:&mut GlesRenderer,source:&crate::owned_shm::RetainedShmPixels,
+)->Result<smithay::backend::renderer::gles::GlesTexture,Box<dyn Error>> {
+    use smithay::backend::renderer::Texture;
+    let (width,height)=source.dimensions();
+    let texture=renderer.import_memory(source.bytes(),source.format(),(width,height).into(),false)?;
+    if (texture.width() as i32,texture.height() as i32)!=(width,height) {
+        return Err("retained SHM upload texture dimensions differ from source".into());
+    }
+    Ok(texture)
+}
+
 struct Restore<'a> {
     card: &'a DrmDeviceFd,
     original: crtc::Info,
