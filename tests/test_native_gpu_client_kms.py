@@ -16,6 +16,21 @@ HOST=(ROOT/"scripts/run-qemu-melania-native.sh").read_text()
 CI=(ROOT/".github/workflows/qemu-melania-native.yml").read_text()
 
 class RealClientDmabufToKms(unittest.TestCase):
+    def test_mixed_shm_upload_is_opt_in_and_uses_exact_gpu_receipt(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        self.assertIn("DirectGpuUpdate::Shm(source) if mixed_shm",gbm)
+        self.assertIn("upload_retained_shm_texture(&mut renderer,source)?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_SHM_GPU",BRIDGE)
+        self.assertIn("copy_retained_gpu_client_shm(ptr,len,metadata)",BRIDGE)
+        self.assertIn("direct_gpu_shm_waiting.remove(index)",BRIDGE)
+        self.assertIn("!is_gpu_client && !is_shm_client",BRIDGE)
+        self.assertLess(BRIDGE.index("direct_gpu_clients.finish(&completed.key,&completed.resource)"),
+                        BRIDGE.index("MELANIA_NATIVE_RETAINED_SHM_KMS_ACK="))
+        self.assertLess(gbm.index("stream.write_all(&ack)?;",gbm.index("fn qemu_gpu_scene_stream(")),
+                        gbm.index("MELANIA_NATIVE_RETAINED_SHM_KERNEL_ACK="))
+        self.assertIn("state.direct_gpu_shm_waiting.clear()",BRIDGE)
+        self.assertIn("state.direct_gpu_shm_inflight.take()",BRIDGE)
+
     def test_client_produces_gpu_image_and_waits_for_real_kms(self):
         for marker in (
             "MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS",

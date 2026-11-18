@@ -803,6 +803,11 @@ fn qemu_gpu_scene_stream(
         (!persistent_direct || !direct_mode)) {
         return Err("direct client GPU proof cannot enter persistent mode without retained lifetime opt-in".into());
     }
+    let mixed_shm=std::env::var("MELANIA_NATIVE_RETAINED_SHM_GPU").as_deref()==Ok("YES_QEMU_VM");
+    if std::env::var_os("MELANIA_NATIVE_RETAINED_SHM_GPU").is_some() &&
+       (!mixed_shm || !persistent_direct || !direct_mode || !multi_gpu) {
+        return Err("retained SHM GPU upload requires persistent retained direct scene".into());
+    }
     if persistent &&
        std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").as_deref()
            !=Ok("YES_DISPOSABLE_QEMU") {
@@ -987,6 +992,7 @@ fn qemu_gpu_scene_stream(
             let mut visibility_slot=None;
             let mut raised_slot=None;
             let mut resize_target=None;
+            let mut client_shm=None;
             let client_dmabuf=if direct_frame {
                 let (planned,slot,buffer)=direct.as_ref().ok_or("direct GPU channel missing")?
                     .recv_timeout(Duration::from_secs(2))?;
@@ -1001,6 +1007,10 @@ fn qemu_gpu_scene_stream(
                 use crate::continuous_kms_stream::DirectGpuUpdate;
                 match buffer {
                     DirectGpuUpdate::Buffer(buffer)=>Some((slot,buffer)),
+                    DirectGpuUpdate::Shm(source) if mixed_shm=>{
+                        client_shm=Some((slot,source));
+                        None
+                    },
                     DirectGpuUpdate::Resize{buffer,rect} if persistent_direct || (resize_gpu && (index==19 || (live_resize && index==20)))=>{
                         if !retained.contains_key(&slot) || retained_layout.is_visible(slot)!=Some(true) {
                             return Err("GPU resize references missing or hidden surface".into());
@@ -1075,7 +1085,7 @@ fn qemu_gpu_scene_stream(
                     return Err("direct GPU client size/format mismatch".into());
                 }
                 Some(crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)?)
-            } else if removed_slot.is_some() || moved_slot.is_some() || visibility_slot.is_some() || raised_slot.is_some() {
+            } else if client_shm.is_some() || removed_slot.is_some() || moved_slot.is_some() || visibility_slot.is_some() || raised_slot.is_some() {
                 None
             } else {
                 Some(renderer.import_memory(
@@ -1091,7 +1101,16 @@ fn qemu_gpu_scene_stream(
                 println!("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true");
                 Some(image)
             } else {None};
-            if multi_gpu && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
+            if let Some((slot,source))=client_shm.as_ref() {
+                // Upload once from the copied pool; the new GLES texture
+                // itself owns the retained image, just like DMA-BUF snapshots.
+                // No source mmap, DMA-BUF readback or full-output CPU upload.
+                let (width,height)=source.dimensions();
+                let image=upload_retained_shm_texture(&mut renderer,source)?;
+                retained_layout.update_buffer(*slot,width,height)?;
+                retained.insert(*slot,image);
+                println!("MELANIA_NATIVE_RETAINED_SHM_GPU_UPLOAD={} slot={slot}",index+1);
+            } else if multi_gpu && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
                 use smithay::backend::allocator::Buffer;
                 let (slot,buffer)=client_dmabuf.as_ref().ok_or("missing retained GPU source")?;
                 let opaque=buffer.format().code==Fourcc::Xrgb8888;
@@ -1217,7 +1236,7 @@ fn qemu_gpu_scene_stream(
                 verify_direct_client_gpu_pixels(&mut renderer,&bound,index)?;
             }
             drop(bound);
-            if direct_frame && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
+            if direct_frame && client_shm.is_none() && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
                 let (_,buffer)=client_dmabuf.ok_or("direct client import disappeared")?;
                 let texture=texture.ok_or("direct client texture disappeared")?;
                 if rolling_retire {
@@ -1354,6 +1373,9 @@ fn qemu_gpu_scene_stream(
             stream.write_all(&ack)?;
             stream.flush()?;
             println!("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK={}",index+1);
+            if client_shm.is_some() {
+                println!("MELANIA_NATIVE_RETAINED_SHM_KERNEL_ACK={}",index+1);
+            }
             if direct_frame {
                 println!("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK={}",index+1);
                 if multi_gpu {
