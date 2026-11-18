@@ -209,12 +209,15 @@ class RealClientDmabufToKms(unittest.TestCase):
         # The original finite path still never destroys its imports until
         # restore. The opt-in rolling path may retire only after kernel ACK.
         route=loop.index("if !ack_owned",retained)
-        confirm=loop.index("rolling_imports.confirm(index+1)?",route)
+        confirm=loop.index("rolling_imports.confirm_with(index+1",route)
         self.assertLess(route,confirm)
         self.assertLess(confirm,ack)
         self.assertNotIn("renderer.cleanup_texture_cache()",loop[retained:restore])
         self.assertIn("if rolling_retire {",loop[route:confirm])
-        self.assertIn("rolling_imports.clear_after_restore()",loop[restore:clear])
+        self.assertIn("rolling_imports.clear_after_restore_with(",loop[restore:clear])
+        self.assertIn("drop(rolling_backing.take())",loop[confirm:ack])
+        self.assertIn("rolling_backing_peak>3",loop)
+        self.assertLess(loop.index("renderer.cleanup_texture_cache()",clear),loop.index("drop(final_backings)",clear))
         self.assertIn("renderer.cleanup_texture_cache()",loop[clear:])
 
     def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):

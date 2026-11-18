@@ -62,16 +62,25 @@ impl<T> GpuImportRetirement<T> {
     /// Caller must establish GPU completion and actual DRM route/FB ACK.
     /// On a failed or missing ACK the queue is untouched until rollback.
     pub fn confirm(&mut self,sequence:u64)->Result<usize,&'static str> {
+        self.confirm_with(sequence,drop)
+    }
+    /// Move retired resources into the caller's context-specific teardown
+    /// path. A failed acknowledgement invokes no retirement callback.
+    pub fn confirm_with(&mut self,sequence:u64,mut retire:impl FnMut(T))->Result<usize,&'static str> {
         if self.confirmed.checked_add(1)!=Some(sequence) {return Err("invalid GPU retirement ACK");}
         self.confirmed=sequence;
         let mut retired=0;
         while self.pending.front().is_some_and(|(frame,_)|*frame<sequence) {
-            self.pending.pop_front();
+            let (_,source)=self.pending.pop_front().expect("checked nonempty");
+            retire(source);
             retired+=1;
         }
         Ok(retired)
     }
-    pub fn clear_after_restore(&mut self) {self.pending.clear();}
+    pub fn clear_after_restore(&mut self) {self.clear_after_restore_with(drop);}
+    pub fn clear_after_restore_with(&mut self,mut retire:impl FnMut(T)) {
+        while let Some((_,source))=self.pending.pop_front() {retire(source);}
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +100,26 @@ mod gpu_retirement_tests {
         }
         assert_eq!(queue.confirm(4097).unwrap(),1); // compositor-only frame
         assert_eq!(queue.len(),0);
+    }
+    #[test]
+    fn context_retirement_callback_is_serialized_and_never_called_for_invalid_ack() {
+        let mut queue=GpuImportRetirement::default();
+        let mut deferred=None;
+        for sequence in 1..=4096 {
+            queue.stage(sequence,sequence).unwrap();
+            assert!(queue.confirm_with(sequence+1, |_| panic!("invalid ACK retired a resource")).is_err());
+            let previous=deferred.take();
+            let retired=queue.confirm_with(sequence,|source| {
+                assert!(deferred.replace(source).is_none());
+            }).unwrap();
+            assert_eq!(retired,usize::from(sequence>1));
+            assert_eq!(previous,sequence.checked_sub(2).filter(|n|*n>0));
+            assert!(queue.len()+usize::from(deferred.is_some())<=2);
+        }
+        let mut final_sources=Vec::new();
+        queue.clear_after_restore_with(|source| final_sources.push(source));
+        assert_eq!(final_sources,vec![4096]);
+        assert_eq!(deferred,Some(4095));
     }
     #[test]
     fn no_ack_keeps_resources_alive_until_explicit_restore() {

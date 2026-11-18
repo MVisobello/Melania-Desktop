@@ -869,6 +869,12 @@ fn qemu_gpu_scene_stream(
         smithay::backend::renderer::gles::GlesTexture,
         Option<smithay::backend::renderer::gles::GlesTexture>,
     )>::default();
+    // GLES texture destruction can be deferred by the renderer. Keep the
+    // retired source's backing alive across the next verified GPU draw,
+    // separately from the two live source imports. This adds at most one
+    // backing allocation, not another live imported texture.
+    let mut rolling_backing:Option<smithay::backend::allocator::dmabuf::Dmabuf>=None;
+    let mut rolling_backing_peak=0usize;
     let mut rolling_retired=0usize;
     let mut rolling_peak=0usize;
     let mut rolling_staged=0usize;
@@ -1169,6 +1175,8 @@ fn qemu_gpu_scene_stream(
                     rolling_imports.stage(index+1,(buffer,texture,opaque_snapshot))?;
                     rolling_staged+=1;
                     rolling_peak=rolling_peak.max(rolling_imports.len());
+                    rolling_backing_peak=rolling_backing_peak.max(rolling_imports.len()+usize::from(rolling_backing.is_some()));
+                    if rolling_backing_peak>3 {return Err("GPU source backing budget exceeded".into());}
                 } else {
                     if direct_import_lifetime.len()>=12 &&
                         (!resize_gpu || direct_import_lifetime.len()>=if live_resize {14} else {13}) {
@@ -1265,14 +1273,20 @@ fn qemu_gpu_scene_stream(
                 // At this point GLES completion and the real kernel route,
                 // connector, mode and framebuffer verification succeeded.
                 // Never evict an import on a failed submission/flip.
-                let retired=rolling_imports.confirm(index+1)?;
+                // Keep the previous retired backing until this subsequent
+                // GLES completion and DRM receipt. Drop textures before
+                // their backing; never purge the EGL cache mid-stream.
+                let mut next_backing=None;
+                let retired=rolling_imports.confirm_with(index+1,|(buffer,texture,normalized)|{
+                    drop(normalized);
+                    drop(texture);
+                    debug_assert!(next_backing.is_none());
+                    next_backing=Some(buffer);
+                })?;
+                drop(rolling_backing.take());
+                rolling_backing=next_backing;
                 rolling_retired+=retired;
                 if retired>0 {
-                    // Do not purge Smithay EGL caches while the independent
-                    // Wayland import context is still active. The real VM
-                    // rejected its fifth import after an eager cache purge.
-                    // Actual source handles are retired by the queue; final
-                    // cache cleanup remains after CRTC restoration.
                     println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED={} frame={}",retired,index+1);
                 }
             }
@@ -1310,6 +1324,7 @@ fn qemu_gpu_scene_stream(
     attempt?;
     restored?;
     if direct_mode {
+        let mut final_backings=Vec::new();
         // All draws returned actual GPU completion and the kernel has
         // restored its original CRTC. The old client images are never used
         // for future rendering; retire them now under the owning context.
@@ -1321,12 +1336,20 @@ fn qemu_gpu_scene_stream(
             println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK={rolling_peak}");
             println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED={rolling_staged}");
             println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE={rolling_retired}");
-            rolling_imports.clear_after_restore();
-            println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true");
+            println!("MELANIA_NATIVE_GPU_ROLLING_BACKINGS_PEAK={rolling_backing_peak}");
+            rolling_imports.clear_after_restore_with(|(buffer,texture,normalized)|{
+                drop(normalized);
+                drop(texture);
+                final_backings.push(buffer);
+            });
+            if let Some(backing)=rolling_backing.take() {final_backings.push(backing);}
+            if final_backings.len()>2 {return Err("GPU final backing budget exceeded".into());}
         }
         normalized_gpu_sources.clear();
         direct_import_lifetime.clear();
         renderer.cleanup_texture_cache()?;
+        drop(final_backings);
+        if rolling_retire {println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true");}
         println!("MELANIA_NATIVE_DIRECT_GPU_RETIRED_AFTER_RESTORE=true");
     }
     println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");

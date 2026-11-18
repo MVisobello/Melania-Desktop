@@ -382,6 +382,7 @@ run_retained_gpu_probe() {
       fatal 'retained_gpu_client_used_forbidden_cpu_staging'
     fi
     for marker in 'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2' \
+      'MELANIA_NATIVE_GPU_ROLLING_BACKINGS_PEAK=3' \
       'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED=14' \
       'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE=13' \
       'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true'; do
