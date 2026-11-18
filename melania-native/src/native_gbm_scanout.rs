@@ -576,7 +576,7 @@ fn verify_retained_gpu_scene(
     } else if removed_slot.is_some() {
         return Err("unexpected GPU removal during original 12-frame acceptance".into());
     }
-    let live_drag=matches!(std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref(),Ok("LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"));
+    let live_drag=matches!(std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref(),Ok("LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM"));
     if (13..=14).contains(&index) {
         let (slot,x,y)=moved_slot.ok_or("missing real GPU drag")?;
         let (expected_x,expected_y)=if live_drag && index==13 {(410,155)} else {(650,190)};
@@ -607,6 +607,23 @@ fn verify_retained_gpu_scene(
         }
         for (px,py) in [(200,150),(360,240),(158,200),(460,200)] {sample(renderer,px,py,[27,33,58])?;}
     } else if visibility_slot.is_some() {return Err("unexpected visibility operation".into());}
+    if index==19 && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("RESIZE_QEMU_VM") {
+        let rect=layout.geometry(1).ok_or("missing resized GPU role")?;
+        if removed_slot.is_some() || moved_slot.is_some() || visibility_slot.is_some() || raised_slot.is_some() ||
+            (rect.x-650).abs()>6 || (rect.y-350).abs()>6 ||
+            (rect.width-466).abs()>3 || (rect.height-280).abs()>3 ||
+            layout.hit_test(1090.0,400.0)!=Some(1) {
+            return Err("GPU resize geometry or operation mismatch".into());
+        }
+        sample(renderer,700,400,[204,102,51])?;
+        sample(renderer,1090,400,[204,102,51])?;
+        sample(renderer,800,650,retained_gpu_probe_rgb(11).ok_or("missing D color")?)?;
+        sample(renderer,300,500,retained_gpu_probe_rgb(9).ok_or("missing C color")?)?;
+        sample(renderer,1150,400,[27,33,58])?;
+        sample(renderer,rect.x+rect.width+2,400,[65,171,216])?;
+        println!("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=20");
+        return Ok(());
+    }
     if index>=17 {
         if removed_slot.is_some() || visibility_slot.is_some() ||
             layout.is_visible(1)!=Some(true) || layout.is_visible(4)!=Some(true) {
@@ -725,11 +742,12 @@ fn qemu_gpu_scene_stream(
         .as_deref()==Ok("YES_QEMU_VM");
     if multi_gpu && !direct_mode {return Err("retained GPU mode requires direct channel".into());}
     let total=if multi_gpu {13u64} else if direct_mode {12u64} else {24u64};
-    let stack_gpu=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("STACK_QEMU_VM");
+    let resize_gpu=multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("RESIZE_QEMU_VM");
+    let stack_gpu=resize_gpu || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("STACK_QEMU_VM"));
     let visibility_gpu=stack_gpu || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("VISIBILITY_QEMU_VM"));
     let live_drag=visibility_gpu || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_QEMU_VM"));
     let move_gpu=live_drag || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM"));
-    let total=if stack_gpu {19} else if visibility_gpu {17} else if live_drag {15} else if move_gpu {14} else {total};
+    let total=if resize_gpu {20} else if stack_gpu {19} else if visibility_gpu {17} else if live_drag {15} else if move_gpu {14} else {total};
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
     if direct_mode && persistent {
@@ -1107,7 +1125,7 @@ fn qemu_gpu_scene_stream(
             if direct_frame && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
                 let (_,buffer)=client_dmabuf.ok_or("direct client import disappeared")?;
                 let texture=texture.ok_or("direct client texture disappeared")?;
-                if direct_import_lifetime.len()>=12 {
+                if direct_import_lifetime.len()>=12 && (!resize_gpu || direct_import_lifetime.len()>=13) {
                     return Err("finite direct GPU import lifetime budget exceeded".into());
                 }
                 direct_import_lifetime.push((buffer,texture));
@@ -1248,6 +1266,7 @@ fn qemu_gpu_scene_stream(
             println!("MELANIA_NATIVE_RETAINED_GPU_FOUR_WINDOW_12_FRAMES_PASS=true");
             println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_13_FRAMES_PASS=true");
             if stack_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_STACK_19_FRAMES_PASS=true");}
+            if resize_gpu {println!("MELANIA_NATIVE_GPU_XDG_RESIZE_20_FRAMES_PASS=true");}
             if visibility_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_17_FRAMES_PASS=true");}
             if live_drag {println!("MELANIA_NATIVE_RETAINED_GPU_LIVE_DRAG_15_FRAMES_PASS=true");}
             else if move_gpu {println!("MELANIA_NATIVE_RETAINED_GPU_REAL_DRAG_14_FRAMES_PASS=true");}

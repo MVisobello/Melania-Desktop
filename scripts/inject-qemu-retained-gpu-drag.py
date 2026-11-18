@@ -58,6 +58,14 @@ def main():
     time.sleep(.15)
     tablet(args.qmp,700,400,"release")
     print("MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true",flush=True)
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_GPU_XDG_RESIZE_READY=true",until)
+    tablet(args.qmp,1050,585)
+    time.sleep(.15)
+    tablet(args.qmp,1050,585,"press")
+    helper["wait_marker"](args.serial,"MELANIA_QEMU_GPU_XDG_RESIZE_GRANTED=true",until)
+    tablet(args.qmp,1100,615)
+    time.sleep(.15)
+    tablet(args.qmp,1100,615,"release")
 
 if __name__=="__main__":
     main()
