@@ -346,6 +346,26 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_clients.contains_resource(&buffer) {return;}",BRIDGE)
         self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
 
+    def test_persistent_direct_shutdown_drains_before_cancel_and_rollback(self):
+        shutdown=BRIDGE.split("if persistent_kms && shutdown_flag.load(Ordering::Relaxed) {",1)[1]
+        shutdown=shutdown.split("if trusted_ime_pid.is_some()",1)[0]
+        order=("state.persistent_shutdown_requested=true;",
+               "state.poll_continuous_kms()?",
+               "state.direct_gpu_clients.has_active()",
+               "state.direct_gpu_clients.cancel_all_waiting()",
+               "resource.release();",
+               "state.native_presentation_guard.revoke();",
+               "state.continuous_worker.take();",
+               "join.join()",
+               "state.direct_gpu_removal_queue.revoke()",
+               "revoke_client_dmabuf_gpu(&mut state);",
+               "owner.release()")
+        # The timeout path separately revokes before returning an error.
+        offsets=[shutdown.index(marker,shutdown.index("state.direct_gpu_clients.cancel_all_waiting()")) if marker=="state.native_presentation_guard.revoke();" else shutdown.index(marker) for marker in order]
+        self.assertEqual(offsets,sorted(offsets))
+        self.assertNotIn("finish_retirement(",shutdown)
+        self.assertNotIn("complete_presented_frame(",shutdown)
+
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move",BRIDGE)

@@ -123,6 +123,13 @@ impl<K:PartialEq,V:PartialEq> GpuClientQueue<K,V> {
     pub fn cancel_destroyed_resource(&mut self,resource:&V) {
         self.waiting.retain(|(_,v)|v!=resource);
     }
+    /// Stop accepting work before draining the single active sampling job.
+    /// Only unsubmitted sources may be returned as canceled; the active
+    /// source is never returned here, even when shutdown is requested.
+    pub fn cancel_all_waiting(&mut self)->Vec<V> {
+        self.waiting.drain(..).map(|(_,resource)|resource).collect()
+    }
+    pub fn has_active(&self)->bool {self.active.is_some()}
     /// Epoch revocation is not a successful presentation or release.
     pub fn revoke(&mut self){self.waiting.clear(); self.active=None;}
 }
@@ -153,6 +160,22 @@ mod tests {
         assert_eq!(q.activate_next(),Some(("C",5)));
         assert!(q.finish(&"C",&5));
         assert_eq!(q.activate_next(),None);
+    }
+    #[test]
+    fn gpu_shutdown_cancels_only_unsampled_sources_and_preserves_active_receipt() {
+        let mut queue=GpuClientQueue::default();
+        assert_eq!(queue.stage(1,10),GpuQueueAdmission::Queued(None));
+        assert_eq!(queue.activate_next(),Some((1,10)));
+        assert_eq!(queue.stage(1,11),GpuQueueAdmission::Queued(None));
+        assert_eq!(queue.stage(2,20),GpuQueueAdmission::Queued(None));
+        assert_eq!(queue.cancel_all_waiting(),vec![11,20]);
+        assert!(queue.has_active());
+        assert!(queue.contains_resource(&10));
+        assert!(!queue.finish(&1,&11));
+        assert_eq!(queue.activate_next(),None);
+        assert!(queue.finish(&1,&10));
+        assert!(!queue.has_active());
+        assert!(queue.cancel_all_waiting().is_empty());
     }
     #[test]
     fn gpu_queue_repeated_buffer_reuse_requires_completion() {

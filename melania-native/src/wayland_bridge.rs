@@ -6171,6 +6171,23 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             state.native_presentation_guard.revoke();
             return Err("persistent KMS failed to drain pending DRM flip before shutdown".into());
         }
+        // A successful drain proves the active source completed. Waiting
+        // sources never entered GLES sampling, so they may be canceled
+        // without manufacturing a presentation or frame callback.
+        if state.direct_gpu_sender.is_some() {
+            if state.direct_gpu_clients.has_active() || state.direct_gpu_pending.is_some() ||
+                state.direct_gpu_removal_inflight.is_some() {
+                return Err("persistent GPU shutdown left an active sampling or removal receipt".into());
+            }
+            let canceled=state.direct_gpu_clients.cancel_all_waiting();
+            let count=canceled.len();
+            for resource in canceled {
+                state.client_dmabuf_imports.retain(|(known,_)|known!=&resource);
+                resource.release();
+            }
+            display.flush_clients()?;
+            println!("MELANIA_NATIVE_PERSISTENT_GPU_UNSAMPLED_CANCELED={count}");
+        }
         state.native_presentation_guard.revoke();
         // With no jobs in flight this shuts down the writer; the receiver
         // observes EOF at a complete frame boundary, rolls the CRTC back,
@@ -6186,6 +6203,13 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         let Some(mut owner)=integrated_drm.take() else {
             return Err("persistent DRM lost its libseat owner".into());
         };
+        // The presenter has now returned after real CRTC restoration.
+        // Queued removal reservations need no synthetic KMS receipts:
+        // discard the entire revoked scene, not individual reusable IDs.
+        if state.direct_gpu_sender.is_some() {
+            state.direct_gpu_removal_queue.revoke();
+            println!("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_ROLLBACK_JOINED=true");
+        }
         // A clean persistent shutdown must retain the same DRM primary
         // node identity even after the kernel CRTC rollback completed.
         // Run libseat.close regardless of identity verification outcome.
