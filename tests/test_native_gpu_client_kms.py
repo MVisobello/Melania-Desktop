@@ -318,6 +318,19 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_GPU_ROLE_SLOT_RESERVED=2",GUEST)
         self.assertIn("MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=2",GUEST)
 
+    def test_persistent_gpu_removals_are_dequeued_as_separate_generations(self):
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1].split("fn grab(&mut self",1)[0]
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        self.assertLess(close.index("begin_retirement(&surface)"),
+                        close.index("direct_gpu_removal_queue.enqueue(slot)"))
+        self.assertLess(submit.index("direct_gpu_removal_queue.pop()"),
+                        submit.index("continuous_redraw.next_frame()"))
+        self.assertIn("is_retiring(slot)",submit)
+        self.assertIn("state.direct_gpu_removal_queue.revoke()",BRIDGE)
+        # No persistent producer activation until the client commit queue,
+        # repeated buffer use and shutdown are integrated.
+        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move",BRIDGE)
