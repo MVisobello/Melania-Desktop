@@ -760,6 +760,14 @@ fn qemu_gpu_scene_stream(
     let live_drag=visibility_gpu || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_QEMU_VM"));
     let move_gpu=live_drag || (multi_gpu && std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").as_deref()==Ok("YES_QEMU_VM"));
     let total=if live_resize {21} else if resize_gpu {20} else if stack_gpu {19} else if visibility_gpu {17} else if live_drag {15} else if move_gpu {14} else {total};
+    // Explicit isolated acceptance mode, independent from the historical
+    // finite source-lifetime diagnostic. Never enable for single texture
+    // scanout, where the client import itself is used in later frames.
+    let rolling_retire=std::env::var("MELANIA_NATIVE_GPU_ROLLING_RETIRE").as_deref()==Ok("YES_QEMU_VM");
+    if std::env::var_os("MELANIA_NATIVE_GPU_ROLLING_RETIRE").is_some() &&
+        (!rolling_retire || !multi_gpu || !direct_mode) {
+        return Err("rolling GPU import retirement requires retained direct scene".into());
+    }
     let persistent=std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND")
         .as_deref()==Ok("YES_DISPOSABLE_QEMU");
     if direct_mode && persistent {
@@ -856,6 +864,24 @@ fn qemu_gpu_scene_stream(
         smithay::backend::allocator::dmabuf::Dmabuf,
         smithay::backend::renderer::gles::GlesTexture,
     )>::new();
+    let mut rolling_imports=crate::continuous_kms_stream::GpuImportRetirement::<(
+        smithay::backend::allocator::dmabuf::Dmabuf,
+        smithay::backend::renderer::gles::GlesTexture,
+        Option<smithay::backend::renderer::gles::GlesTexture>,
+    )>::default();
+    // Keeping only the retired backing did not prevent fifth-import
+    // EGLImage failure in the separate Smithay importer. Hold the full
+    // retired source across one additional verified draw/DRM receipt.
+    // At most three source bundles, including normalized textures.
+    let mut rolling_deferred:Option<(
+        smithay::backend::allocator::dmabuf::Dmabuf,
+        smithay::backend::renderer::gles::GlesTexture,
+        Option<smithay::backend::renderer::gles::GlesTexture>,
+    )>=None;
+    let mut rolling_backing_peak=0usize;
+    let mut rolling_retired=0usize;
+    let mut rolling_peak=0usize;
+    let mut rolling_staged=0usize;
     let attempt=(||->Result<(),Box<dyn Error>> {
         let mut prior_identity:Option<crate::native_frame_order::FrameIdentity>=None;
         // Retain two fixed-size CPU staging buffers for the entire GPU
@@ -1149,12 +1175,20 @@ fn qemu_gpu_scene_stream(
             if direct_frame && removed_slot.is_none() && moved_slot.is_none() && visibility_slot.is_none() && raised_slot.is_none() {
                 let (_,buffer)=client_dmabuf.ok_or("direct client import disappeared")?;
                 let texture=texture.ok_or("direct client texture disappeared")?;
-                if direct_import_lifetime.len()>=12 &&
-                    (!resize_gpu || direct_import_lifetime.len()>=if live_resize {14} else {13}) {
-                    return Err("finite direct GPU import lifetime budget exceeded".into());
+                if rolling_retire {
+                    rolling_imports.stage(index+1,(buffer,texture,opaque_snapshot))?;
+                    rolling_staged+=1;
+                    rolling_peak=rolling_peak.max(rolling_imports.len());
+                    rolling_backing_peak=rolling_backing_peak.max(rolling_imports.len()+usize::from(rolling_deferred.is_some()));
+                    if rolling_backing_peak>3 {return Err("GPU source backing budget exceeded".into());}
+                } else {
+                    if direct_import_lifetime.len()>=12 &&
+                        (!resize_gpu || direct_import_lifetime.len()>=if live_resize {14} else {13}) {
+                        return Err("finite direct GPU import lifetime budget exceeded".into());
+                    }
+                    direct_import_lifetime.push((buffer,texture));
+                    if let Some(image)=opaque_snapshot {normalized_gpu_sources.push(image);}
                 }
-                direct_import_lifetime.push((buffer,texture));
-                if let Some(image)=opaque_snapshot {normalized_gpu_sources.push(image);}
                 println!("MELANIA_NATIVE_DIRECT_GPU_STAGE={} retained",index+1);
             }
 
@@ -1239,6 +1273,29 @@ fn qemu_gpu_scene_stream(
                 println!("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER={}",
                          flip_ledger.completed_count());
             }
+            if rolling_retire {
+                // At this point GLES completion and the real kernel route,
+                // connector, mode and framebuffer verification succeeded.
+                // Never evict an import on a failed submission/flip.
+                // Preserve the entire previous bundle, not only its FD.
+                // Drop normalized/imported textures before the backing,
+                // never purge the EGL cache in the live rendering loop.
+                let mut next_deferred=None;
+                let retired=rolling_imports.confirm_with(index+1,|source|{
+                    debug_assert!(next_deferred.is_none());
+                    next_deferred=Some(source);
+                })?;
+                if let Some((buffer,texture,normalized))=rolling_deferred.take() {
+                    drop(normalized);
+                    drop(texture);
+                    drop(buffer);
+                }
+                rolling_deferred=next_deferred;
+                rolling_retired+=retired;
+                if retired>0 {
+                    println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED={} frame={}",retired,index+1);
+                }
+            }
             if !persistent && index+1==total {
                 // Finite mode must restore before its last client ACK.
                 rollback.restore()?;
@@ -1273,12 +1330,37 @@ fn qemu_gpu_scene_stream(
     attempt?;
     restored?;
     if direct_mode {
+        let mut final_backings=Vec::new();
         // All draws returned actual GPU completion and the kernel has
         // restored its original CRTC. The old client images are never used
         // for future rendering; retire them now under the owning context.
+        if rolling_retire {
+            if rolling_peak>2 || rolling_imports.len()>1 ||
+                rolling_retired+rolling_imports.len()!=rolling_staged {
+                return Err("GPU rolling import retirement ledger mismatch".into());
+            }
+            println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK={rolling_peak}");
+            println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED={rolling_staged}");
+            println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE={rolling_retired}");
+            println!("MELANIA_NATIVE_GPU_ROLLING_BACKINGS_PEAK={rolling_backing_peak}");
+            println!("MELANIA_NATIVE_GPU_ROLLING_SOURCE_BUNDLES_PEAK={rolling_backing_peak}");
+            rolling_imports.clear_after_restore_with(|(buffer,texture,normalized)|{
+                drop(normalized);
+                drop(texture);
+                final_backings.push(buffer);
+            });
+            if let Some((buffer,texture,normalized))=rolling_deferred.take() {
+                drop(normalized);
+                drop(texture);
+                final_backings.push(buffer);
+            }
+            if final_backings.len()>2 {return Err("GPU final backing budget exceeded".into());}
+        }
         normalized_gpu_sources.clear();
         direct_import_lifetime.clear();
         renderer.cleanup_texture_cache()?;
+        drop(final_backings);
+        if rolling_retire {println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true");}
         println!("MELANIA_NATIVE_DIRECT_GPU_RETIRED_AFTER_RESTORE=true");
     }
     println!("MELANIA_NATIVE_GPU_WAYLAND_GBM_BUFFERS_REUSED=2");

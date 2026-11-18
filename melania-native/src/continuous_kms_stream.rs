@@ -37,6 +37,107 @@ pub enum DirectGpuUpdate {
 }
 pub type DirectGpuFrame = (PlannedSceneFrame, u64, DirectGpuUpdate);
 
+/// A source DMA-BUF is no longer sampled once its independently owned
+/// retained texture has finished drawing. Keep it alive through the next
+/// verified presentation to avoid racing driver image destruction.
+/// This queue is local to a single DRM epoch; never carry it across reset.
+pub struct GpuImportRetirement<T> {
+    confirmed:u64,
+    pending:std::collections::VecDeque<(u64,T)>,
+}
+impl<T> Default for GpuImportRetirement<T> {
+    fn default()->Self {Self{confirmed:0,pending:Default::default()}}
+}
+impl<T> GpuImportRetirement<T> {
+    pub fn len(&self)->usize {self.pending.len()}
+    pub fn stage(&mut self,sequence:u64,source:T)->Result<(),&'static str> {
+        if self.confirmed.checked_add(1)!=Some(sequence) ||
+            self.pending.len()>=2 ||
+            self.pending.back().is_some_and(|(frame,_)|*frame>=sequence) {
+            return Err("invalid GPU import retirement stage");
+        }
+        self.pending.push_back((sequence,source));
+        Ok(())
+    }
+    /// Caller must establish GPU completion and actual DRM route/FB ACK.
+    /// On a failed or missing ACK the queue is untouched until rollback.
+    pub fn confirm(&mut self,sequence:u64)->Result<usize,&'static str> {
+        self.confirm_with(sequence,drop)
+    }
+    /// Move retired resources into the caller's context-specific teardown
+    /// path. A failed acknowledgement invokes no retirement callback.
+    pub fn confirm_with(&mut self,sequence:u64,mut retire:impl FnMut(T))->Result<usize,&'static str> {
+        if self.confirmed.checked_add(1)!=Some(sequence) {return Err("invalid GPU retirement ACK");}
+        self.confirmed=sequence;
+        let mut retired=0;
+        while self.pending.front().is_some_and(|(frame,_)|*frame<sequence) {
+            let (_,source)=self.pending.pop_front().expect("checked nonempty");
+            retire(source);
+            retired+=1;
+        }
+        Ok(retired)
+    }
+    pub fn clear_after_restore(&mut self) {self.clear_after_restore_with(drop);}
+    pub fn clear_after_restore_with(&mut self,mut retire:impl FnMut(T)) {
+        while let Some((_,source))=self.pending.pop_front() {retire(source);}
+    }
+}
+
+#[cfg(test)]
+mod gpu_retirement_tests {
+    use super::GpuImportRetirement;
+    #[test]
+    fn long_stream_stays_bounded_and_rejects_stale_or_skipped_confirmation() {
+        let mut queue=GpuImportRetirement::default();
+        for sequence in 1..=4096 {
+            queue.stage(sequence,sequence).unwrap();
+            assert!(queue.len()<=2);
+            assert!(queue.confirm(sequence-1).is_err());
+            assert!(queue.confirm(sequence+1).is_err());
+            assert!(queue.stage(sequence,sequence).is_err());
+            assert_eq!(queue.confirm(sequence).unwrap(),usize::from(sequence>1));
+            assert_eq!(queue.len(),1);
+        }
+        assert_eq!(queue.confirm(4097).unwrap(),1); // compositor-only frame
+        assert_eq!(queue.len(),0);
+    }
+    #[test]
+    fn context_retirement_callback_is_serialized_and_never_called_for_invalid_ack() {
+        let mut queue=GpuImportRetirement::default();
+        let mut deferred=None;
+        for sequence in 1..=4096 {
+            queue.stage(sequence,sequence).unwrap();
+            assert!(queue.confirm_with(sequence+1, |_| panic!("invalid ACK retired a resource")).is_err());
+            let previous=deferred.take();
+            let retired=queue.confirm_with(sequence,|source| {
+                assert!(deferred.replace(source).is_none());
+            }).unwrap();
+            assert_eq!(retired,usize::from(sequence>1));
+            assert_eq!(previous,sequence.checked_sub(2).filter(|n|*n>0));
+            assert!(queue.len()+usize::from(deferred.is_some())<=2);
+        }
+        let mut final_sources=Vec::new();
+        queue.clear_after_restore_with(|source| final_sources.push(source));
+        assert_eq!(final_sources,vec![4096]);
+        assert_eq!(deferred,Some(4095));
+    }
+    #[test]
+    fn no_ack_keeps_resources_alive_until_explicit_restore() {
+        use std::{cell::Cell,rc::Rc};
+        struct Source(Rc<Cell<usize>>);
+        impl Drop for Source {fn drop(&mut self){self.0.set(self.0.get()+1);}}
+        let drops=Rc::new(Cell::new(0));
+        let mut queue=GpuImportRetirement::default();
+        queue.stage(1,Source(drops.clone())).unwrap();
+        queue.confirm(1).unwrap();
+        queue.stage(2,Source(drops.clone())).unwrap();
+        assert!(queue.confirm(3).is_err());
+        assert_eq!(drops.get(),0);
+        queue.clear_after_restore();
+        assert_eq!(drops.get(),2);
+    }
+}
+
 #[derive(Debug)]
 pub struct ContinuousKmsJob {
     pub planned: PlannedSceneFrame,
