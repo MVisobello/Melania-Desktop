@@ -67,11 +67,11 @@ serial="$report/serial.log"
 : > "$serial"
 drag_pid=''
 if [[ "$guest_arg" == --retained-gpu-only ]]; then
-  python3 "$root/scripts/inject-qemu-retained-gpu-drag.py" --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 650 > "$report/qmp-retained-drag.log" 2>&1 &
+  python3 "$root/scripts/inject-qemu-retained-gpu-drag.py" --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 850 > "$report/qmp-retained-drag.log" 2>&1 &
   drag_pid=$!
 fi
 set +e
-timeout --signal=TERM --kill-after=10s 650s \
+timeout --signal=TERM --kill-after=10s 850s \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \
@@ -112,6 +112,16 @@ if [[ "$guest_arg" == --retained-gpu-only ]]; then
   grep -qxF 'MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true' "$normalized"
   grep -qxF 'MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true' "$normalized"
   grep -qxF 'MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true' "$normalized"
+  grep -qxF 'MELANIA_QEMU_PERSISTENT_DIRECT_GPU_48_CLIENT_4_REMOVAL_PASS=true' "$normalized"
+  for index in $(seq 1 52); do
+    [[ "$(grep -Fxc "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED=$index" "$normalized")" == 1 ]]
+    if ((index <= 48)); then
+      [[ "$(grep -Fxc "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_VERIFIED=$index" "$normalized")" == 1 ]]
+    fi
+  done
+  for slot in 1 2 3 4; do
+    [[ "$(grep -Fxc "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED=$slot" "$normalized")" == 1 ]]
+  done
   grep -qxF 'MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true' "$report/qmp-retained-drag.log"
   grep -qxF 'MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true' "$report/qmp-retained-drag.log"
 fi

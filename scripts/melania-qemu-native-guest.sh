@@ -408,6 +408,128 @@ run_retained_gpu_probe() {
     
 }
 
+run_persistent_direct_gpu_probe() {
+# Persistent retained direct GPU: actual fresh DMA-BUFs from four XDG roles.
+# This acceptance is separate from the finite fixture and the SHM GPU path.
+local continuous_server=/mnt/melania-native/melania-native
+local continuous_client=/mnt/melania-native/melania-continuous-client
+[[ -x "$continuous_server" && -x "$continuous_client" ]] || fatal 'persistent_direct_GPU_real_binaries_missing'
+direct_persist_server_log="$(mktemp -t melania-direct-persist-server-XXXXXX)"
+direct_persist_client_log="$(mktemp -t melania-direct-persist-client-XXXXXX)"
+MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_PIXELS=YES_QEMU_VM \
+MELANIA_NATIVE_LIVE_STREAM=YES_QEMU_VM \
+MELANIA_NATIVE_PRESENT_FRAME_CALLBACKS=YES_QEMU_VM \
+MELANIA_NATIVE_CONTINUOUS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_IN_PROCESS_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU=YES_QEMU_VM \
+MELANIA_NATIVE_DIRECT_CLIENT_GBM=YES_QEMU_VM \
+MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
+MELANIA_NATIVE_GPU_WAYLAND_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_KMS=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_PERSISTENT_DIRECT_GPU=YES_DISPOSABLE_QEMU \
+MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM \
+MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
+  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  > "$direct_persist_server_log" 2>&1 &
+direct_persist_server_pid=$!
+direct_persist_socket=''
+for attempt in $(seq 1 300); do
+  direct_persist_socket="$(sed -n 's/^MELANIA_NATIVE_WAYLAND_SOCKET_READY=//p' "$direct_persist_server_log" | head -n 1)"
+  [[ -n "$direct_persist_socket" ]] && break
+  kill -0 "$direct_persist_server_pid" 2>/dev/null || break
+  sleep .1
+done
+if [[ -z "$direct_persist_socket" ]] ||
+   ! grep -Fqx 'MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STARTED=true' "$direct_persist_server_log"; then
+  cat "$direct_persist_server_log"
+  kill -TERM "$direct_persist_server_pid" 2>/dev/null || true
+  fatal 'persistent_direct_GPU_server_not_ready'
+fi
+if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS=YES_QEMU_VM \
+  MELANIA_QEMU_CONTINUOUS_CLIENT_DOUBLE_GPU=YES_QEMU_VM \
+  MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW=YES_QEMU_VM \
+  MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT=YES_QEMU_VM \
+  WAYLAND_DISPLAY="$direct_persist_socket" \
+  timeout --signal=TERM --kill-after=3s 240s \
+  "$continuous_client" > "$direct_persist_client_log" 2>&1; then
+  cat "$direct_persist_server_log" "$direct_persist_client_log"
+  kill -TERM "$direct_persist_server_pid" 2>/dev/null || true
+  fatal 'persistent_direct_GPU_client_failed'
+fi
+for attempt in $(seq 1 300); do
+  [[ "$(grep -c '^MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=' "$direct_persist_server_log" || true)" == 4 ]] && break
+  kill -0 "$direct_persist_server_pid" 2>/dev/null || break
+  sleep .1
+done
+sleep 15
+if ! kill -0 "$direct_persist_server_pid" 2>/dev/null; then
+  cat "$direct_persist_server_log" "$direct_persist_client_log"
+  fatal 'persistent_direct_GPU_server_died_before_signal'
+fi
+kill -TERM "$direct_persist_server_pid"
+if ! wait "$direct_persist_server_pid"; then
+  cat "$direct_persist_server_log" "$direct_persist_client_log"
+  fatal 'persistent_direct_GPU_rollback_failed'
+fi
+for index in $(seq 1 52); do
+  [[ "$(grep -Fxc "MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index" "$direct_persist_server_log")" == 1 ]] ||
+    fatal "persistent_direct_GPU_missing_kernel_receipt_$index"
+  if ((index <= 48)); then
+    grep -Fqx "MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index" "$direct_persist_client_log" ||
+      fatal "persistent_direct_GPU_missing_client_receipt_$index"
+  fi
+done
+for slot in 1 2 3 4; do
+  grep -Fqx "MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=$slot" "$direct_persist_server_log" ||
+    fatal "persistent_direct_GPU_missing_removal_$slot"
+done
+for marker in \
+  'MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES=52' \
+  'MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=52 windows=0' \
+  'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2' \
+  'MELANIA_NATIVE_GPU_INDEPENDENT_NON_MASTER_IMPORTER=true' \
+  'MELANIA_NATIVE_GPU_ROLLING_SOURCE_BUNDLES_PEAK=3' \
+  'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED=48' \
+  'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true' \
+  'MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_ROLLBACK_JOINED=true' \
+  'MELANIA_NATIVE_GPU_WAYLAND_PERSISTENT_ROLLBACK_PASS=true' \
+  'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
+  'NATIVE_SESSION_READY=false'; do
+  grep -Fqx "$marker" "$direct_persist_server_log" || fatal "persistent_direct_GPU_missing_$marker"
+done
+for marker in \
+  'MELANIA_QEMU_PERSISTENT_DIRECT_GPU_IDLE_AFTER_24=true' \
+  'MELANIA_QEMU_PERSISTENT_DIRECT_GPU_RESUMED=true' \
+  'MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_48_ACKS=true'; do
+  grep -Fqx "$marker" "$direct_persist_client_log" || fatal "persistent_direct_GPU_missing_$marker"
+done
+if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$direct_persist_server_log"; then
+  fatal 'persistent_direct_GPU_used_CPU_readback'
+fi
+# Preserve unambiguous per-run evidence for host and artifact auditing.
+for index in $(seq 1 52); do
+  grep -Fqx "MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=$index" "$direct_persist_server_log"
+  report "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED=$index"
+  if ((index <= 48)); then
+    grep -Fqx "MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=$index" "$direct_persist_client_log"
+    report "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_VERIFIED=$index"
+  fi
+done
+for slot in 1 2 3 4; do
+  grep -Fqx "MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=$slot" "$direct_persist_server_log"
+  report "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED=$slot"
+done
+report 'MELANIA_QEMU_PERSISTENT_DIRECT_GPU_48_CLIENT_4_REMOVAL_PASS=true'
+cat "$direct_persist_server_log" "$direct_persist_client_log"
+rm -f "$direct_persist_server_log" "$direct_persist_client_log"
+}
+
 [[ "$(id -u)" == "0" ]] || fatal 'root_required_inside_disposable_guest'
 vendor="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
 model="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
@@ -437,6 +559,7 @@ if [[ "${1:-}" == --direct-gpu-only || "${1:-}" == --retained-gpu-only ]]; then
   unset DISPLAY WAYLAND_DISPLAY
   if [[ "$1" == --retained-gpu-only ]]; then
     run_retained_gpu_probe
+    run_persistent_direct_gpu_probe
     report 'MELANIA_QEMU_FOCUSED_RETAINED_GPU_PASS=true'
   else
     run_direct_gpu_probe
@@ -3544,6 +3667,7 @@ run_direct_gpu_probe
 
 
 run_retained_gpu_probe
+run_persistent_direct_gpu_probe
 
 
 # P0 text-input-v3 + input-method-v2: TWO real client processes,

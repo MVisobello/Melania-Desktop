@@ -259,7 +259,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("let gpu_frames:u32=if multi_gpu {12}",CLIENT)
         self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows",GUEST)
         self.assertIn("MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
-        self.assertIn("retained_gpu_probe_size(u64::from(gpu_index-1))",CLIENT)
+        self.assertIn("retained_gpu_probe_size(u64::from(fixture_index))",CLIENT)
         self.assertIn("retained_gpu_geometry(*slot,size.w,size.h)",gbm)
         self.assertIn("renderer.create_buffer(Fourcc::Abgr8888,(w,h).into())",snapshot)
         self.assertIn("sample(renderer,x+w-3,y+h-3,expected)?",gbm)
@@ -292,7 +292,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES=",loop)
         # The bridge must still reject persistent GPU client mode until
         # arbitrary live client admission and drain are integrated.
-        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+        self.assertIn("state.gtk_layer_mode || (persistent_kms && !persistent_direct)",BRIDGE)
 
     def test_gpu_role_close_removes_texture_and_requires_real_13th_frame(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
@@ -341,7 +341,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("state.direct_gpu_removal_queue.revoke()",BRIDGE)
         # No persistent producer activation until the client commit queue,
         # repeated buffer use and shutdown are integrated.
-        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+        self.assertIn("state.gtk_layer_mode || (persistent_kms && !persistent_direct)",BRIDGE)
 
     def test_persistent_gpu_client_queue_receipts_are_one_sample_at_a_time(self):
         submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
@@ -356,7 +356,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("direct_gpu_clients.cancel_waiting(&surface)",BRIDGE)
         self.assertIn("state.direct_gpu_clients.revoke()",BRIDGE)
         self.assertIn("direct_gpu_clients.contains_resource(&buffer) {return;}",BRIDGE)
-        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+        self.assertIn("state.gtk_layer_mode || (persistent_kms && !persistent_direct)",BRIDGE)
 
     def test_persistent_direct_shutdown_drains_before_cancel_and_rollback(self):
         shutdown=BRIDGE.split("if persistent_kms && shutdown_flag.load(Ordering::Relaxed) {",1)[1]
@@ -377,6 +377,29 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertEqual(offsets,sorted(offsets))
         self.assertNotIn("finish_retirement(",shutdown)
         self.assertNotIn("complete_presented_frame(",shutdown)
+
+    def test_persistent_direct_real_client_acceptance_is_separately_gated(self):
+        self.assertIn("persistent_direct=native_frame_budget::persistent_direct_gpu_mode_matches(",BRIDGE)
+        self.assertIn("persistent direct GPU requires isolated QEMU retained DMA-BUF session",BRIDGE)
+        self.assertIn("let gpu_frames=if persistent_gpu {48} else {gpu_frames};",CLIENT)
+        self.assertIn("state.frame_done_count!=48",CLIENT)
+        stage=GUEST.split("run_persistent_direct_gpu_probe() {",1)[1].split('[[ "$(id -u)"',1)[0]
+        for marker in ("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU=YES_DISPOSABLE_QEMU",
+                       "MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT=YES_QEMU_VM",
+                       "seq 1 52", "seq 1 300", "MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES=52",
+                       "MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=52 windows=0",
+                       "MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_ROLLBACK_JOINED=true",
+                       "MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true"):
+            self.assertIn(marker,stage)
+        self.assertNotIn("MELANIA_NATIVE_QEMU_FRAME_TARGET=",stage)
+        self.assertNotIn("MELANIA_QEMU_CONTINUOUS_FRAMES=",stage)
+        self.assertIn("run_retained_gpu_probe\n    run_persistent_direct_gpu_probe",GUEST)
+        self.assertIn("run_retained_gpu_probe\nrun_persistent_direct_gpu_probe",GUEST)
+        for marker in ("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_VERIFIED",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED"):
+            self.assertIn(marker,stage)
 
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
