@@ -113,6 +113,14 @@ if [[ "$guest_arg" == --retained-gpu-only ]]; then
   grep -qxF 'MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true' "$normalized"
   grep -qxF 'MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true' "$normalized"
   grep -qxF 'MELANIA_QEMU_PERSISTENT_DIRECT_GPU_48_CLIENT_4_REMOVAL_PASS=true' "$normalized"
+  grep -qxF 'MELANIA_QEMU_MIXED_GPU_36_DMA_12_SHM_PASS=true' "$normalized"
+  for index in $(seq 1 48); do
+    if ((index%4==3)); then
+      [[ "$(grep -Fxc "MELANIA_QEMU_MIXED_SHM_VERIFIED=$index" "$normalized")" == 1 ]]
+    else
+      [[ "$(grep -Fxc "MELANIA_QEMU_MIXED_DMA_VERIFIED=$index" "$normalized")" == 1 ]]
+    fi
+  done
   for index in $(seq 1 52); do
     [[ "$(grep -Fxc "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED=$index" "$normalized")" == 1 ]]
     if ((index <= 48)); then

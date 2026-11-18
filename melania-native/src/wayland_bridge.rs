@@ -182,6 +182,10 @@ struct BridgeState {
     direct_gpu_sender:Option<std::sync::mpsc::SyncSender<melania_native::continuous_kms_stream::DirectGpuFrame>>,
     direct_gpu_pending:Option<(u64,DirectGpuUpdate)>,
     direct_gpu_clients:GpuClientQueue<WlSurface,wl_buffer::WlBuffer>,
+    // Only waiting SHM sources live here. Transfer ownership (not a copy)
+    // to the typed presenter channel when the common queue activates.
+    direct_gpu_shm_waiting:Vec<(wl_buffer::WlBuffer,melania_native::owned_shm::RetainedShmPixels)>,
+    direct_gpu_shm_inflight:Option<wl_buffer::WlBuffer>,
     direct_gpu_layout:RetainedGpuLayout,
     direct_gpu_move_inflight:Option<(u64,i32,i32)>,
     direct_gpu_visibility_inflight:Option<(u64,bool)>,
@@ -495,22 +499,34 @@ impl BridgeState {
         if self.persistent_kms_mode && self.direct_gpu_sender.is_some() &&
             self.direct_gpu_pending.is_none() {
             if let Some((surface,buffer))=self.direct_gpu_clients.activate_next() {
-                let dmabuf=smithay::wayland::dmabuf::get_dmabuf(&buffer)
-                    .map_err(|_|"queued GPU client has no DMA-BUF")?.clone();
-                if !self.client_dmabuf_imports.iter().any(|(known,_)|known==&buffer) {
-                    return Err("queued GPU client lost EGL import".into());
-                }
+                let (update,width,height)=if let Some(index)=self.direct_gpu_shm_waiting.iter()
+                    .position(|(known,_)|known==&buffer) {
+                    if self.direct_gpu_shm_inflight.is_some() {
+                        return Err("persistent SHM sampling receipt collision".into());
+                    }
+                    let (_,source)=self.direct_gpu_shm_waiting.remove(index);
+                    let (width,height)=source.dimensions();
+                    self.direct_gpu_shm_inflight=Some(buffer.clone());
+                    (DirectGpuUpdate::Shm(source),width,height)
+                } else {
+                    let dmabuf=smithay::wayland::dmabuf::get_dmabuf(&buffer)
+                        .map_err(|_|"queued GPU client has no DMA-BUF")?.clone();
+                    if !self.client_dmabuf_imports.iter().any(|(known,_)|known==&buffer) {
+                        return Err("queued GPU client lost EGL import".into());
+                    }
+                    let size=dmabuf.size();
+                    (DirectGpuUpdate::Buffer(dmabuf),size.w,size.h)
+                };
                 let slot=self.known_window_surfaces.register(surface.clone())
                     .map_err(|_|"persistent GPU surface registry full")?;
-                let size=dmabuf.size();
-                self.direct_gpu_layout.update_buffer(slot,size.w,size.h)?;
+                self.direct_gpu_layout.update_buffer(slot,width,height)?;
                 // Only the exact selected update enters the ACK ledger.
                 // Other clients remain in the bounded sampling queue.
                 if !matches!(self.continuous_client_ledger.stage(surface,buffer),Ok(None)) {
                     return Err("persistent GPU client receipt ledger collision".into());
                 }
                 self.direct_gpu_slots.insert(slot);
-                self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Buffer(dmabuf)));
+                self.direct_gpu_pending=Some((slot,update));
                 self.multi_scene.note_external_gpu_frame();
                 self.note_scene_change();
             }
@@ -770,7 +786,12 @@ impl BridgeState {
                     std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
                     .as_deref()==Ok("YES_QEMU_VM");
             let is_gpu_client=smithay::wayland::dmabuf::get_dmabuf(&completed.resource).is_ok();
-            if required_gpu_client && !is_gpu_client {
+            let is_shm_client=self.direct_gpu_shm_inflight.as_ref()
+                .is_some_and(|resource|resource==&completed.resource);
+            if self.direct_gpu_shm_inflight.is_some() && (!is_shm_client || is_gpu_client) {
+                return Err("persistent SHM receipt does not match submitted source".into());
+            }
+            if required_gpu_client && !is_gpu_client && !is_shm_client {
                 return Err("required GPU DMA-BUF disappeared before KMS frame completion".into());
             }
             // A previously imported Wayland DMA-BUF must remain owned by
@@ -787,6 +808,10 @@ impl BridgeState {
             if persistent_direct &&
                 !self.direct_gpu_clients.finish(&completed.key,&completed.resource) {
                 return Err("persistent GPU client receipt does not match active sampling".into());
+            }
+            if is_shm_client {
+                self.direct_gpu_shm_inflight.take();
+                println!("MELANIA_NATIVE_RETAINED_SHM_KMS_ACK={}",self.continuous_frame_count);
             }
             let newer_gpu_update=persistent_direct &&
                 self.direct_gpu_clients.has_waiting_for(&completed.key);
@@ -2728,6 +2753,8 @@ fn revoke_client_dmabuf_gpu(state:&mut BridgeState) {
     state.gpu_resize_latest=None;
     state.direct_gpu_pending.take();
     state.direct_gpu_clients.revoke();
+    state.direct_gpu_shm_waiting.clear();
+    state.direct_gpu_shm_inflight.take();
     state.direct_gpu_removal_queue.revoke();
     state.direct_gpu_sender.take();
     // Cancel transactions BEFORE timeline invalidation wakes eventfds.
@@ -2744,6 +2771,7 @@ fn revoke_client_dmabuf_gpu(state:&mut BridgeState) {
 impl BufferHandler for BridgeState {
     fn buffer_destroyed(&mut self,buffer:&wl_buffer::WlBuffer) {
         self.direct_gpu_clients.cancel_destroyed_resource(buffer);
+        self.direct_gpu_shm_waiting.retain(|(known,_)|known!=buffer);
         self.client_dmabuf_imports.retain(|(known,_)|known!=buffer);
     }
 }
@@ -3039,9 +3067,36 @@ impl CompositorHandler for BridgeState {
                 let gpu_client_kms=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
                     .as_deref()==Ok("YES_QEMU_VM");
                 if self.persistent_kms_mode && self.direct_gpu_sender.is_some() && !dma_buffer {
-                    // This experimental direct-only backend cannot mix
-                    // CPU SHM or layers into its retained GLES scene.
-                    buffer.release();
+                    // Separate VM-only opt-in. Do not silently downgrade
+                    // a required DMA-BUF proof or admit layer/popups here.
+                    if std::env::var("MELANIA_NATIVE_RETAINED_SHM_GPU").as_deref()!=Ok("YES_QEMU_VM") ||
+                        !self.xdg_shell.toplevel_surfaces().iter().any(|top|top.wl_surface()==surface) {
+                        buffer.release();
+                        return;
+                    }
+                    if self.direct_gpu_clients.contains_resource(&buffer) {return;}
+                    let copied=with_buffer_contents(&buffer,|ptr,len,metadata|{
+                        melania_native::owned_shm::copy_retained_gpu_client_shm(ptr,len,metadata)
+                    });
+                    let Ok(Ok(source))=copied else {
+                        buffer.release();
+                        return;
+                    };
+                    match self.direct_gpu_clients.stage(surface.clone(),buffer.clone()) {
+                        GpuQueueAdmission::Queued(replaced)=>{
+                            if let Some(old)=replaced {
+                                self.client_dmabuf_imports.retain(|(known,_)|known!=&old);
+                                self.direct_gpu_shm_waiting.retain(|(known,_)|known!=&old);
+                                old.release();
+                            }
+                            self.direct_gpu_shm_waiting.push((buffer,source));
+                            if let Err(error)=self.submit_continuous_frame() {
+                                eprintln!("persistent SHM GPU submit failed: {error}");
+                            }
+                        }
+                        GpuQueueAdmission::Busy=>{},
+                        GpuQueueAdmission::Full(rejected)=>{rejected.release();}
+                    }
                     return;
                 }
                 if dma_buffer && !gpu_client_kms {
@@ -3086,6 +3141,7 @@ impl CompositorHandler for BridgeState {
                             GpuQueueAdmission::Queued(replaced)=>{
                                 if let Some(old)=replaced {
                                     self.client_dmabuf_imports.retain(|(known,_)|known!=&old);
+                                    self.direct_gpu_shm_waiting.retain(|(known,_)|known!=&old);
                                     old.release();
                                 }
                                 if let Err(error)=self.submit_continuous_frame() {
@@ -4024,6 +4080,7 @@ impl XdgShellHandler for BridgeState {
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
         if let Some(unsubmitted)=self.direct_gpu_clients.cancel_waiting(&surface) {
             self.client_dmabuf_imports.retain(|(known,_)|known!=&unsubmitted);
+            self.direct_gpu_shm_waiting.retain(|(known,_)|known!=&unsubmitted);
             unsubmitted.release();
         }
         // The existing finite retained scene has a real removal frame.
@@ -5161,6 +5218,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         client_dmabuf_imports:Vec::new(),
         direct_gpu_sender:None,direct_gpu_pending:None,
         direct_gpu_clients:Default::default(),
+        direct_gpu_shm_waiting:Vec::new(),direct_gpu_shm_inflight:None,
         direct_gpu_slots:Default::default(),direct_gpu_removal_inflight:None,
         direct_gpu_removal_queue:Default::default(),
         direct_gpu_layout:Default::default(),direct_gpu_move_inflight:None,
@@ -5622,6 +5680,10 @@ pub fn run() -> Result<(),Box<dyn Error>> {
          state.managed_xdg_mode || state.gtk_layer_mode || state.layer_pixels_mode ||
          std::env::var_os("MELANIA_NATIVE_EXPLICIT_SYNC").is_some()) {
         return Err("persistent direct GPU requires isolated QEMU retained DMA-BUF session".into());
+    }
+    if std::env::var_os("MELANIA_NATIVE_RETAINED_SHM_GPU").is_some() &&
+        (std::env::var("MELANIA_NATIVE_RETAINED_SHM_GPU").as_deref()!=Ok("YES_QEMU_VM") || !persistent_direct) {
+        return Err("retained SHM upload requires explicit persistent direct GPU QEMU mode".into());
     }
     // The server may announce zwp_linux_dmabuf_v1 ONLY in this explicit
     // disposable VM GPU-import experiment, never on a generic shell probe
@@ -6249,13 +6311,14 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         // without manufacturing a presentation or frame callback.
         if state.direct_gpu_sender.is_some() {
             if state.direct_gpu_clients.has_active() || state.direct_gpu_pending.is_some() ||
-                state.direct_gpu_removal_inflight.is_some() {
+                state.direct_gpu_removal_inflight.is_some() || state.direct_gpu_shm_inflight.is_some() {
                 return Err("persistent GPU shutdown left an active sampling or removal receipt".into());
             }
             let canceled=state.direct_gpu_clients.cancel_all_waiting();
             let count=canceled.len();
             for resource in canceled {
                 state.client_dmabuf_imports.retain(|(known,_)|known!=&resource);
+                state.direct_gpu_shm_waiting.retain(|(known,_)|known!=&resource);
                 resource.release();
             }
             display.flush_clients()?;
