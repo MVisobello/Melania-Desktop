@@ -383,7 +383,7 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("persistent direct GPU requires isolated QEMU retained DMA-BUF session",BRIDGE)
         self.assertIn("let gpu_frames=if persistent_gpu {48} else {gpu_frames};",CLIENT)
         self.assertIn("state.frame_done_count!=48",CLIENT)
-        stage=GUEST.split("# Persistent retained direct GPU:",1)[1].split("# Stage114:",1)[0]
+        stage=GUEST.split("run_persistent_direct_gpu_probe() {",1)[1].split('[[ "$(id -u)"',1)[0]
         for marker in ("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU=YES_DISPOSABLE_QEMU",
                        "MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM",
                        "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT=YES_QEMU_VM",
@@ -394,6 +394,12 @@ class RealClientDmabufToKms(unittest.TestCase):
             self.assertIn(marker,stage)
         self.assertNotIn("MELANIA_NATIVE_QEMU_FRAME_TARGET=",stage)
         self.assertNotIn("MELANIA_QEMU_CONTINUOUS_FRAMES=",stage)
+        self.assertIn("run_retained_gpu_probe\n    run_persistent_direct_gpu_probe",GUEST)
+        self.assertIn("run_retained_gpu_probe\nrun_persistent_direct_gpu_probe",GUEST)
+        for marker in ("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_VERIFIED",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED"):
+            self.assertIn(marker,stage)
 
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
