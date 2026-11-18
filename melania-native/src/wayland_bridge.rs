@@ -5065,6 +5065,18 @@ fn revoke_wayland_input_for_lost_seat(state:&mut BridgeState) {
     state.dynamic_confirmed_frame=None;
 }
 
+// The disposable rolling-import experiment needs an independently opened
+// DRM file (and therefore a separate GEM-handle namespace). Merely duping
+// the libseat FD does not isolate two GBM devices. Verify the non-master
+// importer without acquiring or dropping master, before creating EGL.
+fn qemu_is_drm_master(fd:&OwnedFd)->bool {
+    use std::os::fd::AsRawFd;
+    #[link(name="drm")]
+    unsafe extern "C" {fn drmIsMaster(fd:libc::c_int)->libc::c_int;}
+    // SAFETY: fd is owned and live for the duration of the libdrm call.
+    unsafe {drmIsMaster(fd.as_raw_fd())!=0}
+}
+
 /// Keep the original libseat-owned descriptor until the DRM worker exits.
 /// The seat's close() callback (not a bare close(2)) retires its device ID.
 struct OwnedSeatCard {
@@ -5751,10 +5763,41 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             // No bogus protocol advertisement: create the actual libseat-
             // owned GBM/EGL/GLES importer FIRST, filter the live GPU format/
             // modifier table, and only then publish the Wayland global.
-            let gpu_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
-            let card=DrmDeviceFd::new(DeviceFd::from(gpu_fd));
-            let gbm=GbmDevice::new(card)?;
-            let display=unsafe {EGLDisplay::new(gbm)}?;
+            let independent_importer=direct_gpu &&
+                std::env::var("MELANIA_NATIVE_GPU_ROLLING_RETIRE").as_deref()==Ok("YES_QEMU_VM");
+            let display=if independent_importer {
+                // The existing guest-only/seat-active/integrated KMS guards
+                // are mandatory. The libseat card remains the sole KMS owner.
+                let owner=integrated_drm.as_ref().ok_or("missing KMS owner for GPU importer")?;
+                owner.verify_identity()?;
+                let master=owner.fd.as_ref().ok_or("missing live KMS descriptor")?;
+                if !qemu_is_drm_master(master) {
+                    return Err("rolling GPU importer requires an existing libseat DRM master".into());
+                }
+                let gpu_fd=smithay::reexports::rustix::fs::open(card_path,
+                    OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK | OFlags::NOFOLLOW,
+                    smithay::reexports::rustix::fs::Mode::empty())?;
+                melania_native::native_drm_node_identity::verify_libseat_drm_primary_card(
+                    card_path,&gpu_fd,Some(owner.drm_identity))?;
+                if qemu_is_drm_master(&gpu_fd) || !qemu_is_drm_master(master) {
+                    return Err("independent rolling GPU importer must not own DRM master".into());
+                }
+                // Plain DeviceFd: DrmDeviceFd::new would attempt SET_MASTER.
+                // Only the independently owned GBM/EGL importer retains this
+                // fd; existing epoch-revocation drops it before seat release.
+                let gbm=GbmDevice::new(DeviceFd::from(gpu_fd))?;
+                let display=unsafe {EGLDisplay::new(gbm)}?;
+                if !qemu_is_drm_master(master) {
+                    return Err("rolling GPU importer changed DRM master".into());
+                }
+                println!("MELANIA_NATIVE_GPU_INDEPENDENT_NON_MASTER_IMPORTER=true");
+                display
+            } else {
+                let gpu_fd=integrated_drm.as_ref().unwrap().fd.as_ref().unwrap().try_clone()?;
+                let card=DrmDeviceFd::new(DeviceFd::from(gpu_fd));
+                let gbm=GbmDevice::new(card)?;
+                unsafe {EGLDisplay::new(gbm)}?
+            };
             let context=EGLContext::new(&display)?;
             let renderer=unsafe {GlesRenderer::new(context)}?;
             let formats=melania_native::native_client_dmabuf::client_import_formats(&renderer);
