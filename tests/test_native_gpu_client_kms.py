@@ -331,6 +331,21 @@ class RealClientDmabufToKms(unittest.TestCase):
         # repeated buffer use and shutdown are integrated.
         self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
 
+    def test_persistent_gpu_client_queue_receipts_are_one_sample_at_a_time(self):
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        poll=BRIDGE.split("fn poll_continuous_kms(",1)[1].split("fn begin_generation_proof(",1)[0]
+        self.assertLess(submit.index("direct_gpu_clients.activate_next()"),
+                        submit.index("continuous_redraw.next_frame()"))
+        self.assertLess(poll.index("continuous_redraw.presented(planned)"),
+                        poll.index("direct_gpu_clients.finish(&completed.key,&completed.resource)"))
+        self.assertLess(poll.index("direct_gpu_clients.finish(&completed.key,&completed.resource)"),
+                        poll.index("completed.resource.release()"))
+        self.assertIn("completed.notify_frame && is_live && !newer_gpu_update",poll)
+        self.assertIn("direct_gpu_clients.cancel_waiting(&surface)",BRIDGE)
+        self.assertIn("state.direct_gpu_clients.revoke()",BRIDGE)
+        self.assertIn("direct_gpu_clients.contains_resource(&buffer) {return;}",BRIDGE)
+        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move",BRIDGE)

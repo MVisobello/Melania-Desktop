@@ -71,10 +71,107 @@ impl<K: PartialEq, V> ClientCommitLedger<K, V> {
     }
 }
 
+/// A direct GPU update owns an unconsumed client buffer, unlike the
+/// CPU ledger whose pixels are already copied. Keep one active sampling
+/// transaction and at most one waiting update per surface. No receipt for
+/// another surface can retire the active update.
+#[derive(Debug)]
+pub struct GpuClientQueue<K,V> {
+    waiting:std::collections::VecDeque<(K,V)>,
+    active:Option<(K,V)>,
+}
+impl<K,V> Default for GpuClientQueue<K,V> {
+    fn default()->Self {Self{waiting:Default::default(),active:None}}
+}
+#[derive(Debug,PartialEq,Eq)]
+pub enum GpuQueueAdmission<V> {Queued(Option<V>),Busy,Full(V)}
+impl<K:PartialEq,V:PartialEq> GpuClientQueue<K,V> {
+    // One active source + up to three waiting sources, within the existing
+    // four-import Wayland registry budget. Never evict an active source.
+    pub fn contains_resource(&self,resource:&V)->bool {
+        self.active.as_ref().is_some_and(|(_,v)|v==resource) ||
+        self.waiting.iter().any(|(_,v)|v==resource)
+    }
+    pub fn has_waiting_for(&self,key:&K)->bool {
+        self.waiting.iter().any(|(k,_)|k==key)
+    }
+    pub fn stage(&mut self,key:K,resource:V)->GpuQueueAdmission<V> {
+        if self.contains_resource(&resource) {return GpuQueueAdmission::Busy;}
+        if let Some((_,old))=self.waiting.iter_mut().find(|(k,_)|k==&key) {
+            return GpuQueueAdmission::Queued(Some(std::mem::replace(old,resource)));
+        }
+        if self.waiting.len()>=3 {return GpuQueueAdmission::Full(resource);}
+        self.waiting.push_back((key,resource));
+        GpuQueueAdmission::Queued(None)
+    }
+    pub fn activate_next(&mut self)->Option<(K,V)> where K:Clone,V:Clone {
+        if self.active.is_some(){return None;}
+        let next=self.waiting.pop_front()?;
+        self.active=Some(next.clone());
+        Some(next)
+    }
+    /// Call strictly after the matching current-epoch DRM receipt.
+    pub fn finish(&mut self,key:&K,resource:&V)->bool {
+        if !self.active.as_ref().is_some_and(|(k,v)|k==key && v==resource) {return false;}
+        self.active=None;
+        true
+    }
+    pub fn cancel_waiting(&mut self,key:&K)->Option<V> {
+        let index=self.waiting.iter().position(|(k,_)|k==key)?;
+        self.waiting.remove(index).map(|(_,v)|v)
+    }
+    pub fn cancel_destroyed_resource(&mut self,resource:&V) {
+        self.waiting.retain(|(_,v)|v!=resource);
+    }
+    /// Epoch revocation is not a successful presentation or release.
+    pub fn revoke(&mut self){self.waiting.clear(); self.active=None;}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn gpu_queue_never_releases_active_or_other_surface_receipt() {
+        let mut q=GpuClientQueue::default();
+        assert_eq!(q.stage("A",1),GpuQueueAdmission::Queued(None));
+        assert_eq!(q.activate_next(),Some(("A",1)));
+        assert_eq!(q.stage("B",2),GpuQueueAdmission::Queued(None));
+        assert_eq!(q.stage("A",3),GpuQueueAdmission::Queued(None));
+        assert_eq!(q.stage("B",4),GpuQueueAdmission::Queued(Some(2)));
+        assert_eq!(q.stage("C",1),GpuQueueAdmission::Busy);
+        assert_eq!(q.stage("C",5),GpuQueueAdmission::Queued(None));
+        assert_eq!(q.stage("D",6),GpuQueueAdmission::Full(6));
+        assert!(q.has_waiting_for(&"A"));
+        assert_eq!(q.activate_next(),None);
+        assert!(!q.finish(&"B",&1));
+        assert!(!q.finish(&"A",&3));
+        assert!(q.finish(&"A",&1));
+        assert_eq!(q.activate_next(),Some(("B",4)));
+        assert_eq!(q.cancel_waiting(&"A"),Some(3));
+        assert!(q.finish(&"B",&4));
+        assert_eq!(q.activate_next(),Some(("C",5)));
+        assert!(q.finish(&"C",&5));
+        assert_eq!(q.activate_next(),None);
+    }
+    #[test]
+    fn gpu_queue_repeated_buffer_reuse_requires_completion() {
+        let mut q=GpuClientQueue::default();
+        for _ in 0..4096 {
+            assert_eq!(q.stage(1,9),GpuQueueAdmission::Queued(None));
+            assert_eq!(q.activate_next(),Some((1,9)));
+            assert_eq!(q.stage(1,9),GpuQueueAdmission::Busy);
+            assert_eq!(q.cancel_waiting(&1),None);
+            assert!(q.finish(&1,&9));
+        }
+        q.stage(2,8);
+        q.cancel_destroyed_resource(&8);
+        assert_eq!(q.activate_next(),None);
+        q.stage(2,8);
+        q.activate_next();
+        q.revoke();
+        assert!(!q.finish(&2,&8));
+    }
     #[test]
     fn two_clients_survive_overlapping_commits() {
         let mut ledger=ClientCommitLedger::new();
