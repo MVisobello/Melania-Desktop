@@ -80,7 +80,7 @@ use melania_native::control_io::NativeControlPoller;
 use melania_native::native_presentation_guard::{NativePresentationGuard,PresentationToken};
 use melania_native::native_frame_budget;
 use melania_native::continuous_kms_stream::DirectGpuUpdate;
-use melania_native::retained_gpu_layout::RetainedGpuLayout;
+use melania_native::retained_gpu_layout::{GpuRect,RetainedGpuLayout};
 use melania_native::native_explicit_acquire::{WaylandAcquireGate,cancel_acquire_transaction};
 use smithay::wayland::compositor::{BlockerState,add_pre_commit_hook};
 use smithay::backend::renderer::sync::Fence;
@@ -187,7 +187,7 @@ struct BridgeState {
     direct_gpu_raise_inflight:Option<u64>,
     direct_gpu_selected:Option<u64>,
     gpu_forwarded_left:Option<WlSurface>,
-    gpu_resize_pending:Option<(WlSurface,Serial,i32,i32,bool)>,
+    gpu_resize_pending:Option<(WlSurface,Serial,GpuRect,bool)>,
     gpu_forwarded_keys:BTreeSet<u32>,
     direct_gpu_slots:std::collections::BTreeSet<u64>,
     direct_gpu_removal_inflight:Option<u64>,
@@ -1045,14 +1045,15 @@ impl BridgeState {
                     if let Some(top)=self.xdg_shell.toplevel_surfaces().iter()
                         .find(|top|top.wl_surface()==&surface).cloned() {
                         // Keep the old texture until a matching configured buffer arrives.
-                        let width=rect.width.min(1274-rect.x);
-                        let height=rect.height.min(794-rect.y);
-                        if width>=96 && height>=72 && self.direct_gpu_layout.geometry(slot)
-                            .is_some_and(|old|(old.width,old.height)!=(width,height)) {
-                            top.with_pending_state(|pending|{pending.size=Some((width,height).into());});
-                            let serial=top.send_configure();
-                            self.gpu_resize_pending=Some((surface,serial,width,height,false));
-                            println!("MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE={slot} {width}x{height}");
+                        if let Some(InteractionKind::Resize(direction))=self.window_interaction.active_kind() {
+                            if let Some(target)=self.direct_gpu_layout.resize_target(slot,rect,direction) {
+                                top.with_pending_state(|pending|{
+                                    pending.size=Some((target.width,target.height).into());
+                                });
+                                let serial=top.send_configure();
+                                self.gpu_resize_pending=Some((surface,serial,target,false));
+                                println!("MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE={slot} {}x{}",target.width,target.height);
+                            }
                         }
                     }
                 }
@@ -2920,10 +2921,10 @@ impl CompositorHandler for BridgeState {
                         .as_deref()==Ok("YES_QEMU_VM");
                     let allowed=if multi_gpu {self.continuous_frame_count<12 ||
                          (self.gpu_resize_probe() && self.continuous_frame_count==19 &&
-                          self.gpu_resize_pending.as_ref().is_some_and(|(role,_,w,h,acked)|
+                          self.gpu_resize_pending.as_ref().is_some_and(|(role,_,rect,acked)|
                               role==surface && *acked &&
                               smithay::wayland::dmabuf::get_dmabuf(&buffer).is_ok_and(|dma|
-                                  dma.size().w==*w && dma.size().h==*h)))} else {
+                                  dma.size().w==rect.width && dma.size().h==rect.height)))} else {
                         melania_native::native_client_dmabuf::qemu_gpu_frame_allowed(
                             self.continuous_frame_count,true)
                     };
@@ -2957,18 +2958,25 @@ impl CompositorHandler for BridgeState {
                             return;
                         }
                     }
+                    let resize_target=if self.gpu_resize_probe() && self.continuous_frame_count==19 {
+                        self.gpu_resize_pending.take().map(|(_,_,rect,_)|rect)
+                    } else {None};
                     if multi_gpu {
                         let size=dmabuf.as_ref().expect("admitted DMA-BUF").size();
-                        if let Err(error)=self.direct_gpu_layout.update_buffer(slot,size.w,size.h) {
+                        let result=if let Some(rect)=resize_target {
+                            self.direct_gpu_layout.commit_resize(slot,rect,size.w,size.h)
+                        } else {
+                            self.direct_gpu_layout.update_buffer(slot,size.w,size.h).map(|_|())
+                        };
+                        if let Err(error)=result {
                             self.continuous_submission_failure.record(error.into());
                             return;
                         }
                     }
-                    if self.gpu_resize_probe() && self.continuous_frame_count==19 {
-                         self.gpu_resize_pending.take();
-                     }
-                     self.direct_gpu_slots.insert(slot);
-                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,DirectGpuUpdate::Buffer(buffer)));
+                    self.direct_gpu_slots.insert(slot);
+                    self.direct_gpu_pending=dmabuf.map(|buffer|(slot,if let Some(rect)=resize_target {
+                        DirectGpuUpdate::Resize{buffer,rect}
+                    } else {DirectGpuUpdate::Buffer(buffer)}));
                     self.multi_scene.note_external_gpu_frame();
                     self.note_scene_change();
                     if let Err(error)=self.submit_continuous_frame() {
@@ -3660,7 +3668,7 @@ impl XdgShellHandler for BridgeState {
         let Some(direction)=xdg_resize_direction(edge) else{return;};
         if self.gpu_resize_probe() {
             let surface=top.wl_surface();
-            if self.continuous_frame_count!=19 || direction!=ResizeDirection::BottomRight ||
+            if self.continuous_frame_count!=19 ||
                 !self.seat.owns(&seat) || !self.lifecycle.seat_active() ||
                 self.native_presentation_guard.permanently_revoked() ||
                 !self.pointer_buttons_held.contains(&0x110) ||
@@ -3786,7 +3794,7 @@ impl XdgShellHandler for BridgeState {
     fn ack_configure(&mut self,surface:WlSurface,configure:Configure) {
         if self.gpu_resize_probe() {
             if let Configure::Toplevel(ref ack)=configure {
-                if let Some((role,serial,_,_,accepted))=self.gpu_resize_pending.as_mut() {
+                if let Some((role,serial,_,accepted))=self.gpu_resize_pending.as_mut() {
                     if role==&surface && *serial==ack.serial && !*accepted {
                         *accepted=true;
                         println!("MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE_ACK=true");
@@ -3804,7 +3812,7 @@ impl XdgShellHandler for BridgeState {
     }
     fn toplevel_destroyed(&mut self,top:ToplevelSurface){
         let surface=top.wl_surface().clone();
-        if self.gpu_resize_pending.as_ref().is_some_and(|(role,_,_,_,_)|role==&surface) {self.gpu_resize_pending=None;}
+        if self.gpu_resize_pending.as_ref().is_some_and(|(role,_,_,_)|role==&surface) {self.gpu_resize_pending=None;}
         if self.gpu_forwarded_left.as_ref()==Some(&surface) {
             self.gpu_forwarded_left=None;
         }
