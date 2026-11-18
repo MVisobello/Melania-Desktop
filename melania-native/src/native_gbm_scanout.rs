@@ -881,11 +881,15 @@ fn qemu_gpu_scene_stream(
         smithay::backend::renderer::gles::GlesTexture,
         Option<smithay::backend::renderer::gles::GlesTexture>,
     )>::default();
-    // GLES texture destruction can be deferred by the renderer. Keep the
-    // retired source's backing alive across the next verified GPU draw,
-    // separately from the two live source imports. This adds at most one
-    // backing allocation, not another live imported texture.
-    let mut rolling_backing:Option<smithay::backend::allocator::dmabuf::Dmabuf>=None;
+    // Keeping only the retired backing did not prevent fifth-import
+    // EGLImage failure in the separate Smithay importer. Hold the full
+    // retired source across one additional verified draw/DRM receipt.
+    // At most three source bundles, including normalized textures.
+    let mut rolling_deferred:Option<(
+        smithay::backend::allocator::dmabuf::Dmabuf,
+        smithay::backend::renderer::gles::GlesTexture,
+        Option<smithay::backend::renderer::gles::GlesTexture>,
+    )>=None;
     let mut rolling_backing_peak=0usize;
     let mut rolling_retired=0usize;
     let mut rolling_peak=0usize;
@@ -1202,7 +1206,7 @@ fn qemu_gpu_scene_stream(
                     rolling_imports.stage(index+1,(buffer,texture,opaque_snapshot))?;
                     rolling_staged+=1;
                     rolling_peak=rolling_peak.max(rolling_imports.len());
-                    rolling_backing_peak=rolling_backing_peak.max(rolling_imports.len()+usize::from(rolling_backing.is_some()));
+                    rolling_backing_peak=rolling_backing_peak.max(rolling_imports.len()+usize::from(rolling_deferred.is_some()));
                     if rolling_backing_peak>3 {return Err("GPU source backing budget exceeded".into());}
                 } else {
                     if direct_import_lifetime.len()>=12 &&
@@ -1300,18 +1304,20 @@ fn qemu_gpu_scene_stream(
                 // At this point GLES completion and the real kernel route,
                 // connector, mode and framebuffer verification succeeded.
                 // Never evict an import on a failed submission/flip.
-                // Keep the previous retired backing until this subsequent
-                // GLES completion and DRM receipt. Drop textures before
-                // their backing; never purge the EGL cache mid-stream.
-                let mut next_backing=None;
-                let retired=rolling_imports.confirm_with(index+1,|(buffer,texture,normalized)|{
+                // Preserve the entire previous bundle, not only its FD.
+                // Drop normalized/imported textures before the backing,
+                // never purge the EGL cache in the live rendering loop.
+                let mut next_deferred=None;
+                let retired=rolling_imports.confirm_with(index+1,|source|{
+                    debug_assert!(next_deferred.is_none());
+                    next_deferred=Some(source);
+                })?;
+                if let Some((buffer,texture,normalized))=rolling_deferred.take() {
                     drop(normalized);
                     drop(texture);
-                    debug_assert!(next_backing.is_none());
-                    next_backing=Some(buffer);
-                })?;
-                drop(rolling_backing.take());
-                rolling_backing=next_backing;
+                    drop(buffer);
+                }
+                rolling_deferred=next_deferred;
                 rolling_retired+=retired;
                 if retired>0 {
                     println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED={} frame={}",retired,index+1);
@@ -1364,12 +1370,17 @@ fn qemu_gpu_scene_stream(
             println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED={rolling_staged}");
             println!("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE={rolling_retired}");
             println!("MELANIA_NATIVE_GPU_ROLLING_BACKINGS_PEAK={rolling_backing_peak}");
+            println!("MELANIA_NATIVE_GPU_ROLLING_SOURCE_BUNDLES_PEAK={rolling_backing_peak}");
             rolling_imports.clear_after_restore_with(|(buffer,texture,normalized)|{
                 drop(normalized);
                 drop(texture);
                 final_backings.push(buffer);
             });
-            if let Some(backing)=rolling_backing.take() {final_backings.push(backing);}
+            if let Some((buffer,texture,normalized))=rolling_deferred.take() {
+                drop(normalized);
+                drop(texture);
+                final_backings.push(buffer);
+            }
             if final_backings.len()>2 {return Err("GPU final backing budget exceeded".into());}
         }
         normalized_gpu_sources.clear();
