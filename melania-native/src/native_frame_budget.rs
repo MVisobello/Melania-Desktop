@@ -69,7 +69,8 @@ pub fn direct_gpu_move_budget_matches(multi:Option<&str>,motion:Option<&str>,fra
         Some("LIVE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("15"),
         Some("VISIBILITY_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("17"),
         Some("STACK_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("19"),
-        Some("RESIZE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("20"),_=>false}
+        Some("RESIZE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("20"),
+        Some("LIVE_RESIZE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("21"),_=>false}
 }
 
 impl std::fmt::Display for FrameBudgetError {
@@ -98,6 +99,9 @@ mod tests {
     fn drag_budget_requires_exact_retained_opt_in() {
         assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("STACK_QEMU_VM"),Some("19")));
         assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("RESIZE_QEMU_VM"),Some("20")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_RESIZE_QEMU_VM"),Some("21")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_RESIZE_QEMU_VM"),Some("20")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("LIVE_RESIZE_QEMU_VM"),Some("21")));
         assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("RESIZE_QEMU_VM"),Some("19")));
         assert!(!direct_gpu_move_budget_matches(None,Some("RESIZE_QEMU_VM"),Some("20")));
         assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("STACK_QEMU_VM"),Some("20")));

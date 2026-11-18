@@ -73,7 +73,7 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "xdg_wm_base"=>state.wm=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_shm"=>state.shm=Some(registry.bind(name,version.min(1),qh,())),
                 "wl_output"=>state.output=Some(registry.bind(name,version.min(3),qh,())),
-                "wl_seat" if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM")) =>
+                "wl_seat" if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) =>
                     state.gpu_seat=Some(registry.bind(name,version.min(5),qh,())),
                 "zwp_linux_dmabuf_v1" if
                     std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
@@ -120,7 +120,7 @@ impl Dispatch<wl_pointer::WlPointer,()> for Client {
                 if let Some(surface)=state.gpu_pointer_focus.clone() {
                     state.gpu_buttons.push((surface.clone(),pressed));
                     if pressed && state.gpu_move_requested && !state.gpu_resize_requested &&
-                        state.gpu_buttons.len()==7 && std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("RESIZE_QEMU_VM") {
+                        state.gpu_buttons.len()==7 && std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE") .as_deref().is_ok_and(|mode|matches!(mode,"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
                         if let (Some((target,top)),Some(seat))=(&state.gpu_move_target,&state.gpu_seat) {
                             if target==&surface {
                                 top.resize(seat,serial,xdg_toplevel::ResizeEdge::BottomRight);
@@ -562,7 +562,7 @@ fn exercise_real_client_dmabuf(
         // The BO and its associated import may only be reused/dropped
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
-    if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("RESIZE_QEMU_VM") {
+    if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE") .as_deref().is_ok_and(|mode|matches!(mode,"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
         state.dmabuf=Some(dmabuf);
     } else {dmabuf.destroy();}
     if let Some(surface_sync)=surface_sync {surface_sync.destroy();}
@@ -572,16 +572,21 @@ fn exercise_real_client_dmabuf(
 }
 
 fn submit_gpu_resize_buffer(state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
-    qh:&QueueHandle<Client>,surface:&wl_surface::WlSurface)->Result<(),Box<dyn Error>> {
+    qh:&QueueHandle<Client>,surface:&wl_surface::WlSurface,intermediate:bool)->Result<(),Box<dyn Error>> {
+    let live=std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_RESIZE_QEMU_VM");
+    let expected_buttons=if intermediate {7} else {8};
+    let expected_callbacks=if live && !intermediate {14} else {13};
     let deadline=Instant::now()+Duration::from_secs(20);
-    while !state.gpu_resize_configured || state.gpu_buttons.len()!=8 {
+    while !state.gpu_resize_configured || state.gpu_buttons.len()!=expected_buttons {
         queue.roundtrip(state)?;
         if Instant::now()>=deadline {return Err("GPU resize missing real configure/ACK or release".into());}
         thread::sleep(Duration::from_millis(10));
     }
-    let (w,h)=state.gpu_resize_size.ok_or("missing GPU resize dimensions")?;
-    if (w-466).abs()>3 || (h-280).abs()>3 {return Err("unexpected GPU resize configure size".into());}
-    let dmabuf=state.dmabuf.take().ok_or("missing resize DMA-BUF global")?;
+    let (w,h)=state.gpu_resize_size.take().ok_or("missing GPU resize dimensions")?;
+    state.gpu_resize_configured=false;
+    let (expected_w,expected_h)=if intermediate {(446,268)} else {(466,280)};
+    if (w-expected_w).abs()>3 || (h-expected_h).abs()>3 {return Err("unexpected GPU resize configure size".into());}
+    let dmabuf=state.dmabuf.as_ref().cloned().ok_or("missing resize DMA-BUF global")?;
     let file=OpenOptions::new().read(true).write(true).open("/dev/dri/card0")?;
     let card=DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file)));
     let gbm=GbmDevice::new(card)?;
@@ -595,7 +600,8 @@ fn submit_gpu_resize_buffer(state:&mut Client,queue:&mut wayland_client::EventQu
     {
         let mut target=renderer.bind(&mut image)?;
         let mut frame=renderer.render(&mut target,(w,h).into(),Transform::Normal)?;
-        frame.clear(Color32F::new(0.8,0.4,0.2,1.0),&[Rectangle::from_size((w,h).into())])?;
+        let color=if intermediate {Color32F::new(0.2,0.6,0.8,1.0)} else {Color32F::new(0.8,0.4,0.2,1.0)};
+        frame.clear(color,&[Rectangle::from_size((w,h).into())])?;
         frame.finish()?.wait()?;
     }
     let params=dmabuf.create_params(qh,());
@@ -612,15 +618,21 @@ fn submit_gpu_resize_buffer(state:&mut Client,queue:&mut wayland_client::EventQu
     surface.damage_buffer(0,0,w,h);
     surface.commit();
     let deadline=Instant::now()+Duration::from_secs(10);
-    while !state.buffer_released || state.frame_done_count!=13 {
+    while !state.buffer_released || state.frame_done_count!=expected_callbacks {
         queue.roundtrip(state)?;
         if Instant::now()>=deadline {return Err("resize DMA-BUF missing verified callback/release".into());}
         thread::sleep(Duration::from_millis(10));
     }
     buffer.destroy();
     params.destroy();
-    dmabuf.destroy();
-    println!("MELANIA_QEMU_GPU_XDG_RESIZE_CLIENT_ACKED=true");
+    if intermediate {
+        if state.gpu_buttons.len()!=7 {return Err("client received release before intermediate resize ACK".into());}
+        println!("MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_CLIENT_HELD_ACKED=true");
+        std::io::stdout().flush()?;
+    } else {
+        state.dmabuf.take().ok_or("missing final resize global")?.destroy();
+        println!("MELANIA_QEMU_GPU_XDG_RESIZE_CLIENT_ACKED=true");
+    }
     Ok(())
 }
 
@@ -641,7 +653,7 @@ fn main()->Result<(),Box<dyn Error>> {
     // This fixture binds the actual seat, not an in-process focus observer.
     let _gpu_keyboard=state.gpu_seat.as_ref().map(|seat|seat.get_keyboard(&qh,()));
     let _gpu_pointer=state.gpu_seat.as_ref().map(|seat|seat.get_pointer(&qh,()));
-    if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM")) &&
+    if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) &&
         (_gpu_keyboard.is_none() || _gpu_pointer.is_none()) {
         return Err("GPU focus probe missing real seat devices".into());
     }
@@ -711,7 +723,7 @@ fn main()->Result<(),Box<dyn Error>> {
             }
             if state.frame_done_count!=12 {return Err("GPU close fabricated a client frame callback".into());}
             println!("MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_ACKED=true");
-            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("YES_QEMU_VM"|"LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM")) {
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("YES_QEMU_VM"|"LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
                 let deadline=Instant::now()+Duration::from_secs(20);
                 loop {
                     queue.roundtrip(&mut state)?;
@@ -723,7 +735,7 @@ fn main()->Result<(),Box<dyn Error>> {
                 if state.frame_done_count!=12 {return Err("GPU drag fabricated callback".into());}
                 println!("MELANIA_QEMU_RETAINED_GPU_REAL_DRAG_ACKED=true");
             }
-            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM")) {
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
                 let deadline=Instant::now()+Duration::from_secs(20);
                 loop {
                     queue.roundtrip(&mut state)?;
@@ -735,7 +747,7 @@ fn main()->Result<(),Box<dyn Error>> {
                 if state.frame_done_count!=12 {return Err("GPU visibility fabricated callback".into());}
                 println!("MELANIA_QEMU_RETAINED_GPU_VISIBILITY_ACKED=true");
             }
-            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM")) {
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
                 let deadline=Instant::now()+Duration::from_secs(20);
                 loop {
                     queue.roundtrip(&mut state)?;
@@ -769,9 +781,12 @@ fn main()->Result<(),Box<dyn Error>> {
                 println!("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_VERIFIED=true");
                 println!("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true");
                 println!("MELANIA_QEMU_RETAINED_GPU_RAISE_ACKED=true");
-                if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("RESIZE_QEMU_VM") {
+                if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE") .as_deref().is_ok_and(|mode|matches!(mode,"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
                     std::io::stdout().flush()?;
-                    submit_gpu_resize_buffer(&mut state,&mut queue,&qh,&surface)?;
+                    if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_RESIZE_QEMU_VM") {
+                        submit_gpu_resize_buffer(&mut state,&mut queue,&qh,&surface,true)?;
+                    }
+                    submit_gpu_resize_buffer(&mut state,&mut queue,&qh,&surface,false)?;
                 }
             }
             for (s,x,t) in extra {
