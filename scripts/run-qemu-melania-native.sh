@@ -441,6 +441,7 @@ if [[ "$retained_drag_code" -ne 0 || "$qemu_code" -ne 0 || "$capture_code" -ne 0
     ! grep -q '^MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_PERSISTENT_DIRECT_GPU_48_CLIENT_4_REMOVAL_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_MIXED_GPU_36_DMA_12_SHM_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_GESTURE_SENT=true' "$report/qmp-retained-drag.log" ||
@@ -708,6 +709,16 @@ done
 for slot in 1 2 3 4; do
   [[ "$(grep -c "^MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED=$slot[[:space:]]*$" "$serial")" == 1 ]] ||
     deny "missing/duplicate persistent direct GPU removal receipt $slot"
+done
+# Independently require the distinct mixed-source proof per real commit.
+for index in $(seq 1 48); do
+  if ((index%4==3)); then
+    [[ "$(grep -c "^MELANIA_QEMU_MIXED_SHM_VERIFIED=$index[[:space:]]*$" "$serial")" == 1 ]] ||
+      deny "missing/duplicate mixed SHM receipt $index"
+  else
+    [[ "$(grep -c "^MELANIA_QEMU_MIXED_DMA_VERIFIED=$index[[:space:]]*$" "$serial")" == 1 ]] ||
+      deny "missing/duplicate mixed DMA-BUF receipt $index"
+  fi
 done
 # Require a consistent kernel capability and actual wire protocol result.
 # An unsupported driver remains a valid general-regression environment,

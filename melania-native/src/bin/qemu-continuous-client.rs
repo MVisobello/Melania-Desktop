@@ -259,6 +259,7 @@ fn exercise_real_client_dmabuf(
     qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
     xdg_surface:&wl_surface::WlSurface,
     extra_surfaces:&[wl_surface::WlSurface],
+    shm:&wl_shm::WlShm,
 )->Result<(),Box<dyn Error>> {
     let dmabuf=state.dmabuf.take()
         .ok_or("QEMU Smithay server did not advertise zwp_linux_dmabuf_v1")?;
@@ -289,6 +290,12 @@ fn exercise_real_client_dmabuf(
     if persistent_gpu && (!multi_gpu || !gpu_kms || !double_gpu ||
         std::env::var_os("MELANIA_QEMU_DIRECT_GPU_MOVE").is_some()) {
         return Err("persistent direct GPU client requires four retained roles without finite input fixture".into());
+    }
+    let mixed_shm=std::env::var("MELANIA_QEMU_MIXED_SHM_GPU_CLIENT").as_deref()==Ok("YES_QEMU_VM");
+    if std::env::var_os("MELANIA_QEMU_MIXED_SHM_GPU_CLIENT").is_some() &&
+        (!mixed_shm || !persistent_gpu || !multi_gpu || !gpu_kms ||
+         std::env::var_os("MELANIA_QEMU_CLIENT_EXPLICIT_SYNC").is_some()) {
+        return Err("mixed SHM fixture requires persistent retained GPU client".into());
     }
     let gpu_frames:u32=if multi_gpu {12} else if double_gpu {2} else {1};
     let gpu_frames=if persistent_gpu {48} else {gpu_frames};
@@ -328,6 +335,57 @@ fn exercise_real_client_dmabuf(
             melania_native::window_placement::retained_gpu_probe_size(u64::from(fixture_index))
                 .ok_or("missing retained GPU fixture dimensions")?
         } else {(W as i32,H as i32)};
+        if mixed_shm && gpu_index%4==3 {
+            let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[fixture_index as usize];
+            let probe=if slot==1 {xdg_surface.clone()} else {extra_surfaces[(slot-2) as usize].clone()};
+            let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(fixture_index))
+                .ok_or("missing mixed SHM fixture color")?;
+            // Alternate genuine XRGB and premultiplied ARGB SHM sources.
+            // Padded rows make this a real wl_shm import, not a synthetic GPU clear.
+            let opaque=gpu_index%8==3;
+            let stride=gpu_w.checked_mul(4).and_then(|w|w.checked_add(16)).ok_or("mixed SHM stride overflow")?;
+            let mut pixels=vec![0u8;(stride*gpu_h) as usize];
+            for y in 0..gpu_h as usize {
+                let row=y*stride as usize;
+                for x in 0..gpu_w as usize {
+                    let i=row+x*4;
+                    let alpha=if opaque {0} else if x<32 && y<24 {128} else {255};
+                    let scale=if opaque {255} else {alpha};
+                    pixels[i..i+4].copy_from_slice(&[
+                        (u16::from(b)*u16::from(scale)/255) as u8,
+                        (u16::from(g)*u16::from(scale)/255) as u8,
+                        (u16::from(r)*u16::from(scale)/255) as u8,alpha,
+                    ]);
+                }
+            }
+            let path=format!("/run/melania-native-qemu/mixed-client-{}-{gpu_index}.bgra",std::process::id());
+            let mut file=OpenOptions::new().create_new(true).read(true).write(true).open(&path)?;
+            file.write_all(&pixels)?;
+            file.sync_all()?;
+            let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,qh,());
+            std::fs::remove_file(&path)?;
+            let buffer=pool.create_buffer(0,gpu_w,gpu_h,stride,
+                if opaque {wl_shm::Format::Xrgb8888} else {wl_shm::Format::Argb8888},qh,());
+            state.buffer_released=false;
+            let _callback=probe.frame(qh,());
+            probe.attach(Some(&buffer),0,0);
+            probe.damage_buffer(0,0,gpu_w,gpu_h);
+            probe.commit();
+            let deadline=Instant::now()+Duration::from_secs(10);
+            while !state.buffer_released || state.frame_done_count!=gpu_index {
+                queue.roundtrip(state)?;
+                if Instant::now()>=deadline {
+                    return Err("mixed retained SHM client missing GPU presentation or buffer release".into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            println!("MELANIA_QEMU_MIXED_SHM_CLIENT_ACK={gpu_index}");
+            println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED={gpu_index}");
+            std::io::stdout().flush()?;
+            buffer.destroy();
+            pool.destroy();
+            continue;
+        }
         let mut image=allocator.create_buffer(
             gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear],
         )?;
@@ -715,7 +773,7 @@ fn main()->Result<(),Box<dyn Error>> {
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
         .as_deref()==Ok("YES_QEMU_VM") {
         let extra_surfaces:Vec<_>=extra.iter().map(|(s,_,_)|s.clone()).collect();
-        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,&extra_surfaces)?;
+        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,&extra_surfaces,&shm)?;
         if std::env::var("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT").as_deref()==Ok("YES_QEMU_VM") {
             if state.frame_done_count!=48 {return Err("persistent GPU client did not complete 48 real callbacks".into());}
             // Destroy four roles in one client flush. The compositor must

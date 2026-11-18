@@ -416,6 +416,18 @@ class RealClientDmabufToKms(unittest.TestCase):
                        "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED"):
             self.assertIn(marker,stage)
 
+    def test_mixed_runtime_proof_separate_from_dma_only(self):
+        self.assertIn("mixed_shm && gpu_index%4==3",CLIENT)
+        self.assertIn("MELANIA_QEMU_MIXED_SHM_CLIENT_ACK={gpu_index}",CLIENT)
+        self.assertIn("MELANIA_NATIVE_RETAINED_SHM_GPU=YES_QEMU_VM",GUEST)
+        self.assertIn("run_persistent_direct_gpu_probe\nrun_mixed_retained_gpu_probe",GUEST)
+        self.assertIn("run_persistent_direct_gpu_probe\n    run_mixed_retained_gpu_probe",GUEST)
+        for marker in ("MELANIA_QEMU_MIXED_GPU_36_DMA_12_SHM_PASS=true",
+                       "MELANIA_QEMU_MIXED_SHM_VERIFIED",
+                       "MELANIA_QEMU_MIXED_DMA_VERIFIED"):
+            self.assertIn(marker,GUEST)
+            self.assertIn(marker,HOST)
+
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move",BRIDGE)
