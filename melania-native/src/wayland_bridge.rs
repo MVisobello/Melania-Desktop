@@ -2710,6 +2710,10 @@ impl DmabufHandler for BridgeState {
                 }
             }
             Err(error)=>{
+                use smithay::backend::allocator::Buffer;
+                let extent=dmabuf.size();
+                eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_CONTEXT=after_frame:{} registry:{} extent:{}x{} format:{:?}",
+                    self.continuous_frame_count,self.client_dmabuf_imports.len(),extent.w,extent.h,dmabuf.format());
                 eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_IMPORT_REFUSED={error}");
                 notifier.failed();
             }
