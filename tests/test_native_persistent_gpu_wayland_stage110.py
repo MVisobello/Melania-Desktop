@@ -17,8 +17,10 @@ class PersistentGpuWayland110(unittest.TestCase):
         self.assertIn("stream.set_read_timeout(if persistent {",body)
         self.assertIn("None\n    } else {\n        Some(Duration::from_secs(12))",body)
         self.assertIn("if !persistent && frames_seen>=total {break;}",body)
-        self.assertIn("if direct_mode && persistent",body)
+        self.assertIn("persistent_direct_gpu_mode_matches(",body)
+        self.assertIn("direct_mode && persistent && !persistent_direct",body)
         self.assertIn("direct client GPU proof cannot enter persistent mode",body)
+        self.assertIn("!persistent_direct || !direct_mode",body)
         self.assertIn("let total=if multi_gpu {13u64} else if direct_mode {12u64} else {24u64};",body)
         # Idle is unlimited until a real header begins, but a hung/trickled
         # GPU image cannot retain the DRM/GBM CRTC beyond the deadline.
