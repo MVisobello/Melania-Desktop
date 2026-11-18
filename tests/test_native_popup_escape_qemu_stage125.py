@@ -122,11 +122,15 @@ class RealUsbPopupEscapeStage125(unittest.TestCase):
     def test_close_redraws_orphan_popup_even_without_parent_scene_slot(self):
         lifecycle=BRIDGE[BRIDGE.index("fn toplevel_destroyed(&mut self"):]
         close=lifecycle[:lifecycle.index("fn grab(&mut self")]
-        self.assertIn("let parent_key=self.known_window_surfaces.remove(&surface);",close)
+        self.assertIn("let parent_key=if reserve_gpu_slot {",close)
+        self.assertIn("self.known_window_surfaces.begin_retirement(&surface)",close)
+        self.assertIn("self.known_window_surfaces.remove(&surface)",close)
         self.assertIn("} else {false};",close)
         self.assertIn("if removed || popup_damage || gpu_removed {",close)
         self.assertLess(close.index("let popup_damage=self.evict_native_popup_tree("),
-                        close.index("let parent_key=self.known_window_surfaces.remove("))
+                        close.index("let parent_key=if reserve_gpu_slot {"))
+        self.assertLess(close.index("let parent_key=if reserve_gpu_slot {"),
+                        close.index("self.known_window_surfaces.remove(&surface)"))
         self.assertLess(close.index("if removed || popup_damage || gpu_removed {"),
                         close.index("if let Some(key)=parent_key {",close.index("if removed || popup_damage || gpu_removed {")))
         self.assertLess(close.index("self.note_scene_change();"),

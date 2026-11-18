@@ -95,6 +95,27 @@ impl<T:PartialEq> WindowSlots<T> {
     }
 }
 
+/// Bounded FIFO of destroyed GPU role IDs awaiting their own removal job.
+/// The separate WindowSlots reservation survives dequeue and only ends at ACK.
+#[derive(Debug,Default)]
+pub struct GpuRemovalQueue {
+    waiting:std::collections::VecDeque<u64>,
+}
+impl GpuRemovalQueue {
+    pub fn enqueue(&mut self,id:u64)->Result<(),SlotError> {
+        if id==0 || id>MAX_DYNAMIC_SLOTS as u64 {return Err(SlotError::InvalidCapacity);}
+        if self.waiting.contains(&id) {return Ok(());}
+        if self.waiting.len()>=MAX_DYNAMIC_SLOTS {return Err(SlotError::CapacityExceeded);}
+        self.waiting.push_back(id);
+        Ok(())
+    }
+    pub fn pop(&mut self)->Option<u64> {self.waiting.pop_front()}
+    pub fn is_empty(&self)->bool {self.waiting.is_empty()}
+    pub fn len(&self)->usize {self.waiting.len()}
+    /// Only for permanent epoch revocation, never a successful role ACK.
+    pub fn revoke(&mut self) {self.waiting.clear();}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +199,39 @@ mod tests {
             assert_eq!(slots.retiring_count(),0);
             owner=next;
         }
+    }
+    #[test]
+    fn concurrent_gpu_removals_are_serialized_without_reusing_unacked_ids() {
+        let mut slots=WindowSlots::with_capacity(16).unwrap();
+        let mut queue=GpuRemovalQueue::default();
+        for id in 1..=16 {assert_eq!(slots.register(id),Ok(id));}
+        for id in 1..=16 {
+            assert_eq!(slots.begin_retirement(&id),Some(id));
+            queue.enqueue(id).unwrap();
+            queue.enqueue(id).unwrap(); // duplicate event is idempotent
+        }
+        assert_eq!(queue.len(),16);
+        assert!(queue.enqueue(0).is_err());
+        assert!(queue.enqueue(17).is_err());
+        for id in 1..=16 {
+            assert_eq!(queue.pop(),Some(id));
+            assert!(slots.is_retiring(id));
+            assert!(slots.finish_retirement(id));
+            assert_eq!(slots.register(id+16),Ok(id));
+        }
+        assert!(queue.is_empty());
+        assert_eq!(slots.live_count(),16);
+    }
+    #[test]
+    fn removal_queue_revocation_does_not_release_slot_reservation() {
+        let mut slots=WindowSlots::default();
+        slots.register(1).unwrap();
+        let id=slots.begin_retirement(&1).unwrap();
+        let mut queue=GpuRemovalQueue::default();
+        queue.enqueue(id).unwrap();
+        queue.revoke();
+        assert!(queue.is_empty());
+        assert!(slots.is_retiring(id));
     }
     #[test]
     fn invalid_ids_and_unknown_surfaces_fail_closed() {

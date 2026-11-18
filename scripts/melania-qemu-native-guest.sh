@@ -308,6 +308,8 @@ run_retained_gpu_probe() {
       'MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=13 windows=3' \
       'MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=13' \
       'MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK=2' \
+      'MELANIA_NATIVE_GPU_ROLE_SLOT_RESERVED=2' \
+      'MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=2' \
       'MELANIA_NATIVE_RETAINED_GPU_CLOSE_13_FRAMES_PASS=true'; do
       grep -Fqx "$marker" "$retained_gpu_client_server_log" ||
         fatal "retained_gpu_close_missing_$marker"

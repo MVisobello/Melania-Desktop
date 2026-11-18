@@ -68,7 +68,7 @@ use smithay::{
 use melania_native::layer_surface_layout::{self,Anchors,Insets,LayerRequest,ShellLayer};
 use melania_native::gtk_layer_geometry;
 use melania_native::scene::Layer as SceneLayer;
-use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::ClientCommitLedger,multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels,WindowBatchUpdate},window_slots::WindowSlots,async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
+use melania_native::{NativeLifecycle,DeviceChange,native_gpu_watch::NativeGpuWatch,render_scheduler::{FrameTicket,RenderScheduler},continuous_redraw::{ContinuousRedraw,PlannedSceneFrame},continuous_kms_stream::{ContinuousKmsWorker,ContinuousKmsJob},client_commit_ledger::ClientCommitLedger,multi_window_scene::MultiWindowScene,dynamic_window_scene::{DynamicWindowScene,WindowPixels,WindowBatchUpdate},window_slots::{WindowSlots,GpuRemovalQueue},async_kms_stream::{AsyncKmsWorker,FrameJob},window_interaction::{WindowInteraction,WindowRect,InteractionKind,ResizeDirection},managed_window::{ManagedWindow,WindowDisplayState,DownShortcutAction}};
 use smithay::backend::input::Device as InputDevice;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use crate::{native_client_frame,qemu_continuous_receiver};
@@ -192,6 +192,7 @@ struct BridgeState {
     gpu_forwarded_keys:BTreeSet<u32>,
     direct_gpu_slots:std::collections::BTreeSet<u64>,
     direct_gpu_removal_inflight:Option<u64>,
+    direct_gpu_removal_queue:GpuRemovalQueue,
     // GTK4's GDK Wayland backend requires wl_data_device_manager even
     // before it creates its first layer-shell window. This is a protocol
     // global, NOT proof of native clipboard/DnD integration or login.
@@ -477,6 +478,19 @@ impl BridgeState {
                 return Ok(());
             }
         }
+        // Persistent mode serializes each queued role removal into its own
+        // scene generation. Existing finite proof scheduling is unchanged.
+        if self.persistent_kms_mode && self.direct_gpu_sender.is_some() &&
+            self.direct_gpu_pending.is_none() {
+            if let Some(slot)=self.direct_gpu_removal_queue.pop() {
+                if !self.known_window_surfaces.is_retiring(slot) {
+                    return Err("queued GPU removal lost reserved role".into());
+                }
+                self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove));
+                self.multi_scene.note_external_gpu_frame();
+                self.note_scene_change();
+            }
+        }
         let Some(planned)=self.continuous_redraw.next_frame() else {return Ok(());};
         let generation=if self.dynamic_window_mode {
             self.dynamic_scene.generation()
@@ -489,6 +503,12 @@ impl BridgeState {
         }
         if let Some((slot,dmabuf))=self.direct_gpu_pending.take() {
             let removal=matches!(&dmabuf,DirectGpuUpdate::Remove);
+            // Do not submit a removal of an identity that is already free
+            // for reuse. The real, matched worker receipt is its only release.
+            if removal && !self.known_window_surfaces.is_retiring(slot) {
+                self.continuous_redraw.failed(planned);
+                return Err("GPU removal submitted without reserved role slot".into());
+            }
             let movement=match &dmabuf {DirectGpuUpdate::Move{x,y}=>Some((slot,*x,*y)),_=>None};
             let visibility=match &dmabuf {DirectGpuUpdate::Visibility{visible}=>Some((slot,*visible)),_=>None};
             let raise=matches!(&dmabuf,DirectGpuUpdate::Raise).then_some(slot);
@@ -789,13 +809,23 @@ impl BridgeState {
             self.gpu_resize_flush();
         }
         if let Some(slot)=self.direct_gpu_removal_inflight.take() {
-            if self.continuous_frame_count!=13 || slot!=2 ||
+            if (!self.persistent_kms_mode &&
+                (self.continuous_frame_count!=13 || slot!=2 || self.frame_callback_count!=12)) ||
                self.known_window_surfaces.get(slot).is_some() ||
-               self.frame_callback_count!=12 {
+               !self.known_window_surfaces.is_retiring(slot) {
                 return Err("retained GPU close ACK inconsistent with live role or callback ledger".into());
             }
-            publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))?;
-            println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK={slot}");
+            // poll_continuous_kms has already verified the active libseat
+            // epoch, exact ticket, worker receipt and redraw generation.
+            // Never recycle a slot on submission, timeout or failed ACK.
+            if !self.known_window_surfaces.finish_retirement(slot) {
+                return Err("GPU role retirement receipt lost reservation".into());
+            }
+            println!("MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK={slot}");
+            if !self.persistent_kms_mode {
+                publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))?;
+                println!("MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK={slot}");
+            }
         }
         if let Some((slot,x,y))=self.direct_gpu_move_inflight.take() {
             let live=self.gpu_live_drag_probe();
@@ -2664,6 +2694,7 @@ fn revoke_client_dmabuf_gpu(state:&mut BridgeState) {
     state.gpu_resize_pending.take();
     state.gpu_resize_latest=None;
     state.direct_gpu_pending.take();
+    state.direct_gpu_removal_queue.revoke();
     state.direct_gpu_sender.take();
     // Cancel transactions BEFORE timeline invalidation wakes eventfds.
     for (_,gate,_) in state.explicit_acquires.drain(..) {gate.cancel();}
@@ -3903,15 +3934,26 @@ impl XdgShellHandler for BridgeState {
         // still mapped, and one child cannot trigger an intermediate KMS
         // present while siblings are still being removed.
         let popup_damage=self.evict_native_popup_tree(&surface,true,true);
-        let parent_key=self.known_window_surfaces.remove(&surface);
+        // The existing finite retained scene has a real removal frame.
+        // Reserve its slot before removing the role from lookup/focus, so
+        // another surface cannot reuse the GPU ID while removal is queued.
+        let reserve_gpu_slot=self.known_window_surfaces.id_of(&surface)
+            .is_some_and(|slot|self.direct_gpu_slots.contains(&slot)) &&
+            std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM") &&
+            (self.persistent_kms_mode ||
+             self.continuous_frame_count + u64::from(self.continuous_inflight.is_some()) < self.continuous_frame_target);
+        let parent_key=if reserve_gpu_slot {
+            self.known_window_surfaces.begin_retirement(&surface)
+        } else {
+            self.known_window_surfaces.remove(&surface)
+        };
         // GPU-owned content does not live in the CPU multi_scene. A real
         // destroyed XDG role must explicitly retire its independent texture.
         let mut gpu_removed=false;
         if let Some(slot)=parent_key {
-            if self.direct_gpu_slots.remove(&slot) &&
-                std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").as_deref()==Ok("YES_QEMU_VM") &&
-                self.continuous_frame_count + u64::from(self.continuous_inflight.is_some()) < self.continuous_frame_target {
-                if self.direct_gpu_pending.is_some() {
+            if self.direct_gpu_slots.remove(&slot) && reserve_gpu_slot {
+                println!("MELANIA_NATIVE_GPU_ROLE_SLOT_RESERVED={slot}");
+                if !self.persistent_kms_mode && self.direct_gpu_pending.is_some() {
                     self.continuous_submission_failure.record("GPU removal collided with queued scene operation".into());
                     return;
                 }
@@ -3920,8 +3962,18 @@ impl XdgShellHandler for BridgeState {
                     self.continuous_submission_failure.record("missing GPU layout during removal".into());
                     return;
                 }
-                self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove));
-                self.multi_scene.note_external_gpu_frame();
+                if self.persistent_kms_mode {
+                    // A previously submitted or queued update keeps its
+                    // original order. The closing role is already invisible
+                    // to input and cannot be reused until its removal ACK.
+                    if self.direct_gpu_removal_queue.enqueue(slot).is_err() {
+                        self.continuous_submission_failure.record("GPU removal queue exceeded capacity".into());
+                        return;
+                    }
+                } else {
+                    self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove));
+                    self.multi_scene.note_external_gpu_frame();
+                }
                 gpu_removed=true;
             }
         }
@@ -5017,6 +5069,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
         client_dmabuf_imports:Vec::new(),
         direct_gpu_sender:None,direct_gpu_pending:None,
         direct_gpu_slots:Default::default(),direct_gpu_removal_inflight:None,
+        direct_gpu_removal_queue:Default::default(),
         direct_gpu_layout:Default::default(),direct_gpu_move_inflight:None,
         direct_gpu_visibility_inflight:None,direct_gpu_selected:None,direct_gpu_raise_inflight:None,
         gpu_forwarded_left:None,gpu_forwarded_keys:BTreeSet::new(),gpu_resize_pending:None,gpu_resize_latest:None,

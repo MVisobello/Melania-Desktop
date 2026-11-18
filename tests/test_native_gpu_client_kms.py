@@ -314,6 +314,35 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(poll.index("continuous_redraw.presented(planned)"),
                         poll.index('publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))'))
 
+    def test_gpu_slot_retirement_is_bound_to_real_removal_ticket(self):
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1].split("fn grab(&mut self",1)[0]
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        poll=BRIDGE.split("fn poll_continuous_kms(",1)[1].split("fn begin_generation_proof(",1)[0]
+        self.assertLess(close.index("begin_retirement(&surface)"),
+                        close.index("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove))"))
+        self.assertLess(submit.index("if removal && !self.known_window_surfaces.is_retiring(slot)"),
+                        submit.index("sender.try_send((planned,slot,dmabuf))"))
+        released=poll.index("finish_retirement(slot)")
+        for check in ("self.native_presentation_guard.accepts(ticket", "reply.planned!=planned",
+                      "if let Err(error)=reply.status", "continuous_redraw.presented(planned)",
+                      "self.direct_gpu_removal_inflight.take()"):
+            self.assertLess(poll.index(check),released)
+        self.assertIn("MELANIA_NATIVE_GPU_ROLE_SLOT_RESERVED=2",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=2",GUEST)
+
+    def test_persistent_gpu_removals_are_dequeued_as_separate_generations(self):
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1].split("fn grab(&mut self",1)[0]
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        self.assertLess(close.index("begin_retirement(&surface)"),
+                        close.index("direct_gpu_removal_queue.enqueue(slot)"))
+        self.assertLess(submit.index("direct_gpu_removal_queue.pop()"),
+                        submit.index("continuous_redraw.next_frame()"))
+        self.assertIn("is_retiring(slot)",submit)
+        self.assertIn("state.direct_gpu_removal_queue.revoke()",BRIDGE)
+        # No persistent producer activation until the client commit queue,
+        # repeated buffer use and shutdown are integrated.
+        self.assertIn("state.gtk_layer_mode || persistent_kms ||",BRIDGE)
+
     def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
         gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
         self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move",BRIDGE)
