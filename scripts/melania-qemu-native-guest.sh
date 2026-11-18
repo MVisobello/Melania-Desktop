@@ -381,7 +381,8 @@ run_retained_gpu_probe() {
     if grep -Fq 'MELANIA_NATIVE_CLIENT_DMABUF_GPU_PIXELS_READBACK=' "$retained_gpu_client_server_log"; then
       fatal 'retained_gpu_client_used_forbidden_cpu_staging'
     fi
-    for marker in 'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2' \
+    for marker in 'MELANIA_NATIVE_GPU_INDEPENDENT_NON_MASTER_IMPORTER=true' \
+      'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2' \
       'MELANIA_NATIVE_GPU_ROLLING_BACKINGS_PEAK=3' \
       'MELANIA_NATIVE_GPU_ROLLING_SOURCE_BUNDLES_PEAK=3' \
       'MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED=14' \
