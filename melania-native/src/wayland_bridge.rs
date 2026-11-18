@@ -3034,6 +3034,12 @@ impl CompositorHandler for BridgeState {
                 }
                 let gpu_client_kms=std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS")
                     .as_deref()==Ok("YES_QEMU_VM");
+                if self.persistent_kms_mode && self.direct_gpu_sender.is_some() && !dma_buffer {
+                    // This experimental direct-only backend cannot mix
+                    // CPU SHM or layers into its retained GLES scene.
+                    buffer.release();
+                    return;
+                }
                 if dma_buffer && !gpu_client_kms {
                     self.client_dmabuf_imports.retain(|(known,_)|known!=&buffer);
                     eprintln!("MELANIA_NATIVE_CLIENT_DMABUF_NOT_PRESENTED=true");
@@ -5582,6 +5588,25 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     let integrated_kms=std::env::var("MELANIA_NATIVE_IN_PROCESS_KMS")
         .as_deref()==Ok("YES_QEMU_VM");
     let persistent_kms=state.persistent_kms_mode;
+    let persistent_direct=native_frame_budget::persistent_direct_gpu_mode_matches(
+        std::env::var("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_PERSISTENT_KMS").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_PERSISTENT_GPU_WAYLAND").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE").ok().as_deref(),
+        std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_QEMU_FRAME_TARGET").ok().as_deref(),
+        std::env::var("MELANIA_NATIVE_GPU_ROLLING_RETIRE").ok().as_deref(),
+    );
+    if std::env::var_os("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU").is_some() &&
+        (!persistent_direct || !integrated_kms ||
+         std::env::var("MELANIA_NATIVE_DIRECT_CLIENT_GBM").as_deref()!=Ok("YES_QEMU_VM") ||
+         std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_KMS").as_deref()!=Ok("YES_QEMU_VM") ||
+         std::env::var("MELANIA_NATIVE_GPU_WAYLAND_KMS").as_deref()!=Ok("YES_DISPOSABLE_QEMU") ||
+         state.managed_xdg_mode || state.gtk_layer_mode || state.layer_pixels_mode ||
+         std::env::var_os("MELANIA_NATIVE_EXPLICIT_SYNC").is_some()) {
+        return Err("persistent direct GPU requires isolated QEMU retained DMA-BUF session".into());
+    }
     // The server may announce zwp_linux_dmabuf_v1 ONLY in this explicit
     // disposable VM GPU-import experiment, never on a generic shell probe
     // or a physical host that still falls back to labwc.
@@ -5598,15 +5623,15 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if gpu_client_kms && (
         !client_dmabuf_probe || !integrated_kms ||
         state.dynamic_window_mode || state.multi_window_mode ||
-        state.continuous_frame_target!=if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
+        (!persistent_direct && state.continuous_frame_target!=if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
             .as_deref()==Ok("LIVE_RESIZE_QEMU_VM") {21} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
             .as_deref()==Ok("RESIZE_QEMU_VM") {20} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
             .as_deref()==Ok("STACK_QEMU_VM") {19} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
             .as_deref()==Ok("VISIBILITY_QEMU_VM") {17} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
             .as_deref()==Ok("LIVE_QEMU_VM") {15} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MOVE")
             .as_deref()==Ok("YES_QEMU_VM") {14} else if std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")
-            .as_deref()==Ok("YES_QEMU_VM") {13} else {12} || state.layer_pixels_mode ||
-        state.gtk_layer_mode || persistent_kms ||
+            .as_deref()==Ok("YES_QEMU_VM") {13} else {12}) || state.layer_pixels_mode ||
+        state.gtk_layer_mode || (persistent_kms && !persistent_direct) ||
         !state.frame_callbacks_probe
     ) {
         return Err("QEMU client DMA-BUF KMS requires the exact single-output 12-frame isolated experiment".into());
@@ -5616,7 +5641,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
     if std::env::var_os("MELANIA_NATIVE_DIRECT_CLIENT_GBM").is_some() &&
        (!direct_gpu || !gpu_client_kms ||
         std::env::var("MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU").as_deref()!=Ok("YES_QEMU_VM") ||
-        std::env::var_os("MELANIA_NATIVE_GPU_WAYLAND_KMS").is_some()) {
+        (!persistent_direct && std::env::var_os("MELANIA_NATIVE_GPU_WAYLAND_KMS").is_some())) {
         return Err("direct client GBM requires the isolated two-GPU 12-frame mode".into());
     }
     if std::env::var_os("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW").is_some() &&
@@ -5657,6 +5682,7 @@ pub fn run() -> Result<(),Box<dyn Error>> {
             signal_hook::flag::register(signal,shutdown_flag.clone())?;
         }
         println!("MELANIA_NATIVE_PERSISTENT_KMS_STARTED=true");
+        if persistent_direct {println!("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STARTED=true");}
     }
     if integrated_kms && (
         !state.continuous_kms_mode || !state.live_stream ||

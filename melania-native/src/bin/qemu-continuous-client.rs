@@ -284,7 +284,14 @@ fn exercise_real_client_dmabuf(
     let multi_gpu=!extra_surfaces.is_empty();
     if multi_gpu && extra_surfaces.len()!=3 {return Err("GPU probe requires four XDG surfaces".into());}
     if multi_gpu && !double_gpu {return Err("retained GPU client needs both formats".into());}
+    let persistent_gpu=std::env::var("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if persistent_gpu && (!multi_gpu || !gpu_kms || !double_gpu ||
+        std::env::var_os("MELANIA_QEMU_DIRECT_GPU_MOVE").is_some()) {
+        return Err("persistent direct GPU client requires four retained roles without finite input fixture".into());
+    }
     let gpu_frames:u32=if multi_gpu {12} else if double_gpu {2} else {1};
+    let gpu_frames=if persistent_gpu {48} else {gpu_frames};
 
     // VirtIO's GBM allocator uses DRM_IOCTL_MODE_CREATE_DUMB on the
     // unprivileged primary device. It never acquires DRM_MASTER; only the
@@ -306,13 +313,19 @@ fn exercise_real_client_dmabuf(
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
     let surface_sync=manager.as_ref().map(|manager|manager.get_surface(xdg_surface,qh,()));
     for gpu_index in 1..=gpu_frames {
+        if persistent_gpu && gpu_index==25 {
+            println!("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_IDLE_AFTER_24=true");
+            std::io::stdout().flush()?;
+            thread::sleep(Duration::from_secs(15));
+        }
+        let fixture_index=if persistent_gpu {(gpu_index-1)%12} else {gpu_index-1};
         // Real fresh GBM BO and live FD for each independent frame.
         // Frame 1 keeps the original ARGB transparency probe; frame 2
         // is XRGB without alpha. Its undefined readback alpha must NOT
         // corrupt the visibly different (R,G,B)=(0.12,0.64,0.27) pixel.
         let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};
         let (gpu_w,gpu_h)=if multi_gpu {
-            melania_native::window_placement::retained_gpu_probe_size(u64::from(gpu_index-1))
+            melania_native::window_placement::retained_gpu_probe_size(u64::from(fixture_index))
                 .ok_or("missing retained GPU fixture dimensions")?
         } else {(W as i32,H as i32)};
         let mut image=allocator.create_buffer(
@@ -324,7 +337,7 @@ fn exercise_real_client_dmabuf(
                 &mut target,(gpu_w,gpu_h).into(),Transform::Normal
             )?;
             let color=if multi_gpu {
-                let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(gpu_index-1))
+                let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(fixture_index))
                     .ok_or("missing retained GPU fixture color")?;
                 Color32F::new(f32::from(r)/255.0,f32::from(g)/255.0,f32::from(b)/255.0,1.0)
             } else if gpu_index==1 {
@@ -369,7 +382,7 @@ fn exercise_real_client_dmabuf(
         );
         let probe=if gpu_kms {
                 if multi_gpu {
-                    let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[(gpu_index-1) as usize];
+                    let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[fixture_index as usize];
                     if slot==1 {xdg_surface.clone()}
                     else {extra_surfaces[(slot-2) as usize].clone()}
                 } else {xdg_surface.clone()}
@@ -455,6 +468,9 @@ fn exercise_real_client_dmabuf(
                 return Err("client DMA-BUF received a fabricated KMS frame callback".into());
             }
             println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
+        }
+        if persistent_gpu && gpu_index==25 {
+            println!("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_RESUMED=true");
         }
         std::io::stdout().flush()?;
         imported.destroy();
@@ -700,6 +716,21 @@ fn main()->Result<(),Box<dyn Error>> {
         .as_deref()==Ok("YES_QEMU_VM") {
         let extra_surfaces:Vec<_>=extra.iter().map(|(s,_,_)|s.clone()).collect();
         exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,&extra_surfaces)?;
+        if std::env::var("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT").as_deref()==Ok("YES_QEMU_VM") {
+            if state.frame_done_count!=48 {return Err("persistent GPU client did not complete 48 real callbacks".into());}
+            // Destroy four roles in one client flush. The compositor must
+            // serialize four independent reserved GPU removal receipts.
+            for (s,x,t) in extra {
+                t.destroy(); x.destroy(); s.destroy();
+            }
+            toplevel.destroy(); xdg.destroy(); surface.destroy();
+            wm.destroy();
+            connection.flush()?;
+            queue.roundtrip(&mut state)?;
+            if state.frame_done_count!=48 {return Err("persistent GPU removal fabricated callbacks".into());}
+            println!("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_48_ACKS=true");
+            return Ok(());
+        }
         if multi_gpu {
             println!("MELANIA_QEMU_RETAINED_GPU_FOUR_WINDOW_CLIENT_12_ACKS=true");
             std::io::stdout().flush()?;
