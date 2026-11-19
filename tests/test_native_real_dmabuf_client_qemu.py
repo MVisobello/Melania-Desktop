@@ -46,12 +46,27 @@ class RealWaylandDmabufClient(unittest.TestCase):
         self.assertNotIn("set_master(",CLIENT)
         imp=CLIENT.split("fn exercise_real_client_dmabuf(",1)[1].split(
             "fn main()->Result",1)[0]
-        self.assertLess(imp.index("frame.finish()?.wait()?"),
-                        imp.index("params.create_immed("))
-        self.assertLess(imp.index("params.create_immed("),
-                        imp.index("probe.commit()"))
-        self.assertLess(imp.index("probe.commit()"),
-                        imp.index("imported.destroy()"))
+        # The mixed SHM branch has its own commit and continues before
+        # allocating a DMA-BUF. Audit both paths independently.
+        mixed = imp[imp.index("if mixed_shm && gpu_index%4==3 {"):
+                    imp.index("let mut image=allocator.create_buffer(")]
+        for marker in ("pool.create_buffer(", "probe.attach(Some(&buffer),0,0)",
+                       "probe.commit()", "while !state.buffer_released",
+                       "buffer.destroy()", "pool.destroy()", "continue;"):
+            self.assertIn(marker, mixed)
+        self.assertLess(mixed.index("pool.create_buffer("), mixed.index("probe.commit()"))
+        self.assertLess(mixed.index("probe.commit()"), mixed.index("while !state.buffer_released"))
+        self.assertLess(mixed.index("while !state.buffer_released"), mixed.index("buffer.destroy()"))
+        self.assertLess(mixed.index("buffer.destroy()"), mixed.index("continue;"))
+        gpu = imp[imp.index("let mut image=allocator.create_buffer("):]
+        self.assertLess(gpu.index("frame.finish()?.wait()?"),
+                        gpu.index("params.create_immed("))
+        self.assertLess(gpu.index("params.create_immed("),
+                        gpu.index("probe.attach(Some(&imported),0,0)"))
+        self.assertLess(gpu.index("probe.attach(Some(&imported),0,0)"),
+                        gpu.index("probe.commit()"))
+        self.assertLess(gpu.index("probe.commit()"),
+                        gpu.index("imported.destroy()"))
 
     def test_real_gpu_fd_y_invert_rejected_over_wayland_without_kms_ack(self):
         # The negative case must use the real GBM allocation and the
