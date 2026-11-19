@@ -430,6 +430,20 @@ wait "$retained_drag_pid"
 retained_drag_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
+# Report real wait exit codes before the fail-closed aggregate gate.
+# This is forensic evidence only: all original acceptance predicates below remain.
+for observer_status in \
+    capture_code input_code client_capture_code rust_capture_code \
+    live_capture_code multi_capture_code focus_inject_code drag_inject_code \
+    drag_capture_code close_capture_code reopen_capture_code continuous_capture_code \
+    two_continuous_capture_code continuous_reopen_capture_code dynamic_capture_code dynamic_pointer_input_code \
+    dynamic_pointer_capture_code managed_role_capture_code auth_resize_inject_code real_popup_capture_code \
+    snap_inject_code edge_inject_code alt_tab_input_code hover_focus_input_code \
+    native_tabs_input_code combined_tabs_input_code layer_capture_code gtk_capture_code \
+    gtk_two_capture_code gtk_start_capture_code gtk_super_input_code retained_drag_code; do
+  printf 'MELANIA_QEMU_OBSERVER_EXIT=%s code=%s\n' "$observer_status" "${!observer_status}" |
+    tee -a "$report/result.txt"
+done
 if [[ "$retained_drag_code" -ne 0 || "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$hover_focus_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$combined_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_REAL_USB_DRAG_KMS_PASS=true' "$serial" ||
     ! grep -q '^MELANIA_QEMU_RETAINED_GPU_LIVE_DRAG_KMS_PASS=true' "$serial" ||
@@ -694,6 +708,13 @@ if [[ "$retained_drag_code" -ne 0 || "$qemu_code" -ne 0 || "$capture_code" -ne 0
   tail -n 30 "$report/qmp-real-gtk-two-frames.log" || true
   tail -n 30 "$report/qmp-real-gtk-start-overlay.log" || true
   tail -n 30 "$report/qmp-real-gtk-super-input.log" || true
+  # Include failures from observers not covered by the historical fixed tail list.
+  for observer_log in "$report"/qmp-*.log; do
+    if [[ -f "$observer_log" ]] && grep -Eq 'Traceback|RuntimeError|TimeoutError|AssertionError' "$observer_log"; then
+      printf 'MELANIA_QEMU_OBSERVER_ERROR_LOG=%s\n' "${observer_log##*/}"
+      tail -n 30 "$observer_log" || true
+    fi
+  done
   exit 1
 fi
 # A generic suite PASS is insufficient: independently audit the actual
