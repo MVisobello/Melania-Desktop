@@ -420,9 +420,10 @@ pub fn readback_qemu_client_bgra(
     // The closure has dropped its mapping, target and renderbuffer even
     // after an error. Always drain Smithay's pending GPU resource cleanup
     // before the next frame, and preserve BOTH errors if cleanup also fails.
-    let cleanup=renderer.cleanup_texture_cache()
-        .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"));
-    let pixels=resolve_gpu_staging_cleanup(pixels,cleanup)?;
+    let pixels=resolve_gpu_staging_cleanup(pixels,|| {
+        renderer.cleanup_texture_cache()
+            .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"))
+    })?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_completed");
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete");
     Ok(pixels)
@@ -430,10 +431,12 @@ pub fn readback_qemu_client_bgra(
 
 /// Preserve the original GLES failure while reporting a secondary cleanup
 /// failure. This helper is independent of the driver and regression tested.
-fn resolve_gpu_staging_cleanup<T>(
-    staged:Result<T,String>,cleanup:Result<(),String>,
-)->Result<T,String> {
-    match (staged,cleanup) {
+fn resolve_gpu_staging_cleanup<T,F>(
+    staged:Result<T,String>,cleanup:F,
+)->Result<T,String>
+where F:FnOnce()->Result<(),String> {
+    // Execute cleanup unconditionally, including after a failed GPU stage.
+    match (staged,cleanup()) {
         (Ok(pixels),Ok(())) => Ok(pixels),
         (Err(error),Ok(())) => Err(error),
         (Ok(_),Err(error)) => Err(error),
@@ -515,20 +518,29 @@ mod tests {
     // This also guards against trusting the undefined alpha byte of XRGB.
     #[test]
     fn gpu_staging_cleanup_reports_both_stage_and_cleanup_errors() {
-        assert_eq!(resolve_gpu_staging_cleanup(Ok(7u8),Ok(())),Ok(7));
+        assert_eq!(resolve_gpu_staging_cleanup(Ok(7u8),||Ok(())),Ok(7));
         assert_eq!(
-            resolve_gpu_staging_cleanup::<u8>(Err("GLES draw failed".into()),Ok(())),
+            resolve_gpu_staging_cleanup::<u8,_>(Err("GLES draw failed".into()),||Ok(())),
             Err("GLES draw failed".into())
         );
         assert_eq!(
-            resolve_gpu_staging_cleanup(Ok(7u8),Err("GPU cleanup failed".into())),
+            resolve_gpu_staging_cleanup(Ok(7u8),||Err("GPU cleanup failed".into())),
             Err("GPU cleanup failed".into())
         );
-        let result=resolve_gpu_staging_cleanup::<u8>(
-            Err("GLES draw failed".into()),Err("GPU cleanup failed".into()));
+        let result=resolve_gpu_staging_cleanup::<u8,_>(
+            Err("GLES draw failed".into()),||Err("GPU cleanup failed".into()));
         let error=result.unwrap_err();
         assert!(error.contains("GLES draw failed"));
         assert!(error.contains("GPU cleanup failed"));
+    }
+
+    #[test]
+    fn gpu_staging_cleanup_runs_even_after_failed_stage() {
+        let mut calls=0usize;
+        let result=resolve_gpu_staging_cleanup::<u8,_>(
+            Err("draw failed".into()),|| { calls+=1; Ok(()) });
+        assert_eq!(result,Err("draw failed".into()));
+        assert_eq!(calls,1,"cleanup must run exactly once on failure");
     }
 
     #[test]
