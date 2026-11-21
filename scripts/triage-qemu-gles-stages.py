@@ -31,6 +31,9 @@ def analyze(lines):
         if not fields:
             errors.append(f"line {number}: empty GLES stage marker")
             continue
+        if len(fields) != 1:
+            errors.append(f"line {number}: GLES stage marker has trailing tokens: {fields[1:]!r}")
+            continue
         stage = fields[0]
         if stage not in STAGES:
             errors.append(f"line {number}: unknown stage {stage!r}")
@@ -89,6 +92,19 @@ class Tests(unittest.TestCase):
         self.assertEqual(frames, [])
         self.assertTrue(any("empty GLES stage marker" in error for error in errors))
         self.assertTrue(any("without frame start" in error for error in errors))
+
+    def test_trailing_tokens_cannot_masquerade_as_complete_frames(self):
+        lines = [PREFIX + stage + " unexpected" for _ in range(2) for stage in STAGES]
+        frames, errors = analyze(lines)
+        self.assertEqual(frames, [])
+        self.assertTrue(any("trailing tokens" in error for error in errors))
+        self.assertTrue(any("two required" in error for error in errors))
+
+    def test_timestamped_single_stage_marker_remains_valid(self):
+        lines = ["2026-11-21T20:00:00Z INFO " + PREFIX + stage for _ in range(2) for stage in STAGES]
+        frames, errors = analyze(lines)
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(errors, [])
 
     def test_unknown_stage_fails_closed(self):
         _, errors = analyze([PREFIX + "unknown"])
