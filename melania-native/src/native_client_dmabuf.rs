@@ -492,6 +492,20 @@ mod tests {
         }
         b.build().unwrap()
     }
+    // A GLES target already contains the opaque scene background. The CPU
+    // transport must only swizzle its pixels, never apply source-over again.
+    // This also guards against trusting the undefined alpha byte of XRGB.
+    #[test]
+    fn composited_opaque_readback_never_blends_background_twice() {
+        let rgba=[100, 70, 40, 0, 12, 34, 56, 128];
+        let pixels=convert_rgba_readback_to_bgra(
+            &rgba,2,1,false,Fourcc::Xrgb8888).unwrap();
+        assert_eq!(pixels,vec![40,70,100,0,56,34,12,0]);
+        let flipped=convert_rgba_readback_to_bgra(
+            &rgba,1,2,true,Fourcc::Xrgb8888).unwrap();
+        assert_eq!(flipped,vec![56,34,12,0,40,70,100,0]);
+    }
+
     #[test]
     fn advertised_linear_modifiers_are_deterministic_and_not_dropped() {
         use smithay::backend::allocator::Modifier;
