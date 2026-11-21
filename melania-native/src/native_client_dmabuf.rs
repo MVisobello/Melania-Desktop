@@ -392,7 +392,10 @@ pub fn readback_qemu_client_bgra(
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_previous");
     renderer.cleanup_texture_cache()
         .map_err(|error|format!("client GPU previous resource cleanup failed: {error}"))?;
-    let pixels={
+    // Keep temporary GLES resources scoped even when any stage fails. The
+    // outer cleanup must run on both Ok and Err to avoid carrying stale GL
+    // objects into the next imported Wayland client frame.
+    let pixels=(|| -> Result<Vec<u8>,String> {
         println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=allocate");
         let mut composed:GlesRenderbuffer=renderer.create_buffer(
             Fourcc::Abgr8888,(width as i32,height as i32).into(),
@@ -412,15 +415,30 @@ pub fn readback_qemu_client_bgra(
             .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
         // Target is opaque; packing never applies source alpha twice.
         // Copy before dropping the PBO mapping, framebuffer and renderbuffer.
-        convert_rgba_readback_to_bgra(mapped,width,height,flipped,Fourcc::Xrgb8888)?
-    };
-    // Smithay queues destruction until its next cleanup call. Drain now,
-    // after the owned CPU copy, rather than inside the next client's draw.
+        convert_rgba_readback_to_bgra(mapped,width,height,flipped,Fourcc::Xrgb8888)
+    })();
+    // The closure has dropped its mapping, target and renderbuffer even
+    // after an error. Always drain Smithay's pending GPU resource cleanup
+    // before the next frame, and preserve BOTH errors if cleanup also fails.
+    let cleanup=renderer.cleanup_texture_cache()
+        .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"));
+    let pixels=resolve_gpu_staging_cleanup(pixels,cleanup)?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_completed");
-    renderer.cleanup_texture_cache()
-        .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"))?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete");
     Ok(pixels)
+}
+
+/// Preserve the original GLES failure while reporting a secondary cleanup
+/// failure. This helper is independent of the driver and regression tested.
+fn resolve_gpu_staging_cleanup<T>(
+    staged:Result<T,String>,cleanup:Result<(),String>,
+)->Result<T,String> {
+    match (staged,cleanup) {
+        (Ok(pixels),Ok(())) => Ok(pixels),
+        (Err(error),Ok(())) => Err(error),
+        (Ok(_),Err(error)) => Err(error),
+        (Err(stage),Err(cleanup)) => Err(format!("{stage}; cleanup also failed: {cleanup}")),
+    }
 }
 
 // Shared background for the actual GPU composition and the reference
@@ -495,6 +513,24 @@ mod tests {
     // A GLES target already contains the opaque scene background. The CPU
     // transport must only swizzle its pixels, never apply source-over again.
     // This also guards against trusting the undefined alpha byte of XRGB.
+    #[test]
+    fn gpu_staging_cleanup_reports_both_stage_and_cleanup_errors() {
+        assert_eq!(resolve_gpu_staging_cleanup(Ok(7u8),Ok(())),Ok(7));
+        assert_eq!(
+            resolve_gpu_staging_cleanup::<u8>(Err("GLES draw failed".into()),Ok(())),
+            Err("GLES draw failed".into())
+        );
+        assert_eq!(
+            resolve_gpu_staging_cleanup(Ok(7u8),Err("GPU cleanup failed".into())),
+            Err("GPU cleanup failed".into())
+        );
+        let result=resolve_gpu_staging_cleanup::<u8>(
+            Err("GLES draw failed".into()),Err("GPU cleanup failed".into()));
+        let error=result.unwrap_err();
+        assert!(error.contains("GLES draw failed"));
+        assert!(error.contains("GPU cleanup failed"));
+    }
+
     #[test]
     fn composited_opaque_readback_never_blends_background_twice() {
         let rgba=[100, 70, 40, 0, 12, 34, 56, 128];
