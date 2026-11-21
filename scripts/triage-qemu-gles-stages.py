@@ -27,7 +27,11 @@ def analyze(lines):
     for number, line in enumerate(lines, 1):
         if PREFIX not in line:
             continue
-        stage = line.split(PREFIX, 1)[1].strip().split()[0]
+        fields = line.split(PREFIX, 1)[1].strip().split()
+        if not fields:
+            errors.append(f"line {number}: empty GLES stage marker")
+            continue
+        stage = fields[0]
         if stage not in STAGES:
             errors.append(f"line {number}: unknown stage {stage!r}")
             continue
@@ -79,6 +83,12 @@ class Tests(unittest.TestCase):
     def test_no_markers_fails_closed(self):
         _, errors = analyze(["GLES initialization failed"])
         self.assertTrue(errors)
+
+    def test_empty_stage_fails_closed_without_exception(self):
+        frames, errors = analyze([PREFIX, PREFIX + "   ", PREFIX + "complete"])
+        self.assertEqual(frames, [])
+        self.assertTrue(any("empty GLES stage marker" in error for error in errors))
+        self.assertTrue(any("without frame start" in error for error in errors))
 
     def test_unknown_stage_fails_closed(self):
         _, errors = analyze([PREFIX + "unknown"])
