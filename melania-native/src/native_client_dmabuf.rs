@@ -360,8 +360,11 @@ fn compose_client_texture_to_target(
         texture,src,dest,&[dest],opaque_regions,Transform::Normal,1.0,None,&[],
     ).map_err(|error|format!("client GPU texture composition failed: {error}"))?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish");
-    frame.finish().map_err(|error|format!("client GPU composition finish failed: {error}"))?
-        .wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
+    let sync=frame.finish()
+        .map_err(|error|format!("client GPU composition finish failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish_returned");
+    sync.wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_completed");
     Ok(())
 }
 
