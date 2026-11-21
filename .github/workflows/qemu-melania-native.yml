@@ -3,6 +3,7 @@ name: Melania native KMS TEST_ONLY inside QEMU
 on:
   pull_request:
     paths:
+      - scripts/triage-qemu-gles-stages.py
       - scripts/melania-qemu-native-guest.sh
       - tests/test_native_real_ime_wire_roundtrip.py
       - scripts/run-qemu-melania-native.sh
@@ -92,6 +93,7 @@ on:
   push:
     branches: [main]
     paths:
+      - scripts/triage-qemu-gles-stages.py
       - scripts/melania-qemu-native-guest.sh
       - tests/test_native_real_ime_wire_roundtrip.py
       - scripts/run-qemu-melania-native.sh
