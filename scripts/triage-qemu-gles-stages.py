@@ -106,6 +106,20 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(frames), 2)
         self.assertEqual(errors, [])
 
+    def test_malformed_marker_after_two_valid_frames_still_fails(self):
+        lines = [PREFIX + stage for _ in range(2) for stage in STAGES]
+        lines.append(PREFIX + "complete trailing")
+        frames, errors = analyze(lines)
+        self.assertEqual(len(frames), 2)
+        self.assertTrue(any("trailing tokens" in error for error in errors))
+
+    def test_third_frame_crash_after_two_valid_frames_still_fails(self):
+        lines = [PREFIX + stage for _ in range(2) for stage in STAGES]
+        lines.extend(PREFIX + stage for stage in STAGES[:5])
+        frames, errors = analyze(lines)
+        self.assertEqual(len(frames), 3)
+        self.assertTrue(any("frame 3:" in error for error in errors))
+
     def test_unknown_stage_fails_closed(self):
         _, errors = analyze([PREFIX + "unknown"])
         self.assertTrue(errors)
