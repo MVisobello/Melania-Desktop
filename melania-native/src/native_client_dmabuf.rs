@@ -535,6 +535,31 @@ mod tests {
     }
 
     #[test]
+    fn gpu_staging_cleanup_runs_exactly_once_after_success() {
+        let mut calls=0usize;
+        let result=resolve_gpu_staging_cleanup(Ok(42u8),|| {
+            calls+=1;
+            Ok(())
+        });
+        assert_eq!(result,Ok(42));
+        assert_eq!(calls,1,"successful staging must drain exactly once");
+    }
+
+    #[test]
+    fn gpu_staging_cleanup_failure_after_failed_stage_is_not_silenced() {
+        let mut calls=0usize;
+        let result=resolve_gpu_staging_cleanup::<u8,_>(
+            Err("frame finish failed".into()),|| {
+                calls+=1;
+                Err("cache cleanup failed".into())
+            });
+        assert_eq!(calls,1,"failure path must attempt cleanup exactly once");
+        let error=result.unwrap_err();
+        assert!(error.contains("frame finish failed"));
+        assert!(error.contains("cache cleanup failed"));
+    }
+
+    #[test]
     fn gpu_staging_cleanup_runs_even_after_failed_stage() {
         let mut calls=0usize;
         let result=resolve_gpu_staging_cleanup::<u8,_>(
