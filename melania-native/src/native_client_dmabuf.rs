@@ -915,13 +915,13 @@ mod tests {
     #[test]
     fn opaque_modifier_does_not_invent_linear_last_row_extent() {
         // 360x1024 is within the visible 16 MiB budget. An opaque
-        // modifier's 65536 stride is not necessarily a byte pitch.
+        // modifier's 32768 stride is within the metadata ceiling but is not necessarily a byte pitch.
         // The kernel allocation, not a fabricated LINEAR extent, bounds
         // the resource. A LINEAR buffer with the same metadata is rejected.
-        let opaque=memfd_geometry(4096,0,65536,360,1024,Modifier::Invalid);
+        let opaque=memfd_geometry(4096,0,32768,360,1024,Modifier::Invalid);
         assert_eq!(validate_client_dmabuf(&opaque),Ok(()));
         assert_eq!(validate_client_plane_backing(&opaque),Ok(()));
-        let linear=memfd_geometry(4096,0,65536,360,1024,Modifier::Linear);
+        let linear=memfd_geometry(4096,0,32768,360,1024,Modifier::Linear);
         assert_eq!(validate_client_dmabuf(&linear),
             Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into()));
     }
