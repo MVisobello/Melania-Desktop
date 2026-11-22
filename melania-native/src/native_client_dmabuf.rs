@@ -149,7 +149,13 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
         .ok_or("client DMA-BUF has no plane stride")? as usize;
     let offset=buffer.offsets().next()
         .ok_or("client DMA-BUF has no plane offset")? as usize;
-    if stride<row || stride>MAX_CLIENT_SURFACE_EDGE*16 {
+    // A LINEAR stride must cover the visible row. For opaque GPU modifiers
+    // the driver defines the layout, so a smaller advertised stride is not
+    // proof of an invalid allocation. Keep the independent metadata ceiling
+    // and kernel-FD allocation checks for every modifier.
+    if stride>MAX_CLIENT_SURFACE_EDGE*16 ||
+       (buffer.format().modifier==smithay::backend::allocator::Modifier::Linear &&
+        stride<row) {
         return Err("client DMA-BUF stride outside bounded packed-RGB layout".into());
     }
     // The QEMU bridge handles 32-bit packed RGB only. A LINEAR row or
@@ -783,6 +789,19 @@ mod tests {
         let normal=linear_memfd((360*224*4) as u64,0,360*4);
         assert_eq!(validate_client_dmabuf(&normal),Ok(()));
         assert_eq!(validate_client_plane_backing(&normal),Ok(()));
+    }
+
+    #[test]
+    fn opaque_modifier_stride_is_not_assumed_to_cover_linear_pixel_row() {
+        // The driver owns the byte layout for non-LINEAR modifiers. An
+        // opaque modifier may legitimately report a stride smaller than
+        // width * 4; the separate FD and offset checks remain mandatory.
+        let opaque=memfd_geometry(4096,0,64,360,224,Modifier::Invalid);
+        let linear=memfd_geometry(4096,0,64,360,224,Modifier::Linear);
+        assert_eq!(validate_client_dmabuf(&opaque),Ok(()));
+        assert_eq!(validate_client_plane_backing(&opaque),Ok(()));
+        assert_eq!(validate_client_dmabuf(&linear),
+            Err("client DMA-BUF stride outside bounded packed-RGB layout".into()));
     }
 
     #[test]
