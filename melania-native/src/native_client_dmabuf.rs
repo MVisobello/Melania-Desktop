@@ -162,23 +162,20 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
        (stride%4!=0 || offset%4!=0) {
         return Err("client LINEAR packed-RGB stride/offset must be 4-byte aligned".into());
     }
-    let last=height.checked_sub(1)
-        .and_then(|rows|rows.checked_mul(stride))
-        .and_then(|length|length.checked_add(offset))
-        .and_then(|length|length.checked_add(row))
-        .ok_or("client DMA-BUF plane address overflow")?;
-    if last>64*1024*1024 {
-        return Err("client DMA-BUF unbounded plane offset or backing extent".into());
-    }
-    // A LINEAR packed-RGB plane's last visible byte is the true minimum
-    // backing extent. Its padding and offset must consume the same 16 MiB
-    // quota as its visible pixels. Without this check a 360x1024 client
-    // could reserve >32 MiB through stride while nominal pixels use 1.4 MiB.
-    // Tiled/compressed modifiers have opaque physical layout, so do not
-    // invent a minimum allocation extent for those layouts here.
-    if buffer.format().modifier==smithay::backend::allocator::Modifier::Linear &&
-       last>MAX_CLIENT_BUFFER_BYTES {
-        return Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into());
+    // Only LINEAR has a defined last-row byte extent. For tiled or
+    // compressed modifiers the stride is metadata in a vendor-specific
+    // layout: treating it as a byte pitch invents a potentially huge
+    // allocation and incorrectly rejects valid driver-advertised buffers.
+    // The separate kernel-FD budget still applies to every modifier.
+    if buffer.format().modifier==smithay::backend::allocator::Modifier::Linear {
+        let last=height.checked_sub(1)
+            .and_then(|rows|rows.checked_mul(stride))
+            .and_then(|length|length.checked_add(offset))
+            .and_then(|length|length.checked_add(row))
+            .ok_or("client DMA-BUF plane address overflow")?;
+        if last>MAX_CLIENT_BUFFER_BYTES {
+            return Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into());
+        }
     }
     Ok(())
 }
@@ -878,6 +875,20 @@ mod tests {
             assert_eq!(validate_client_plane_backing(b),
                 Err("DMA-BUF plane offset outside kernel allocation".into()));
         }
+    }
+
+    #[test]
+    fn opaque_modifier_does_not_invent_linear_last_row_extent() {
+        // 360x1024 is within the visible 16 MiB budget. An opaque
+        // modifier's 65536 stride is not necessarily a byte pitch.
+        // The kernel allocation, not a fabricated LINEAR extent, bounds
+        // the resource. A LINEAR buffer with the same metadata is rejected.
+        let opaque=memfd_geometry(4096,0,65536,360,1024,Modifier::Invalid);
+        assert_eq!(validate_client_dmabuf(&opaque),Ok(()));
+        assert_eq!(validate_client_plane_backing(&opaque),Ok(()));
+        let linear=memfd_geometry(4096,0,65536,360,1024,Modifier::Linear);
+        assert_eq!(validate_client_dmabuf(&linear),
+            Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into()));
     }
 
     #[test]
