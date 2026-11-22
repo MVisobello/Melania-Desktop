@@ -205,11 +205,17 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
         .ok_or("LINEAR DMA-BUF backing stride missing")? as usize;
     let offset=buffer.offsets().next()
         .ok_or("LINEAR DMA-BUF backing offset missing")? as usize;
-    let required=height.checked_sub(1)
-        .and_then(|rows|rows.checked_mul(stride))
-        .and_then(|bytes|bytes.checked_add(offset))
-        .and_then(|bytes|bytes.checked_add(row))
-        .ok_or("LINEAR DMA-BUF backing extent overflow")?;
+    // Opaque/tiled modifiers do not define a LINEAR last-row extent.
+    // Calculate that extent only when the layout actually is LINEAR.
+    let required=if linear {
+        Some(height.checked_sub(1)
+            .and_then(|rows|rows.checked_mul(stride))
+            .and_then(|bytes|bytes.checked_add(offset))
+            .and_then(|bytes|bytes.checked_add(row))
+            .ok_or("LINEAR DMA-BUF backing extent overflow")?)
+    } else {
+        None
+    };
     let fd=buffer.handles().next().ok_or("LINEAR DMA-BUF plane FD missing")?;
     // lseek(0, SEEK_END) on DMA-BUF returns the true allocation size on
     // supported Linux kernels. Do not use stat.st_size, a guessed GBM pitch,
@@ -230,7 +236,7 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     if (offset as u64) >= actual as u64 {
         return Err("DMA-BUF plane offset outside kernel allocation".into());
     }
-    if linear && (actual as u64) < required as u64 {
+    if required.is_some_and(|extent| (actual as u64) < extent as u64) {
         return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
     }
     // The earlier visible-byte check bounds the minimum addressed pixels.
@@ -907,6 +913,20 @@ mod tests {
         assert_eq!(validate_client_dmabuf(&oversized),Ok(()));
         assert_eq!(validate_client_plane_backing(&oversized),
                    Err("DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+    }
+
+    #[test]
+    fn non_linear_backing_does_not_invent_linear_row_extent() {
+        // 2048x2048 has exactly 16 MiB of visible pixels, but an opaque
+        // modifier's stride is NOT a physical LINEAR pitch. Requiring the
+        // fabricated 64 MiB last-row span would reject this allocation.
+        let tiled=memfd_geometry(4096,0,32768,2048,2048,Modifier::Invalid);
+        assert_eq!(validate_client_dmabuf(&tiled),Ok(()));
+        assert_eq!(validate_client_plane_backing(&tiled),Ok(()));
+        // The same metadata with a LINEAR modifier must fail closed.
+        let linear=memfd_geometry(4096,0,32768,2048,2048,Modifier::Linear);
+        assert!(validate_client_dmabuf(&linear).is_err());
+        assert!(validate_client_plane_backing(&linear).is_err());
     }
 
     #[test]
