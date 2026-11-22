@@ -589,6 +589,39 @@ mod tests {
     }
 
     #[test]
+    fn gpu_readback_rejects_truncated_and_oversized_pixel_mappings() {
+        // A GLES mapping is untrusted until its byte extent matches the
+        // advertised rectangle. Never index a short map or silently accept
+        // trailing bytes, even when the format itself is supported.
+        let width=2usize;
+        let height=2usize;
+        let exact=[0u8;16];
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&exact,width,height,false,Fourcc::Xrgb8888)
+                .unwrap().len(),16
+        );
+        for bytes in [&exact[..15],&exact[..0]] {
+            assert_eq!(
+                convert_rgba_readback_to_bgra(bytes,width,height,false,Fourcc::Xrgb8888),
+                Err("client GPU readback dimensions or size invalid".into())
+            );
+        }
+        let oversized=[0u8;17];
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&oversized,width,height,true,Fourcc::Argb8888),
+            Err("client GPU readback dimensions or size invalid".into())
+        );
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&exact,0,height,false,Fourcc::Xrgb8888),
+            Err("client GPU readback dimensions or size invalid".into())
+        );
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&exact,width,height,false,Fourcc::Rgb565),
+            Err("client GPU readback requires supported packed RGB".into())
+        );
+    }
+
+    #[test]
     fn composited_opaque_readback_never_blends_background_twice() {
         let rgba=[100, 70, 40, 0, 12, 34, 56, 128];
         let pixels=convert_rgba_readback_to_bgra(
