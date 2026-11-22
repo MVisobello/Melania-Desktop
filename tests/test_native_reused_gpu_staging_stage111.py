@@ -30,13 +30,14 @@ class NativeReusedGpuStaging111(unittest.TestCase):
         self.assertLess(ack,swap)
         self.assertLess(code.index("stream.flush()?;",ack),swap)
         self.assertIn("have_prior_pixels=true;",code[swap:swap+130])
-        self.assertIn("if have_prior_pixels && prior_pixels==pixels",code)
+        self.assertIn("if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent",code)
+        self.assertIn("if !direct_frame {\n                std::mem::swap(&mut pixels,&mut prior_pixels);",code)
         self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_FLIP_LEDGER",code)
 
     def test_identical_client_commit_is_real_gpu_presented_not_fake_ack(self):
-        body=GPU[GPU.index("pub fn qemu_wayland_gpu_scene_stream("):]
-        self.assertIn("if have_prior_pixels && prior_pixels==pixels && !persistent",body)
-        self.assertLess(body.index("if have_prior_pixels && prior_pixels==pixels && !persistent"),
+        body=GPU[GPU.index("fn qemu_gpu_scene_stream("):]
+        self.assertIn("if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent",body)
+        self.assertLess(body.index("if !direct_frame && have_prior_pixels && prior_pixels==pixels && !persistent"),
                         body.index("frame.render_texture_from_to("))
         self.assertLess(body.index("wait_for_scanout(&card,crtc,connector,framebuffer)?;"),
                         body.index("stream.write_all(&ack)?;"))

@@ -56,6 +56,38 @@ pub fn receiver_frame_budget(
     Ok(count)
 }
 
+/// Direct GBM has two distinct finite acceptance contracts. The additional
+/// frame in retained mode is compositor-only XDG destruction, not an extra
+/// DMA-BUF import. Refuse missing, arbitrary or mismatched configuration.
+pub fn direct_gpu_frame_budget_matches(multi:Option<&str>,frames:Option<&str>)->bool {
+    matches!((multi,frames),(None,Some("12"))|(Some("YES_QEMU_VM"),Some("13")))
+}
+
+/// No fixture frame count may leak into the opt-in persistent retained GPU
+/// receiver. This only validates a disposable VM mode, not physical/login
+/// readiness. The Wayland producer needs a separate integration gate.
+pub fn persistent_direct_gpu_mode_matches(
+    opt_in:Option<&str>,persistent_kms:Option<&str>,persistent_gpu:Option<&str>,
+    multi:Option<&str>,motion:Option<&str>,frames:Option<&str>,
+    target:Option<&str>,rolling:Option<&str>,
+)->bool {
+    opt_in==Some("YES_DISPOSABLE_QEMU") &&
+    persistent_kms==Some("YES_DISPOSABLE_QEMU") &&
+    persistent_gpu==Some("YES_DISPOSABLE_QEMU") &&
+    multi==Some("YES_QEMU_VM") && motion.is_none() &&
+    frames.is_none() && target.is_none() && rolling==Some("YES_QEMU_VM")
+}
+
+pub fn direct_gpu_move_budget_matches(multi:Option<&str>,motion:Option<&str>,frames:Option<&str>)->bool {
+    match motion {None=>direct_gpu_frame_budget_matches(multi,frames),
+        Some("YES_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("14"),
+        Some("LIVE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("15"),
+        Some("VISIBILITY_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("17"),
+        Some("STACK_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("19"),
+        Some("RESIZE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("20"),
+        Some("LIVE_RESIZE_QEMU_VM")=>multi==Some("YES_QEMU_VM") && frames==Some("21"),_=>false}
+}
+
 impl std::fmt::Display for FrameBudgetError {
     fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
         write!(f,"invalid QEMU continuous frame budget")
@@ -67,6 +99,72 @@ impl std::error::Error for FrameBudgetError {}
 mod tests {
     use super::*;
 
+    #[test]
+    fn direct_gpu_exact_mode_budget_rejects_cross_mode_and_invalid_counts() {
+        assert!(direct_gpu_frame_budget_matches(None,Some("12")));
+        assert!(direct_gpu_frame_budget_matches(Some("YES_QEMU_VM"),Some("13")));
+        for mode in [None,Some("YES_QEMU_VM"),Some("NO"),Some("")] {
+            for count in [None,Some("0"),Some("12"),Some("13"),Some("013"),Some("14"),Some("24"),Some("64")] {
+                let expected=matches!((mode,count),(None,Some("12"))|(Some("YES_QEMU_VM"),Some("13")));
+                assert_eq!(direct_gpu_frame_budget_matches(mode,count),expected);
+            }
+        }
+    }
+    #[test]
+    fn persistent_direct_receiver_needs_explicit_mode_and_no_finite_budget() {
+        let valid=[Some("YES_DISPOSABLE_QEMU"),Some("YES_DISPOSABLE_QEMU"),
+            Some("YES_DISPOSABLE_QEMU"),Some("YES_QEMU_VM"),None,None,None,Some("YES_QEMU_VM")];
+        let check=|v:[Option<&str>;8]|persistent_direct_gpu_mode_matches(
+            v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7]);
+        assert!(check(valid));
+        for i in 0..valid.len() {
+            let mut wrong=valid;
+            wrong[i]=Some("invalid");
+            assert!(!check(wrong));
+            if valid[i].is_some() {
+                wrong=valid;
+                wrong[i]=None;
+                assert!(!check(wrong));
+            }
+        }
+        for frames in ["12","13","14","15","17","19","20","21","24","64"] {
+            let mut finite=valid;
+            finite[5]=Some(frames);
+            assert!(!check(finite));
+            finite=valid;
+            finite[6]=Some(frames);
+            assert!(!check(finite));
+        }
+    }
+    #[test]
+    fn drag_budget_requires_exact_retained_opt_in() {
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("STACK_QEMU_VM"),Some("19")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("RESIZE_QEMU_VM"),Some("20")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_RESIZE_QEMU_VM"),Some("21")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_RESIZE_QEMU_VM"),Some("20")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("LIVE_RESIZE_QEMU_VM"),Some("21")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("RESIZE_QEMU_VM"),Some("19")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("RESIZE_QEMU_VM"),Some("20")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("STACK_QEMU_VM"),Some("20")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("STACK_QEMU_VM"),Some("19")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("STACK_QEMU_VM"),Some("17")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("VISIBILITY_QEMU_VM"),Some("19")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("VISIBILITY_QEMU_VM"),Some("17")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("VISIBILITY_QEMU_VM"),Some("17")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("VISIBILITY_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_QEMU_VM"),Some("17")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("LIVE_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("LIVE_QEMU_VM"),Some("14")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("YES_QEMU_VM"),Some("15")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),None,Some("15")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("YES_QEMU_VM"),Some("14")));
+        assert!(!direct_gpu_move_budget_matches(None,Some("YES_QEMU_VM"),Some("14")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),None,Some("14")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("NO"),Some("14")));
+        assert!(!direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),Some("YES_QEMU_VM"),Some("13")));
+        assert!(direct_gpu_move_budget_matches(Some("YES_QEMU_VM"),None,Some("13")));
+    }
     #[test]
     fn old_twelve_frame_proof_unchanged() {
         assert_eq!(frame_budget(None,DEFAULT_QEMU_FRAMES),Ok(12));

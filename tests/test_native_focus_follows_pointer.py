@@ -19,9 +19,28 @@ class NativeFocusFollowsPointer(unittest.TestCase):
         start = BRIDGE.index('InputEvent::PointerMotion {event} =>')
         end = BRIDGE.index('InputEvent::PointerAxis {event} =>', start)
         section = BRIDGE[start:end]
-        self.assertEqual(section.count('state.maybe_focus_hovered_toplevel(point)'), 2)
-        self.assertEqual(section.count('pointer.motion(state,target,'), 2)
-        self.assertEqual(section.count('pointer.frame(state);'), 2)
+        # Each physical event has two mutually exclusive rendering paths.
+        # Preserve the original CPU motion/frame/hover ordering and require
+        # the GPU path to forward only outside a compositor-owned grab.
+        for event in ('InputEvent::PointerMotion {event} =>',
+                      'InputEvent::PointerMotionAbsolute {event} =>'):
+            block = section.split(event, 1)[1]
+            block = block.split('InputEvent::PointerMotionAbsolute {event} =>', 1)[0]
+            gpu, cpu = block.split('state.apply_window_motion(point);', 1)
+            gpu = gpu.split('if state.gpu_drag_probe() {', 1)[1]
+            self.assertIn('state.window_interaction.active_key().is_none()', gpu)
+            self.assertIn('state.gpu_drag_motion(point)', gpu)
+            self.assertEqual(gpu.count('pointer.motion(state,target,'), 1)
+            self.assertEqual(gpu.count('pointer.frame(state);'), 1)
+            self.assertLess(gpu.index('state.window_interaction.active_key().is_none()'),
+                            gpu.index('pointer.motion(state,target,'))
+            self.assertLess(gpu.index('pointer.motion(state,target,'), gpu.index('pointer.frame(state);'))
+            self.assertIn('return;', gpu[gpu.index('pointer.frame(state);'):])
+            self.assertEqual(cpu.count('pointer.motion(state,target,'), 1)
+            self.assertEqual(cpu.count('pointer.frame(state);'), 1)
+            self.assertEqual(cpu.count('state.maybe_focus_hovered_toplevel(point)'), 1)
+            self.assertLess(cpu.index('pointer.motion(state,target,'), cpu.index('pointer.frame(state);'))
+            self.assertLess(cpu.index('pointer.frame(state);'), cpu.index('state.maybe_focus_hovered_toplevel(point)'))
         self.assertEqual(section.count('state.apply_window_motion(point);'), 2)
 
     def test_keyboard_focus_without_raise_or_fabricated_frames(self):

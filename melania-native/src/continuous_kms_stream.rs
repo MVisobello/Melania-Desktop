@@ -23,6 +23,122 @@ const IMAGE_BYTES: usize = 1280 * 800 * 4;
 const HEADER_BYTES: usize = 4 + 8 + 8 + 8 + 4;
 const ACK_BYTES: usize = 4 + 8 + 8 + 8 + 1;
 
+/// The actual imported client DMA-BUF stays owned until the KMS worker
+/// finishes sampling it. Only its matching ticket may unlock a direct job.
+// Some(buffer) replaces GPU-owned content; None removes the actual surface.
+// Both operations carry the same presentation ticket and zero CPU pixels.
+pub enum DirectGpuUpdate {
+    Buffer(smithay::backend::allocator::dmabuf::Dmabuf),
+    Shm(crate::owned_shm::RetainedShmPixels),
+    Resize {buffer:smithay::backend::allocator::dmabuf::Dmabuf,rect:crate::retained_gpu_layout::GpuRect},
+    Remove,
+    Move {x:i32,y:i32},
+    Visibility {visible:bool},
+    Raise,
+}
+pub type DirectGpuFrame = (PlannedSceneFrame, u64, DirectGpuUpdate);
+
+/// A source DMA-BUF is no longer sampled once its independently owned
+/// retained texture has finished drawing. Keep it alive through the next
+/// verified presentation to avoid racing driver image destruction.
+/// This queue is local to a single DRM epoch; never carry it across reset.
+pub struct GpuImportRetirement<T> {
+    confirmed:u64,
+    pending:std::collections::VecDeque<(u64,T)>,
+}
+impl<T> Default for GpuImportRetirement<T> {
+    fn default()->Self {Self{confirmed:0,pending:Default::default()}}
+}
+impl<T> GpuImportRetirement<T> {
+    pub fn len(&self)->usize {self.pending.len()}
+    pub fn stage(&mut self,sequence:u64,source:T)->Result<(),&'static str> {
+        if self.confirmed.checked_add(1)!=Some(sequence) ||
+            self.pending.len()>=2 ||
+            self.pending.back().is_some_and(|(frame,_)|*frame>=sequence) {
+            return Err("invalid GPU import retirement stage");
+        }
+        self.pending.push_back((sequence,source));
+        Ok(())
+    }
+    /// Caller must establish GPU completion and actual DRM route/FB ACK.
+    /// On a failed or missing ACK the queue is untouched until rollback.
+    pub fn confirm(&mut self,sequence:u64)->Result<usize,&'static str> {
+        self.confirm_with(sequence,drop)
+    }
+    /// Move retired resources into the caller's context-specific teardown
+    /// path. A failed acknowledgement invokes no retirement callback.
+    pub fn confirm_with(&mut self,sequence:u64,mut retire:impl FnMut(T))->Result<usize,&'static str> {
+        if self.confirmed.checked_add(1)!=Some(sequence) {return Err("invalid GPU retirement ACK");}
+        self.confirmed=sequence;
+        let mut retired=0;
+        while self.pending.front().is_some_and(|(frame,_)|*frame<sequence) {
+            let (_,source)=self.pending.pop_front().expect("checked nonempty");
+            retire(source);
+            retired+=1;
+        }
+        Ok(retired)
+    }
+    pub fn clear_after_restore(&mut self) {self.clear_after_restore_with(drop);}
+    pub fn clear_after_restore_with(&mut self,mut retire:impl FnMut(T)) {
+        while let Some((_,source))=self.pending.pop_front() {retire(source);}
+    }
+}
+
+#[cfg(test)]
+mod gpu_retirement_tests {
+    use super::GpuImportRetirement;
+    #[test]
+    fn long_stream_stays_bounded_and_rejects_stale_or_skipped_confirmation() {
+        let mut queue=GpuImportRetirement::default();
+        for sequence in 1..=4096 {
+            queue.stage(sequence,sequence).unwrap();
+            assert!(queue.len()<=2);
+            assert!(queue.confirm(sequence-1).is_err());
+            assert!(queue.confirm(sequence+1).is_err());
+            assert!(queue.stage(sequence,sequence).is_err());
+            assert_eq!(queue.confirm(sequence).unwrap(),usize::from(sequence>1));
+            assert_eq!(queue.len(),1);
+        }
+        assert_eq!(queue.confirm(4097).unwrap(),1); // compositor-only frame
+        assert_eq!(queue.len(),0);
+    }
+    #[test]
+    fn context_retirement_callback_is_serialized_and_never_called_for_invalid_ack() {
+        let mut queue=GpuImportRetirement::default();
+        let mut deferred=None;
+        for sequence in 1..=4096 {
+            queue.stage(sequence,sequence).unwrap();
+            assert!(queue.confirm_with(sequence+1, |_| panic!("invalid ACK retired a resource")).is_err());
+            let previous=deferred.take();
+            let retired=queue.confirm_with(sequence,|source| {
+                assert!(deferred.replace(source).is_none());
+            }).unwrap();
+            assert_eq!(retired,usize::from(sequence>1));
+            assert_eq!(previous,sequence.checked_sub(2).filter(|n|*n>0));
+            assert!(queue.len()+usize::from(deferred.is_some())<=2);
+        }
+        let mut final_sources=Vec::new();
+        queue.clear_after_restore_with(|source| final_sources.push(source));
+        assert_eq!(final_sources,vec![4096]);
+        assert_eq!(deferred,Some(4095));
+    }
+    #[test]
+    fn no_ack_keeps_resources_alive_until_explicit_restore() {
+        use std::{cell::Cell,rc::Rc};
+        struct Source(Rc<Cell<usize>>);
+        impl Drop for Source {fn drop(&mut self){self.0.set(self.0.get()+1);}}
+        let drops=Rc::new(Cell::new(0));
+        let mut queue=GpuImportRetirement::default();
+        queue.stage(1,Source(drops.clone())).unwrap();
+        queue.confirm(1).unwrap();
+        queue.stage(2,Source(drops.clone())).unwrap();
+        assert!(queue.confirm(3).is_err());
+        assert_eq!(drops.get(),0);
+        queue.clear_after_restore();
+        assert_eq!(drops.get(),2);
+    }
+}
+
 #[derive(Debug)]
 pub struct ContinuousKmsJob {
     pub planned: PlannedSceneFrame,
@@ -94,8 +210,31 @@ fn transfer(stream: &mut UnixStream, job: &ContinuousKmsJob) -> Result<(), Strin
     verified_ack(&ack, job.planned)
 }
 
+// Distinct wire marker: the legacy CPU receiver cannot misinterpret this
+// as a zero-sized image. The DMA-BUF itself travels only in-process, via a
+// separate bounded typed channel, never as serialized pixel data.
+fn transfer_direct(stream:&mut UnixStream, job:&ContinuousKmsJob)->Result<(),String> {
+    if !job.pixels.is_empty() {return Err("direct GPU job must have no CPU pixels".into());}
+    let mut header=frame_header(job.planned);
+    header[..4].copy_from_slice(b"MLG1");
+    header[28..32].copy_from_slice(&0u32.to_le_bytes());
+    stream.write_all(&header).map_err(|e|e.to_string())?;
+    stream.flush().map_err(|e|e.to_string())?;
+    let mut ack=[0u8;ACK_BYTES];
+    stream.read_exact(&mut ack).map_err(|e|e.to_string())?;
+    verified_ack(&ack,job.planned)
+}
+
 impl ContinuousKmsWorker {
-    pub fn spawn(mut stream: UnixStream) -> std::io::Result<Self> {
+    pub fn spawn(stream: UnixStream) -> std::io::Result<Self> {
+        Self::spawn_mode(stream,false)
+    }
+
+    pub fn spawn_direct(stream:UnixStream)->std::io::Result<Self> {
+        Self::spawn_mode(stream,true)
+    }
+
+    fn spawn_mode(mut stream:UnixStream,direct:bool)->std::io::Result<Self> {
         // If duplicating the FD fails, do NOT start a worker that cannot be
         // interrupted safely during libseat/VT cleanup.
         let shutdown = stream.try_clone()?;
@@ -105,7 +244,11 @@ impl ContinuousKmsWorker {
         let worker_poisoned = Arc::clone(&poisoned);
         let worker = thread::spawn(move || {
             while let Ok(job) = jobs.recv() {
-                let status = transfer(&mut stream, &job);
+                let status = if direct && job.pixels.is_empty() {
+                    transfer_direct(&mut stream,&job)
+                } else {
+                    transfer(&mut stream,&job)
+                };
                 let failed = status.is_err();
                 // transfer only borrowed the pixels; move the SAME allocation
                 // back to the compositor. No 1280x800 staging copy or second
@@ -210,6 +353,28 @@ mod tests {
             },
             generation: u64::from_le_bytes(header[20..28].try_into().unwrap()),
         }
+    }
+
+    #[test]
+    fn direct_gpu_transport_sends_only_ticket_and_requires_matching_ack() {
+        let (client,mut peer)=UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let worker=ContinuousKmsWorker::spawn_direct(client).unwrap();
+        let frame=plan(7,1,3);
+        worker.submit(ContinuousKmsJob{planned:frame,pixels:Vec::new()}).unwrap();
+        let mut header=[0u8;HEADER_BYTES];
+        peer.read_exact(&mut header).unwrap();
+        assert_eq!(&header[..4],b"MLG1");
+        assert_eq!(&header[28..32],&0u32.to_le_bytes());
+        assert_eq!(&header[4..28],&frame_header(frame)[4..28]);
+        peer.write_all(&ack(frame,0)).unwrap();
+        let result=result_for(&worker);
+        assert!(result.status.is_ok());
+        assert!(result.pixels.is_empty());
+        worker.submit(ContinuousKmsJob{planned:plan(7,2,4),pixels:Vec::new()}).unwrap();
+        peer.read_exact(&mut header).unwrap();
+        peer.write_all(&ack(frame,0)).unwrap();
+        assert!(result_for(&worker).status.is_err());
     }
 
     #[test]

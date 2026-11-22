@@ -1,0 +1,51 @@
+name: Melania focused direct GPU diagnostic
+on:
+  pull_request:
+    paths:
+      - melania-native/**
+      - scripts/melania-qemu-native-guest.sh
+      - scripts/run-qemu-direct-gpu-focused.sh
+      - .github/workflows/qemu-direct-gpu-focused.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  focused-direct-gpu:
+    name: Real client DMA-BUF to GBM (${{ matrix.mode }} focused VM)
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [direct, retained]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile real native compositor and Wayland client
+        run: |
+          set -euo pipefail
+          bash -n scripts/melania-qemu-native-guest.sh
+          bash -n scripts/run-qemu-direct-gpu-focused.sh
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libgles2-mesa-dev libudev-dev libseat-dev \
+            libdrm-dev libgbm-dev libinput-dev qemu-system-x86 \
+            qemu-utils cloud-image-utils genisoimage curl
+          cargo build -p melania-native --bin melania-native --bin qemu-continuous-client
+      - name: Run only the real 12-frame direct GPU acceptance
+        env:
+          MELANIA_QEMU_NATIVE_VM: YES_DISPOSABLE_QEMU
+          MELANIA_QEMU_NATIVE_REPORT_DIR: reports/qemu-direct-gpu
+          MELANIA_QEMU_FOCUSED_MODE: ${{ matrix.mode }}
+        run: bash scripts/run-qemu-direct-gpu-focused.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-focused-${{ matrix.mode }}-gpu-evidence
+          path: reports/qemu-direct-gpu/
+          if-no-files-found: warn

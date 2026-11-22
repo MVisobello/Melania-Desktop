@@ -16,6 +16,21 @@ HOST=(ROOT/"scripts/run-qemu-melania-native.sh").read_text()
 CI=(ROOT/".github/workflows/qemu-melania-native.yml").read_text()
 
 class RealClientDmabufToKms(unittest.TestCase):
+    def test_mixed_shm_upload_is_opt_in_and_uses_exact_gpu_receipt(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        self.assertIn("DirectGpuUpdate::Shm(source) if mixed_shm",gbm)
+        self.assertIn("upload_retained_shm_texture(&mut renderer,source)?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_SHM_GPU",BRIDGE)
+        self.assertIn("copy_retained_gpu_client_shm(ptr,len,metadata)",BRIDGE)
+        self.assertIn("direct_gpu_shm_waiting.remove(index)",BRIDGE)
+        self.assertIn("!is_gpu_client && !is_shm_client",BRIDGE)
+        self.assertLess(BRIDGE.index("direct_gpu_clients.finish(&completed.key,&completed.resource)"),
+                        BRIDGE.index("MELANIA_NATIVE_RETAINED_SHM_KMS_ACK="))
+        self.assertLess(gbm.index("stream.write_all(&ack)?;",gbm.index("fn qemu_gpu_scene_stream(")),
+                        gbm.index("MELANIA_NATIVE_RETAINED_SHM_KERNEL_ACK="))
+        self.assertIn("state.direct_gpu_shm_waiting.clear()",BRIDGE)
+        self.assertIn("state.direct_gpu_shm_inflight.take()",BRIDGE)
+
     def test_client_produces_gpu_image_and_waits_for_real_kms(self):
         for marker in (
             "MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS",
@@ -90,6 +105,23 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertLess(path.index("validate_client_plane_backing(buffer)?;"),
                         path.index("ensure_implicit_client_writer_ready(buffer)?;"))
 
+    def test_live_commit_rechecks_writer_fence_before_gpu_sampling(self):
+        helper=GPU.split("pub fn client_sampling_format(",1)[1].split(
+            "pub fn import_client_dmabuf(",1)[0]
+        self.assertIn("ensure_implicit_client_writer_ready(buffer)?;",helper)
+        self.assertIn("fn client_sampling_rechecks_kernel_readiness_after_import_admission()",GPU)
+        live=BRIDGE.split("let client_gpu_snapshot=if dma_buffer && gpu_client_kms",1)[1]
+        check=live.index("client_sampling_format(dmabuf)")
+        refused=live.index("MELANIA_NATIVE_CLIENT_DMABUF_SAMPLING_REFUSED=",check)
+        released=live.index("buffer.release();",refused)
+        returned=live.index("return;",released)
+        sample=live.index("readback_qemu_client_bgra(renderer,texture,source_format)")
+        self.assertLess(check,refused)
+        self.assertLess(refused,released)
+        self.assertLess(released,returned)
+        self.assertLess(returned,sample)
+        self.assertIn("gpu_client_missing_two_sampling_fence_rechecks",GUEST)
+
     def test_implicit_fence_poll_retries_eintr_without_blocking(self):
         # EINTR is not a GPU-fence failure. Keep retries bounded and do not
         # convert an interrupted kernel poll into an unbounded Wayland stall.
@@ -118,6 +150,390 @@ class RealClientDmabufToKms(unittest.TestCase):
             "fn readback_swizzles_rgba_into_opaque_bgra_and_flips_bottom_up()",
         ):
             self.assertIn(marker,GPU)
+
+    def test_direct_gpu_client_bypasses_cpu_snapshot_and_uses_real_gbm_presenter(self):
+        stream=(ROOT/"melania-native/src/continuous_kms_stream.rs").read_text()
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        direct=BRIDGE.split("if dma_buffer && gpu_client_kms && self.direct_gpu_sender.is_some()",1)[1].split(
+            "// Opt-in QEMU transitional path",1)[0]
+        self.assertIn("self.direct_gpu_pending=dmabuf.map",direct)
+        self.assertIn("self.multi_scene.note_external_gpu_frame()",direct)
+        self.assertNotIn("readback_qemu_client_bgra",direct)
+        self.assertIn("sender.try_send((planned,slot,dmabuf))",BRIDGE)
+        self.assertIn("ContinuousKmsJob{planned,pixels:Vec::new()}",BRIDGE)
+        self.assertIn("fn direct_gpu_transport_sends_only_ticket_and_requires_matching_ack()",stream)
+        self.assertIn('header[..4].copy_from_slice(b"MLG1")',stream)
+        self.assertIn("crate::native_client_dmabuf::import_client_dmabuf(&mut renderer,buffer)",gbm)
+        self.assertIn("direct GPU buffer ticket mismatch",gbm)
+        self.assertIn("verify_direct_client_gpu_pixels(&mut renderer,&bound,index)",gbm)
+        self.assertIn("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=1",GUEST)
+        self.assertIn("MELANIA_NATIVE_DIRECT_CLIENT_GBM_SCANOUT_ACK=2",GUEST)
+        self.assertIn("direct_gpu_client_used_forbidden_cpu_staging",GUEST)
+        self.assertIn("MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true",GUEST)
+
+    def test_opaque_output_uses_vertical_gpu_blit_with_asymmetric_client_pixels(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        copy=gbm.split("fn blit_opaque_direct_window(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("gl.BlitFramebuffer(0,h,w,0,x,y,x+w,y+h",copy)
+        self.assertIn("gl.Finish()",copy)
+        self.assertNotIn("map_texture(",copy)
+        self.assertIn("gl.BindFramebuffer(ffi::FRAMEBUFFER,draw as u32)",copy)
+        self.assertIn("opaque GPU blit orientation mismatch",gbm)
+        guest=(ROOT/"scripts/melania-qemu-native-guest.sh").read_text()
+        self.assertIn("MELANIA_QEMU_CLIENT_DIRECT_ORIENTATION=YES_QEMU_VM",guest)
+        self.assertIn("MELANIA_NATIVE_DIRECT_GPU_XRGB_OUTPUT_BLIT=true",guest)
+
+    def test_opaque_source_normalized_on_gpu_without_cpu_staging(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        normalize=gbm.split("fn normalize_opaque_direct_source(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("renderer.blit(&input,&mut output,rect,rect,TextureFilter::Nearest)",normalize)
+        self.assertIn("gl.ColorMask(ffi::FALSE,ffi::FALSE,ffi::FALSE,ffi::TRUE)",normalize)
+        self.assertIn("gl.Finish()",normalize)
+        self.assertNotIn("copy_framebuffer(",normalize)
+        self.assertNotIn("map_texture(",normalize)
+        self.assertIn("MELANIA_NATIVE_DIRECT_GPU_XRGB_NORMALIZED=true",gbm)
+        self.assertIn("sampled_texture",gbm)
+
+    def test_direct_gpu_diagnostics_do_not_queue_pbo_destruction(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        sample=gbm.split("fn sample_direct_gpu_pixel(",1)[1].split("fn verify_direct_client_gpu_pixels(",1)[0]
+        self.assertIn("gl.ReadPixels(x,y,1,1,ffi::RGBA,ffi::UNSIGNED_BYTE",sample)
+        self.assertIn("gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,0)",sample)
+        self.assertIn("gl.BindBuffer(ffi::PIXEL_PACK_BUFFER,pack_buffer as u32)",sample)
+        self.assertIn("ffi::FRAMEBUFFER_COMPLETE",sample)
+        self.assertNotIn("copy_framebuffer(",sample)
+        self.assertNotIn("map_texture(",sample)
+        self.assertLess(gbm.index("driver_finished"),gbm.index("let completion=frame.finish()?;"))
+
+    def test_direct_gpu_finishes_real_work_and_defers_import_destruction_until_restore(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        loop=gbm.split("fn qemu_gpu_scene_stream(",1)[1]
+        self.assertIn("caps.retain(|cap| *cap!=Capability::ExportFence)",loop)
+        finish=loop.index("let completion=frame.finish()?;")
+        wait=loop.index("completion.wait()?;",finish)
+        sample=loop.index("verify_direct_client_gpu_pixels(&mut renderer,&bound,index)",wait)
+        retained=loop.index("direct_import_lifetime.push((buffer,texture))",sample)
+        ack=loop.index("stream.write_all(&ack)?;",retained)
+        restore=loop.index("let restored=rollback.restore();",ack)
+        clear=loop.index("direct_import_lifetime.clear();",restore)
+        self.assertLess(finish,wait)
+        self.assertLess(wait,sample)
+        self.assertLess(sample,retained)
+        self.assertLess(retained,ack)
+        self.assertLess(ack,restore)
+        self.assertLess(restore,clear)
+        self.assertIn("if direct_import_lifetime.len()>=12",loop)
+        # The original finite path still never destroys its imports until
+        # restore. The opt-in rolling path may retire only after kernel ACK.
+        route=loop.index("if !ack_owned",retained)
+        confirm=loop.index("rolling_imports.confirm_with(index+1",route)
+        self.assertLess(route,confirm)
+        self.assertLess(confirm,ack)
+        self.assertNotIn("renderer.cleanup_texture_cache()",loop[retained:restore])
+        self.assertIn("if rolling_retire {",loop[route:confirm])
+        self.assertIn("rolling_imports.clear_after_restore_with(",loop[restore:clear])
+        self.assertIn("rolling_deferred.take()",loop[confirm:ack])
+        self.assertIn("next_deferred=Some(source)",loop[confirm:ack])
+        self.assertIn("rolling_deferred=next_deferred",loop[confirm:ack])
+        self.assertIn("MELANIA_NATIVE_GPU_ROLLING_SOURCE_BUNDLES_PEAK=3",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_INDEPENDENT_NON_MASTER_IMPORTER=true",GUEST)
+        importer=BRIDGE.split("let display=if independent_importer {",1)[1].split("} else {",1)[0]
+        self.assertIn("owner.verify_identity()?",importer)
+        self.assertIn("OFlags::NOFOLLOW",importer)
+        self.assertIn("Some(owner.drm_identity)",importer)
+        self.assertIn("qemu_is_drm_master(&gpu_fd) || !qemu_is_drm_master(master)",importer)
+        self.assertIn("GbmDevice::new(DeviceFd::from(gpu_fd))",importer)
+        self.assertNotIn("let card=DrmDeviceFd::new(",importer)
+        self.assertIn("MELANIA_NATIVE_GPU_INDEPENDENT_NON_MASTER_IMPORTER=true",importer)
+        self.assertIn("rolling_backing_peak>3",loop)
+        self.assertLess(loop.index("renderer.cleanup_texture_cache()",clear),loop.index("drop(final_backings)",clear))
+        self.assertIn("renderer.cleanup_texture_cache()",loop[clear:])
+
+    def test_retained_gpu_scene_copies_independent_windows_on_gpu_and_checks_every_ack(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        for marker in ("fn retain_direct_window(", "retained.insert(*slot,image)",
+                       "for (slot,rect) in retained_layout.bottom_to_top()",
+                       "retained_layout.update_buffer(*slot,size.w,size.h)?",
+                       "retained_layout.remove(slot)",
+                       "verify_retained_gpu_scene(&mut renderer,&bound,index,removed_slot,moved_slot,visibility_slot,raised_slot,&retained_layout)",
+                       "retained GPU scene frame {index} pixel ({x},{y}) mismatch"):
+            self.assertIn(marker,gbm)
+        snapshot=gbm.split("fn retain_direct_window(",1)[1].split("fn qemu_gpu_scene_stream(",1)[0]
+        self.assertNotIn("copy_framebuffer",snapshot)
+        self.assertNotIn("map_texture",snapshot)
+        self.assertIn("frame.finish()?.wait()?",snapshot)
+        self.assertIn("blit_opaque_direct_window(renderer,source,(0,0))?",snapshot)
+        self.assertIn("if !opaque {",snapshot)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_OPAQUE_SNAPSHOT_BLIT=true",snapshot)
+        self.assertIn("blit_opaque_direct_window(&mut renderer,image,(160,120))?",gbm)
+        self.assertIn("extra_surfaces[(slot-2) as usize].clone()",CLIENT)
+        self.assertIn("RETAINED_GPU_PROBE_SLOTS",CLIENT)
+        self.assertIn("for slot in 2..=4",CLIENT)
+        self.assertIn("self.known_window_surfaces.id_of(&completed.key).is_some()",BRIDGE)
+        self.assertIn("self.known_window_surfaces.register(surface.clone())",BRIDGE)
+        self.assertIn("let (slot,buffer)=client_dmabuf.as_ref()",gbm)
+        self.assertIn("Color32F::new(0.0,0.0,0.0,0.0)",snapshot)
+        self.assertIn("let gpu_frames:u32=if multi_gpu {12}",CLIENT)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=$index windows=$windows",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true",GUEST)
+        self.assertIn("retained_gpu_probe_size(u64::from(fixture_index))",CLIENT)
+        self.assertIn("retained_gpu_geometry(*slot,size.w,size.h)",gbm)
+        self.assertIn("renderer.create_buffer(Fourcc::Abgr8888,(w,h).into())",snapshot)
+        self.assertIn("sample(renderer,x+w-3,y+h-3,expected)?",gbm)
+        self.assertIn("sample(renderer,x+old_w-2,y+h.min(old_h)/2,[27,33,58])?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SHRINK_CLEARED=$index",GUEST)
+
+    def test_direct_gpu_receiver_admits_only_exact_legacy_or_retained_budget(self):
+        receiver=DRM.split("fn run_embedded_direct(",1)[1].split("fn run_stream(",1)[0]
+        self.assertIn("guest_only()?",receiver)
+        self.assertIn("direct_gpu_move_budget_matches(",receiver)
+        self.assertIn('std::env::var("MELANIA_NATIVE_DIRECT_GPU_MULTIWINDOW")',receiver)
+        self.assertIn('std::env::var("MELANIA_QEMU_CONTINUOUS_FRAMES")',receiver)
+        self.assertLess(receiver.index("direct_gpu_move_budget_matches("),
+                        receiver.index("qemu_direct_client_gpu_scene_stream("))
+
+    def test_persistent_direct_receiver_keeps_finite_proofs_and_drm_gates(self):
+        receiver=DRM.split("fn run_embedded_direct(",1)[1].split("fn run_stream(",1)[0]
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        loop=gbm.split("fn qemu_gpu_scene_stream(",1)[1]
+        self.assertIn("persistent_direct_gpu_mode_matches(",receiver)
+        self.assertIn("guest_only()?",receiver)
+        self.assertIn("if !persistent && frames_seen>=total {break;}",loop)
+        self.assertIn("PersistentFrameRead::begin_with_idle_guard(",loop)
+        self.assertIn("if multi_gpu && !persistent_direct",loop)
+        self.assertIn("verify_retained_gpu_scene(&mut renderer,&bound,index",loop)
+        self.assertIn("persistent GPU retained scene geometry mismatch",loop)
+        self.assertLess(loop.index("completion.wait()?;"),loop.index("if !ack_owned"))
+        self.assertLess(loop.index("if !ack_owned"),loop.index("rolling_imports.confirm_with("))
+        self.assertLess(loop.index("rolling_imports.confirm_with("),loop.index("stream.write_all(&ack)?;"))
+        self.assertIn("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES=",loop)
+        # The bridge must still reject persistent GPU client mode until
+        # arbitrary live client admission and drain are integrated.
+        self.assertIn("state.gtk_layer_mode || (persistent_kms && !persistent_direct)",BRIDGE)
+
+    def test_gpu_role_close_removes_texture_and_requires_real_13th_frame(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1]
+        self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove))",close)
+        close=close.split("fn grab(&mut self",1)[0]
+        self.assertLess(close.index("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove))"),
+                        close.index("if removed || popup_damage || gpu_removed {"))
+        self.assertLess(close.index("if removed || popup_damage || gpu_removed {"),
+                        close.index("self.submit_continuous_frame()"))
+        self.assertEqual(close.count("self.submit_continuous_frame()"),1)
+        self.assertIn("retained.remove(&slot)",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_CLOSE_PIXELS_VERIFIED=2",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=13 windows=3",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_CLOSE_KMS_ACK=2",GUEST)
+        self.assertIn("closed_t.destroy()",CLIENT)
+        self.assertIn("GPU close fabricated a client frame callback",CLIENT)
+        poll=BRIDGE.split("fn poll_continuous_kms(",1)[1].split("fn begin_generation_proof(",1)[0]
+        self.assertLess(poll.index("continuous_redraw.presented(planned)"),
+                        poll.index('publish_verified_crtc_receipt(Path::new("/run/melania-native-qemu/retained-gpu-close-acked"))'))
+
+    def test_gpu_slot_retirement_is_bound_to_real_removal_ticket(self):
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1].split("fn grab(&mut self",1)[0]
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        poll=BRIDGE.split("fn poll_continuous_kms(",1)[1].split("fn begin_generation_proof(",1)[0]
+        self.assertLess(close.index("begin_retirement(&surface)"),
+                        close.index("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Remove))"))
+        self.assertLess(submit.index("if removal && !self.known_window_surfaces.is_retiring(slot)"),
+                        submit.index("sender.try_send((planned,slot,dmabuf))"))
+        released=poll.index("finish_retirement(slot)")
+        for check in ("self.native_presentation_guard.accepts(ticket", "reply.planned!=planned",
+                      "if let Err(error)=reply.status", "continuous_redraw.presented(planned)",
+                      "self.direct_gpu_removal_inflight.take()"):
+            self.assertLess(poll.index(check),released)
+        self.assertIn("MELANIA_NATIVE_GPU_ROLE_SLOT_RESERVED=2",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_ROLE_SLOT_RELEASED_KMS_ACK=2",GUEST)
+
+    def test_persistent_gpu_removals_are_dequeued_as_separate_generations(self):
+        close=BRIDGE.split("fn toplevel_destroyed(",1)[1].split("fn grab(&mut self",1)[0]
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        self.assertLess(close.index("begin_retirement(&surface)"),
+                        close.index("direct_gpu_removal_queue.enqueue(slot)"))
+        self.assertLess(submit.index("direct_gpu_removal_queue.pop()"),
+                        submit.index("continuous_redraw.next_frame()"))
+        self.assertIn("is_retiring(slot)",submit)
+        self.assertIn("state.direct_gpu_removal_queue.revoke()",BRIDGE)
+        # No persistent producer activation until the client commit queue,
+        # repeated buffer use and shutdown are integrated.
+        self.assertIn("state.gtk_layer_mode || (persistent_kms && !persistent_direct)",BRIDGE)
+
+    def test_persistent_gpu_client_queue_receipts_are_one_sample_at_a_time(self):
+        submit=BRIDGE.split("fn try_submit_continuous_frame(",1)[1].split("fn poll_continuous_kms(",1)[0]
+        poll=BRIDGE.split("fn poll_continuous_kms(",1)[1].split("fn begin_generation_proof(",1)[0]
+        self.assertLess(submit.index("direct_gpu_clients.activate_next()"),
+                        submit.index("continuous_redraw.next_frame()"))
+        self.assertLess(poll.index("continuous_redraw.presented(planned)"),
+                        poll.index("direct_gpu_clients.finish(&completed.key,&completed.resource)"))
+        self.assertLess(poll.index("direct_gpu_clients.finish(&completed.key,&completed.resource)"),
+                        poll.index("completed.resource.release()"))
+        self.assertIn("completed.notify_frame && is_live && !newer_gpu_update",poll)
+        self.assertIn("direct_gpu_clients.cancel_waiting(&surface)",BRIDGE)
+        self.assertIn("state.direct_gpu_clients.revoke()",BRIDGE)
+        self.assertIn("direct_gpu_clients.contains_resource(&buffer) {return;}",BRIDGE)
+        self.assertIn("state.gtk_layer_mode || (persistent_kms && !persistent_direct)",BRIDGE)
+
+    def test_persistent_direct_shutdown_drains_before_cancel_and_rollback(self):
+        shutdown=BRIDGE.split("if persistent_kms && shutdown_flag.load(Ordering::Relaxed) {",1)[1]
+        shutdown=shutdown.split("if trusted_ime_pid.is_some()",1)[0]
+        order=("state.persistent_shutdown_requested=true;",
+               "state.poll_continuous_kms()?",
+               "state.direct_gpu_clients.has_active()",
+               "state.direct_gpu_clients.cancel_all_waiting()",
+               "resource.release();",
+               "state.native_presentation_guard.revoke();",
+               "state.continuous_worker.take();",
+               "join.join()",
+               "state.direct_gpu_removal_queue.revoke()",
+               "revoke_client_dmabuf_gpu(&mut state);",
+               "owner.release()")
+        # The timeout path separately revokes before returning an error.
+        offsets=[shutdown.index(marker,shutdown.index("state.direct_gpu_clients.cancel_all_waiting()")) if marker=="state.native_presentation_guard.revoke();" else shutdown.index(marker) for marker in order]
+        self.assertEqual(offsets,sorted(offsets))
+        self.assertNotIn("finish_retirement(",shutdown)
+        self.assertNotIn("complete_presented_frame(",shutdown)
+
+    def test_persistent_direct_real_client_acceptance_is_separately_gated(self):
+        self.assertIn("persistent_direct=native_frame_budget::persistent_direct_gpu_mode_matches(",BRIDGE)
+        self.assertIn("persistent direct GPU requires isolated QEMU retained DMA-BUF session",BRIDGE)
+        self.assertIn("let gpu_frames=if persistent_gpu {48} else {gpu_frames};",CLIENT)
+        self.assertIn("state.frame_done_count!=48",CLIENT)
+        stage=GUEST.split("run_persistent_direct_gpu_probe() {",1)[1].split('[[ "$(id -u)"',1)[0]
+        for marker in ("MELANIA_NATIVE_PERSISTENT_DIRECT_GPU=YES_DISPOSABLE_QEMU",
+                       "MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT=YES_QEMU_VM",
+                       "seq 1 52", "seq 1 300", "MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_STOPPED_FRAMES=52",
+                       "MELANIA_NATIVE_RETAINED_GPU_SCENE_ACK=52 windows=0",
+                       "MELANIA_NATIVE_PERSISTENT_DIRECT_GPU_ROLLBACK_JOINED=true",
+                       "MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true"):
+            self.assertIn(marker,stage)
+        self.assertNotIn("MELANIA_NATIVE_QEMU_FRAME_TARGET=",stage)
+        self.assertNotIn("MELANIA_QEMU_CONTINUOUS_FRAMES=",stage)
+        self.assertIn("run_retained_gpu_probe\n    run_persistent_direct_gpu_probe",GUEST)
+        self.assertIn("run_retained_gpu_probe\nrun_persistent_direct_gpu_probe",GUEST)
+        for marker in ("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_VERIFIED",
+                       "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED"):
+            self.assertIn(marker,stage)
+
+    def test_mixed_runtime_proof_separate_from_dma_only(self):
+        self.assertIn("mixed_shm && gpu_index%4==3",CLIENT)
+        self.assertIn("MELANIA_QEMU_MIXED_SHM_CLIENT_ACK={gpu_index}",CLIENT)
+        self.assertIn("MELANIA_NATIVE_RETAINED_SHM_GPU=YES_QEMU_VM",GUEST)
+        self.assertIn("run_persistent_direct_gpu_probe\nrun_mixed_retained_gpu_probe",GUEST)
+        self.assertIn("run_persistent_direct_gpu_probe\n    run_mixed_retained_gpu_probe",GUEST)
+        for marker in ("MELANIA_QEMU_MIXED_GPU_36_DMA_12_SHM_PASS=true",
+                       "MELANIA_QEMU_MIXED_SHM_VERIFIED",
+                       "MELANIA_QEMU_MIXED_DMA_VERIFIED"):
+            self.assertIn(marker,GUEST)
+            self.assertIn(marker,HOST)
+
+    def test_real_gpu_drag_has_ticket_and_pixel_gate(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        self.assertIn("self.direct_gpu_pending=Some((slot,DirectGpuUpdate::Move",BRIDGE)
+        self.assertIn("state.gpu_drag_button(event.button_code()",BRIDGE)
+        self.assertIn("retained_layout.move_to(slot,x,y)?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_MOVE_PIXELS_VERIFIED=1",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=14",GUEST)
+        self.assertIn("GPU drag fabricated callback",CLIENT)
+        self.assertIn("inject-qemu-retained-gpu-drag.py",HOST)
+
+    def test_gpu_motion_has_intermediate_held_ack_and_coalesced_position(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        injector=(ROOT/"scripts/inject-qemu-retained-gpu-drag.py").read_text()
+        self.assertEqual(BRIDGE.count("if state.gpu_live_drag_probe() {state.gpu_drag_motion(point);}"),2)
+        self.assertIn("!matches!(update,DirectGpuUpdate::Move{..})",BRIDGE)
+        self.assertIn("self.pointer_buttons_held.contains(&0x110)",BRIDGE)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_HELD_DRAG_ACK=14",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_MOVE_FRAME_PIXELS_VERIFIED=15",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=15",GUEST)
+        self.assertIn("sample(renderer,460,200,[27,33,58])?",gbm)
+        self.assertLess(injector.index("MELANIA_QEMU_RETAINED_GPU_HELD_DRAG_FRAME14=true"),injector.index('tablet(args.qmp,670,200,"release")'))
+
+    def test_gpu_visibility_retains_texture_and_uses_real_key_ack(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        layout=(ROOT/"melania-native/src/retained_gpu_layout.rs").read_text()
+        self.assertIn("state.gpu_visibility_key(u32::from(event.key_code())",BRIDGE)
+        self.assertIn("DirectGpuUpdate::Visibility{visible}",gbm)
+        self.assertIn("if retained_layout.is_visible(slot)!=Some(true) {continue;}",gbm)
+        self.assertIn("!self.hidden.contains(slot)",layout)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_PIXELS_VERIFIED=16 visible=false",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_VISIBILITY_PIXELS_VERIFIED=17 visible=true",GUEST)
+        self.assertIn("MELANIA_NATIVE_GPU_WAYLAND_KMS_ACK=17",GUEST)
+        self.assertIn("GPU visibility fabricated callback",CLIENT)
+
+    def test_gpu_raise_uses_actual_click_and_overlapping_pixel_gate(self):
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        injector=(ROOT/"scripts/inject-qemu-retained-gpu-drag.py").read_text()
+        self.assertIn("self.gpu_raise_clicked(point,time)",BRIDGE)
+        self.assertIn("self.direct_gpu_layout.hit_test(point.x,point.y)",BRIDGE)
+        self.assertIn("retained_layout.raise(slot)?",gbm)
+        self.assertIn("sample(renderer,800,550,if raised {a} else {d})?",gbm)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_STACK_PIXELS_VERIFIED=18 front=4",GUEST)
+        self.assertIn("MELANIA_NATIVE_RETAINED_GPU_STACK_PIXELS_VERIFIED=19 front=1",GUEST)
+        self.assertIn("GPU raise fabricated callback",CLIENT)
+        self.assertLess(injector.index("MELANIA_QEMU_RETAINED_GPU_OVERLAP_FRAME18=true"),injector.index('tablet(args.qmp,700,400,"press")'))
+
+    def test_gpu_focus_is_real_and_independent_of_raise_ticket(self):
+        helper=BRIDGE.split("fn gpu_raise_clicked(",1)[1].split("fn gpu_live_drag_probe(",1)[0]
+        self.assertLess(helper.index("keyboard.set_focus("),helper.index("if !changed {return;}"))
+        self.assertLess(helper.index("pointer.motion("),helper.index("DirectGpuUpdate::Raise"))
+        self.assertIn("self.direct_gpu_layout.target_at(point.x,point.y)",BRIDGE)
+        self.assertIn("wl_keyboard::Event::Enter{surface,..}",CLIENT)
+        self.assertIn("wl_pointer::Event::Enter{surface,surface_x,surface_y,..}",CLIENT)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true",HOST)
+        self.assertIn("GPU focus missing real D to A seat enters",CLIENT)
+
+    def test_gpu_client_input_requires_real_held_serial_and_forwarded_pairs(self):
+        gate=BRIDGE.split("fn move_request(",1)[1].split("// Stage113:",1)[0]
+        for marker in ("self.seat.owns(&seat)","self.pointer_buttons_held.contains(&0x110)",
+                       "self.gpu_forwarded_left.as_ref()!=Some(surface)",
+                       "take_xdg_pointer_press(&mut self.last_xdg_press,surface,serial)"):
+            self.assertIn(marker,gate)
+        self.assertIn("top._move(seat,serial)",CLIENT)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_VERIFIED=true",GUEST)
+        self.assertIn("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true",HOST)
+        self.assertIn("state.gpu_forwarded_keys.remove(&code)",BRIDGE)
+
+    def test_gpu_resize_requires_configure_ack_and_new_client_buffer(self):
+        for marker in ("self.gpu_resize_pending.as_ref().is_some_and", "dma.size().w==rect.width && dma.size().h==rect.height",
+                       "MELANIA_NATIVE_GPU_XDG_RESIZE_CONFIGURE_ACK=true",
+                       "MELANIA_NATIVE_GPU_XDG_RESIZE_KMS_ACK=20"):
+            self.assertIn(marker,BRIDGE)
+        self.assertIn("top.resize(seat,serial,xdg_toplevel::ResizeEdge::BottomRight)",CLIENT)
+        self.assertIn("resize DMA-BUF missing verified callback/release",CLIENT)
+        self.assertIn("self.direct_gpu_layout.resize_target(slot,rect,direction)",BRIDGE)
+        self.assertIn("self.direct_gpu_layout.commit_resize(slot,rect,size.w,size.h)",BRIDGE)
+        gbm=(ROOT/"melania-native/src/native_gbm_scanout.rs").read_text()
+        self.assertIn("DirectGpuUpdate::Resize{buffer,rect}",gbm)
+        self.assertIn("retained_layout.commit_resize(*slot,rect,size.w,size.h)",gbm)
+        self.assertNotIn("direction!=ResizeDirection::BottomRight",BRIDGE)
+        self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=20",GUEST)
+        self.assertIn("MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true",HOST)
+
+    def test_live_gpu_resize_serializes_real_configures_and_held_ack(self):
+        self.assertIn("self.gpu_resize_motion(point,false)",BRIDGE)
+        self.assertIn("self.gpu_resize_motion(point,true)",BRIDGE)
+        self.assertIn("self.gpu_resize_latest=Some((slot,target,finished))",BRIDGE)
+        flush=BRIDGE.split("fn gpu_resize_flush(",1)[1].split("fn gpu_stack_probe(",1)[0]
+        self.assertLess(flush.index("self.gpu_resize_pending.is_some()"),flush.index("top.send_configure()"))
+        self.assertIn("self.continuous_inflight.is_some()",flush)
+        self.assertIn("intermediate GPU resize was not presented while held",BRIDGE)
+        self.assertIn("client received release before intermediate resize ACK",CLIENT)
+        self.assertIn("MELANIA_NATIVE_GPU_XDG_RESIZE_PIXELS_VERIFIED=21",GUEST)
+        self.assertIn("MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true",HOST)
+
+    def test_rolling_gpu_imports_remain_bounded_in_real_vm(self):
+        self.assertIn("MELANIA_NATIVE_GPU_ROLLING_RETIRE=YES_QEMU_VM",GUEST)
+        for marker in ("MELANIA_NATIVE_GPU_ROLLING_IMPORTS_PEAK=2",
+                       "MELANIA_NATIVE_GPU_ROLLING_IMPORTS_STAGED=14",
+                       "MELANIA_NATIVE_GPU_ROLLING_IMPORTS_RETIRED_BEFORE_RESTORE=13",
+                       "MELANIA_NATIVE_GPU_ROLLING_IMPORTS_DRAINED=true"):
+            self.assertIn(marker,GUEST)
+        self.assertIn("MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true",HOST)
 
     def test_live_gpu_composition_precedes_opaque_readback(self):
         compose=GPU.split("fn compose_client_texture_to_target(",1)[1].split(
@@ -170,7 +586,7 @@ class RealClientDmabufToKms(unittest.TestCase):
             "MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU",
             "readback_qemu_client_bgra(renderer,texture,source_format)",
             "smithay::wayland::dmabuf::get_dmabuf(&buffer)",
-            "Ok(dmabuf)=>dmabuf.format().code",
+            "client_sampling_format(dmabuf)",
             "self.multi_scene.upsert(key,pixels)",
             "self.continuous_client_ledger.stage(surface.clone(),buffer)",
             "self.submit_continuous_frame()",
@@ -190,9 +606,9 @@ class RealClientDmabufToKms(unittest.TestCase):
     def test_two_different_gpu_dmabufs_present_before_ten_shm_frames(self):
         self.assertIn("for gpu_index in 1..=gpu_frames",CLIENT)
         self.assertIn("!state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier))",CLIENT)
-        self.assertIn("let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
-        self.assertIn("W as u32,H as u32,frame_format,&[Modifier::Linear]",CLIENT)
-        self.assertIn("W as i32,H as i32,frame_format as u32",CLIENT)
+        self.assertIn("let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};",CLIENT)
+        self.assertIn("gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear]",CLIENT)
+        self.assertIn("gpu_w,gpu_h,frame_format as u32",CLIENT)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",CLIENT)
         self.assertIn("MELANIA_QEMU_EXTERNAL_CLIENT_XRGB_DMA_BUF_KMS_ACKED=true",GUEST)
         self.assertIn("let mut image=allocator.create_buffer(",CLIENT)

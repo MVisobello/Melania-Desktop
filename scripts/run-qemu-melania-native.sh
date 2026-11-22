@@ -341,6 +341,8 @@ python3 "$root/scripts/inject-qemu-real-gtk-super-start.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 1350 \
   > "$report/qmp-real-gtk-super-input.log" 2>&1 &
 gtk_super_input_pid=$!
+python3 "$root/scripts/inject-qemu-retained-gpu-drag.py" --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 2050 > "$report/qmp-retained-drag.log" 2>&1 &
+retained_drag_pid=$!
 set +e
 # Extra *independent* GPU-client/DRM KMS session now runs LAST, after all
 # legacy live QMP observers. Give the guest a bounded +300s for that extra
@@ -424,9 +426,39 @@ wait "$gtk_start_capture_pid"
 gtk_start_capture_code=$?
 wait "$gtk_super_input_pid"
 gtk_super_input_code=$?
+wait "$retained_drag_pid"
+retained_drag_code=$?
 set -e
 printf 'QEMU_EXIT=%s\n' "$qemu_code" > "$report/result.txt"
-if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$hover_focus_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$combined_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
+# Report real wait exit codes before the fail-closed aggregate gate.
+# This is forensic evidence only: all original acceptance predicates below remain.
+for observer_status in \
+    capture_code input_code client_capture_code rust_capture_code \
+    live_capture_code multi_capture_code focus_inject_code drag_inject_code \
+    drag_capture_code close_capture_code reopen_capture_code continuous_capture_code \
+    two_continuous_capture_code continuous_reopen_capture_code dynamic_capture_code dynamic_pointer_input_code \
+    dynamic_pointer_capture_code managed_role_capture_code auth_resize_inject_code real_popup_capture_code \
+    snap_inject_code edge_inject_code alt_tab_input_code hover_focus_input_code \
+    native_tabs_input_code combined_tabs_input_code layer_capture_code gtk_capture_code \
+    gtk_two_capture_code gtk_start_capture_code gtk_super_input_code retained_drag_code; do
+  printf 'MELANIA_QEMU_OBSERVER_EXIT=%s code=%s\n' "$observer_status" "${!observer_status}" |
+    tee -a "$report/result.txt"
+done
+if [[ "$retained_drag_code" -ne 0 || "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$client_capture_code" -ne 0 || "$rust_capture_code" -ne 0 || "$live_capture_code" -ne 0 || "$multi_capture_code" -ne 0 || "$focus_inject_code" -ne 0 || "$drag_inject_code" -ne 0 || "$drag_capture_code" -ne 0 || "$close_capture_code" -ne 0 || "$reopen_capture_code" -ne 0 || "$continuous_capture_code" -ne 0 || "$two_continuous_capture_code" -ne 0 || "$continuous_reopen_capture_code" -ne 0 || "$dynamic_capture_code" -ne 0 || "$dynamic_pointer_input_code" -ne 0 || "$dynamic_pointer_capture_code" -ne 0 || "$managed_role_capture_code" -ne 0 || "$auth_resize_inject_code" -ne 0 || "$real_popup_capture_code" -ne 0 || "$snap_inject_code" -ne 0 || "$edge_inject_code" -ne 0 || "$alt_tab_input_code" -ne 0 || "$hover_focus_input_code" -ne 0 || "$native_tabs_input_code" -ne 0 || "$combined_tabs_input_code" -ne 0 || "$layer_capture_code" -ne 0 || "$gtk_capture_code" -ne 0 || "$gtk_two_capture_code" -ne 0 || "$gtk_start_capture_code" -ne 0 || "$gtk_super_input_code" -ne 0 ]] ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_REAL_USB_DRAG_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_LIVE_DRAG_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_VISIBILITY_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_STACK_KMS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_GPU_XDG_RESIZE_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_PERSISTENT_DIRECT_GPU_48_CLIENT_4_REMOVAL_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_MIXED_GPU_36_DMA_12_SHM_PASS=true' "$serial" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_RAISE_SENT=true' "$report/qmp-retained-drag.log" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_VISIBILITY_SENT=true' "$report/qmp-retained-drag.log" ||
+    ! grep -q '^MELANIA_QEMU_RETAINED_GPU_USB_GESTURE_SENT=true' "$report/qmp-retained-drag.log" ||
     ! grep -q '^MELANIA_QEMU_GTK4_PANEL_PIXELS_FROM_KMS=true' "$report/qmp-real-gtk-panel.log" ||
     ! grep -q '^MELANIA_QEMU_GTK4_TWO_DISTINCT_REAL_FRAMES=true' "$report/qmp-real-gtk-two-frames.log" ||
     ! grep -q '^MELANIA_QEMU_GTK_START_REAL_CRTC_PIXELS=true' "$report/qmp-real-gtk-start-overlay.log" ||
@@ -676,8 +708,48 @@ if [[ "$qemu_code" -ne 0 || "$capture_code" -ne 0 || "$input_code" -ne 0 || "$cl
   tail -n 30 "$report/qmp-real-gtk-two-frames.log" || true
   tail -n 30 "$report/qmp-real-gtk-start-overlay.log" || true
   tail -n 30 "$report/qmp-real-gtk-super-input.log" || true
+  # Include failures from observers not covered by the historical fixed tail list.
+  for observer_log in "$report"/qmp-*.log; do
+    if [[ -f "$observer_log" ]] && grep -Eq 'Traceback|RuntimeError|TimeoutError|AssertionError' "$observer_log"; then
+      printf 'MELANIA_QEMU_OBSERVER_ERROR_LOG=%s\n' "${observer_log##*/}"
+      tail -n 30 "$observer_log" || true
+    fi
+  done
   exit 1
 fi
+# A generic suite PASS is insufficient: independently audit the actual
+# persistent direct GPU proof's unique, per-frame and per-role evidence.
+for index in $(seq 1 52); do
+  [[ "$(grep -c "^MELANIA_QEMU_PERSISTENT_DIRECT_GPU_KERNEL_VERIFIED=$index[[:space:]]*$" "$serial")" == 1 ]] ||
+    deny "missing/duplicate persistent direct GPU kernel receipt $index"
+  if ((index <= 48)); then
+    [[ "$(grep -c "^MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_VERIFIED=$index[[:space:]]*$" "$serial")" == 1 ]] ||
+      deny "missing/duplicate persistent direct GPU client receipt $index"
+  fi
+done
+for slot in 1 2 3 4; do
+  [[ "$(grep -c "^MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED=$slot[[:space:]]*$" "$serial")" == 1 ]] ||
+    deny "missing/duplicate persistent direct GPU removal receipt $slot"
+done
+# Independently require the distinct mixed-source proof per real commit.
+for index in $(seq 1 48); do
+  if ((index%4==3)); then
+    [[ "$(grep -c "^MELANIA_QEMU_MIXED_SHM_VERIFIED=$index[[:space:]]*$" "$serial")" == 1 ]] ||
+      deny "missing/duplicate mixed SHM receipt $index"
+  else
+    [[ "$(grep -c "^MELANIA_QEMU_MIXED_DMA_VERIFIED=$index[[:space:]]*$" "$serial")" == 1 ]] ||
+      deny "missing/duplicate mixed DMA-BUF receipt $index"
+  fi
+done
+# Require a consistent kernel capability and actual wire protocol result.
+# An unsupported driver remains a valid general-regression environment,
+# but must never be reported as a successful explicit-sync protocol test.
+if ! python3 "$root/scripts/verify-qemu-explicit-sync.py" "$serial" |
+    tee "$report/explicit-sync-evidence.txt"; then
+  printf '%s\n' 'MELANIA_QEMU_NATIVE_RESULT=FAIL' | tee -a "$report/result.txt"
+  exit 1
+fi
+cat "$report/explicit-sync-evidence.txt" >> "$report/result.txt"
 # Export only the previously verified LIVE QMP GTK framebuffer, preserving
 # the original PPM as forensic evidence. Never synthesize a screenshot.
 python3 "$root/scripts/export-qemu-real-gtk-png.py" \

@@ -3,12 +3,16 @@
 use std::{error::Error,fs::OpenOptions,io::Write,os::fd::{AsFd,OwnedFd},thread,time::{Duration,Instant}};
 use melania_native::native_frame_budget::frame_budget;
 use wayland_client::{
-    Connection,Dispatch,QueueHandle,
-    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback},
+    Connection,Dispatch,QueueHandle,WEnum,
+    protocol::{wl_registry,wl_compositor,wl_surface,wl_shm,wl_shm_pool,wl_buffer,wl_output,wl_callback,wl_seat,wl_pointer,wl_keyboard},
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_v1,zwp_linux_buffer_params_v1,
 };
+use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
+    wp_linux_drm_syncobj_manager_v1,wp_linux_drm_syncobj_surface_v1,wp_linux_drm_syncobj_timeline_v1,
+};
+use melania_native::native_drm_timeline::KernelTimeline;
 use smithay::{
     backend::{
         allocator::{
@@ -35,9 +39,22 @@ struct Client {
     wm:Option<xdg_wm_base::XdgWmBase>,
     shm:Option<wl_shm::WlShm>,
     dmabuf:Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    explicit_sync:Option<wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1>,
     dmabuf_formats:Vec<(u32,u64)>,
     output:Option<wl_output::WlOutput>,
     output_mode_received:bool,
+    gpu_seat:Option<wl_seat::WlSeat>,
+    gpu_keyboard_enters:Vec<wl_surface::WlSurface>,
+    gpu_pointer_enters:Vec<(wl_surface::WlSurface,f64,f64)>,
+    gpu_keyboard_focus:Option<wl_surface::WlSurface>,
+    gpu_pointer_focus:Option<wl_surface::WlSurface>,
+    gpu_buttons:Vec<(wl_surface::WlSurface,bool)>,
+    gpu_keys:Vec<(wl_surface::WlSurface,u32,bool)>,
+    gpu_move_target:Option<(wl_surface::WlSurface,xdg_toplevel::XdgToplevel)>,
+    gpu_move_requested:bool,
+    gpu_resize_requested:bool,
+    gpu_resize_size:Option<(i32,i32)>,
+    gpu_resize_configured:bool,
     xdg_acked:bool,
     buffer_released:bool,
     frame_done_count:u32,
@@ -56,15 +73,78 @@ impl Dispatch<wl_registry::WlRegistry,()> for Client {
                 "xdg_wm_base"=>state.wm=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_shm"=>state.shm=Some(registry.bind(name,version.min(1),qh,())),
                 "wl_output"=>state.output=Some(registry.bind(name,version.min(3),qh,())),
+                "wl_seat" if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) =>
+                    state.gpu_seat=Some(registry.bind(name,version.min(5),qh,())),
                 "zwp_linux_dmabuf_v1" if
                     std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
                         .as_deref()==Ok("YES_QEMU_VM") =>
                     state.dmabuf=Some(registry.bind(name,version.min(3),qh,())),
+                "wp_linux_drm_syncobj_manager_v1" if std::env::var("MELANIA_QEMU_CLIENT_EXPLICIT_SYNC")
+                    .as_deref()==Ok("YES_QEMU_VM") =>
+                    state.explicit_sync=Some(registry.bind(name,1,qh,())),
                 _=>{}
             }
         }
     }
 }
+wayland_client::delegate_noop!(Client: ignore wl_seat::WlSeat);
+impl Dispatch<wl_keyboard::WlKeyboard,()> for Client {
+    fn event(state:&mut Self,_:&wl_keyboard::WlKeyboard,event:wl_keyboard::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        match event {
+            wl_keyboard::Event::Enter{surface,..}=>{
+                state.gpu_keyboard_focus=Some(surface.clone());
+                state.gpu_keyboard_enters.push(surface);
+            },
+            wl_keyboard::Event::Leave{..}=>state.gpu_keyboard_focus=None,
+            wl_keyboard::Event::Key{key,state:edge,..}=>{
+                if let Some(surface)=state.gpu_keyboard_focus.clone() {
+                    state.gpu_keys.push((surface,key,edge==WEnum::Value(wl_keyboard::KeyState::Pressed)));
+                }
+            },
+            _=>{},
+        }
+    }
+}
+impl Dispatch<wl_pointer::WlPointer,()> for Client {
+    fn event(state:&mut Self,_:&wl_pointer::WlPointer,event:wl_pointer::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>) {
+        match event {
+            wl_pointer::Event::Enter{surface,surface_x,surface_y,..}=>{
+                state.gpu_pointer_focus=Some(surface.clone());
+                state.gpu_pointer_enters.push((surface,surface_x,surface_y));
+            },
+            wl_pointer::Event::Leave{..}=>state.gpu_pointer_focus=None,
+            wl_pointer::Event::Button{serial,button:0x110,state:edge,..}=>{
+                let pressed=edge==WEnum::Value(wl_pointer::ButtonState::Pressed);
+                if let Some(surface)=state.gpu_pointer_focus.clone() {
+                    state.gpu_buttons.push((surface.clone(),pressed));
+                    if pressed && state.gpu_move_requested && !state.gpu_resize_requested &&
+                        state.gpu_buttons.len()==7 && std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE") .as_deref().is_ok_and(|mode|matches!(mode,"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
+                        if let (Some((target,top)),Some(seat))=(&state.gpu_move_target,&state.gpu_seat) {
+                            if target==&surface {
+                                top.resize(seat,serial,xdg_toplevel::ResizeEdge::BottomRight);
+                                state.gpu_resize_requested=true;
+                            }
+                        }
+                    }
+                    if pressed && !state.gpu_move_requested {
+                        if let (Some((target,top)),Some(seat))=(&state.gpu_move_target,&state.gpu_seat) {
+                            if target==&surface {
+                                top._move(seat,serial);
+                                state.gpu_move_requested=true;
+                            }
+                        }
+                    }
+                }
+            },
+            _=>{},
+        }
+    }
+}
+wayland_client::delegate_noop!(Client: ignore wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1);
+wayland_client::delegate_noop!(Client: ignore wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1);
+wayland_client::delegate_noop!(Client: ignore wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1);
 impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,()> for Client {
     fn event(state:&mut Self,_:&zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
              event:zwp_linux_dmabuf_v1::Event,_:&(),_:&Connection,
@@ -108,12 +188,21 @@ impl Dispatch<xdg_surface::XdgSurface,()> for Client {
         if let xdg_surface::Event::Configure{serial}=event {
             surface.ack_configure(serial);
             state.xdg_acked=true;
+            if state.gpu_resize_requested && state.gpu_resize_size.is_some() {
+                state.gpu_resize_configured=true;
+            }
         }
     }
 }
 impl Dispatch<xdg_toplevel::XdgToplevel,()> for Client {
-    fn event(_: &mut Self,_:&xdg_toplevel::XdgToplevel,_:xdg_toplevel::Event,
-             _:&(),_:&Connection,_:&QueueHandle<Self>){}
+    fn event(state:&mut Self,top:&xdg_toplevel::XdgToplevel,event:xdg_toplevel::Event,
+             _:&(),_:&Connection,_:&QueueHandle<Self>){
+        if state.gpu_resize_requested && state.gpu_move_target.as_ref().is_some_and(|(_,role)|role==top) {
+            if let xdg_toplevel::Event::Configure{width,height,..}=event {
+                if width>0 && height>0 {state.gpu_resize_size=Some((width,height));}
+            }
+        }
+    }
 }
 impl Dispatch<wl_compositor::WlCompositor,()> for Client {
     fn event(_: &mut Self,_:&wl_compositor::WlCompositor,_:wl_compositor::Event,
@@ -169,6 +258,8 @@ fn exercise_real_client_dmabuf(
     state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
     qh:&QueueHandle<Client>,compositor:&wl_compositor::WlCompositor,
     xdg_surface:&wl_surface::WlSurface,
+    extra_surfaces:&[wl_surface::WlSurface],
+    shm:&wl_shm::WlShm,
 )->Result<(),Box<dyn Error>> {
     let dmabuf=state.dmabuf.take()
         .ok_or("QEMU Smithay server did not advertise zwp_linux_dmabuf_v1")?;
@@ -191,42 +282,130 @@ fn exercise_real_client_dmabuf(
        !state.dmabuf_formats.contains(&(Fourcc::Xrgb8888 as u32,modifier)) {
         return Err("QEMU Wayland compositor did not advertise XRGB8888+LINEAR".into());
     }
-    let gpu_frames:u32=if double_gpu {2} else {1};
+    let multi_gpu=!extra_surfaces.is_empty();
+    if multi_gpu && extra_surfaces.len()!=3 {return Err("GPU probe requires four XDG surfaces".into());}
+    if multi_gpu && !double_gpu {return Err("retained GPU client needs both formats".into());}
+    let persistent_gpu=std::env::var("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT")
+        .as_deref()==Ok("YES_QEMU_VM");
+    if persistent_gpu && (!multi_gpu || !gpu_kms || !double_gpu ||
+        std::env::var_os("MELANIA_QEMU_DIRECT_GPU_MOVE").is_some()) {
+        return Err("persistent direct GPU client requires four retained roles without finite input fixture".into());
+    }
+    let mixed_shm=std::env::var("MELANIA_QEMU_MIXED_SHM_GPU_CLIENT").as_deref()==Ok("YES_QEMU_VM");
+    if std::env::var_os("MELANIA_QEMU_MIXED_SHM_GPU_CLIENT").is_some() &&
+        (!mixed_shm || !persistent_gpu || !multi_gpu || !gpu_kms ||
+         std::env::var_os("MELANIA_QEMU_CLIENT_EXPLICIT_SYNC").is_some()) {
+        return Err("mixed SHM fixture requires persistent retained GPU client".into());
+    }
+    let gpu_frames:u32=if multi_gpu {12} else if double_gpu {2} else {1};
+    let gpu_frames=if persistent_gpu {48} else {gpu_frames};
 
     // VirtIO's GBM allocator uses DRM_IOCTL_MODE_CREATE_DUMB on the
     // unprivileged primary device. It never acquires DRM_MASTER; only the
     // compositor's separate libseat-owned DRM FD can perform KMS modesets.
     let file=OpenOptions::new().read(true).write(true)
         .open("/dev/dri/card0")?;
-    let gbm=GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file))))?;
+    let card=DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file)));
+    let explicit=std::env::var("MELANIA_QEMU_CLIENT_EXPLICIT_SYNC").as_deref()==Ok("YES_QEMU_VM");
+    let manager=if explicit {
+        if !gpu_kms || !double_gpu {return Err("explicit sync needs two real GPU frames".into());}
+        Some(state.explicit_sync.take().ok_or("missing explicit sync global")?)
+    } else {None};
+    let gbm=GbmDevice::new(card.clone())?;
     let mut allocator=DmabufAllocator(GbmAllocator::new(
         gbm.clone(),GbmBufferFlags::RENDERING,
     ));
     let display=unsafe {EGLDisplay::new(gbm)}?;
     let context=EGLContext::new(&display)?;
     let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    let surface_sync=manager.as_ref().map(|manager|manager.get_surface(xdg_surface,qh,()));
     for gpu_index in 1..=gpu_frames {
+        if persistent_gpu && gpu_index==25 {
+            println!("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_IDLE_AFTER_24=true");
+            std::io::stdout().flush()?;
+            thread::sleep(Duration::from_secs(15));
+        }
+        let fixture_index=if persistent_gpu {(gpu_index-1)%12} else {gpu_index-1};
         // Real fresh GBM BO and live FD for each independent frame.
         // Frame 1 keeps the original ARGB transparency probe; frame 2
         // is XRGB without alpha. Its undefined readback alpha must NOT
         // corrupt the visibly different (R,G,B)=(0.12,0.64,0.27) pixel.
-        let frame_format=if gpu_index==1 {format} else {Fourcc::Xrgb8888};
+        let frame_format=if gpu_index%2==1 {format} else {Fourcc::Xrgb8888};
+        let (gpu_w,gpu_h)=if multi_gpu {
+            melania_native::window_placement::retained_gpu_probe_size(u64::from(fixture_index))
+                .ok_or("missing retained GPU fixture dimensions")?
+        } else {(W as i32,H as i32)};
+        if mixed_shm && gpu_index%4==3 {
+            let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[fixture_index as usize];
+            let probe=if slot==1 {xdg_surface.clone()} else {extra_surfaces[(slot-2) as usize].clone()};
+            let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(fixture_index))
+                .ok_or("missing mixed SHM fixture color")?;
+            // Alternate genuine XRGB and premultiplied ARGB SHM sources.
+            // Padded rows make this a real wl_shm import, not a synthetic GPU clear.
+            let opaque=gpu_index%8==3;
+            let stride=gpu_w.checked_mul(4).and_then(|w|w.checked_add(16)).ok_or("mixed SHM stride overflow")?;
+            let mut pixels=vec![0u8;(stride*gpu_h) as usize];
+            for y in 0..gpu_h as usize {
+                let row=y*stride as usize;
+                for x in 0..gpu_w as usize {
+                    let i=row+x*4;
+                    let alpha=if opaque {0} else if x<32 && y<24 {128} else {255};
+                    let scale=if opaque {255} else {alpha};
+                    pixels[i..i+4].copy_from_slice(&[
+                        (u16::from(b)*u16::from(scale)/255) as u8,
+                        (u16::from(g)*u16::from(scale)/255) as u8,
+                        (u16::from(r)*u16::from(scale)/255) as u8,alpha,
+                    ]);
+                }
+            }
+            let path=format!("/run/melania-native-qemu/mixed-client-{}-{gpu_index}.bgra",std::process::id());
+            let mut file=OpenOptions::new().create_new(true).read(true).write(true).open(&path)?;
+            file.write_all(&pixels)?;
+            file.sync_all()?;
+            let pool=shm.create_pool(file.as_fd(),pixels.len() as i32,qh,());
+            std::fs::remove_file(&path)?;
+            let buffer=pool.create_buffer(0,gpu_w,gpu_h,stride,
+                if opaque {wl_shm::Format::Xrgb8888} else {wl_shm::Format::Argb8888},qh,());
+            state.buffer_released=false;
+            let _callback=probe.frame(qh,());
+            probe.attach(Some(&buffer),0,0);
+            probe.damage_buffer(0,0,gpu_w,gpu_h);
+            probe.commit();
+            let deadline=Instant::now()+Duration::from_secs(10);
+            while !state.buffer_released || state.frame_done_count!=gpu_index {
+                queue.roundtrip(state)?;
+                if Instant::now()>=deadline {
+                    return Err("mixed retained SHM client missing GPU presentation or buffer release".into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            println!("MELANIA_QEMU_MIXED_SHM_CLIENT_ACK={gpu_index}");
+            println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED={gpu_index}");
+            std::io::stdout().flush()?;
+            buffer.destroy();
+            pool.destroy();
+            continue;
+        }
         let mut image=allocator.create_buffer(
-            W as u32,H as u32,frame_format,&[Modifier::Linear],
+            gpu_w as u32,gpu_h as u32,frame_format,&[Modifier::Linear],
         )?;
         {
             let mut target=renderer.bind(&mut image)?;
             let mut frame=renderer.render(
-                &mut target,(W as i32,H as i32).into(),Transform::Normal
+                &mut target,(gpu_w,gpu_h).into(),Transform::Normal
             )?;
-            let color=if gpu_index==1 {
+            let color=if multi_gpu {
+                let [r,g,b]=melania_native::window_placement::retained_gpu_probe_rgb(u64::from(fixture_index))
+                    .ok_or("missing retained GPU fixture color")?;
+                Color32F::new(f32::from(r)/255.0,f32::from(g)/255.0,f32::from(b)/255.0,1.0)
+            } else if gpu_index==1 {
                 Color32F::new(0.33,0.18,0.73,1.0)
             } else {
                 Color32F::new(0.12,0.64,0.27,1.0)
             };
             frame.clear(
                 color,
-                &[Rectangle::from_size((W as i32,H as i32).into())],
+                &[Rectangle::from_size((gpu_w,gpu_h).into())],
             )?;
             if gpu_index==1 {
                 // Keep the original genuine premultiplied alpha patch and
@@ -235,6 +414,12 @@ fn exercise_real_client_dmabuf(
                     Color32F::new(0.165,0.09,0.365,0.5),
                     &[Rectangle::from_loc_and_size((20,20),(48,36))],
                 )?;
+            }
+            if gpu_index==2 &&
+                std::env::var("MELANIA_QEMU_CLIENT_DIRECT_ORIENTATION").as_deref()==Ok("YES_QEMU_VM") {
+                // Prove the flipped opaque blit with an asymmetric GPU patch.
+                frame.clear(Color32F::new(0.79,0.24,0.08,1.0),
+                    &[Rectangle::from_loc_and_size((20,20),(48,36))])?;
             }
             // Wait for real GLES completion, not a fabricated client fence.
             frame.finish()?.wait()?;
@@ -250,11 +435,16 @@ fn exercise_real_client_dmabuf(
             return Err("QEMU client GPU produced a non-packed DMA-BUF layout".into());
         }
         let imported=params.create_immed(
-            W as i32,H as i32,frame_format as u32,
+            gpu_w,gpu_h,frame_format as u32,
             zwp_linux_buffer_params_v1::Flags::empty(),qh,(),
         );
-        let probe=if gpu_kms {xdg_surface.clone()}
-            else {compositor.create_surface(qh,())};
+        let probe=if gpu_kms {
+                if multi_gpu {
+                    let slot=melania_native::window_placement::RETAINED_GPU_PROBE_SLOTS[fixture_index as usize];
+                    if slot==1 {xdg_surface.clone()}
+                    else {extra_surfaces[(slot-2) as usize].clone()}
+                } else {xdg_surface.clone()}
+            } else {compositor.create_surface(qh,())};
         if gpu_kms {
             // Each callback is tied to its own real wl_surface.commit,
             // never merely to successful import/zwp_linux_buffer creation.
@@ -262,15 +452,55 @@ fn exercise_real_client_dmabuf(
         }
         state.buffer_released=false;
         probe.attach(Some(&imported),0,0);
-        probe.damage_buffer(0,0,W as i32,H as i32);
+        probe.damage_buffer(0,0,gpu_w,gpu_h);
+        // Deliberately withhold acquire even after the genuine GBM render.
+        // A separate timeline per allocation proves actual release ownership.
+        let sync=if let (Some(manager),Some(surface_sync))=(manager.as_ref(),surface_sync.as_ref()) {
+            let acquire=KernelTimeline::create(&card)?;
+            let release=KernelTimeline::create(&card)?;
+            let acquire_fd=acquire.export_timeline()?;
+            let release_fd=release.export_timeline()?;
+            let acquire_obj=manager.import_timeline(acquire_fd.as_fd(),qh,());
+            let release_obj=manager.import_timeline(release_fd.as_fd(),qh,());
+            surface_sync.set_acquire_point(&acquire_obj,0,1);
+            surface_sync.set_release_point(&release_obj,0,1);
+            Some((acquire,release,acquire_obj,release_obj))
+        } else {None};
         probe.commit();
+        if let Some((acquire,release,_,_))=sync.as_ref() {
+            let withheld=Instant::now()+Duration::from_millis(200);
+            while Instant::now()<withheld {
+                queue.roundtrip(state)?;
+                if state.frame_done_count>=gpu_index || release.ready(1)? {
+                    return Err("explicit commit presented/released before acquire".into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            println!("MELANIA_QEMU_EXPLICIT_ACQUIRE_BLOCKED={gpu_index}");
+            acquire.signal(1)?;
+        }
         let deadline=Instant::now()+Duration::from_secs(10);
         while !state.buffer_released ||
               (gpu_kms && state.frame_done_count!=gpu_index) {
             queue.roundtrip(state)?;
+            if let Some((_,release,_,_))=sync.as_ref() {
+                // Only the kernel release point authorizes explicit reuse.
+                state.buffer_released=release.ready(1)?;
+            }
             if Instant::now()>=deadline {
                 return Err("real client DMA-BUF missing verified GPU-to-KMS release or callback".into());
             }
+        }
+        if let Some((acquire,release,acquire_obj,release_obj))=sync {
+            if !release.ready(1)? || state.frame_done_count!=gpu_index {
+                return Err("explicit release missing verified callback".into());
+            }
+            println!("MELANIA_QEMU_EXPLICIT_RELEASE_VERIFIED={gpu_index}");
+            acquire_obj.destroy();
+            release_obj.destroy();
+            queue.roundtrip(state)?;
+            acquire.close()?;
+            release.close()?;
         }
         if gpu_kms {
             if state.frame_done_count!=gpu_index {
@@ -278,7 +508,7 @@ fn exercise_real_client_dmabuf(
             }
             if gpu_index==1 {
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME1_KMS_ACKED=true");
-            } else {
+            } else if gpu_index==2 {
                 println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_FRAME2_KMS_ACKED=true");
                 // Emitted only after the real wl_surface.frame callback
                 // and wl_buffer.release paired with verified DRM ACK #2.
@@ -286,14 +516,19 @@ fn exercise_real_client_dmabuf(
             }
             if gpu_index==1 {
                 println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=1");
-            } else {
+            } else if gpu_index==2 {
                 println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED=2");
+            } else {
+                println!("MELANIA_NATIVE_CONTINUOUS_CLIENT_ACKED={gpu_index}");
             }
         } else {
             if state.frame_done_count!=0 {
                 return Err("client DMA-BUF received a fabricated KMS frame callback".into());
             }
             println!("MELANIA_QEMU_EXTERNAL_CLIENT_DMABUF_RELEASED_NO_KMS=true");
+        }
+        if persistent_gpu && gpu_index==25 {
+            println!("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_RESUMED=true");
         }
         std::io::stdout().flush()?;
         imported.destroy();
@@ -401,7 +636,77 @@ fn exercise_real_client_dmabuf(
         // The BO and its associated import may only be reused/dropped
         // AFTER this exact client's KMS-verified wl_buffer.release.
     }
-    dmabuf.destroy();
+    if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE") .as_deref().is_ok_and(|mode|matches!(mode,"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
+        state.dmabuf=Some(dmabuf);
+    } else {dmabuf.destroy();}
+    if let Some(surface_sync)=surface_sync {surface_sync.destroy();}
+    if let Some(manager)=manager {manager.destroy();}
+    if explicit {queue.roundtrip(state)?;}
+    Ok(())
+}
+
+fn submit_gpu_resize_buffer(state:&mut Client,queue:&mut wayland_client::EventQueue<Client>,
+    qh:&QueueHandle<Client>,surface:&wl_surface::WlSurface,intermediate:bool)->Result<(),Box<dyn Error>> {
+    let live=std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_RESIZE_QEMU_VM");
+    let expected_buttons=if intermediate {7} else {8};
+    let expected_callbacks=if live && !intermediate {14} else {13};
+    let deadline=Instant::now()+Duration::from_secs(20);
+    while !state.gpu_resize_configured || state.gpu_buttons.len()!=expected_buttons {
+        queue.roundtrip(state)?;
+        if Instant::now()>=deadline {return Err("GPU resize missing real configure/ACK or release".into());}
+        thread::sleep(Duration::from_millis(10));
+    }
+    let (w,h)=state.gpu_resize_size.take().ok_or("missing GPU resize dimensions")?;
+    state.gpu_resize_configured=false;
+    let (expected_w,expected_h)=if intermediate {(446,268)} else {(466,280)};
+    if (w-expected_w).abs()>3 || (h-expected_h).abs()>3 {return Err("unexpected GPU resize configure size".into());}
+    let dmabuf=state.dmabuf.as_ref().cloned().ok_or("missing resize DMA-BUF global")?;
+    let file=OpenOptions::new().read(true).write(true).open("/dev/dri/card0")?;
+    let card=DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file)));
+    let gbm=GbmDevice::new(card)?;
+    let mut allocator=DmabufAllocator(GbmAllocator::new(gbm.clone(),GbmBufferFlags::RENDERING));
+    let display=unsafe {EGLDisplay::new(gbm)}?;
+    let context=EGLContext::new(&display)?;
+    let mut renderer=unsafe {GlesRenderer::new(context)}?;
+    let format=Fourcc::Argb8888;
+    let modifier:u64=Modifier::Linear.into();
+    let mut image=allocator.create_buffer(w as u32,h as u32,format,&[Modifier::Linear])?;
+    {
+        let mut target=renderer.bind(&mut image)?;
+        let mut frame=renderer.render(&mut target,(w,h).into(),Transform::Normal)?;
+        let color=if intermediate {Color32F::new(0.2,0.6,0.8,1.0)} else {Color32F::new(0.8,0.4,0.2,1.0)};
+        frame.clear(color,&[Rectangle::from_size((w,h).into())])?;
+        frame.finish()?.wait()?;
+    }
+    let params=dmabuf.create_params(qh,());
+    let mut planes=0;
+    for ((fd,offset),stride) in image.handles().zip(image.offsets()).zip(image.strides()) {
+        params.add(fd,planes,offset,stride,(modifier>>32) as u32,modifier as u32);
+        planes+=1;
+    }
+    if planes!=1 {return Err("unexpected GPU resize plane count".into());}
+    let buffer=params.create_immed(w,h,format as u32,zwp_linux_buffer_params_v1::Flags::empty(),qh,());
+    state.buffer_released=false;
+    let _callback=surface.frame(qh,());
+    surface.attach(Some(&buffer),0,0);
+    surface.damage_buffer(0,0,w,h);
+    surface.commit();
+    let deadline=Instant::now()+Duration::from_secs(10);
+    while !state.buffer_released || state.frame_done_count!=expected_callbacks {
+        queue.roundtrip(state)?;
+        if Instant::now()>=deadline {return Err("resize DMA-BUF missing verified callback/release".into());}
+        thread::sleep(Duration::from_millis(10));
+    }
+    buffer.destroy();
+    params.destroy();
+    if intermediate {
+        if state.gpu_buttons.len()!=7 {return Err("client received release before intermediate resize ACK".into());}
+        println!("MELANIA_QEMU_GPU_XDG_LIVE_RESIZE_CLIENT_HELD_ACKED=true");
+        std::io::stdout().flush()?;
+    } else {
+        state.dmabuf.take().ok_or("missing final resize global")?.destroy();
+        println!("MELANIA_QEMU_GPU_XDG_RESIZE_CLIENT_ACKED=true");
+    }
     Ok(())
 }
 
@@ -419,6 +724,13 @@ fn main()->Result<(),Box<dyn Error>> {
     if !state.output_mode_received {
         return Err("continuous client did not see 1280x800 Wayland output".into());
     }
+    // This fixture binds the actual seat, not an in-process focus observer.
+    let _gpu_keyboard=state.gpu_seat.as_ref().map(|seat|seat.get_keyboard(&qh,()));
+    let _gpu_pointer=state.gpu_seat.as_ref().map(|seat|seat.get_pointer(&qh,()));
+    if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) &&
+        (_gpu_keyboard.is_none() || _gpu_pointer.is_none()) {
+        return Err("GPU focus probe missing real seat devices".into());
+    }
     let compositor=state.compositor.take().ok_or("wl_compositor missing")?;
     let wm=state.wm.take().ok_or("xdg_wm_base missing")?;
     let shm=state.shm.take().ok_or("wl_shm missing")?;
@@ -426,15 +738,158 @@ fn main()->Result<(),Box<dyn Error>> {
     let xdg=wm.get_xdg_surface(&surface,&qh,());
     let toplevel=xdg.get_toplevel(&qh,());
     toplevel.set_title("Melania QEMU continuous real Wayland client".into());
+    if state.gpu_seat.is_some() {
+        state.gpu_move_target=Some((surface.clone(),toplevel.clone()));
+    }
     surface.commit();
     for _ in 0..5 {
         queue.roundtrip(&mut state)?;
         if state.xdg_acked {break;}
     }
     if !state.xdg_acked {return Err("continuous client xdg configure missing".into());}
+    let multi_gpu=std::env::var("MELANIA_QEMU_DIRECT_GPU_MULTIWINDOW")
+        .as_deref()==Ok("YES_QEMU_VM");
+    let mut extra=Vec::new();
+    if multi_gpu {
+        if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF_KMS")
+            .as_deref()!=Ok("YES_QEMU_VM") {
+            return Err("multiwindow GPU requires real KMS client mode".into());
+        }
+        for slot in 2..=4 {
+            let s=compositor.create_surface(&qh,());
+            let x=wm.get_xdg_surface(&s,&qh,());
+            let t=x.get_toplevel(&qh,());
+            t.set_title(format!("Melania retained GPU window {slot}"));
+            state.xdg_acked=false;
+            s.commit();
+            for _ in 0..5 {
+                queue.roundtrip(&mut state)?;
+                if state.xdg_acked {break;}
+            }
+            if !state.xdg_acked {return Err("additional GPU toplevel configure missing".into());}
+            extra.push((s,x,t));
+        }
+    }
     if std::env::var("MELANIA_QEMU_CONTINUOUS_CLIENT_DMABUF")
         .as_deref()==Ok("YES_QEMU_VM") {
-        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface)?;
+        let extra_surfaces:Vec<_>=extra.iter().map(|(s,_,_)|s.clone()).collect();
+        exercise_real_client_dmabuf(&mut state,&mut queue,&qh,&compositor,&surface,&extra_surfaces,&shm)?;
+        if std::env::var("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT").as_deref()==Ok("YES_QEMU_VM") {
+            if state.frame_done_count!=48 {return Err("persistent GPU client did not complete 48 real callbacks".into());}
+            // Destroy four roles in one client flush. The compositor must
+            // serialize four independent reserved GPU removal receipts.
+            for (s,x,t) in extra {
+                t.destroy(); x.destroy(); s.destroy();
+            }
+            toplevel.destroy(); xdg.destroy(); surface.destroy();
+            wm.destroy();
+            connection.flush()?;
+            queue.roundtrip(&mut state)?;
+            if state.frame_done_count!=48 {return Err("persistent GPU removal fabricated callbacks".into());}
+            println!("MELANIA_QEMU_PERSISTENT_DIRECT_GPU_CLIENT_48_ACKS=true");
+            return Ok(());
+        }
+        if multi_gpu {
+            println!("MELANIA_QEMU_RETAINED_GPU_FOUR_WINDOW_CLIENT_12_ACKS=true");
+            std::io::stdout().flush()?;
+            // Destroy a real mapped XDG role, without attaching a replacement
+            // buffer. Keep all other windows alive until the compositor's
+            // post-KMS receipt for the GPU-only removal is visible.
+            let (closed_s,closed_x,closed_t)=extra.remove(0);
+            closed_t.destroy();
+            closed_x.destroy();
+            closed_s.destroy();
+            connection.flush()?;
+            let deadline=Instant::now()+Duration::from_secs(10);
+            loop {
+                queue.roundtrip(&mut state)?;
+                if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-close-acked")
+                    .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") {
+                    break;
+                }
+                if Instant::now()>=deadline {return Err("closed GPU window missing real KMS receipt".into());}
+                thread::sleep(Duration::from_millis(10));
+            }
+            if state.frame_done_count!=12 {return Err("GPU close fabricated a client frame callback".into());}
+            println!("MELANIA_QEMU_RETAINED_GPU_REAL_XDG_CLOSE_ACKED=true");
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("YES_QEMU_VM"|"LIVE_QEMU_VM"|"VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
+                let deadline=Instant::now()+Duration::from_secs(20);
+                loop {
+                    queue.roundtrip(&mut state)?;
+                    if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-move-acked")
+                        .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") {break;}
+                    if Instant::now()>=deadline {return Err("real GPU drag missing verified KMS receipt".into());}
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if state.frame_done_count!=12 {return Err("GPU drag fabricated callback".into());}
+                println!("MELANIA_QEMU_RETAINED_GPU_REAL_DRAG_ACKED=true");
+            }
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("VISIBILITY_QEMU_VM"|"STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
+                let deadline=Instant::now()+Duration::from_secs(20);
+                loop {
+                    queue.roundtrip(&mut state)?;
+                    if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-visibility-acked")
+                        .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") {break;}
+                    if Instant::now()>=deadline {return Err("GPU visibility missing verified KMS receipt".into());}
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if state.frame_done_count!=12 {return Err("GPU visibility fabricated callback".into());}
+                println!("MELANIA_QEMU_RETAINED_GPU_VISIBILITY_ACKED=true");
+            }
+            if matches!(std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref(),Ok("STACK_QEMU_VM"|"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
+                let deadline=Instant::now()+Duration::from_secs(20);
+                loop {
+                    queue.roundtrip(&mut state)?;
+                    if std::fs::read_to_string("/run/melania-native-qemu/retained-gpu-raise-acked")
+                        .is_ok_and(|receipt|receipt=="verified CRTC route and framebuffer ACK\n") &&
+                        state.gpu_buttons.last()==Some(&(surface.clone(),false)) {break;}
+                    if Instant::now()>=deadline {return Err("GPU raise missing verified KMS receipt or real button release".into());}
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if state.frame_done_count!=12 {return Err("GPU raise fabricated callback".into());}
+                // The real USB clicks target D (already above A), then A.
+                // Verify Wayland Enter events on both exact surface objects.
+                // D is now extra[1] because B was destroyed earlier.
+                let d=&extra.get(1).ok_or("GPU focus missing D")?.0;
+                let keyboard_ok=state.gpu_keyboard_enters.windows(2)
+                    .any(|w|&w[0]==d && w[1]==surface);
+                let pointer_ok=state.gpu_pointer_enters.windows(2).any(|w|
+                    &w[0].0==d && w[1].0==surface &&
+                    (w[0].1-150.0).abs()<12.0 && (w[0].2-150.0).abs()<12.0 &&
+                    (w[1].1-50.0).abs()<12.0 && (w[1].2-50.0).abs()<12.0);
+                if !keyboard_ok || !pointer_ok {
+                    return Err(format!("GPU focus missing real D to A seat enters; keyboard={keyboard_ok} pointer={pointer_ok}").into());
+                }
+                let buttons_ok=state.gpu_buttons==vec![(surface.clone(),true),(surface.clone(),false),
+                    (d.clone(),true),(d.clone(),false),(surface.clone(),true),(surface.clone(),false)];
+                // F8 (evdev 66) is sent to D before the final A raise.
+                let keys_ok=state.gpu_keys==vec![(d.clone(),66,true),(d.clone(),66,false)];
+                if !state.gpu_move_requested || !buttons_ok || !keys_ok {
+                    return Err(format!("GPU input missing real client move/button/key pairs: move={} buttons={buttons_ok} keys={keys_ok}",state.gpu_move_requested).into());
+                }
+                println!("MELANIA_QEMU_RETAINED_GPU_CLIENT_INPUT_VERIFIED=true");
+                println!("MELANIA_QEMU_RETAINED_GPU_WAYLAND_FOCUS_VERIFIED=true");
+                println!("MELANIA_QEMU_RETAINED_GPU_RAISE_ACKED=true");
+                if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE") .as_deref().is_ok_and(|mode|matches!(mode,"RESIZE_QEMU_VM"|"LIVE_RESIZE_QEMU_VM")) {
+                    std::io::stdout().flush()?;
+                    if std::env::var("MELANIA_QEMU_DIRECT_GPU_MOVE").as_deref()==Ok("LIVE_RESIZE_QEMU_VM") {
+                        submit_gpu_resize_buffer(&mut state,&mut queue,&qh,&surface,true)?;
+                    }
+                    submit_gpu_resize_buffer(&mut state,&mut queue,&qh,&surface,false)?;
+                }
+            }
+            for (s,x,t) in extra {
+                t.destroy();
+                x.destroy();
+                s.destroy();
+            }
+            toplevel.destroy();
+            xdg.destroy();
+            surface.destroy();
+            wm.destroy();
+            connection.flush()?;
+            return Ok(());
+        }
         if std::env::var("MELANIA_QEMU_CLIENT_REJECT_OOB_OFFSET")
             .as_deref()==Ok("YES_QEMU_VM") {
             // This isolated negative client has already received the genuine
