@@ -339,11 +339,8 @@ fn compose_client_texture_to_target(
     if width!=360 || height!=224 {
         return Err("QEMU GPU client composition must match verified 360x224 scene".into());
     }
-    let opaque=match source_format {
-        Fourcc::Xrgb8888 | Fourcc::Xbgr8888 => true,
-        Fourcc::Argb8888 | Fourcc::Abgr8888 => false,
-        _ => return Err("GPU composition requires supported packed RGB".into()),
-    };
+    validate_gpu_composition_format(source_format)?;
+    let opaque=matches!(source_format,Fourcc::Xrgb8888 | Fourcc::Xbgr8888);
     let dest=Rectangle::from_size((width,height).into());
     let src=Rectangle::from_size((f64::from(width),f64::from(height)).into());
     let mut frame=renderer.render(target,(width,height).into(),Transform::Normal)
@@ -368,6 +365,15 @@ fn compose_client_texture_to_target(
     Ok(())
 }
 
+/// Fail closed before touching the GLES target for unsupported client formats.
+fn validate_gpu_composition_format(source_format:Fourcc)->Result<(),String> {
+    match source_format {
+        Fourcc::Xrgb8888 | Fourcc::Xbgr8888 |
+        Fourcc::Argb8888 | Fourcc::Abgr8888 => Ok(()),
+        _ => Err("GPU composition requires supported packed RGB".into()),
+    }
+}
+
 /// Transitional QEMU path: alpha composition occurs on an actual GLES
 /// framebuffer, then the opaque completed image is downloaded for the
 /// existing CPU scene/KMS worker. This is NOT zero-copy or native scanout.
@@ -384,6 +390,9 @@ pub fn readback_qemu_client_bgra(
     if width!=360 || height!=224 {
         return Err("QEMU GPU client readback must match verified 360x224 scene".into());
     }
+    // Reject unsupported client formats before allocating any GL resource.
+    // The draw helper also validates, but that happens after binding an FBO.
+    validate_gpu_composition_format(source_format)?;
     // The staging bridge never samples its output as a texture. Use a
     // renderbuffer and read the exact same bound framebuffer, avoiding a
     // second FBO attachment and its texture read/write sync bookkeeping.
@@ -566,6 +575,17 @@ mod tests {
             Err("draw failed".into()),|| { calls+=1; Ok(()) });
         assert_eq!(result,Err("draw failed".into()));
         assert_eq!(calls,1,"cleanup must run exactly once on failure");
+    }
+
+    #[test]
+    fn gpu_composition_preflight_rejects_unsupported_format() {
+        for format in [
+            Fourcc::Xrgb8888,Fourcc::Xbgr8888,
+            Fourcc::Argb8888,Fourcc::Abgr8888,
+        ] {
+            assert_eq!(validate_gpu_composition_format(format),Ok(()));
+        }
+        assert!(validate_gpu_composition_format(Fourcc::Rgb565).is_err());
     }
 
     #[test]
