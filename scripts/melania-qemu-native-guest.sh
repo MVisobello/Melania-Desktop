@@ -3692,8 +3692,12 @@ for marker in \
   'MELANIA_RUST_KMS_CONNECTOR_RESTORE_VERIFIED=true' \
   'MELANIA_NATIVE_LIBSEAT_DRM_RELEASED=true' \
   'MELANIA_NATIVE_SEAT_DRM_FD_IDENTITY_VERIFIED_POST_ROLLBACK=true'; do
-  grep -Fqx "$marker" "$gpu_client_server_log" ||
+  if ! grep -Fqx "$marker" "$gpu_client_server_log"; then
+    # Preserve the actual compositor/client trace for a missing acceptance marker.
+    # The check remains fail-closed; diagnostics never substitute for KMS ACKs.
+    cat "$gpu_client_server_log" "$gpu_client_client_log"
     fatal "gpu_client_real_egl_to_KMS_missing_$marker"
+  fi
 done
 if [[ "$(grep -Fxc 'MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete' "$gpu_client_server_log" || true)" != 2 ]] ||
    [[ "$(grep -Fxc 'MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224' "$gpu_client_server_log" || true)" != 2 ]]; then
