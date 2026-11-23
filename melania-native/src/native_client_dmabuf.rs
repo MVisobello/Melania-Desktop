@@ -382,6 +382,11 @@ fn compose_client_texture_to_target(
     // Distinguish a driver crash inside the fence wait from a crash before it.
     // Keep the synchronization mandatory: no unsynchronized readback fallback.
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_wait_entered");
+    // The guest may abort inside the driver before the next log record. Flush
+    // the boundary marker explicitly so a missing fence_completed cannot be
+    // confused with a buffered stdout line during QEMU crash triage.
+    std::io::Write::flush(&mut std::io::stdout())
+        .map_err(|error|format!("client GPU fence diagnostic flush failed: {error}"))?;
     sync.wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_completed");
     Ok(())
