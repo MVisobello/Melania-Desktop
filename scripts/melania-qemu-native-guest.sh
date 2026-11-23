@@ -3610,6 +3610,21 @@ report 'MELANIA_QEMU_REAL_LAYER_SHELL_12_KMS_PASS=true'
 # from the same separate Wayland process; the final ten frames are genuine
 # wl_shm client commits, each with its own real KMS ACK.
 # Existing historical reject-without-fake-ACK case ABOVE stays unchanged.
+# Collect a real inferior backtrace for the legacy GLES staging path when
+# explicitly requested in a disposable QEMU guest. This does not alter the
+# normal acceptance path or bypass any of its KMS/Wayland assertions.
+gpu_client_command=("$continuous_server" --experimental-wayland-seat)
+gpu_client_timeout=76
+if [[ "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" == YES_QEMU_VM ]]; then
+  command -v gdb >/dev/null || fatal 'gpu_client_GDB_missing'
+  gpu_client_command=(gdb --batch --return-child-result
+    -ex 'set pagination off' -ex 'set confirm off'
+    -ex 'set debuginfod enabled off'
+    -ex 'run'
+    -ex 'thread apply all bt full'
+    --args "$continuous_server" --experimental-wayland-seat)
+  gpu_client_timeout=120
+fi
 gpu_client_server_log="$(mktemp -t melania-gpu-client-kms-server-XXXXXX)"
 gpu_client_client_log="$(mktemp -t melania-gpu-client-kms-client-XXXXXX)"
 MELANIA_NATIVE_WAYLAND_EXPERIMENT=YES_QEMU_VM \
@@ -3623,8 +3638,8 @@ MELANIA_NATIVE_CLIENT_DMABUF_KMS=YES_QEMU_VM \
 MELANIA_NATIVE_CLIENT_DMABUF_DOUBLE_GPU=YES_QEMU_VM \
 MELANIA_QEMU_CONTINUOUS_KMS=YES_DISPOSABLE_QEMU \
 MELANIA_QEMU_CONTINUOUS_FRAMES=12 \
-  timeout --signal=TERM --kill-after=3s 76s \
-  "$continuous_server" --experimental-wayland-seat < /dev/tty1 \
+  timeout --signal=TERM --kill-after=3s "${gpu_client_timeout}s" \
+  "${gpu_client_command[@]}" < /dev/tty1 \
   > "$gpu_client_server_log" 2>&1 &
 gpu_client_server_pid=$!
 gpu_client_socket=''
@@ -3647,8 +3662,14 @@ if ! MELANIA_QEMU_CONTINUOUS_CLIENT=YES_QEMU_VM \
   WAYLAND_DISPLAY="$gpu_client_socket" \
   timeout --signal=TERM --kill-after=3s 65s \
   "$continuous_client" > "$gpu_client_client_log" 2>&1; then
+  # GDB needs to finish unwinding after the client sees a broken pipe.
+  # The bounded debugger timeout still prevents indefinite CI hangs.
+  if [[ "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" == YES_QEMU_VM ]]; then
+    wait "$gpu_client_server_pid" || true
+  else
+    kill "$gpu_client_server_pid" 2>/dev/null || true
+  fi
   cat "$gpu_client_server_log" "$gpu_client_client_log"
-  kill "$gpu_client_server_pid" 2>/dev/null || true
   fatal 'gpu_client_real_separate_Wayland_process_failed'
 fi
 if ! wait "$gpu_client_server_pid"; then
