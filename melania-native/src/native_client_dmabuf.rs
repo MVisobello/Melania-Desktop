@@ -379,6 +379,9 @@ fn compose_client_texture_to_target(
     let sync=frame.finish()
         .map_err(|error|format!("client GPU composition finish failed: {error}"))?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish_returned");
+    // Distinguish a driver crash inside the fence wait from a crash before it.
+    // Keep the synchronization mandatory: no unsynchronized readback fallback.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_wait_entered");
     sync.wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_completed");
     Ok(())
