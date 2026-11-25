@@ -226,3 +226,189 @@ mod tests {
         assert_eq!(d.revision(),before);
     }
 }
+
+
+/// A per-output damage snapshot. The renderer must retain this token until
+/// the corresponding kernel-confirmed presentation, never clear on submit.
+/// Coordinates are output-local at the layout's current pixel scale.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputDamageFrame {
+    output_id: u32,
+    layout_revision: u64,
+    damage_revision: u64,
+    pub full: bool,
+    pub rects: Vec<DamageRect>,
+}
+impl OutputDamageFrame {
+    pub fn output_id(&self) -> u32 { self.output_id }
+}
+
+#[derive(Debug)]
+struct OutputDamage {
+    regions: DamageRegions,
+    serial: u64,
+}
+
+/// Independent damage queues for a validated extended desktop layout.
+/// This is renderer bookkeeping, not a KMS submitter: only the backend
+/// holding the real per-CRTC receipt may confirm a captured snapshot.
+/// Layout changes invalidate every outstanding snapshot and repaint every
+/// surviving output; no stale ACK may clear a newly attached monitor.
+#[derive(Debug, Default)]
+pub struct MultiOutputDamage {
+    layout: crate::output_layout::OutputLayout,
+    outputs: std::collections::BTreeMap<u32, OutputDamage>,
+}
+impl MultiOutputDamage {
+    pub fn layout(&self) -> &crate::output_layout::OutputLayout { &self.layout }
+
+    pub fn reconfigure(
+        &mut self,
+        outputs: impl IntoIterator<Item=crate::output_layout::DisplayRect>,
+    ) -> Result<bool, crate::output_layout::LayoutError> {
+        if !self.layout.reconfigure(outputs)? { return Ok(false); }
+        self.outputs.clear();
+        for rect in self.layout.outputs() {
+            // Validated layout guarantees strictly positive dimensions.
+            let mut regions = DamageRegions::new(rect.width, rect.height)
+                .expect("validated output dimensions");
+            regions.invalidate_all();
+            self.outputs.insert(rect.id, OutputDamage { regions, serial: 0 });
+        }
+        Ok(true)
+    }
+
+    /// Split global desktop damage at output boundaries, including negative
+    /// origins and gaps. Widen before adding/subtracting; never cast an
+    /// unbounded global coordinate to an output-local signed value.
+    pub fn invalidate(&mut self, x:i32, y:i32, width:usize, height:usize) {
+        if width == 0 || height == 0 { return; }
+        let right = i64::from(x).saturating_add(i64::try_from(width).unwrap_or(i64::MAX));
+        let bottom = i64::from(y).saturating_add(i64::try_from(height).unwrap_or(i64::MAX));
+        for rect in self.layout.outputs() {
+            let ox = i64::from(rect.x);
+            let oy = i64::from(rect.y);
+            let left = i64::from(x).max(ox);
+            let top = i64::from(y).max(oy);
+            let r = right.min(ox + i64::from(rect.width));
+            let b = bottom.min(oy + i64::from(rect.height));
+            if left >= r || top >= b { continue; }
+            let entry = self.outputs.get_mut(&rect.id).expect("layout and damage map agree");
+            // Increment even when regions already represent a full repaint:
+            // new content arriving during an in-flight full frame is not
+            // necessarily included in that earlier submitted framebuffer.
+            entry.serial = entry.serial.wrapping_add(1);
+            entry.regions.invalidate((left-ox) as i32, (top-oy) as i32,
+                                     (r-left) as usize, (b-top) as usize);
+        }
+    }
+
+    pub fn window_moved(&mut self, old:(i32,i32,usize,usize), new:(i32,i32,usize,usize)) {
+        self.invalidate(old.0,old.1,old.2,old.3);
+        self.invalidate(new.0,new.1,new.2,new.3);
+    }
+
+    pub fn pending(&self, output_id:u32) -> Option<OutputDamageFrame> {
+        let entry = self.outputs.get(&output_id)?;
+        if entry.regions.is_clean() { return None; }
+        Some(OutputDamageFrame {
+            output_id,
+            layout_revision: self.layout.revision(),
+            damage_revision: entry.serial,
+            full: entry.regions.is_full(),
+            rects: entry.regions.regions().to_vec(),
+        })
+    }
+
+    /// Call ONLY after the real backend has verified this output's flip.
+    /// Conservatively retain all regions if newer content arrived meanwhile.
+    /// No kernel calls or hardware-readiness claims are made here.
+    pub fn confirm_presented(&mut self, frame: &OutputDamageFrame) -> bool {
+        if self.layout.revision() != frame.layout_revision { return false; }
+        let Some(entry) = self.outputs.get_mut(&frame.output_id) else { return false; };
+        if entry.serial != frame.damage_revision || entry.regions.is_clean() { return false; }
+        entry.regions.clear_after_presented();
+        true
+    }
+}
+
+#[cfg(test)]
+mod multi_output_tests {
+    use super::*;
+    use crate::output_layout::{DisplayRect, LayoutError};
+
+    fn left() -> DisplayRect { DisplayRect{id:1,x:-640,y:0,width:640,height:480} }
+    fn right() -> DisplayRect { DisplayRect{id:2,x:0,y:0,width:1280,height:800} }
+    fn clean_pair() -> MultiOutputDamage {
+        let mut damage = MultiOutputDamage::default();
+        assert_eq!(damage.reconfigure([left(),right()]), Ok(true));
+        for id in [1,2] {
+            let frame = damage.pending(id).unwrap();
+            assert!(frame.full);
+            assert!(damage.confirm_presented(&frame));
+        }
+        damage
+    }
+    #[test]
+    fn straddling_window_invalidates_each_output_in_local_coordinates() {
+        let mut d = clean_pair();
+        d.invalidate(-20,10,50,60);
+        let a = d.pending(1).unwrap();
+        let b = d.pending(2).unwrap();
+        assert_eq!(a.rects, vec![DamageRect{x:620,y:10,width:20,height:60}]);
+        assert_eq!(b.rects, vec![DamageRect{x:0,y:10,width:30,height:60}]);
+        assert!(d.confirm_presented(&a));
+        assert!(d.pending(1).is_none());
+        assert_eq!(d.pending(2),Some(b));
+    }
+    #[test]
+    fn moving_between_outputs_and_late_receipts_preserve_new_damage() {
+        let mut d = clean_pair();
+        d.window_moved((-50,20,40,30),(100,200,40,30));
+        let a = d.pending(1).unwrap();
+        let b = d.pending(2).unwrap();
+        d.invalidate(110,210,2,2);
+        assert!(d.confirm_presented(&a));
+        assert!(!d.confirm_presented(&b));
+        let latest = d.pending(2).unwrap();
+        assert!(d.confirm_presented(&latest));
+        assert!(!d.confirm_presented(&latest));
+    }
+    #[test]
+    fn full_frame_also_rejects_ack_if_new_content_arrived() {
+        let mut d = MultiOutputDamage::default();
+        d.reconfigure([left(),right()]).unwrap();
+        let old = d.pending(2).unwrap();
+        d.invalidate(0,0,1,1);
+        assert!(!d.confirm_presented(&old));
+        assert!(d.pending(2).unwrap().full);
+    }
+    #[test]
+    fn topology_change_and_replug_reject_old_ack_without_partial_mutation() {
+        let mut d = clean_pair();
+        d.invalidate(20,20,10,10);
+        let old = d.pending(2).unwrap();
+        assert_eq!(d.reconfigure([left(),DisplayRect{x:-1,..right()}]),
+                   Err(LayoutError::OverlappingOutputs));
+        assert_eq!(d.pending(2),Some(old.clone()));
+        assert_eq!(d.reconfigure([left()]),Ok(true));
+        assert!(!d.confirm_presented(&old));
+        assert_eq!(d.reconfigure([left(),right()]),Ok(true));
+        assert!(!d.confirm_presented(&old));
+        assert!(d.pending(2).unwrap().full);
+        let new = d.pending(2).unwrap();
+        assert_eq!(d.reconfigure([right(),left()]),Ok(false));
+        assert!(d.confirm_presented(&new));
+    }
+    #[test]
+    fn gap_and_extreme_geometry_are_clipped_without_overflow() {
+        let mut d = clean_pair();
+        d.invalidate(-100,600,20,20);
+        assert!(d.pending(1).is_none() && d.pending(2).is_none());
+        d.invalidate(i32::MIN,i32::MIN,usize::MAX,usize::MAX);
+        assert_eq!(d.pending(1).unwrap().rects,
+                   vec![DamageRect{x:0,y:0,width:640,height:480}]);
+        assert_eq!(d.pending(2).unwrap().rects,
+                   vec![DamageRect{x:0,y:0,width:1280,height:800}]);
+    }
+}
