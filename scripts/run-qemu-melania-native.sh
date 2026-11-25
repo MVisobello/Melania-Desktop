@@ -145,6 +145,18 @@ genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
   -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-ime-roundtrip=$ime_probe" "melania-auth-resize-client=$auth_resize_client" "melania-real-popup-client=$real_popup_client" "melania-super-snap-client=$snap_client" "melania-edge-drop-client=$edge_client" "melania-layer-panel-client=$layer_client" "melania-gtk-five-roles=$gtk_five_client" "melania-panel=$gtk_panel" "libgtk4-layer-shell.so.0=$gtk_layer_lib" "icons=$fluent_icons"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
+# Optional crash diagnosis is confined to this disposable guest. Never
+# forward arbitrary host environment strings into executable cloud-init.
+gdb_package=''
+gdb_env=''
+case "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" in
+  '') ;;
+  YES_QEMU_VM)
+    gdb_package='  - gdb'
+    gdb_env='MELANIA_QEMU_CLIENT_GLES_GDB=YES_QEMU_VM '
+    ;;
+  *) deny 'invalid GLES guest debugger opt-in' ;;
+esac
 cat > user-data <<EOF
 #cloud-config
 ssh_pwauth: false
@@ -164,13 +176,14 @@ packages:
   - libdisplay-info1
   - libgtk-4-1
   - gsettings-desktop-schemas
+$gdb_package
 write_files:
   - path: /usr/local/sbin/melania-qemu-native-guest.sh
     permissions: '0700'
     encoding: b64
     content: $encoded
 runcmd:
-  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; bash /usr/local/sbin/melania-qemu-native-guest.sh > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
+  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; ${gdb_env}bash /usr/local/sbin/melania-qemu-native-guest.sh > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
 EOF
 cloud-localds seed.iso user-data meta-data
 
