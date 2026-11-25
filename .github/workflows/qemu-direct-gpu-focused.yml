@@ -20,7 +20,9 @@ jobs:
       matrix:
         mode: [direct, retained]
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Includes image download, compilation, package provisioning and the
+    # bounded 1200-second retained/persistent/mixed guest sequence.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
