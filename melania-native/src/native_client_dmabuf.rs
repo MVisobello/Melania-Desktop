@@ -387,7 +387,20 @@ fn compose_client_texture_to_target(
     // confused with a buffered stdout line during QEMU crash triage.
     std::io::Write::flush(&mut std::io::stdout())
         .map_err(|error|format!("client GPU fence diagnostic flush failed: {error}"))?;
-    sync.wait().map_err(|error|format!("client GPU composition fence failed: {error}"))?;
+    // The second QEMU frame repeatedly crashes in the EGL CPU-side
+    // client wait. Queue the fence in the renderer's own current context
+    // instead, then synchronously complete that context before readback.
+    // Renderer::wait may only enqueue a GPU wait: it is NOT completion
+    // evidence on its own. glFinish is mandatory, not a CPU blend fallback.
+    renderer.wait(&sync)
+        .map_err(|error|format!("client GPU composition fence insertion failed: {error}"))?;
+    let gl_error=renderer.with_context(|gl| unsafe {
+        gl.Finish();
+        gl.GetError()
+    }).map_err(|error|format!("client GPU composition context finish failed: {error}"))?;
+    if gl_error!=0 {
+        return Err(format!("client GPU composition GL completion failed: 0x{gl_error:04x}"));
+    }
     println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_completed");
     Ok(())
 }
