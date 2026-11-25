@@ -545,7 +545,18 @@ class RealClientDmabufToKms(unittest.TestCase):
         self.assertIn("let opaque_regions=if opaque",compose)
         self.assertLess(compose.index("frame.clear("),compose.index("frame.render_texture_from_to("))
         self.assertLess(compose.index("frame.render_texture_from_to("),compose.index("frame.finish()"))
-        self.assertIn(".wait()",compose)
+        # A queued GPU fence alone is not completion; require the real
+        # context finish and checked GL status before the success marker.
+        self.assertIn("renderer.wait(&sync)",compose)
+        self.assertIn("renderer.with_context(",compose)
+        self.assertIn("gl.Finish();",compose)
+        self.assertIn("gl.GetError()",compose)
+        self.assertIn("if gl_error!=0",compose)
+        self.assertLess(compose.index("frame.finish()"),compose.index("renderer.wait(&sync)"))
+        self.assertLess(compose.index("renderer.wait(&sync)"),compose.index("gl.Finish();"))
+        self.assertLess(compose.index("gl.Finish();"),compose.index("gl.GetError()"))
+        self.assertLess(compose.index("if gl_error!=0"),compose.index('STAGE=fence_completed'))
+        self.assertNotIn("sync.wait()",compose)
         self.assertIn("renderer.create_buffer(",readback)
         self.assertLess(readback.index("compose_client_texture_to_target("),
                         readback.index("renderer.copy_framebuffer(&target,"))
