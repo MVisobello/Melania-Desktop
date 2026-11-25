@@ -462,6 +462,37 @@ if ! awk -F '\t' -v id="$SETTINGS_ID" '$1==id && $2=="attiva" {found=1} END {exi
   exit 1
 fi
 echo 'PASS: live Wayland minimized-window focus fallback and reactivation'
+# Real host keyboard -> nested Smithay -> managed GTK toplevel. Do not
+# substitute the SEND IPC command for the actual move-and-follow shortcut.
+assert_workspace_focus() {
+  local expected_workspace="$1" expected_window="$2" status
+  for i in $(seq 1 40); do
+    status="$(target/debug/melania-winctl status)"
+    target/debug/melania-winctl list >"$TEMP/workspace-keyboard.log"
+    if [[ "$status" =~ (^|[^0-9])$expected_workspace([^0-9]|$) ]] &&
+      awk -F '\t' -v id="$expected_window" '$1==id && $2=="attiva" {found=1} END {exit !found}' "$TEMP/workspace-keyboard.log"; then
+      return 0
+    fi
+    sleep .1
+  done
+  echo "FAIL: expected workspace $expected_workspace with focused window $expected_window; actual $status" >&2
+  cat "$TEMP/workspace-keyboard.log" >&2
+  return 1
+}
+target/debug/melania-winctl activate "$FILES_ID" >/dev/null
+assert_workspace_focus 1 "$FILES_ID"
+xdotool windowfocus --sync "$HOST_WINDOW"
+xdotool key --clearmodifiers ctrl+alt+shift+Right
+assert_workspace_focus 2 "$FILES_ID"
+# Activating Settings must return to workspace 1, proving it did not move
+# together with Files. Reactivating Files must return to workspace 2.
+target/debug/melania-winctl activate "$SETTINGS_ID" >/dev/null
+assert_workspace_focus 1 "$SETTINGS_ID"
+target/debug/melania-winctl activate "$FILES_ID" >/dev/null
+assert_workspace_focus 2 "$FILES_ID"
+xdotool key --clearmodifiers ctrl+alt+shift+Left
+assert_workspace_focus 1 "$FILES_ID"
+echo 'PASS: real keyboard moved only focused GTK window between workspaces and restored focus'
 # Real GTK tab controls, not a source-only assertion: send Ctrl+T and Ctrl+W
 # through the nested host window, assert page-count evidence and retain actual
 # pixels of three visible Nautilus-style tabs for UI review.

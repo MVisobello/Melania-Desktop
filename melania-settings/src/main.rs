@@ -461,8 +461,13 @@ fn build_ui(
             if let Some(page)=content {
                 lazy_pages::fill(&stack,&target,page);
                 if std::env::var_os("MELANIA_PROFILE_SETTINGS").is_some() {
-                    eprintln!("MELANIA_SETTINGS_PAGE_BUILD_MS={} page={}",
+                    // The nested compositor and GTK children share one CI
+                    // log. Format first, then write the whole short line
+                    // instead of interleaving individual formatting pieces.
+                    use std::io::Write;
+                    let line=format!("MELANIA_SETTINGS_PAGE_BUILD_MS={} page={}\n",
                         started.elapsed().as_millis(),target);
+                    let _=std::io::stderr().lock().write_all(line.as_bytes());
                 }
             }
         });

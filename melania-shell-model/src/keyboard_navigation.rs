@@ -25,6 +25,14 @@ pub fn adjacent_workspace(current: u8, count: u8, backwards: bool) -> Option<u8>
     } else if current == count {1} else {current+1})
 }
 
+/// Move-and-follow only when a managed, visible, non-minimized toplevel
+/// actually owns keyboard focus. A one-workspace session is a no-op.
+pub fn adjacent_window_destination(current: u8, count: u8, backwards: bool,
+                                   focused_visible: bool) -> Option<u8> {
+    if !focused_visible { return None; }
+    adjacent_workspace(current, count, backwards).filter(|dest| *dest != current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,6 +50,16 @@ mod tests {
         assert_eq!(cycle_window_id(&ids, None, true), Some(9));
         assert_eq!(cycle_window_id(&[3], Some(3), true), Some(3));
         assert_eq!(cycle_window_id(&[], None, true), None);
+    }
+    #[test] fn move_and_follow_requires_focus_and_distinct_valid_destination() {
+        assert_eq!(adjacent_window_destination(1, 4, true, true), Some(4));
+        assert_eq!(adjacent_window_destination(4, 4, false, true), Some(1));
+        assert_eq!(adjacent_window_destination(2, 4, false, true), Some(3));
+        assert_eq!(adjacent_window_destination(2, 4, false, false), None);
+        assert_eq!(adjacent_window_destination(1, 1, true, true), None);
+        assert_eq!(adjacent_window_destination(0, 4, false, true), None);
+        assert_eq!(adjacent_window_destination(5, 4, true, true), None);
+        assert_eq!(adjacent_window_destination(1, 0, false, true), None);
     }
     #[test] fn workspace_navigation_is_bounded_and_wraps() {
         assert_eq!(adjacent_workspace(1, 4, false), Some(2));
