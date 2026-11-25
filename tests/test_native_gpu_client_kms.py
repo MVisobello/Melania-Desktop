@@ -535,6 +535,15 @@ class RealClientDmabufToKms(unittest.TestCase):
             self.assertIn(marker,GUEST)
         self.assertIn("MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true",HOST)
 
+    def test_guest_overlay_resized_before_cloud_init(self):
+        create = HOST.index('qemu-img create -q -f qcow2')
+        resize = HOST.index('qemu-img resize -q overlay.qcow2 +4G')
+        cloud = HOST.index('#cloud-config')
+        self.assertLess(create, resize)
+        self.assertLess(resize, cloud)
+        self.assertIn('devices: ["/"]', HOST)
+        self.assertIn('resize_rootfs: true', HOST)
+
     def test_legacy_gles_debugger_is_disposable_guest_opt_in(self):
         self.assertIn('case "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" in',HOST)
         self.assertIn("gdb_package='  - gdb'",HOST)
