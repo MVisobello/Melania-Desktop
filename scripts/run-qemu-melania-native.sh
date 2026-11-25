@@ -130,6 +130,9 @@ grep -E "[[:space:]\\*]${image//./\\.}$" SHA256SUMS > verify.sha256 ||
 sha256sum -c verify.sha256
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
+# Expand only the disposable copy-on-write disk, never the downloaded image.
+# The Noble image can run out of root space while unpacking Mesa and GDB.
+qemu-img resize -q overlay.qcow2 +4G
 # The binary is built on Ubuntu 24.04; transfer it through an ISO that is
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
@@ -145,8 +148,25 @@ genisoimage -quiet -R -J -V MELANIA_BIN -o melania-payload.iso \
   -graft-points "melania-native=$native" "melania-vt-guest.py=$root/scripts/melania-vt-guest.py" "melania-fb2-probe=$fb_probe" "melania-visible-probe=$visible_probe" "melania-wayland-client=$client_probe" "melania-shell-client=$shell_probe" "melania-pixel-client=$pixel_client" "melania-pixel-scanout=$pixel_scanout" "melania-rust-kms=$rust_kms" "melania-rust-stream=$stream_kms" "melania-continuous-kms=$continuous_kms" "melania-continuous-client=$continuous_client" "melania-two-continuous-client=$two_continuous_client" "melania-ime-roundtrip=$ime_probe" "melania-auth-resize-client=$auth_resize_client" "melania-real-popup-client=$real_popup_client" "melania-super-snap-client=$snap_client" "melania-edge-drop-client=$edge_client" "melania-layer-panel-client=$layer_client" "melania-gtk-five-roles=$gtk_five_client" "melania-panel=$gtk_panel" "libgtk4-layer-shell.so.0=$gtk_layer_lib" "icons=$fluent_icons"
 printf '%s\n' 'instance-id: melania-native-stage17' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
+# Optional crash diagnosis is confined to this disposable guest. Never
+# forward arbitrary host environment strings into executable cloud-init.
+gdb_package=''
+gdb_env=''
+case "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" in
+  '') ;;
+  YES_QEMU_VM)
+    gdb_package='  - gdb'
+    gdb_env='MELANIA_QEMU_CLIENT_GLES_GDB=YES_QEMU_VM '
+    ;;
+  *) deny 'invalid GLES guest debugger opt-in' ;;
+esac
 cat > user-data <<EOF
 #cloud-config
+# Grow the guest root partition/filesystem into the expanded overlay.
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true
 ssh_pwauth: false
 disable_root: false
 packages:
@@ -164,13 +184,14 @@ packages:
   - libdisplay-info1
   - libgtk-4-1
   - gsettings-desktop-schemas
+$gdb_package
 write_files:
   - path: /usr/local/sbin/melania-qemu-native-guest.sh
     permissions: '0700'
     encoding: b64
     content: $encoded
 runcmd:
-  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; bash /usr/local/sbin/melania-qemu-native-guest.sh > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
+  - [ bash, -c, 'modprobe virtio_gpu 2>/dev/null || true; ${gdb_env}bash /usr/local/sbin/melania-qemu-native-guest.sh > /dev/ttyS0 2>&1; code=\$?; echo "MELANIA_QEMU_NATIVE_GUEST_EXIT=\$code" > /dev/ttyS0; sync; poweroff -f' ]
 EOF
 cloud-localds seed.iso user-data meta-data
 
@@ -266,11 +287,13 @@ python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --output "$report/dynamic-pointer-frame13.ppm" --timeout 1680 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
+# The popup follows the combined tab stage, which can run past 1350s.
+# Match the VM hard deadline; the client still requires its real click in 24s.
 python3 "$root/scripts/capture-qemu-real-xdg-popup.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --popup "$report/real-popup-frame2.ppm" \
   --cleared "$report/real-popup-cleared-frame3.ppm" \
-  --timeout 1350 > "$report/qmp-real-xdg-popup.log" 2>&1 &
+  --timeout 2050 > "$report/qmp-real-xdg-popup.log" 2>&1 &
 real_popup_capture_pid=$!
 python3 "$root/scripts/inject-qemu-alt-tab.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \

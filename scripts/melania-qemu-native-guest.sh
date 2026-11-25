@@ -3620,7 +3620,7 @@ if [[ "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" == YES_QEMU_VM ]]; then
   gpu_client_command=(gdb --batch --return-child-result
     -ex 'set pagination off' -ex 'set confirm off'
     -ex 'set debuginfod enabled off'
-    -ex 'run'
+    -ex 'run --experimental-wayland-seat < /dev/tty1'
     -ex 'thread apply all bt full'
     --args "$continuous_server" --experimental-wayland-seat)
   gpu_client_timeout=120
