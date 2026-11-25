@@ -130,6 +130,9 @@ grep -E "[[:space:]\\*]${image//./\\.}$" SHA256SUMS > verify.sha256 ||
 sha256sum -c verify.sha256
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
+# Expand only the disposable copy-on-write disk, never the downloaded image.
+# The Noble image can run out of root space while unpacking Mesa and GDB.
+qemu-img resize -q overlay.qcow2 +4G
 # The binary is built on Ubuntu 24.04; transfer it through an ISO that is
 # read-only inside QEMU. Not a host device mount; no binaries downloaded
 # from arbitrary sources at guest runtime.
@@ -159,6 +162,11 @@ case "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" in
 esac
 cat > user-data <<EOF
 #cloud-config
+# Grow the guest root partition/filesystem into the expanded overlay.
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true
 ssh_pwauth: false
 disable_root: false
 packages:
