@@ -279,11 +279,13 @@ python3 "$root/scripts/capture-qemu-dynamic-pointer.py" \
   --output "$report/dynamic-pointer-frame13.ppm" --timeout 1680 \
   > "$report/qmp-dynamic-pointer-frame13.log" 2>&1 &
 dynamic_pointer_capture_pid=$!
+# The popup follows the combined tab stage, which can run past 1350s.
+# Match the VM hard deadline; the client still requires its real click in 24s.
 python3 "$root/scripts/capture-qemu-real-xdg-popup.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
   --popup "$report/real-popup-frame2.ppm" \
   --cleared "$report/real-popup-cleared-frame3.ppm" \
-  --timeout 1350 > "$report/qmp-real-xdg-popup.log" 2>&1 &
+  --timeout 2050 > "$report/qmp-real-xdg-popup.log" 2>&1 &
 real_popup_capture_pid=$!
 python3 "$root/scripts/inject-qemu-alt-tab.py" \
   --serial "$serial" --qmp "$work/melania-qmp.sock" \
