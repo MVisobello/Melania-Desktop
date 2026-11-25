@@ -490,6 +490,15 @@ target/debug/melania-winctl activate "$SETTINGS_ID" >/dev/null
 assert_workspace_focus 1 "$SETTINGS_ID"
 target/debug/melania-winctl activate "$FILES_ID" >/dev/null
 assert_workspace_focus 2 "$FILES_ID"
+# Ordinary keyboard switches must recall each workspace's genuine focus.
+xdotool key --clearmodifiers ctrl+alt+Left
+assert_workspace_focus 1 "$SETTINGS_ID"
+xdotool key --clearmodifiers ctrl+alt+Right
+assert_workspace_focus 2 "$FILES_ID"
+# Re-selecting the already active workspace must not clear focus.
+target/debug/melania-winctl workspace 2 >/dev/null
+assert_workspace_focus 2 "$FILES_ID"
+echo 'PASS: real keyboard workspace navigation restored independent focus'
 xdotool key --clearmodifiers ctrl+alt+shift+Left
 assert_workspace_focus 1 "$FILES_ID"
 echo 'PASS: real keyboard moved only focused GTK window between workspaces and restored focus'
