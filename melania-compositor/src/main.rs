@@ -51,7 +51,7 @@ use ::winit::platform::pump_events::PumpStatus;
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use melania_core::{Rect as CoreRect, interaction::{Edges, Interaction, Operation}};
 use melania_shell_model::{detect_snap, snap_geometry, Geometry as ShellRect, SnapZone};
-use melania_shell_model::keyboard_navigation::{adjacent_workspace, cycle_window_id};
+use melania_shell_model::keyboard_navigation::{adjacent_window_destination, adjacent_workspace, cycle_window_id};
 use melania_shell_model::workarea::fit_initial_window;
 use melania_control::{start_toggle_socket_path, Command as ControlCommand, WindowInfo, ACK, respond_error, respond_list, read_command, respond_workspace, SOCKET_ENV};
 use melania_workspaces::Workspaces;
@@ -617,6 +617,28 @@ impl Melania {
         Ok(())
     }
 
+    /// Ctrl+Alt+Shift+Left/Right moves the genuinely focused visible
+    /// toplevel, switches to its destination, and restores its keyboard
+    /// focus. Never move a stale taskbar selection, Start, or a hidden
+    /// client; never interrupt an authenticated move/resize grab.
+    fn move_focused_to_adjacent_workspace(&mut self, backwards: bool) {
+        if self.interaction.is_some() { return; }
+        let Some(id) = self.active_window else { return; };
+        let keyboard = self.seat.get_keyboard().expect("keyboard");
+        let focus = keyboard.current_focus();
+        let focused_visible = self.managed.iter().any(|w| w.id == id
+            && !w.minimized && self.workspaces.is_visible(id)
+            && focus.as_ref() == Some(&w.surface));
+        let Some(dest) = adjacent_window_destination(self.workspaces.current(),
+            self.workspaces.count(), backwards, focused_visible) else { return; };
+        if self.send_to_workspace(id, dest).is_err() { return; }
+        // send and switch use the same validated workspace count, so the
+        // destination remains valid for this synchronous compositor event.
+        if self.switch_workspace(dest).is_ok() {
+            let _ = self.control(ControlCommand::Activate(id));
+        }
+    }
+
     /// Live xdg_toplevel title and application ID, safely encoded by melania-control.
     fn window_snapshot(&self) -> Vec<WindowInfo> {
         // Bound list size: a malicious client can supply arbitrarily long titles.
@@ -961,9 +983,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             if modifiers.ctrl && modifiers.alt && !modifiers.logo &&
                                 (symbol == keysyms::KEY_Left.into() || symbol == keysyms::KEY_Right.into()) {
                                 if pressed {
-                                    if let Some(next) = adjacent_workspace(
-                                        data.workspaces.current(), data.workspaces.count(),
-                                        symbol == keysyms::KEY_Left.into()) {
+                                    let backwards = symbol == keysyms::KEY_Left.into();
+                                    if modifiers.shift {
+                                        data.move_focused_to_adjacent_workspace(backwards);
+                                    } else if let Some(next) = adjacent_workspace(
+                                        data.workspaces.current(), data.workspaces.count(), backwards) {
                                         let _ = data.switch_workspace(next);
                                     }
                                 }
