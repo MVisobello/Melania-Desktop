@@ -181,6 +181,12 @@ on:
       - melania-native/**
       - melania-panel/src/main.rs
   workflow_dispatch:
+    inputs:
+      gles_guest_backtrace:
+        description: Collect legacy GLES crash backtrace inside disposable QEMU
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -369,6 +375,7 @@ jobs:
         env:
           MELANIA_QEMU_NATIVE_VM: YES_DISPOSABLE_QEMU
           MELANIA_QEMU_NATIVE_REPORT_DIR: reports/qemu-native
+          MELANIA_QEMU_CLIENT_GLES_GDB: ${{ github.event_name == 'workflow_dispatch' && inputs.gles_guest_backtrace && 'YES_QEMU_VM' || '' }}
         run: bash scripts/run-qemu-melania-native.sh
       - uses: actions/upload-artifact@v4
         if: always()
