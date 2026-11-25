@@ -535,6 +535,20 @@ class RealClientDmabufToKms(unittest.TestCase):
             self.assertIn(marker,GUEST)
         self.assertIn("MELANIA_QEMU_GPU_ROLLING_IMPORTS_PASS=true",HOST)
 
+    def test_legacy_gles_debugger_is_disposable_guest_opt_in(self):
+        self.assertIn('case "${MELANIA_QEMU_CLIENT_GLES_GDB:-}" in',HOST)
+        self.assertIn("gdb_package='  - gdb'",HOST)
+        self.assertIn("gdb_env='MELANIA_QEMU_CLIENT_GLES_GDB=YES_QEMU_VM '",HOST)
+        self.assertIn('invalid GLES guest debugger opt-in',HOST)
+        self.assertIn('$gdb_package',HOST)
+        self.assertIn('${gdb_env}bash /usr/local/sbin/melania-qemu-native-guest.sh',HOST)
+        self.assertIn('gles_guest_backtrace:',CI)
+        self.assertIn('default: false',CI)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.gles_guest_backtrace",CI)
+        self.assertIn("gpu_client_command=(gdb --batch --return-child-result",GUEST)
+        self.assertIn("run --experimental-wayland-seat < /dev/tty1",GUEST)
+        self.assertIn("thread apply all bt full",GUEST)
+
     def test_live_gpu_composition_precedes_opaque_readback(self):
         compose=GPU.split("fn compose_client_texture_to_target(",1)[1].split(
             "pub fn readback_qemu_client_bgra(",1)[0]
