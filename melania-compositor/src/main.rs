@@ -1196,10 +1196,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let shell_drawn_this_frame = stage_shell && !shell_frame_painted &&
                 top_render_elements > 0 && background_render_elements > 0;
             if debug_render && last_render_report.elapsed() >= Duration::from_secs(1) {
-                eprintln!("MELANIA_RENDER windows={} layers={} elements={} xdg={} top={} size={}x{}",
+                // Child processes share the diagnostic destination. Keep
+                // each short profiling record in a single write.
+                let line=format!("MELANIA_RENDER windows={} layers={} elements={} xdg={} top={} size={}x{}\n",
                           state.space.elements().count(),
                           layer_map_for_output(&output).layers().count(),
                           elements.len(), xdg_render_elements, top_render_elements, size.w, size.h);
+                let _=io::stderr().lock().write_all(line.as_bytes());
                 last_render_report = Instant::now();
             }
             let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
