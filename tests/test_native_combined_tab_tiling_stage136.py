@@ -1,6 +1,9 @@
 """Stage136: required actual USB + two distinct XDG owned client buffers."""
 from pathlib import Path
 import unittest
+import importlib.util
+import time
+from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 BRIDGE=(ROOT/"melania-native/src/wayland_bridge.rs").read_text()
 CLIENT=(ROOT/"melania-native/src/bin/qemu-continuous-two-windows.rs").read_text()
@@ -63,6 +66,36 @@ class NativeCombinedTabTilingStage136(unittest.TestCase):
         self.assertNotIn("NATIVE_SESSION_READY=true",QMP)
         self.assertIn("python3 -m py_compile scripts/inject-qemu-combined-tab-tiling.py",CI)
         self.assertIn("test_native_combined_tab_tiling_stage136.py",CI)
+    def test_terminal_usb_retry_requires_real_delivery_and_releases_every_press(self):
+        spec=importlib.util.spec_from_file_location(
+            "combined_tab_injector",ROOT/"scripts/inject-qemu-combined-tab-tiling.py")
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        serial=Path("serial")
+        qmp=Path("qmp")
+        with patch.object(module.tab,"key") as key, patch.object(
+            module.tab,"wait",side_effect=[TimeoutError("lost key"),None]
+        ) as wait:
+            module.confirm_usb_release(serial,qmp,time.monotonic()+30)
+            self.assertEqual([c.args[2] for c in key.call_args_list],
+                             [True,False,True,False])
+            self.assertEqual(wait.call_count,2)
+            self.assertTrue(all(c.args[1]=="MELANIA_QEMU_TAB_REAL_USB_RELEASE=F8"
+                                for c in wait.call_args_list))
+        with patch.object(module.tab,"key") as key, patch.object(
+            module.tab,"wait",side_effect=TimeoutError("no receipt")
+        ):
+            with self.assertRaises(TimeoutError):
+                module.confirm_usb_release(serial,qmp,time.monotonic()+30)
+            self.assertEqual([c.args[2] for c in key.call_args_list],
+                             [True,False]*3)
+        with patch.object(module.tab,"key") as key, patch.object(
+            module.tab,"wait",side_effect=RuntimeError("guest exited")
+        ):
+            with self.assertRaises(RuntimeError):
+                module.confirm_usb_release(serial,qmp,time.monotonic()+30)
+            self.assertEqual([c.args[2] for c in key.call_args_list],[True,False])
+
     def test_pending_output_wide_resize_blocks_conflicting_real_input_mutations(self):
         # Super+Y toggles, Super+X swap, floating exception, orientation,
         # and an arriving layer-shell reservation cannot bypass an in-flight

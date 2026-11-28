@@ -149,7 +149,13 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
         .ok_or("client DMA-BUF has no plane stride")? as usize;
     let offset=buffer.offsets().next()
         .ok_or("client DMA-BUF has no plane offset")? as usize;
-    if stride<row || stride>MAX_CLIENT_SURFACE_EDGE*16 {
+    // A LINEAR stride must cover the visible row. For opaque GPU modifiers
+    // the driver defines the layout, so a smaller advertised stride is not
+    // proof of an invalid allocation. Keep the independent metadata ceiling
+    // and kernel-FD allocation checks for every modifier.
+    if stride>MAX_CLIENT_SURFACE_EDGE*16 ||
+       (buffer.format().modifier==smithay::backend::allocator::Modifier::Linear &&
+        stride<row) {
         return Err("client DMA-BUF stride outside bounded packed-RGB layout".into());
     }
     // The QEMU bridge handles 32-bit packed RGB only. A LINEAR row or
@@ -162,23 +168,20 @@ pub fn validate_client_dmabuf(buffer:&Dmabuf)->Result<(),String> {
        (stride%4!=0 || offset%4!=0) {
         return Err("client LINEAR packed-RGB stride/offset must be 4-byte aligned".into());
     }
-    let last=height.checked_sub(1)
-        .and_then(|rows|rows.checked_mul(stride))
-        .and_then(|length|length.checked_add(offset))
-        .and_then(|length|length.checked_add(row))
-        .ok_or("client DMA-BUF plane address overflow")?;
-    if last>64*1024*1024 {
-        return Err("client DMA-BUF unbounded plane offset or backing extent".into());
-    }
-    // A LINEAR packed-RGB plane's last visible byte is the true minimum
-    // backing extent. Its padding and offset must consume the same 16 MiB
-    // quota as its visible pixels. Without this check a 360x1024 client
-    // could reserve >32 MiB through stride while nominal pixels use 1.4 MiB.
-    // Tiled/compressed modifiers have opaque physical layout, so do not
-    // invent a minimum allocation extent for those layouts here.
-    if buffer.format().modifier==smithay::backend::allocator::Modifier::Linear &&
-       last>MAX_CLIENT_BUFFER_BYTES {
-        return Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into());
+    // Only LINEAR has a defined last-row byte extent. For tiled or
+    // compressed modifiers the stride is metadata in a vendor-specific
+    // layout: treating it as a byte pitch invents a potentially huge
+    // allocation and incorrectly rejects valid driver-advertised buffers.
+    // The separate kernel-FD budget still applies to every modifier.
+    if buffer.format().modifier==smithay::backend::allocator::Modifier::Linear {
+        let last=height.checked_sub(1)
+            .and_then(|rows|rows.checked_mul(stride))
+            .and_then(|length|length.checked_add(offset))
+            .and_then(|length|length.checked_add(row))
+            .ok_or("client DMA-BUF plane address overflow")?;
+        if last>MAX_CLIENT_BUFFER_BYTES {
+            return Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into());
+        }
     }
     Ok(())
 }
@@ -208,11 +211,17 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
         .ok_or("LINEAR DMA-BUF backing stride missing")? as usize;
     let offset=buffer.offsets().next()
         .ok_or("LINEAR DMA-BUF backing offset missing")? as usize;
-    let required=height.checked_sub(1)
-        .and_then(|rows|rows.checked_mul(stride))
-        .and_then(|bytes|bytes.checked_add(offset))
-        .and_then(|bytes|bytes.checked_add(row))
-        .ok_or("LINEAR DMA-BUF backing extent overflow")?;
+    // Opaque/tiled modifiers do not define a LINEAR last-row extent.
+    // Calculate that extent only when the layout actually is LINEAR.
+    let required=if linear {
+        Some(height.checked_sub(1)
+            .and_then(|rows|rows.checked_mul(stride))
+            .and_then(|bytes|bytes.checked_add(offset))
+            .and_then(|bytes|bytes.checked_add(row))
+            .ok_or("LINEAR DMA-BUF backing extent overflow")?)
+    } else {
+        None
+    };
     let fd=buffer.handles().next().ok_or("LINEAR DMA-BUF plane FD missing")?;
     // lseek(0, SEEK_END) on DMA-BUF returns the true allocation size on
     // supported Linux kernels. Do not use stat.st_size, a guessed GBM pitch,
@@ -233,7 +242,7 @@ fn validate_client_plane_backing(buffer:&Dmabuf)->Result<(),String> {
     if (offset as u64) >= actual as u64 {
         return Err("DMA-BUF plane offset outside kernel allocation".into());
     }
-    if linear && (actual as u64) < required as u64 {
+    if required.is_some_and(|extent| (actual as u64) < extent as u64) {
         return Err("LINEAR DMA-BUF FD shorter than advertised plane extent".into());
     }
     // The earlier visible-byte check bounds the minimum addressed pixels.
@@ -331,17 +340,89 @@ pub fn import_client_dmabuf(
         .map_err(|error|format!("client DMA-BUF GLES texture import failed: {error}"))
 }
 
-/// QEMU-only transitional compositor path: import happened on the
-/// libseat-owned EGL renderer, then download the GLES texture into one
-/// *owned* bounded BGRA image for the existing verified Rust DRM worker.
-/// This is a GPU -> CPU readback, NOT a zero-copy GPU composition engine.
-/// The snapshot may be submitted to KMS only via the existing frame ticket
-/// and DRM FB_ID/vblank ACK; no wl_buffer.release occurs here.
+/// Composite the actual imported Wayland texture with premultiplied alpha
+/// using GLES, into a caller-owned GPU render target. This operation can
+/// also target a GBM scanout buffer once the KMS worker shares GPU resources.
+/// It does not submit DRM, acknowledge presentation, or release wl_buffer.
+fn compose_client_texture_to_target(
+    renderer:&mut GlesRenderer,
+    target:&mut smithay::backend::renderer::gles::GlesTarget<'_>,
+    texture:&GlesTexture,source_format:Fourcc,
+)->Result<(),String> {
+    use smithay::{
+        backend::renderer::{Color32F,Frame,Renderer,Texture},
+        utils::{Rectangle,Transform},
+    };
+    let width=texture.width() as i32;
+    let height=texture.height() as i32;
+    if width!=360 || height!=224 {
+        return Err("QEMU GPU client composition must match verified 360x224 scene".into());
+    }
+    validate_gpu_composition_format(source_format)?;
+    let opaque=matches!(source_format,Fourcc::Xrgb8888 | Fourcc::Xbgr8888);
+    let dest=Rectangle::from_size((width,height).into());
+    let src=Rectangle::from_size((f64::from(width),f64::from(height)).into());
+    let mut frame=renderer.render(target,(width,height).into(),Transform::Normal)
+        .map_err(|error|format!("client GPU composition frame failed: {error}"))?;
+    frame.clear(Color32F::new(
+        f32::from(QEMU_SCENE_BGRA[2])/255.0,
+        f32::from(QEMU_SCENE_BGRA[1])/255.0,
+        f32::from(QEMU_SCENE_BGRA[0])/255.0,1.0,
+    ),&[dest]).map_err(|error|format!("client GPU background clear failed: {error}"))?;
+    // XRGB/XBGR have no alpha; the actual format, not arbitrary bytes
+    // returned by a readback, selects the fully opaque render region.
+    let opaque_regions=if opaque {std::slice::from_ref(&dest)} else {&[]};
+    frame.render_texture_from_to(
+        texture,src,dest,&[dest],opaque_regions,Transform::Normal,1.0,None,&[],
+    ).map_err(|error|format!("client GPU texture composition failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish");
+    let sync=frame.finish()
+        .map_err(|error|format!("client GPU composition finish failed: {error}"))?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=finish_returned");
+    // Distinguish a driver crash inside the fence wait from a crash before it.
+    // Keep the synchronization mandatory: no unsynchronized readback fallback.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_wait_entered");
+    // The guest may abort inside the driver before the next log record. Flush
+    // the boundary marker explicitly so a missing fence_completed cannot be
+    // confused with a buffered stdout line during QEMU crash triage.
+    std::io::Write::flush(&mut std::io::stdout())
+        .map_err(|error|format!("client GPU fence diagnostic flush failed: {error}"))?;
+    // The second QEMU frame repeatedly crashes in the EGL CPU-side
+    // client wait. Queue the fence in the renderer's own current context
+    // instead, then synchronously complete that context before readback.
+    // Renderer::wait may only enqueue a GPU wait: it is NOT completion
+    // evidence on its own. glFinish is mandatory, not a CPU blend fallback.
+    renderer.wait(&sync)
+        .map_err(|error|format!("client GPU composition fence insertion failed: {error}"))?;
+    let gl_error=renderer.with_context(|gl| unsafe {
+        gl.Finish();
+        gl.GetError()
+    }).map_err(|error|format!("client GPU composition context finish failed: {error}"))?;
+    if gl_error!=0 {
+        return Err(format!("client GPU composition GL completion failed: 0x{gl_error:04x}"));
+    }
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=fence_completed");
+    Ok(())
+}
+
+/// Fail closed before touching the GLES target for unsupported client formats.
+fn validate_gpu_composition_format(source_format:Fourcc)->Result<(),String> {
+    match source_format {
+        Fourcc::Xrgb8888 | Fourcc::Xbgr8888 |
+        Fourcc::Argb8888 | Fourcc::Abgr8888 => Ok(()),
+        _ => Err("GPU composition requires supported packed RGB".into()),
+    }
+}
+
+/// Transitional QEMU path: alpha composition occurs on an actual GLES
+/// framebuffer, then the opaque completed image is downloaded for the
+/// existing CPU scene/KMS worker. This is NOT zero-copy or native scanout.
+/// No fallback to CPU blending on GPU failure, and no wl_buffer release.
 pub fn readback_qemu_client_bgra(
     renderer:&mut GlesRenderer,texture:&GlesTexture,source_format:Fourcc,
 )->Result<Vec<u8>,String> {
     use smithay::{
-        backend::renderer::{ExportMem,Texture,TextureMapping},
+        backend::renderer::{gles::GlesRenderbuffer,Bind,ExportMem,Offscreen,Renderer,Texture,TextureMapping},
         utils::Rectangle,
     };
     let width=texture.width() as usize;
@@ -349,22 +430,71 @@ pub fn readback_qemu_client_bgra(
     if width!=360 || height!=224 {
         return Err("QEMU GPU client readback must match verified 360x224 scene".into());
     }
-    let region=Rectangle::from_size((width as i32,height as i32).into());
-    // GLES readback in ABGR8888 gives byte order RGBA (little endian).
-    // Convert to the CPU/KMS scene's opaque XRGB8888 / BGRA byte order.
-    let mapping=renderer.copy_texture(texture,region,Fourcc::Abgr8888)
-        .map_err(|error|format!("QEMU GPU client texture download failed: {error}"))?;
-    let flipped=mapping.flipped();
-    let mapped=renderer.map_texture(&mapping)
-        .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
-    convert_rgba_readback_to_bgra(mapped,width,height,flipped,source_format)
+    // Reject unsupported client formats before allocating any GL resource.
+    // The draw helper also validates, but that happens after binding an FBO.
+    validate_gpu_composition_format(source_format)?;
+    // The staging bridge never samples its output as a texture. Use a
+    // renderbuffer and read the exact same bound framebuffer, avoiding a
+    // second FBO attachment and its texture read/write sync bookkeeping.
+    // The previous QEMU run presented frame 1 but segfaulted at frame 2;
+    // keep explicit stage markers to localize any remaining driver fault.
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_previous");
+    renderer.cleanup_texture_cache()
+        .map_err(|error|format!("client GPU previous resource cleanup failed: {error}"))?;
+    // Keep temporary GLES resources scoped even when any stage fails. The
+    // outer cleanup must run on both Ok and Err to avoid carrying stale GL
+    // objects into the next imported Wayland client frame.
+    let pixels=(|| -> Result<Vec<u8>,String> {
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=allocate");
+        let mut composed:GlesRenderbuffer=renderer.create_buffer(
+            Fourcc::Abgr8888,(width as i32,height as i32).into(),
+        ).map_err(|error|format!("client GPU composition allocation failed: {error}"))?;
+        let mut target=renderer.bind(&mut composed)
+            .map_err(|error|format!("client GPU composition target failed: {error}"))?;
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=compose");
+        compose_client_texture_to_target(renderer,&mut target,texture,source_format)?;
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_COMPOSITED=360x224");
+        let region=Rectangle::from_size((width as i32,height as i32).into());
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=download");
+        let mapping=renderer.copy_framebuffer(&target,region,Fourcc::Abgr8888)
+            .map_err(|error|format!("QEMU composited GPU framebuffer download failed: {error}"))?;
+        let flipped=mapping.flipped();
+        println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=map");
+        let mapped=renderer.map_texture(&mapping)
+            .map_err(|error|format!("QEMU GPU client pixel map failed: {error}"))?;
+        // Target is opaque; packing never applies source alpha twice.
+        // Copy before dropping the PBO mapping, framebuffer and renderbuffer.
+        convert_rgba_readback_to_bgra(mapped,width,height,flipped,Fourcc::Xrgb8888)
+    })();
+    // The closure has dropped its mapping, target and renderbuffer even
+    // after an error. Always drain Smithay's pending GPU resource cleanup
+    // before the next frame, and preserve BOTH errors if cleanup also fails.
+    let pixels=resolve_gpu_staging_cleanup(pixels,|| {
+        renderer.cleanup_texture_cache()
+            .map_err(|error|format!("client GPU completed resource cleanup failed: {error}"))
+    })?;
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=cleanup_completed");
+    println!("MELANIA_NATIVE_CLIENT_DMABUF_GLES_STAGE=complete");
+    Ok(pixels)
 }
 
-// The existing QEMU retained CPU scene is opaque XRGB over this BGRA
-// background. Its GPU client has real ARGB8888 alpha; dropping alpha would
-// wrongly turn translucent and fully transparent client texels into solid
-// foreground pixels. This is an explicitly bounded CPU composition step,
-// NOT direct GPU scanout or proof of production DMA-BUF fencing.
+/// Preserve the original GLES failure while reporting a secondary cleanup
+/// failure. This helper is independent of the driver and regression tested.
+fn resolve_gpu_staging_cleanup<T,F>(
+    staged:Result<T,String>,cleanup:F,
+)->Result<T,String>
+where F:FnOnce()->Result<(),String> {
+    // Execute cleanup unconditionally, including after a failed GPU stage.
+    match (staged,cleanup()) {
+        (Ok(pixels),Ok(())) => Ok(pixels),
+        (Err(error),Ok(())) => Err(error),
+        (Ok(_),Err(error)) => Err(error),
+        (Err(stage),Err(cleanup)) => Err(format!("{stage}; cleanup also failed: {cleanup}")),
+    }
+}
+
+// Shared background for the actual GPU composition and the reference
+// CPU source-over unit tests. The transitional KMS transport is opaque XRGB.
 const QEMU_SCENE_BGRA:[u8;3]=[58,33,27];
 
 fn over_opaque_background(premultiplied:u8,background:u8,alpha:u8)->u8 {
@@ -401,7 +531,11 @@ fn convert_rgba_readback_to_bgra(
             // otherwise partial alpha becomes an incorrectly solid color.
             // Preserve the B,G,R byte order and discard alpha only AFTER
             // the per-channel source-over operation.
-            let alpha=if opaque {255} else {src[3]};
+            if opaque {
+                dst.copy_from_slice(&[src[2],src[1],src[0],0]);
+                continue;
+            }
+            let alpha=src[3];
             dst.copy_from_slice(&[
                 over_opaque_background(src[2],QEMU_SCENE_BGRA[0],alpha),
                 over_opaque_background(src[1],QEMU_SCENE_BGRA[1],alpha),
@@ -428,6 +562,116 @@ mod tests {
         }
         b.build().unwrap()
     }
+    // A GLES target already contains the opaque scene background. The CPU
+    // transport must only swizzle its pixels, never apply source-over again.
+    // This also guards against trusting the undefined alpha byte of XRGB.
+    #[test]
+    fn gpu_staging_cleanup_reports_both_stage_and_cleanup_errors() {
+        assert_eq!(resolve_gpu_staging_cleanup(Ok(7u8),||Ok(())),Ok(7));
+        assert_eq!(
+            resolve_gpu_staging_cleanup::<u8,_>(Err("GLES draw failed".into()),||Ok(())),
+            Err("GLES draw failed".into())
+        );
+        assert_eq!(
+            resolve_gpu_staging_cleanup(Ok(7u8),||Err("GPU cleanup failed".into())),
+            Err("GPU cleanup failed".into())
+        );
+        let result=resolve_gpu_staging_cleanup::<u8,_>(
+            Err("GLES draw failed".into()),||Err("GPU cleanup failed".into()));
+        let error=result.unwrap_err();
+        assert!(error.contains("GLES draw failed"));
+        assert!(error.contains("GPU cleanup failed"));
+    }
+
+    #[test]
+    fn gpu_staging_cleanup_runs_exactly_once_after_success() {
+        let mut calls=0usize;
+        let result=resolve_gpu_staging_cleanup(Ok(42u8),|| {
+            calls+=1;
+            Ok(())
+        });
+        assert_eq!(result,Ok(42));
+        assert_eq!(calls,1,"successful staging must drain exactly once");
+    }
+
+    #[test]
+    fn gpu_staging_cleanup_failure_after_failed_stage_is_not_silenced() {
+        let mut calls=0usize;
+        let result=resolve_gpu_staging_cleanup::<u8,_>(
+            Err("frame finish failed".into()),|| {
+                calls+=1;
+                Err("cache cleanup failed".into())
+            });
+        assert_eq!(calls,1,"failure path must attempt cleanup exactly once");
+        let error=result.unwrap_err();
+        assert!(error.contains("frame finish failed"));
+        assert!(error.contains("cache cleanup failed"));
+    }
+
+    #[test]
+    fn gpu_staging_cleanup_runs_even_after_failed_stage() {
+        let mut calls=0usize;
+        let result=resolve_gpu_staging_cleanup::<u8,_>(
+            Err("draw failed".into()),|| { calls+=1; Ok(()) });
+        assert_eq!(result,Err("draw failed".into()));
+        assert_eq!(calls,1,"cleanup must run exactly once on failure");
+    }
+
+    #[test]
+    fn gpu_composition_preflight_rejects_unsupported_format() {
+        for format in [
+            Fourcc::Xrgb8888,Fourcc::Xbgr8888,
+            Fourcc::Argb8888,Fourcc::Abgr8888,
+        ] {
+            assert_eq!(validate_gpu_composition_format(format),Ok(()));
+        }
+        assert!(validate_gpu_composition_format(Fourcc::Rgb565).is_err());
+    }
+
+    #[test]
+    fn gpu_readback_rejects_truncated_and_oversized_pixel_mappings() {
+        // A GLES mapping is untrusted until its byte extent matches the
+        // advertised rectangle. Never index a short map or silently accept
+        // trailing bytes, even when the format itself is supported.
+        let width=2usize;
+        let height=2usize;
+        let exact=[0u8;16];
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&exact,width,height,false,Fourcc::Xrgb8888)
+                .unwrap().len(),16
+        );
+        for bytes in [&exact[..15],&exact[..0]] {
+            assert_eq!(
+                convert_rgba_readback_to_bgra(bytes,width,height,false,Fourcc::Xrgb8888),
+                Err("client GPU readback dimensions or size invalid".into())
+            );
+        }
+        let oversized=[0u8;17];
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&oversized,width,height,true,Fourcc::Argb8888),
+            Err("client GPU readback dimensions or size invalid".into())
+        );
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&exact,0,height,false,Fourcc::Xrgb8888),
+            Err("client GPU readback dimensions or size invalid".into())
+        );
+        assert_eq!(
+            convert_rgba_readback_to_bgra(&exact,width,height,false,Fourcc::Rgb565),
+            Err("client GPU readback requires supported packed RGB".into())
+        );
+    }
+
+    #[test]
+    fn composited_opaque_readback_never_blends_background_twice() {
+        let rgba=[100, 70, 40, 0, 12, 34, 56, 128];
+        let pixels=convert_rgba_readback_to_bgra(
+            &rgba,2,1,false,Fourcc::Xrgb8888).unwrap();
+        assert_eq!(pixels,vec![40,70,100,0,56,34,12,0]);
+        let flipped=convert_rgba_readback_to_bgra(
+            &rgba,1,2,true,Fourcc::Xrgb8888).unwrap();
+        assert_eq!(flipped,vec![56,34,12,0,40,70,100,0]);
+    }
+
     #[test]
     fn advertised_linear_modifiers_are_deterministic_and_not_dropped() {
         use smithay::backend::allocator::Modifier;
@@ -579,6 +823,19 @@ mod tests {
     }
 
     #[test]
+    fn opaque_modifier_stride_is_not_assumed_to_cover_linear_pixel_row() {
+        // The driver owns the byte layout for non-LINEAR modifiers. An
+        // opaque modifier may legitimately report a stride smaller than
+        // width * 4; the separate FD and offset checks remain mandatory.
+        let opaque=memfd_geometry(4096,0,64,360,224,Modifier::Invalid);
+        let linear=memfd_geometry(4096,0,64,360,224,Modifier::Linear);
+        assert_eq!(validate_client_dmabuf(&opaque),Ok(()));
+        assert_eq!(validate_client_plane_backing(&opaque),Ok(()));
+        assert_eq!(validate_client_dmabuf(&linear),
+            Err("client DMA-BUF stride outside bounded packed-RGB layout".into()));
+    }
+
+    #[test]
     fn linear_packed_rgb_rejects_misaligned_stride_or_first_pixel() {
         // Real memfds with enough bytes for their advertised plane: the
         // failure is solely the 32-bit texel alignment, not FD truncation.
@@ -677,6 +934,20 @@ mod tests {
     }
 
     #[test]
+    fn opaque_modifier_does_not_invent_linear_last_row_extent() {
+        // 360x1024 is within the visible 16 MiB budget. An opaque
+        // modifier's 32768 stride is within the metadata ceiling but is not necessarily a byte pitch.
+        // The kernel allocation, not a fabricated LINEAR extent, bounds
+        // the resource. A LINEAR buffer with the same metadata is rejected.
+        let opaque=memfd_geometry(4096,0,32768,360,1024,Modifier::Invalid);
+        assert_eq!(validate_client_dmabuf(&opaque),Ok(()));
+        assert_eq!(validate_client_plane_backing(&opaque),Ok(()));
+        let linear=memfd_geometry(4096,0,32768,360,1024,Modifier::Linear);
+        assert_eq!(validate_client_dmabuf(&linear),
+            Err("client LINEAR DMA-BUF plane exceeds 16 MiB stride/offset budget".into()));
+    }
+
+    #[test]
     fn non_linear_modifier_still_has_real_kernel_allocation_budget() {
         // An opaque layout needs no invented LINEAR last-row extent,
         // but must not pin an oversized BO through an arbitrary modifier.
@@ -692,6 +963,20 @@ mod tests {
         assert_eq!(validate_client_dmabuf(&oversized),Ok(()));
         assert_eq!(validate_client_plane_backing(&oversized),
                    Err("DMA-BUF FD exceeds 16 MiB allocation budget".into()));
+    }
+
+    #[test]
+    fn non_linear_backing_does_not_invent_linear_row_extent() {
+        // 2048x2048 has exactly 16 MiB of visible pixels, but an opaque
+        // modifier's stride is NOT a physical LINEAR pitch. Requiring the
+        // fabricated 64 MiB last-row span would reject this allocation.
+        let tiled=memfd_geometry(4096,0,32768,2048,2048,Modifier::Invalid);
+        assert_eq!(validate_client_dmabuf(&tiled),Ok(()));
+        assert_eq!(validate_client_plane_backing(&tiled),Ok(()));
+        // The same metadata with a LINEAR modifier must fail closed.
+        let linear=memfd_geometry(4096,0,32768,2048,2048,Modifier::Linear);
+        assert!(validate_client_dmabuf(&linear).is_err());
+        assert!(validate_client_plane_backing(&linear).is_err());
     }
 
     #[test]

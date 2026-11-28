@@ -79,7 +79,10 @@ class QemuClientDmabufProtocol(unittest.TestCase):
             "buffer.handles().next()",
             "libc::lseek(fd.as_raw_fd(),0,libc::SEEK_END)",
             "let linear=buffer.format().modifier==Modifier::Linear;",
-            "if linear && (actual as u64) < required as u64",
+            "let required=if linear {",
+            "Some(height.checked_sub(1)",
+            "None",
+            "if required.is_some_and(|extent| (actual as u64) < extent as u64)",
             "LINEAR DMA-BUF FD shorter than advertised plane extent",
             "DMA-BUF kernel backing size unavailable",
             "if (actual as u64) > MAX_CLIENT_BUFFER_BYTES as u64",
@@ -94,7 +97,7 @@ class QemuClientDmabufProtocol(unittest.TestCase):
             self.assertIn(marker,IMPORTER)
         backing=IMPORTER[IMPORTER.index("fn validate_client_plane_backing("):
                          IMPORTER.index("pub fn import_client_dmabuf(")]
-        self.assertLess(backing.index("if linear && (actual as u64) < required as u64"),
+        self.assertLess(backing.index("if required.is_some_and(|extent| (actual as u64) < extent as u64)"),
                         backing.index("if (actual as u64) > MAX_CLIENT_BUFFER_BYTES as u64"))
         importer=IMPORTER[IMPORTER.index("pub fn import_client_dmabuf("):]
         self.assertLess(importer.index("validate_client_dmabuf(buffer)?;"),
