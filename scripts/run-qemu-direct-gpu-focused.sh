@@ -7,10 +7,14 @@ set -euo pipefail
 case "${MELANIA_QEMU_FOCUSED_MODE:-direct}" in
   direct)
     guest_arg=--direct-gpu-only
+    vm_timeout=850
     proof=MELANIA_QEMU_DIRECT_CLIENT_GPU_TO_GBM_KMS_12_FRAMES_PASS=true
     focused=MELANIA_QEMU_FOCUSED_DIRECT_GPU_PASS=true ;;
   retained)
     guest_arg=--retained-gpu-only
+    # Includes 12-frame retained, 48-client persistent and 48-client mixed
+    # sessions; the old 850s expired after all 52 persistent KMS ACKs.
+    vm_timeout=1200
     proof=MELANIA_QEMU_RETAINED_FOUR_WINDOW_GPU_KMS_12_FRAMES_PASS=true
     focused=MELANIA_QEMU_FOCUSED_RETAINED_GPU_PASS=true ;;
   *) echo 'Unknown focused GPU mode' >&2; exit 78 ;;
@@ -32,12 +36,18 @@ curl --fail --location --retry 3 --connect-timeout 25 --max-time 60 -o SHA256SUM
 grep -E "[[:space:]\\*]${image//./\\.}$" SHA256SUMS > verify.sha256
 sha256sum -c verify.sha256
 qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" overlay.qcow2
+# Only the disposable guest overlay grows, not the verified base image.
+qemu-img resize -q overlay.qcow2 +4G
 genisoimage -quiet -R -J -V MELANIA_BIN -o payload.iso -graft-points \
   "melania-native=$native" "melania-continuous-client=$client"
 printf '%s\n' 'instance-id: melania-direct-gpu-focused' 'local-hostname: melania-native-qemu' > meta-data
 encoded="$(base64 -w0 "$root/scripts/melania-qemu-native-guest.sh")"
 cat > user-data <<EOF
 #cloud-config
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true
 ssh_pwauth: false
 disable_root: false
 packages:
@@ -67,11 +77,11 @@ serial="$report/serial.log"
 : > "$serial"
 drag_pid=''
 if [[ "$guest_arg" == --retained-gpu-only ]]; then
-  python3 "$root/scripts/inject-qemu-retained-gpu-drag.py" --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout 850 > "$report/qmp-retained-drag.log" 2>&1 &
+  python3 "$root/scripts/inject-qemu-retained-gpu-drag.py" --serial "$serial" --qmp "$work/melania-qmp.sock" --timeout "$vm_timeout" > "$report/qmp-retained-drag.log" 2>&1 &
   drag_pid=$!
 fi
 set +e
-timeout --signal=TERM --kill-after=10s 850s \
+timeout --signal=TERM --kill-after=10s "${vm_timeout}s" \
   qemu-system-x86_64 \
   -nodefaults -machine q35,accel=tcg -cpu max -smp 2 -m 3072 \
   -display none -vga virtio -serial "file:$serial" -monitor none -no-reboot \

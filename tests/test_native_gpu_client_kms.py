@@ -416,6 +416,21 @@ class RealClientDmabufToKms(unittest.TestCase):
                        "MELANIA_QEMU_PERSISTENT_DIRECT_GPU_REMOVAL_VERIFIED"):
             self.assertIn(marker,stage)
 
+    def test_focused_mixed_budget_covers_entire_guest_and_keeps_receipts(self):
+        focused=(ROOT/"scripts/run-qemu-direct-gpu-focused.sh").read_text()
+        workflow=(ROOT/".github/workflows/qemu-direct-gpu-focused.yml").read_text()
+        self.assertIn("vm_timeout=850",focused)
+        self.assertIn("vm_timeout=1200",focused)
+        self.assertIn('--timeout "$vm_timeout"',focused)
+        self.assertIn('timeout --signal=TERM --kill-after=10s "${vm_timeout}s"',focused)
+        self.assertIn("qemu-img resize -q overlay.qcow2 +4G",focused)
+        self.assertIn("resize_rootfs: true",focused)
+        self.assertIn("timeout-minutes: 40",workflow)
+        self.assertIn("MELANIA_QEMU_NATIVE_GUEST_EXIT=0",focused)
+        self.assertIn("MELANIA_QEMU_MIXED_GPU_36_DMA_12_SHM_PASS=true",focused)
+        self.assertIn("seq 1 52",focused)
+        self.assertIn("seq 1 48",focused)
+
     def test_mixed_runtime_proof_separate_from_dma_only(self):
         self.assertIn("mixed_shm && gpu_index%4==3",CLIENT)
         self.assertIn("MELANIA_QEMU_MIXED_SHM_CLIENT_ACK={gpu_index}",CLIENT)
