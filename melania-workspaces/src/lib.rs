@@ -14,12 +14,13 @@ pub struct Workspaces {
     active: u8,
     count: u8,
     assigned: BTreeMap<u64, u8>,
+    last_focus: BTreeMap<u8, u64>,
 }
 impl Default for Workspaces { fn default() -> Self { Self::new(DEFAULT_WORKSPACES) } }
 impl Workspaces {
     pub fn new(count: u8) -> Self {
         assert!((1..=16).contains(&count), "workspace count must be 1..=16");
-        Self { active: 1, count, assigned: BTreeMap::new() }
+        Self { active: 1, count, assigned: BTreeMap::new(), last_focus: BTreeMap::new() }
     }
     pub fn current(&self) -> u8 { self.active }
     pub fn count(&self) -> u8 { self.count }
@@ -30,7 +31,23 @@ impl Workspaces {
         self.assigned.insert(id, self.active);
         Ok(())
     }
-    pub fn forget(&mut self, id: u64) -> bool { self.assigned.remove(&id).is_some() }
+    /// Record only focus of an actual visible client, never a hidden window.
+    pub fn remember_focus(&mut self, id: u64) -> bool {
+        if !self.is_visible(id) { return false; }
+        self.last_focus.insert(self.active, id);
+        true
+    }
+    pub fn remembered_focus(&self) -> Option<u64> {
+        self.last_focus.get(&self.active).copied().filter(|id| self.is_visible(*id))
+    }
+    /// Minimized, destroyed or moved windows are no longer valid candidates.
+    pub fn forget_focus(&mut self, id: u64) {
+        self.last_focus.retain(|_, focused| *focused != id);
+    }
+    pub fn forget(&mut self, id: u64) -> bool {
+        self.forget_focus(id);
+        self.assigned.remove(&id).is_some()
+    }
     pub fn switch(&mut self, id: u8) -> Result<bool, WorkspaceError> {
         if id == 0 || id > self.count { return Err(WorkspaceError::InvalidWorkspace); }
         let changed = self.active != id;
@@ -42,6 +59,7 @@ impl Workspaces {
         let old = self.assigned.get_mut(&window_id).ok_or(WorkspaceError::UnknownWindow)?;
         let changed = *old != dest;
         *old = dest;
+        if changed { self.forget_focus(window_id); }
         Ok(changed)
     }
     pub fn windows_in(&self, workspace: u8) -> impl Iterator<Item=u64> + '_ {
@@ -76,6 +94,31 @@ impl Workspaces {
         assert_eq!(s.register(8),Err(WorkspaceError::DuplicateWindow));
         assert!(s.forget(8));assert!(!s.forget(8));
         assert_eq!(s.workspace_of(8),None);s.register(8).unwrap();
+    }
+    #[test] fn workspace_focus_memory_is_independent_and_rejects_hidden_windows() {
+        let mut s=Workspaces::new(4);
+        s.register(1).unwrap();
+        assert!(s.remember_focus(1));
+        s.switch(2).unwrap();
+        assert!(!s.remember_focus(1));
+        assert_eq!(s.remembered_focus(),None);
+        s.register(2).unwrap();
+        assert!(s.remember_focus(2));
+        s.switch(1).unwrap();
+        assert_eq!(s.remembered_focus(),Some(1));
+        s.switch(2).unwrap();
+        assert_eq!(s.remembered_focus(),Some(2));
+        assert!(!s.send(2,2).unwrap());
+        assert_eq!(s.remembered_focus(),Some(2));
+        s.send(2,1).unwrap();
+        assert_eq!(s.remembered_focus(),None);
+        s.switch(1).unwrap();
+        assert_eq!(s.remembered_focus(),Some(1));
+        s.forget_focus(1);
+        assert_eq!(s.remembered_focus(),None);
+        assert!(s.remember_focus(2));
+        s.forget(2);
+        assert_eq!(s.remembered_focus(),None);
     }
     #[test] fn move_multiple_and_filter() {
         let mut s=Workspaces::new(3);

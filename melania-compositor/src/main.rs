@@ -285,6 +285,13 @@ impl SeatHandler for Melania {
         // Necessary for clipboard and wl_data_device DnD focus negotiation.
         let client = focus.and_then(|surface| self.seat_client(surface));
         set_data_device_focus(&self.display, seat, client);
+        // Remember the real keyboard-focused toplevel, not a taskbar
+        // selection or a temporary shell/popup focus.
+        if let Some(id) = focus.and_then(|surface| self.managed.iter()
+            .find(|w| w.surface == *surface && !w.minimized
+                && self.workspaces.is_visible(w.id)).map(|w| w.id)) {
+            self.workspaces.remember_focus(id);
+        }
     }
     fn cursor_image(&mut self, _: &Seat<Self>, _: CursorImageStatus) {}
 }
@@ -294,6 +301,7 @@ impl Melania {
     /// never a minimized window or one on another workspace.
     /// Do not steal focus from Start, a popup, or another surface.
     fn refocus_after_departure(&mut self, id: u64, departed: &WlSurface) {
+        self.workspaces.forget_focus(id);
         if self.last_press.as_ref().is_some_and(|press| press.surface == *departed) {
             self.last_press = None;
         }
@@ -581,7 +589,9 @@ impl Melania {
     /// desktop surface across workspaces. Never treat a workspace switch as
     /// a client-side drag/copy/move operation.
     fn switch_workspace(&mut self, target:u8) -> Result<(), &'static str> {
-        self.workspaces.switch(target).map_err(|_|"Spazio di lavoro non valido")?;
+        let changed = self.workspaces.switch(target).map_err(|_|"Spazio di lavoro non valido")?;
+        if !changed { return Ok(()); }
+        self.visual_dirty=true;
         self.interaction=None;
         self.last_press=None;
         for w in &mut self.managed {
@@ -594,13 +604,40 @@ impl Melania {
                 self.space.unmap_elem(&w.window);
             }
         }
-        self.active_window=None;
-        self.seat.get_keyboard().expect("keyboard").set_focus(self,None,SERIAL_COUNTER.next_serial());
+        let remembered = self.workspaces.remembered_focus().and_then(|id|
+            self.managed.iter().find(|w| w.id == id && !w.minimized
+                && self.workspaces.is_visible(id))
+                .map(|w| (id, w.surface.clone(), w.window.clone())));
+        // If the previous focus is gone, select a surviving mapped window.
+        // Never select a hidden/minimized client or the desktop layer.
+        let next = remembered.or_else(|| self.space.elements().rev().find_map(|element| {
+            let surface = element.toplevel()?.wl_surface();
+            self.managed.iter().find(|w| w.surface == *surface && !w.minimized
+                && self.workspaces.is_visible(w.id))
+                .map(|w| (w.id, w.surface.clone(), w.window.clone()))
+        }));
+        let keyboard = self.seat.get_keyboard().expect("keyboard");
+        let keep_start = self.start_has_focus && self.start_layer.is_some()
+            && keyboard.current_focus().as_ref() == self.start_layer.as_ref();
+        self.active_window = next.as_ref().map(|(id, _, _)| *id);
+        if let Some((_, _, window)) = next.as_ref() {
+            self.space.raise_element(window, true);
+        }
+        let focus = next.map(|(_, surface, _)| surface);
+        if keep_start {
+            // Start owns the keyboard until it closes; then restore focus
+            // on the new workspace, not a client hidden by the switch.
+            self.start_previous_focus = focus;
+        } else {
+            keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
+        }
         Ok(())
     }
     fn send_to_workspace(&mut self,id:u64,destination:u8)->Result<(), &'static str> {
         let index=self.managed.iter().position(|w|w.id==id).ok_or("Finestra non trovata")?;
-        self.workspaces.send(id,destination).map_err(|_|"Spazio di lavoro non valido")?;
+        let changed = self.workspaces.send(id,destination).map_err(|_|"Spazio di lavoro non valido")?;
+        if !changed { return Ok(()); }
+        self.visual_dirty=true;
         let w=&mut self.managed[index];
         if self.workspaces.is_visible(id) && !w.minimized {
             self.space.map_element(w.window.clone(),w.saved_position,true);
